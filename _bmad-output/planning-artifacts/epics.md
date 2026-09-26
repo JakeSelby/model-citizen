@@ -44,6 +44,7 @@ How to read it:
 | Cost benchmarks (FR-55 to FR-58) | AH-E013, AH-E011 |
 | Session operations (FR-8, FR-59 to FR-63) | AH-E001, AH-E002, AH-E015, AH-E017, AH-E018 |
 | Public planning (FR-9, FR-64, FR-65) | AH-E004, AH-E012, AH-E016 |
+| Studio (FR-75 to FR-84) | AH-E022, AH-E023, AH-E024, AH-E025, AH-E026 |
 
 ## Epics
 
@@ -445,6 +446,84 @@ How to read it:
   - AH-S268 [#878](https://github.com/JakeSelby/agent-harness/issues/878): Rename the plugin to model-citizen and keep recognizing the old ID (open)
   - AH-S269 [#879](https://github.com/JakeSelby/agent-harness/issues/879): Rename the product copy to Model Citizen (open)
   - AH-C079 [#880](https://github.com/JakeSelby/agent-harness/issues/880): Point hardcoded links at the new repo and domain, and add the retired-name lint rule (open)
+
+### AH-E022: Open the Studio: one local UI that shows the whole harness, live ([#955](https://github.com/JakeSelby/model-citizen/issues/955), open)
+
+- **Milestones:** v0.18.0
+- **Goal:** `citizen studio` opens a local UI, locked to its launcher and needing no Node at runtime, that shows the installed version and health, the effective selection with each value's layer, every module with its cost, and what the harness decided, live within two seconds.
+- **Covers:** FR-75, FR-76, FR-77
+- **Stories:**
+  - AH-C082 [#960](https://github.com/JakeSelby/model-citizen/issues/960): File the Studio epics and stories (open)
+  - AH-T035 [#961](https://github.com/JakeSelby/model-citizen/issues/961): Write the Studio's UX specification (open)
+  - AH-T036 [#962](https://github.com/JakeSelby/model-citizen/issues/962): Record the Studio's architecture decisions in the spine (open)
+  - AH-SP017 [#963](https://github.com/JakeSelby/model-citizen/issues/963): Spike: can the committed UI bundle be rebuilt byte for byte on Linux CI? (open)
+  - AH-S281 [#964](https://github.com/JakeSelby/model-citizen/issues/964): `citizen studio`: start, open, detach, check and stop a loopback-only local server (open)
+  - AH-S282 [#965](https://github.com/JakeSelby/model-citizen/issues/965): Lock the Studio to its launcher: token, host and origin checks, CSRF, CSP and redaction (open)
+  - AH-S283 [#966](https://github.com/JakeSelby/model-citizen/issues/966): The Studio's front-end workspace, committed bundle and CI build check (open)
+  - AH-S284 [#967](https://github.com/JakeSelby/model-citizen/issues/967): Studio shell, design tokens and component kit (open)
+  - AH-S285 [#968](https://github.com/JakeSelby/model-citizen/issues/968): Overview: the installed version, updates, doctor checks and drift at a glance (open)
+  - AH-S286 [#969](https://github.com/JakeSelby/model-citizen/issues/969): Effective selection, with the layer each value comes from (open)
+  - AH-S287 [#970](https://github.com/JakeSelby/model-citizen/issues/970): Library: every module with its manifest, projection and context cost (open)
+  - AH-S288 [#971](https://github.com/JakeSelby/model-citizen/issues/971): Activity: what the harness decided and what changed (open)
+  - AH-S289 [#972](https://github.com/JakeSelby/model-citizen/issues/972): Live updates: a change from the CLI, an agent or an editor shows within two seconds (open)
+
+### AH-E023: Tune in the Studio: drafts for every change, applied or rolled back through the governed path ([#956](https://github.com/JakeSelby/model-citizen/issues/956), open)
+
+- **Milestones:** v0.18.0
+- **Goal:** Every Studio edit lands in a draft, a managed worktree, and is applied through the CLI's own locks, checks and journal or rolled back in one step; nothing live changes before the developer applies it.
+- **Covers:** FR-78, FR-79
+- **Stories:**
+  - AH-S290 [#973](https://github.com/JakeSelby/model-citizen/issues/973): Drafts: create, list, diff and discard a draft from the Studio or `citizen draft` (open)
+  - AH-S291 [#974](https://github.com/JakeSelby/model-citizen/issues/974): Change mode, stance variants and switches in a draft, with previews and dependency checks (open)
+  - AH-S292 [#975](https://github.com/JakeSelby/model-citizen/issues/975): Edit identity, preferences and integrations in a draft through schema-driven forms (open)
+  - AH-S293 [#976](https://github.com/JakeSelby/model-citizen/issues/976): Hand-edit a rule, skill or stance in a draft, with live lint, budget and projection preview (open)
+  - AH-S294 [#977](https://github.com/JakeSelby/model-citizen/issues/977): Add your own module from a template, or fork a core module into your root (open)
+  - AH-S295 [#978](https://github.com/JakeSelby/model-citizen/issues/978): Review and apply a draft through the governed path (open)
+  - AH-S296 [#979](https://github.com/JakeSelby/model-citizen/issues/979): Roll back an applied draft (open)
+
+### AH-E024: Run from the Studio: any suite or single test against the installed version, a release or a draft ([#957](https://github.com/JakeSelby/model-citizen/issues/957), open)
+
+- **Milestones:** v0.18.0
+- **Goal:** Any suite or single test runs from the Studio against the installed version, a release, a branch, a worktree or a draft, in an isolated profile, with live logs, cancel, a kept record and spend confirmed first.
+- **Covers:** FR-80, FR-81
+- **Stories:**
+  - AH-S297 [#980](https://github.com/JakeSelby/model-citizen/issues/980): Suite catalog and run supervisor, with `citizen runs` (open)
+  - AH-S298 [#981](https://github.com/JakeSelby/model-citizen/issues/981): Run store: every run recorded, with benchmark and acceptance history imported (open)
+  - AH-S299 [#982](https://github.com/JakeSelby/model-citizen/issues/982): Launch, watch and stop the free local suites from the Studio, down to a single unit test (open)
+  - AH-S300 [#983](https://github.com/JakeSelby/model-citizen/issues/983): Run history and run detail, with flaky-test marks (open)
+  - AH-S301 [#984](https://github.com/JakeSelby/model-citizen/issues/984): Targets: run against the installed version, a release, a branch, a worktree or a draft, in an isolated profile (open)
+  - AH-S302 [#985](https://github.com/JakeSelby/model-citizen/issues/985): Spend guard: estimate, confirm and cap a run that spends usage (open)
+  - AH-S303 [#986](https://github.com/JakeSelby/model-citizen/issues/986): Run native acceptance from the Studio, case by case (open)
+  - AH-S304 [#987](https://github.com/JakeSelby/model-citizen/issues/987): Run the live replay benchmark from the Studio against two targets (open)
+  - AH-S305 [#988](https://github.com/JakeSelby/model-citizen/issues/988): Run the evaluation tiers and unit evals from the Studio (open)
+  - AH-S306 [#989](https://github.com/JakeSelby/model-citizen/issues/989): Run the four-arm bench, layer swaps and factorial screens from the Studio (open)
+
+### AH-E025: Judge in the Studio: whether a change helped, against its baseline and its history ([#958](https://github.com/JakeSelby/model-citizen/issues/958), open)
+
+- **Milestones:** v0.18.0
+- **Goal:** Every result sits beside its baseline and its history: paired comparisons with intervals, a verdict for a draft against its base, trends beside the proof set, rule health, spend, and evidence-backed proposals the developer applies.
+- **Covers:** FR-82, FR-83
+- **Stories:**
+  - AH-S307 [#990](https://github.com/JakeSelby/model-citizen/issues/990): Compare two runs, with paired intervals (open)
+  - AH-S308 [#991](https://github.com/JakeSelby/model-citizen/issues/991): Test a draft: run it against its base and report whether it helped (open)
+  - AH-S309 [#992](https://github.com/JakeSelby/model-citizen/issues/992): Trends across versions and dates, beside the project's proof set (open)
+  - AH-S310 [#994](https://github.com/JakeSelby/model-citizen/issues/994): Rule health: measurement status, adherence and context cost for every rule (open)
+  - AH-S311 [#995](https://github.com/JakeSelby/model-citizen/issues/995): Spend and usage from the local ledger (open)
+  - AH-S312 [#996](https://github.com/JakeSelby/model-citizen/issues/996): Proposals: review evidence-backed stance proposals and try one in a draft (open)
+
+### AH-E026: Adopt the Studio: from install to a tuned harness, for developers and their agents ([#959](https://github.com/JakeSelby/model-citizen/issues/959), open)
+
+- **Milestones:** v0.18.0
+- **Goal:** A new install reaches a tuned harness through a guided first run, agents run the same loop from the CLI, and the Studio is accessible, checked end to end, documented and qualified in every release.
+- **Covers:** FR-84, FR-75, FR-77
+- **Stories:**
+  - AH-S313 [#997](https://github.com/JakeSelby/model-citizen/issues/997): First run in the Studio: from install to an applied draft (open)
+  - AH-S314 [#998](https://github.com/JakeSelby/model-citizen/issues/998): Agents drive the Studio loop from the CLI, with a skill and a parity check (open)
+  - AH-S315 [#999](https://github.com/JakeSelby/model-citizen/issues/999): Accessibility and phone-width layouts to WCAG 2.2 AA (open)
+  - AH-S316 [#1000](https://github.com/JakeSelby/model-citizen/issues/1000): End-to-end and performance checks for the Studio in CI (open)
+  - AH-S317 [#1001](https://github.com/JakeSelby/model-citizen/issues/1001): Document the Studio and add it to the product copy (open)
+  - AH-S318 [#1002](https://github.com/JakeSelby/model-citizen/issues/1002): Qualify the Studio in every release (open)
+  - AH-SP018 [#1003](https://github.com/JakeSelby/model-citizen/issues/1003): Spike: reach the Studio from a phone without opening it to the network (open)
 
 ## Completed work with no epic
 
