@@ -4,12 +4,12 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 115,
-    "chore": 84,
+    "bug": 117,
+    "chore": 85,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 319,
+    "story": 320,
     "task": 37
   },
   "items": [
@@ -7654,6 +7654,58 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C083.md",
       "parent_bmad_id": "AH-E022",
       "parent_github_number": 955,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C084",
+      "github_number": 1006,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1006",
+      "title": "File the Studio filing session's follow-ups",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C084.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B115",
+      "github_number": 1007,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1007",
+      "title": "A heredoc that only names the user config path is refused as a config change",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B115.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B116",
+      "github_number": 1008,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1008",
+      "title": "git -C with ~ or a variable resolves a push to an unknown repository",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B116.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S319",
+      "github_number": 1009,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1009",
+      "title": "Import `claude plugin eval` reports into the run store",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S319.md",
+      "parent_bmad_id": "AH-E024",
+      "parent_github_number": 957,
       "lifecycle": "active",
       "provenance": "authored"
     }

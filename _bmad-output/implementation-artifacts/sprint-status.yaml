@@ -365,6 +365,7 @@ development_status:
   ah-s304-run-the-live-replay-benchmark-from-the-studio: backlog
   ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: backlog
   ah-s306-run-the-four-arm-bench-layer-swaps-and-factorial: backlog
+  ah-s319-import-claude-plugin-eval-reports-into-the-run: backlog
 
   ah-e025-judge-in-the-studio-whether-a-change-helped: backlog
   ah-s307-compare-two-runs-with-paired-intervals: backlog
@@ -463,6 +464,8 @@ development_status:
   ah-b112-lock-the-intent-overlap-counter-s-read-modify: ready-for-dev
   ah-b113-test-worker-context-budget-rewrites-a-tracked: ready-for-dev
   ah-b114-the-governance-config-set-check-gates-commands: ready-for-dev
+  ah-b115-a-heredoc-that-only-names-the-user-config-path: backlog
+  ah-b116-git-c-with-or-a-variable-resolves-a-push-to-an: backlog
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -509,6 +512,7 @@ development_status:
   ah-c077-add-the-bmad-issue-map-audit-to-the-agents-md: ready-for-dev
   ah-c080-restore-headroom-in-the-always-loaded-budget: ready-for-dev
   ah-c081-file-the-burndown-bot-epic-and-its-stories: ready-for-dev
+  ah-c084-file-the-studio-filing-session-s-follow-ups: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done

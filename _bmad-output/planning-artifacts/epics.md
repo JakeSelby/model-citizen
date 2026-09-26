@@ -515,6 +515,7 @@ How to read it:
   - AH-S304 [#987](https://github.com/JakeSelby/model-citizen/issues/987): Run the live replay benchmark from the Studio against two targets (open)
   - AH-S305 [#988](https://github.com/JakeSelby/model-citizen/issues/988): Run the evaluation tiers and unit evals from the Studio (open)
   - AH-S306 [#989](https://github.com/JakeSelby/model-citizen/issues/989): Run the four-arm bench, layer swaps and factorial screens from the Studio (open)
+  - AH-S319 [#1009](https://github.com/JakeSelby/model-citizen/issues/1009): Import `claude plugin eval` reports into the run store (open)
 
 ### AH-E025: Judge in the Studio: whether a change helped, against its baseline and its history ([#958](https://github.com/JakeSelby/model-citizen/issues/958), open)
 
