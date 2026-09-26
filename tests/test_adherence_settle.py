@@ -14,9 +14,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from isolation import without_harness_vars
 
@@ -108,6 +111,64 @@ class LiveSettleTests(unittest.TestCase):
         home = self.home()
         adherence.path({"HOME": str(home)}).mkdir(parents=True)
         self.assertEqual(self.start(home), bare)
+
+
+class ConcurrentSettleTests(unittest.TestCase):
+    """Two sessions starting together: the read, the check and the append are one locked step."""
+
+    def setUp(self):
+        home = Path(tempfile.mkdtemp(prefix="adherence-race-"))
+        self.addCleanup(shutil.rmtree, str(home), ignore_errors=True)
+        self.env = {"HOME": str(home)}
+        target = adherence.path(self.env)
+        target.parent.mkdir(parents=True)
+        target.write_text(json.dumps(emitted("due", 2 * DAY)) + "\n")
+
+    def race(self, wait):
+        """Settle from two threads, each held inside its reading until both arrive or `wait` ends.
+
+        Unlocked, both have read the ledger before either appends, which is the race. Locked, the
+        second cannot read until the first has appended, so the first gives up waiting after `wait`.
+        """
+        barrier = threading.Barrier(2, timeout=wait)
+        real = adherence.respond
+
+        def held(row, observed):
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+            return real(row, observed)
+
+        with patch.object(adherence, "respond", held):
+            threads = [threading.Thread(target=adherence.settle, args=(self.env,)) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+        return [row for row in adherence.read_rows(adherence.path(self.env))
+                if row["kind"] == "response"]
+
+    def test_two_concurrent_settlers_write_one_response(self):
+        self.assertEqual(len(self.race(wait=0.3)), 1)
+
+    def test_the_race_writes_two_without_the_lock(self):
+        # Proof the test above bites: with the lock replaced by no lock, both settlers answer.
+        @contextmanager
+        def unlocked(target):
+            yield True
+
+        with patch.object(adherence, "ledger_lock", unlocked):
+            self.assertEqual(len(self.race(wait=10)), 2)
+
+    def test_a_holder_that_never_lets_go_leaves_the_answer_for_later(self):
+        with open(str(adherence.path(self.env)), "rb") as stream, \
+                patch.object(adherence, "LOCK_BUDGET", 0.05):
+            adherence.fcntl.flock(stream, adherence.fcntl.LOCK_EX)
+            started = time.monotonic()
+            self.assertEqual(adherence.settle(self.env), [])
+            self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(len(adherence.settle(self.env)), 1)
 
 
 if __name__ == "__main__":
