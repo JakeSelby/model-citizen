@@ -224,6 +224,7 @@ development_status:
 
   ah-e013-measurement-the-cost-benchmark-detector: in-progress
   ah-b095-the-delegation-stance-never-fires-zero-subagent: backlog
+  ah-b117-adherence-emissions-are-never-settled-in-a-live: ready-for-dev
   ah-s138-record-the-first-live-cost-replay-results: done
   ah-s194-trim-the-harness-s-12-607-token-standing-context: ready-for-dev
   ah-s215-tighten-the-two-detectors-the-corpus-records: ready-for-dev

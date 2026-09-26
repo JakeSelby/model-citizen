@@ -1,0 +1,114 @@
+# SPDX-License-Identifier: MIT
+"""A live session settles due adherence emissions: the session-start hook answers each one once.
+
+Driven through the Claude Code and Codex lifecycle entry points as their own processes, the way
+the runtime runs them, so the test covers the wiring and not only `adherence.settle`. The answer
+is observation, so the start-up output must be the same with a due emission, with one not yet
+due, and with no ledger at all.
+
+Run: python3 -m unittest discover tests
+"""
+import importlib.util
+import json
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+from isolation import without_harness_vars
+
+REPO = Path(__file__).resolve().parent.parent
+RUNTIMES = ("claude-code", "codex")
+DAY = 86400
+
+
+def load_adherence():
+    spec = importlib.util.spec_from_file_location(
+        "harness_adherence_settle", str(REPO / "policy" / "hooks" / "adherence.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+adherence = load_adherence()
+
+
+def emitted(ident, age):
+    return {"kind": "emitted", "adherence_id": ident, "recommendation": "fresh-session",
+            "module": "hooks/usage-feed", "session_id": "s-old", "turn": 2,
+            "ts": adherence.now_ts(time.time() - age), "profile_fingerprint": "p",
+            "schema_version": 1}
+
+
+class LiveSettleTests(unittest.TestCase):
+    def home(self, rows=None):
+        home = Path(tempfile.mkdtemp(prefix="adherence-settle-"))
+        self.addCleanup(shutil.rmtree, str(home), ignore_errors=True)
+        (home / "work").mkdir()
+        if rows is not None:
+            target = adherence.path({"HOME": str(home)})
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        return home
+
+    def start(self, home, runtime="claude-code", session="s-new"):
+        """The session-start entry's stdout, run as the runtime runs it."""
+        env = without_harness_vars()
+        env["HOME"] = str(home)
+        payload = {"hook_event_name": "SessionStart", "session_id": session, "source": "startup",
+                   "cwd": str(home / "work")}
+        done = subprocess.run([sys.executable, str(REPO / "adapters" / runtime / "hook.py")],
+                              input=json.dumps(payload), capture_output=True, text=True,
+                              env=env, cwd=str(home / "work"), timeout=60)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def ledger(self, home):
+        return adherence.read_rows(adherence.path({"HOME": str(home)}))
+
+    def test_a_due_emission_gets_exactly_one_response_and_a_second_start_adds_none(self):
+        for runtime in RUNTIMES:
+            with self.subTest(runtime=runtime):
+                home = self.home([emitted("due", 2 * DAY)])
+                self.start(home, runtime)
+                responses = [row for row in self.ledger(home) if row["kind"] == "response"]
+                self.assertEqual(len(responses), 1)
+                answer = responses[0]
+                self.assertEqual((answer["adherence_id"], answer["outcome"], answer["reason"]),
+                                 ("due", "unknown", "unobserved"))
+                self.assertEqual(sorted(answer), sorted([
+                    "adherence_id", "kind", "module", "outcome", "profile_fingerprint",
+                    "reason", "recommendation", "schema_version", "session_id", "ts",
+                    "turn", "turns_after", "window"]))
+                self.start(home, runtime, session="s-later")
+                self.assertEqual(len(self.ledger(home)), 2)
+
+    def test_settling_adds_nothing_to_what_session_start_says(self):
+        for runtime in RUNTIMES:
+            with self.subTest(runtime=runtime):
+                bare = self.start(self.home(), runtime)
+                self.assertEqual(self.start(self.home([emitted("due", 2 * DAY)]), runtime), bare)
+                self.assertEqual(self.start(self.home([emitted("open", 60)]), runtime), bare)
+
+    def test_nothing_due_writes_nothing(self):
+        home = self.home([emitted("open", 60)])
+        target = adherence.path({"HOME": str(home)})
+        before = target.read_bytes()
+        self.start(home)
+        self.assertEqual(target.read_bytes(), before)
+        empty = self.home()
+        self.start(empty)
+        self.assertFalse(adherence.path({"HOME": str(empty)}).exists())
+
+    def test_a_ledger_it_cannot_read_leaves_session_start_unchanged(self):
+        bare = self.start(self.home())
+        home = self.home()
+        adherence.path({"HOME": str(home)}).mkdir(parents=True)
+        self.assertEqual(self.start(home), bare)
+
+
+if __name__ == "__main__":
+    unittest.main()

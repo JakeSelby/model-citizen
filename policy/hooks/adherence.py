@@ -28,7 +28,8 @@ before the window of `window` further prompts has passed. Not followed: the sess
 `turn + window + 1` arrives first. Unknown: neither can be read yet. An emission is answered
 `unknown` for good only once it is `UNKNOWN_AFTER` old, with `reason` saying why:
 `unobserved` when the ledger holds no row for its turn, which is every emission until the
-observation entry point is registered in live sessions, and `window_open` otherwise.
+observation entry point is registered in live sessions, and `window_open` otherwise. The
+lifecycle's session start calls `settle`, so a live session writes each answer once it is due.
 
 This module sits beside the hooks rather than in `lib/harness_core` for the reason `decisions.py`
 gives: a hook is reached through `~/.claude/hooks/harness` and nothing above that resolves.
