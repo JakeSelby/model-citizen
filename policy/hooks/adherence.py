@@ -247,10 +247,11 @@ def ledger_lock(target):
     yields False because there is nothing to answer. It is polled without blocking for at most
     `LOCK_BUDGET` seconds, so a holder that never lets go cannot stall session start; running out
     of budget, or any error, yields False, and the answers wait for a later start rather than
-    risk a second row. With no advisory locking on the platform it yields True unlocked.
+    risk a second row. A platform with no advisory locking yields False too: every supported one
+    has it, and an answer never written beats one written twice.
     """
     if fcntl is None:
-        yield True
+        yield False
         return
     stream = None
     try:

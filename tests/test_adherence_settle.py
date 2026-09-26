@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -127,8 +128,7 @@ class ConcurrentSettleTests(unittest.TestCase):
     def race(self, wait):
         """Settle from two threads, each held inside its reading until both arrive or `wait` ends.
 
-        Unlocked, both have read the ledger before either appends, which is the race. Locked, the
-        second cannot read until the first has appended, so the first gives up waiting after `wait`.
+        Unlocked, both have read the ledger before either appends, which is the race.
         """
         barrier = threading.Barrier(2, timeout=wait)
         real = adherence.respond
@@ -146,14 +146,50 @@ class ConcurrentSettleTests(unittest.TestCase):
                 thread.start()
             for thread in threads:
                 thread.join(30)
+        return self.rows()
+
+    def rows(self):
         return [row for row in adherence.read_rows(adherence.path(self.env))
                 if row["kind"] == "response"]
 
-    def test_two_concurrent_settlers_write_one_response(self):
-        self.assertEqual(len(self.race(wait=0.3)), 1)
+    def test_a_settler_that_tries_while_another_holds_the_lock_writes_nothing(self):
+        # The first settler waits inside its reading until the second has tried the lock and
+        # been refused, so the one row below is the lock's doing, not the threads' timing.
+        inside, refused = threading.Event(), threading.Event()
+        real_respond, real_fcntl = adherence.respond, adherence.fcntl
+
+        def held(row, observed):
+            inside.set()
+            refused.wait(10)
+            return real_respond(row, observed)
+
+        def flock(stream, operation):
+            try:
+                return real_fcntl.flock(stream, operation)
+            except BlockingIOError:
+                refused.set()
+                raise
+
+        fake = types.SimpleNamespace(flock=flock, LOCK_EX=real_fcntl.LOCK_EX,
+                                     LOCK_NB=real_fcntl.LOCK_NB)
+        with patch.object(adherence, "respond", held), patch.object(adherence, "fcntl", fake):
+            first = threading.Thread(target=adherence.settle, args=(self.env,))
+            first.start()
+            self.assertTrue(inside.wait(10))
+            second = threading.Thread(target=adherence.settle, args=(self.env,))
+            second.start()
+            first.join(30)
+            second.join(30)
+        self.assertTrue(refused.is_set())
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_no_advisory_locking_leaves_the_emission_for_a_later_start(self):
+        with patch.object(adherence, "fcntl", None):
+            self.assertEqual(adherence.settle(self.env), [])
+        self.assertEqual(self.rows(), [])
 
     def test_the_race_writes_two_without_the_lock(self):
-        # Proof the test above bites: with the lock replaced by no lock, both settlers answer.
+        # Proof the race is real: with the lock replaced by no lock, both settlers answer.
         @contextmanager
         def unlocked(target):
             yield True
