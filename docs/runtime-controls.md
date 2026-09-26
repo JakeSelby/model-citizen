@@ -93,6 +93,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `usage-feed` | UserPromptSubmit, SubagentStart, SubagentStop and PostToolUse on a spawn, Claude Code only |
 | `usage-log` | SessionEnd |
 | `validate-plan-card` | PostToolUse on a plan file |
+| `workspace-session` | SessionStart, from its own entry: the workspace's other folders and their instructions ([workspaces](workspaces.md#the-session-start-hook)) |
 
 `citizen config set hooks.<id> off` switches one off, and it applies from the next event with no
 sync: the dispatcher resolves the selection at each event and neither loads nor runs a module

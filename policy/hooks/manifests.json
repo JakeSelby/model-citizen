@@ -181,6 +181,18 @@
       "slot": null,
       "dependencies": [],
       "conflicts": []
+    },
+    "workspace-session": {
+      "claims": [
+        "Names the other folders of the session's workspace at session start and supplies the instructions the runtime does not load from them."
+      ],
+      "surface": [
+        "hook-events"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
     }
   }
 }

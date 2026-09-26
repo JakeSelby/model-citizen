@@ -251,6 +251,23 @@ class NativeInstallTests(TempHome):
     def test_a_personal_codex_hook_survives_sync_diff_and_uninstall(self):
         self.assert_personal_hook_survives(self.home / ".codex" / "hooks.json", "PreToolUse")
 
+    def test_the_workspace_entry_is_owned_on_both_runtimes_and_a_second_sync_changes_nothing(self):
+        files = (self.home / ".claude" / "settings.json", self.home / ".codex" / "hooks.json")
+        self.assertEqual(self.sync(), 0)
+        before = [path.read_bytes() for path in files]
+        for path in files:
+            entries = json.loads(path.read_text())["hooks"]["SessionStart"]
+            self.assertEqual([harness._hook_marker(entry) for entry in entries],
+                             ["runtime-sessionstart", "runtime-sessionstart-workspace"], msg=path)
+            self.assertTrue(all(harness._is_harness_entry(entry) for entry in entries), msg=path)
+        self.assertEqual(self.sync(), 0)
+        self.assertEqual([path.read_bytes() for path in files], before)
+        self.assertEqual([line for line in harness._diff_lines() if "hooks" in line], [])
+        self.assertEqual(harness.cmd_uninstall(harness.argparse.Namespace()), 0)
+        for path in files:
+            remaining = json.loads(path.read_text()) if path.exists() else {}
+            self.assertNotIn("SessionStart", remaining.get("hooks", {}), msg=path)
+
     def test_session_override_does_not_change_global_projections(self):
         with patch.dict(harness.os.environ, {"HARNESS_STANCE_DELEGATION": "off"}):
             self.assertEqual(self.sync(), 0)

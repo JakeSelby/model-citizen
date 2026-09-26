@@ -46,7 +46,7 @@ Sync keeps a journal of what it changed and refuses to overwrite what it does no
 - [Same policy on both](docs/runtime-controls.md): A Claude Code spawn and a Codex spawn resolve to the same delegation policy.
 - [Declared integrations](docs/bmad.md): A planning framework declares itself in one descriptor. citizen integration check|apply installs its overrides, and the spawn hook confines its review layers.
 - [Honest compatibility](docs/compatibility.md): The catalog says which clients are qualified and where the gaps are: two runtimes today, and the headline does not claim more.
-- [A worktree per agent](primitives/skills/worktree-per-agent): Parallel agents do not step on your checkout or on each other. Each claims the paths it will write, and an edit to a live sibling's claim is warned, then denied.
+- [Worktrees and workspaces](docs/workspaces.md): Each agent works in its own worktree and claims the paths it writes. Your .code-workspace files decide which repositories a session sees, instructions included.
 
 ### See and steer what your agents spend
 
@@ -101,7 +101,6 @@ Planned, not promised.
 
 - **Measured against bare:** Proof set 1 runs the harness against bare Claude Code, and harness evidence verify re-derives every published figure from its rows, whatever they show.
 - **The superpowers mode:** One switch hands planning and testing to Superpowers while every hook stays on, and doctor names the mode when it finds the plugin.
-- **Workspaces from your .code-workspace files:** Your .code-workspace files decide which repositories belong together, citizen workspace open launches Claude Code or Codex across them, and a session in any member folder gets the others' instructions.
 
 ## The delivery loop
 

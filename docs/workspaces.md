@@ -89,8 +89,61 @@ placed after it would be read as one more folder.
 - `--codex` launches `codex -C <first> --add-dir <each other>` instead.
 - `--dry-run` prints the `cd` and the command, with the environment variable, and runs nothing.
 
-For the added folders' `CLAUDE.md` files to load, set
-`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` in your environment.
+The added folders' `CLAUDE.md` files load natively because `sync` sets
+`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` while `workspaces_dir` is set; see
+[the environment variable](#the-environment-variable).
+
+## The session-start hook
+
+While `workspaces_dir` is set, a session opened in any member folder is told its workspace at
+start-up: the workspace's name and the rule that attached it, each other member's path marked
+`loaded natively`, `supplied by this hook` or `missing`, and the instructions of every supplied
+member. Instructions are the member's `CLAUDE.md` and `.claude/CLAUDE.md`, else its `AGENTS.md`, then `CLAUDE.local.md`
+and each `.claude/rules/*.md` without `paths:` frontmatter, with their `@` imports; a path-scoped
+rule is listed by path only. A folder in several workspaces that no rule decides gets one line
+naming the candidates and the overrides file, and a folder in none, or with the key unset, gets
+nothing.
+
+On Claude Code a member counts as loaded natively, and is not supplied twice, only when the
+variable is set in the hook's environment, the member is an `--add-dir` argument of the running
+Claude process, read exactly from `/proc` on Linux or `sysctl` on macOS (elsewhere no member
+counts as native), and it has a `CLAUDE.md` or `.claude/CLAUDE.md`. A member with only an `AGENTS.md` is always supplied.
+On Codex every member is supplied.
+
+The hook is `workspace-session`, registered as its own SessionStart entry beside the start-up
+block's, because each hook's output is capped at 10,000 characters and that block already uses
+most of one. A block of at most 9,000 characters goes inline. A longer one is written to
+`~/.local/state/agent-harness/workspaces/<name>-<hash>.md`, named for the workspace and a hash of
+its content so two sessions never overwrite each other's, and only the member list and that path
+are inlined, with an instruction to read the file before answering. The template's `Read(~/**)`
+allow rule already covers it, and bundles older than seven days are removed on the next write. If
+the file cannot be written, the block lists each member's instruction file to read instead. Each
+instruction file is read up to 64 KiB. `citizen config set hooks.workspace-session off` switches it off from the next
+session. Any failure leaves the block out; it never stops a session starting.
+
+What each surface gets:
+
+- **CLI and `workspace open`:** the members arrive as `--add-dir`, so members with a
+  `CLAUDE.md` load natively and the hook supplies the rest.
+- **VS Code:** the extension passes the window's other folders as `--add-dir`, which also tells
+  the hook which workspace the window opened.
+- **Desktop app:** a new chat has no added folders, so the hook supplies every member and asks
+  Claude to request a member folder through the app's folder-grant tool on first use, not all at
+  start; a granted folder arrives as `--add-dir` from the chat's next launch.
+- **Codex:** it loads no `AGENTS.md` from an added folder, so the hook supplies every member.
+  Codex runs a user hook only once its trust is accepted in the client, and `sync` registers this
+  entry as a new one, so trust has to be accepted again after the first sync that adds it.
+- **Role workers:** none run it. Claude workers load no user settings and Codex workers get a
+  fresh `CODEX_HOME`.
+
+## The environment variable
+
+`sync` owns `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` in `~/.claude/settings.json` while
+`workspaces_dir` is set, by the same rules as the native telemetry variables. It writes `1`. A
+value you already set to `1` is taken over silently and journaled; a different value is left
+alone and reported. When `workspaces_dir` is unset, `sync` puts the key back to what it held
+before the harness first wrote it: removed if it was absent, and your own `1` left in place if
+that was what it adopted. A key the journal does not hold is never touched.
 
 ## One store per workspace
 
@@ -109,4 +162,5 @@ removing the symlink and moving the directory back.
 
 Optional, for editing convenience only. Add it as a later folder. Its skills live under
 `claude/skills/`, not `.claude/skills/`, so it adds none as an added folder; its `CLAUDE.md`,
-which is its `AGENTS.md`, loads there only with the environment variable above set.
+which is its `AGENTS.md`, loads there only with the environment variable above set, and the
+session-start hook supplies it otherwise.

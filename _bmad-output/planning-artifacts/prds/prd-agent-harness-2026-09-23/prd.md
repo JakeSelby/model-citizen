@@ -1231,9 +1231,8 @@ are unreleased (#603).
 A developer must be able to define a multi-root workspace whose session history and memory follow the
 workspace, whichever folder is first. The `.code-workspace` files in one configured folder must be the only
 definition of which folders belong together, and a session must be launchable across a workspace's folders.
-**Status:** partial: the shared session store is implemented (0.12); the workspace map, `workspace list`
-and `workspace open` are implemented (0.14, #935); supplying member instructions at session start is
-planned (0.14).
+**Status:** implemented: the shared session store (0.12); the workspace map, `workspace list` and
+`workspace open` (0.14, #935); member instructions supplied at session start (0.14, #936).
 
 **Consequences (testable):**
 - `citizen workspace create` points every folder's project key at one store, so every folder shows the same
@@ -1248,6 +1247,12 @@ planned (0.14).
   every shared folder resolves and by which rule, and each ignored override.
 - `workspace open NAME` runs the runtime in the first existing member with every other existing member as
   `--add-dir` and `HARNESS_WORKSPACE=NAME` set; arguments after `--` come before the `--add-dir` flags.
+- A session started in a member folder receives the other members' paths and instructions from its own
+  SessionStart hook entry: inline when the block fits in 9,000 characters, otherwise as one bundle file it is
+  told to read first.
+- On Claude Code a member is left to native loading only when it is an `--add-dir` argument of the session,
+  `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1` is set and it has a `CLAUDE.md`; on Codex every member
+  is supplied.
 
 #### FR-62: Disposable homes on macOS
 Every runtime launched under a substituted HOME must get a throwaway keychain. If it cannot, the case fails

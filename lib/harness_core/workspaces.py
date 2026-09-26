@@ -39,16 +39,19 @@ this file by path. The API:
     resolve(cwd, directory, env, add_dirs, ...) -> dict
         cwd, folder, workspace, members, rule, candidates
     member_instructions(folder) -> dict        files [(path, text)], scoped [path]
+    claude_files(folder) -> [path]             its CLAUDE.md and .claude/CLAUDE.md
 """
 import json
 import os
 import re
-import subprocess
 
 SUFFIX = ".code-workspace"
 OVERRIDES = "overrides.json"
 ENV = "HARNESS_WORKSPACE"
 IMPORT_DEPTH = 5
+# One instruction file is read up to this many characters, so a huge file cannot stall a hook.
+READ_LIMIT = 64 * 1024
+CLAUDE_FILES = ("CLAUDE.md", os.path.join(".claude", "CLAUDE.md"))
 
 _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 _IMPORT = re.compile(r"(?<![\w`@])@((?:~|\.{1,2})?/?[^\s`@()\[\]<>\"']+)")
@@ -184,22 +187,38 @@ def _within(path, root):
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def _main_checkout(cwd):
-    """The same place in a linked worktree's main checkout, or None when cwd is not in one."""
+def _read_small(path):
     try:
-        done = subprocess.run(
-            ["git", "-C", cwd, "rev-parse", "--path-format=absolute",
-             "--git-common-dir", "--git-dir", "--show-toplevel"],
-            capture_output=True, text=True, timeout=3)
-    except (OSError, subprocess.SubprocessError):
+        with open(path, encoding="utf-8") as handle:
+            return handle.read(4096)
+    except (OSError, UnicodeDecodeError):
         return None
-    lines = done.stdout.splitlines()
-    if done.returncode != 0 or len(lines) != 3:
+
+
+def _main_checkout(cwd):
+    """The same place in a linked worktree's main checkout, or None when cwd is not in one.
+
+    Plain file reads, no `git`, so a session hook stays inside its budget: walk up to the `.git`
+    file, follow its `gitdir:` line, then that directory's `commondir`. A `.git` directory is a
+    main checkout, and a `.git` file with no `commondir` (a submodule) is not a linked worktree.
+    """
+    top = cwd
+    while not os.path.isfile(os.path.join(top, ".git")):
+        if os.path.isdir(os.path.join(top, ".git")):
+            return None
+        parent = os.path.dirname(top)
+        if parent == top:
+            return None
+        top = parent
+    text = _read_small(os.path.join(top, ".git")) or ""
+    line = text.strip().splitlines()[0] if text.strip() else ""
+    if not line.startswith("gitdir:"):
         return None
-    common, git_dir, top = (os.path.realpath(line) for line in lines)
-    if common == git_dir:
+    git_dir = os.path.realpath(os.path.join(top, line[len("gitdir:"):].strip()))
+    common = _read_small(os.path.join(git_dir, "commondir"))
+    if not common or not common.strip():
         return None
-    main = os.path.dirname(common)
+    main = os.path.dirname(os.path.realpath(os.path.join(git_dir, common.strip())))
     rel = os.path.relpath(cwd, top)
     return os.path.realpath(main if rel == "." else os.path.join(main, rel))
 
@@ -304,15 +323,21 @@ def _imports(path, text):
 def _read(path):
     try:
         with open(path, encoding="utf-8") as handle:
-            return handle.read()
+            return handle.read(READ_LIMIT)
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def claude_files(folder):
+    """The folder's project instruction files Claude Code loads: `CLAUDE.md`, `.claude/CLAUDE.md`."""
+    return [os.path.join(folder, name) for name in CLAUDE_FILES
+            if os.path.isfile(os.path.join(folder, name))]
 
 
 def member_instructions(folder):
     """The instruction files a session outside `folder` needs from it, in load order.
 
-    `CLAUDE.md`, else `AGENTS.md`; then `CLAUDE.local.md` and each `.claude/rules/*.md` without
+    `CLAUDE.md` and `.claude/CLAUDE.md`, else `AGENTS.md`; then `CLAUDE.local.md` and each `.claude/rules/*.md` without
     `paths:` frontmatter; each followed by the files it `@`-imports, relative to itself, to depth
     five and outside code. A rule scoped by `paths:` is listed in `scoped` by path only.
     Returns {files: [(path, text)], scoped: [path]}.
@@ -332,10 +357,8 @@ def member_instructions(folder):
             for target in _imports(real, text):
                 add(target, depth + 1)
 
-    primary = os.path.join(folder, "CLAUDE.md")
-    if not os.path.isfile(primary):
-        primary = os.path.join(folder, "AGENTS.md")
-    for path in (primary, os.path.join(folder, "CLAUDE.local.md")):
+    primary = claude_files(folder) or [os.path.join(folder, "AGENTS.md")]
+    for path in primary + [os.path.join(folder, "CLAUDE.local.md")]:
         if os.path.isfile(path):
             add(path, 0)
     rules = os.path.join(folder, ".claude", "rules")

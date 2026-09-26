@@ -341,5 +341,58 @@ class IdMap(unittest.TestCase):
             self.assertIn("from harness_core.lifecycle import main", text)
 
 
+
+class WorkspaceEntry(Fixture):
+    """The workspace block answers its own SessionStart entry, and its id switches it off."""
+
+    def run_entry(self, runtime):
+        loaded, real_load = [], lifecycle.load
+
+        def load(name):
+            loaded.append(name)
+            return real_load(name) if name in REAL else types.SimpleNamespace(main=lambda *args: None)
+
+        event = {"hook_event_name": "SessionStart", "session_id": "s", "cwd": str(self.cwd)}
+        with patch.object(lifecycle, "load", load):
+            lifecycle.workspace(runtime, event)
+        return loaded
+
+    def test_the_workspace_entry_runs_its_module_alone_until_switched_off_on_both_runtimes(self):
+        for runtime in RUNTIMES:
+            with self.subTest(runtime=runtime):
+                self.configure({"workspace-session": "on"})
+                loaded = self.run_entry(runtime)
+                self.assertIn("workspace-session", loaded)
+                self.assertNotIn("harness-session", loaded)
+                self.configure({"workspace-session": "off"})
+                self.assertNotIn("workspace-session", self.run_entry(runtime))
+
+    def test_the_plain_session_start_entry_never_loads_the_workspace_module(self):
+        for runtime in RUNTIMES:
+            with self.subTest(runtime=runtime):
+                self.configure({})
+                loaded, _ = self.dispatch(runtime, {"hook_event_name": "SessionStart", "session_id": "s"})
+                self.assertIn("harness-session", loaded)
+                self.assertNotIn("workspace-session", loaded)
+
+    def test_main_routes_the_workspace_argument_and_prints_an_empty_object_for_no_answer(self):
+        self.configure({"workspace-session": "off"})
+        out = io.StringIO()
+        with patch.object(sys, "stdin", io.StringIO(json.dumps(
+                {"hook_event_name": "SessionStart", "session_id": "s", "cwd": str(self.cwd)}))), \
+                patch.object(lifecycle, "dispatch", side_effect=AssertionError("plain entry ran")), \
+                redirect_stdout(out):
+            lifecycle.main("claude-code", ["workspace"])
+        self.assertEqual(out.getvalue().strip(), "{}")
+
+    def test_bad_input_on_the_workspace_entry_prints_an_empty_answer_not_a_policy_message(self):
+        for text in ("not json", "[1, 2]", ""):
+            with self.subTest(text=text):
+                out = io.StringIO()
+                with patch.object(sys, "stdin", io.StringIO(text)), redirect_stdout(out):
+                    lifecycle.main("claude-code", ["workspace"])
+                self.assertEqual(out.getvalue().strip(), "{}")
+
+
 if __name__ == "__main__":
     unittest.main()
