@@ -1386,6 +1386,109 @@ process.
 - A bot-authored mined task fails validation.
 - `cost_bench.py replay` without `--tag` exits non-zero.
 
+### 4.16 Studio
+
+**Description:** `citizen studio` opens a local web UI over the harness. A developer sees the effective
+configuration and every module, tunes them in drafts, runs any suite or single test against the installed
+version, a release or a draft, and judges each change against its baseline before applying it through the
+same governed path as the CLI. The Studio is a second face on the same core: every action has a `citizen`
+equivalent, it binds to loopback only, and it adds no runtime Python dependency and no remote service. It
+reads the local ledgers and bundles no telemetry backend (§8). Its UI ships as a prebuilt bundle, which
+waits on the AD-21 amendment in #962. The epics are #955 to #959.
+
+#### FR-75: One command opens the Studio
+`citizen studio` must start a local server bound to loopback, serve the UI from a bundle committed to the
+repository, print its URL and open it, and run detached for agents with status, stop and JSON output. One
+instance runs per user. **Status:** planned (v0.18.0, #955).
+
+**Consequences (testable):**
+- A clean install with no Node serves the UI.
+- A second `citizen studio` reuses the running instance.
+- No flag binds the server beyond loopback.
+
+#### FR-76: A local surface locked to its launcher
+The Studio must answer only its launcher: a per-launch token exchanged for an HttpOnly, SameSite=Strict
+cookie, a Host allowlist, Origin and CSRF checks on every write, a content security policy with no inline
+script, and no CORS. No response carries a secret. **Status:** planned (v0.18.0, #965).
+
+**Consequences (testable):**
+- An anonymous API request gets 401, and a foreign Host or Origin gets 403.
+- No API response carries a secret value.
+
+#### FR-77: See the whole harness, live
+The Studio must show the installed version and health, the effective selection with the layer each value
+comes from, every module with its manifest, projection and context cost, and what the harness decided and
+changed, within two seconds of a change on disk, and meet WCAG 2.2 AA at every width down to a phone.
+**Status:** planned (v0.18.0, #955, #999).
+
+**Consequences (testable):**
+- The resolved selection equals `citizen selection`'s for the same inputs.
+- A change made with the CLI shows in an open Studio within two seconds.
+
+#### FR-78: Tune in drafts
+Every Studio edit (a mode, stance variant, switch, setting, module text, or a new or forked module) must
+land in a draft, a managed worktree with a checkpoint commit per save, and pass the CLI's own checks before
+it is saved. Nothing live changes until the developer applies it. **Status:** planned (v0.18.0, #956).
+
+**Consequences (testable):**
+- After any edit, the live checkout, the live config and every projection are unchanged, byte for byte.
+- A change the CLI would refuse is refused with the same reason.
+
+#### FR-79: Apply and roll back through the governed path
+Applying a draft must run through the CLI's locks, checks, ownership journal and decision log, and every
+apply must be reversible in one step. A core module changes only through a fork into the developer's own
+root or a contribution branch, never in place. **Status:** planned (v0.18.0, #978, #979).
+
+**Consequences (testable):**
+- An applied state equals running the CLI commands the Studio shows.
+- A rollback restores the config, the root and the projections byte for byte.
+
+#### FR-80: Run any suite or single test against any target
+The Studio must launch every suite in its catalog, whole or down to one test or case, against the installed
+version, a release, a branch, a worktree or a draft, in an isolated profile built from that target, with a
+live log, a cancel and a kept record. Runs launch only from allowlisted commands, with no shell, and native
+result files stay the system of record. **Status:** planned (v0.18.0, #957).
+
+**Consequences (testable):**
+- No run writes the live home.
+- Deleting the run store and reindexing restores every run.
+
+#### FR-81: Spend shown and capped before it happens
+A Studio run that spends usage must show its estimate and caps before it starts, start only on the
+developer's confirm, stop cleanly at a cap or a usage limit, and record its spend against the run.
+**Status:** planned (v0.18.0, #985).
+
+**Consequences (testable):**
+- No paid run starts without a confirm.
+- A capped run keeps its finished cases.
+
+#### FR-82: Compare runs and judge a change
+The Studio must compare two runs as pairs with the paired, task-clustered intervals, word each verdict by
+the evidence standard, test a draft against its base with matched parameters, and show each measure's trend
+across versions beside the proof set. **Status:** planned (v0.18.0, #990, #991, #992).
+
+**Consequences (testable):**
+- An interval that spans no effect reads as inconclusive, whatever the point estimate.
+- A draft's verdict goes stale when the draft changes.
+
+#### FR-83: Rule health, usage and proposals
+The Studio must show every rule's measurement status, adherence and context cost, spend from the local
+ledger, and stance proposals with their evidence. Evidence proposes and the developer applies: nothing is
+switched for them (§8). **Status:** planned (v0.18.0, #994, #995, #996).
+
+**Consequences (testable):**
+- Rule statuses equal `citizen usage --rules`.
+- Trying a proposal changes nothing live.
+
+#### FR-84: The same loop for agents and newcomers
+Every Studio action must have a `citizen` equivalent that the Studio shows, so an agent runs the draft,
+test and apply loop headless, and a new install must reach an applied draft through a guided first run.
+**Status:** planned (v0.18.0, #997, #998).
+
+**Consequences (testable):**
+- A mutating API route with no CLI equivalent fails a test.
+- An abandoned first run changes nothing live.
+
 ## 5. Cross-cutting non-functional requirements
 
 - **NFR-1 Preservation:**
@@ -1660,6 +1763,13 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - context-lifecycle treatments (#123, #745) and cache-leverage measurement (#524);
   - stance drift and proposals (#692);
   - the adoption cohort (#212, #213, #214).
+- **v0.18.0, Studio** (added 2026-09-26, #960):
+  - `citizen studio`, a local UI over the whole harness, locked to its launcher (FR-75 to FR-77);
+  - drafts for every change, applied through the governed path and reversible (FR-78, FR-79);
+  - any suite or single test against the installed version, a release or a draft, with spend shown first
+    (FR-80, FR-81);
+  - paired comparisons, draft efficacy, trends, rule health, usage and proposals (FR-82, FR-83);
+  - agent parity and a guided first run (FR-84).
 - **v1.0.0, Stable:** the §9.1 contract, the audit and the publication (#206, #207, #209, #210, #211),
   plus the evaluation gate below.
 - **Backlog:** decision-provider consumers (#135), policy preferences, the session archive and
