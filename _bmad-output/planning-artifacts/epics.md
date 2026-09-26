@@ -471,6 +471,7 @@ How to read it:
 - **Covers:** FR-75, FR-76, FR-77
 - **Stories:**
   - AH-C082 [#960](https://github.com/JakeSelby/model-citizen/issues/960): File the Studio epics and stories (open)
+  - AH-C083 [#1005](https://github.com/JakeSelby/model-citizen/issues/1005): Record the Studio field check as a research digest (open)
   - AH-T035 [#961](https://github.com/JakeSelby/model-citizen/issues/961): Write the Studio's UX specification (open)
   - AH-T036 [#962](https://github.com/JakeSelby/model-citizen/issues/962): Record the Studio's architecture decisions in the spine (open)
   - AH-SP017 [#963](https://github.com/JakeSelby/model-citizen/issues/963): Spike: can the committed UI bundle be rebuilt byte for byte on Linux CI? (open)

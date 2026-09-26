@@ -7645,6 +7645,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C083",
+      "github_number": 1005,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1005",
+      "title": "Record the Studio field check as a research digest",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C083.md",
+      "parent_bmad_id": "AH-E022",
+      "parent_github_number": 955,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C084",
       "github_number": 1006,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1006",
