@@ -248,8 +248,42 @@ class ResolveTests(Fixture):
         answer = self.resolve(linked)
         self.assertEqual((answer["rule"], answer["folder"]), ("single", main))
 
+    def test_a_worktree_in_a_subfolder_resolves_to_the_same_place_in_the_main_checkout(self):
+        main = self.repo("app")
+        git = ["git", "-c", "user.name=t", "-c", "user.email=" + "t" + "@example.invalid"]
+        subprocess.run(git + ["-C", main, "init", "-q"], check=True)
+        subprocess.run(git + ["-C", main, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+        linked = self.root / "worktrees" / "app-sub"
+        subprocess.run(git + ["-C", main, "worktree", "add", "-q", str(linked)], check=True)
+        (linked / "pkg").mkdir()
+        self.assertEqual(ws._main_checkout(str(linked / "pkg")),
+                         os.path.join(main, "pkg"))
+
+    def test_a_git_file_without_a_commondir_is_not_a_linked_worktree(self):
+        sub = Path(self.repo("sub"))
+        modules = self.root / "outer" / ".git" / "modules" / "sub"
+        modules.mkdir(parents=True)
+        (sub / ".git").write_text("gitdir: " + str(modules) + "\n")
+        self.assertIsNone(ws._main_checkout(str(sub)))
+        self.assertIsNone(ws._main_checkout(str(self.root)))
+
 
 class InstructionTests(Fixture):
+    def test_dot_claude_claude_md_counts_as_claude_md(self):
+        a = Path(self.repo("a"))
+        (a / ".claude").mkdir()
+        (a / ".claude" / "CLAUDE.md").write_text("nested")
+        (a / "AGENTS.md").write_text("never read")
+        found = ws.member_instructions(str(a))
+        self.assertEqual([text for _, text in found["files"]], ["nested"])
+        self.assertEqual(ws.claude_files(str(a)), [str(a / ".claude" / "CLAUDE.md")])
+
+    def test_one_file_is_read_up_to_the_read_limit(self):
+        a = Path(self.repo("a"))
+        (a / "CLAUDE.md").write_text("x" * (ws.READ_LIMIT + 10))
+        text = ws.member_instructions(str(a))["files"][0][1]
+        self.assertEqual(len(text), ws.READ_LIMIT)
+
     def test_claude_md_wins_over_agents_md_and_imports_follow(self):
         a = Path(self.repo("a"))
         (a / "CLAUDE.md").write_text("see @docs/more.md and `@ignored.md` and me" "@example.com\n")

@@ -79,10 +79,17 @@ class RegistrationTests(unittest.TestCase):
     def test_one_command_per_event_and_nothing_else(self):
         self.assertEqual(sorted(self.hooks), sorted(lifecycle.EVENTS["claude-code"]))
         for event, entries in self.hooks.items():
-            self.assertEqual(len(entries), 1, msg=event)
+            # SessionStart's second entry is the workspace block, with its own output cap.
+            self.assertEqual(len(entries), 2 if event == "SessionStart" else 1, msg=event)
             self.assertEqual(len(entries[0]["hooks"]), 1, msg=event)
             self.assertIn("# harness:runtime-" + event.lower(),
                           entries[0]["hooks"][0]["command"], msg=event)
+
+    def test_the_workspace_entry_is_the_same_adapter_with_its_own_argument_and_marker(self):
+        first, second = (entry["hooks"][0] for entry in self.hooks["SessionStart"])
+        self.assertEqual(second["command"], first["command"].split(" # ", 1)[0]
+                         + " workspace # harness:runtime-sessionstart-workspace")
+        self.assertEqual(second["timeout"], 10)
 
     def test_every_registered_command_names_a_script_that_exists(self):
         for event, entries in self.hooks.items():
@@ -107,7 +114,7 @@ class RegistrationTests(unittest.TestCase):
 
     def test_hook_health_finds_every_registered_command(self):
         count, problems = harness.hook_health(harness.runtime_template())
-        self.assertEqual(count, len(self.hooks))
+        self.assertEqual(count, sum(len(entries) for entries in self.hooks.values()))
         self.assertEqual(problems, [])
 
 

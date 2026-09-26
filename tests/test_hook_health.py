@@ -38,9 +38,12 @@ def settings(command):
 
 class HookCommandTests(unittest.TestCase):
     def test_every_registered_hook_command_is_found(self):
-        # One coordinator command per lifecycle event, so the count follows the event list.
+        # One coordinator command per lifecycle event, plus SessionStart's workspace entry, so the count
+        # follows the registered entries.
         template = harness.runtime_template()
-        self.assertEqual(len(harness.hook_commands(template)), len(template["hooks"]))
+        entries = sum(len(group) for group in template["hooks"].values())
+        self.assertEqual(entries, len(template["hooks"]) + 1)
+        self.assertEqual(len(harness.hook_commands(template)), entries)
 
     def test_no_hooks_block_is_no_commands(self):
         self.assertEqual(harness.hook_commands({}), [])

@@ -922,15 +922,46 @@ def _dispatch(runtime, payload):
     return {}
 
 
+# The workspace block has a SessionStart entry of its own, because the runtime caps each hook's
+# output separately and the start-up block already fills most of one cap.
+WORKSPACE_ARG = "workspace"
+WORKSPACE_MARKER = "runtime-sessionstart-workspace"
+
+
 def registration(root, runtime):
     command = "python3 " + shlex.quote(str(root / "adapters" / runtime / "hook.py"))
-    return {"hooks": {event: [{"hooks": [{"type": "command", "command": command + " # harness:runtime-" + event.lower(),
-                                         "timeout": 300 if event == "Stop" else 2 if event == "SessionEnd" else 10}]}]
-                      for event in EVENTS.get(runtime, BASE_EVENTS)}}
+    hooks = {event: [{"hooks": [{"type": "command", "command": command + " # harness:runtime-" + event.lower(),
+                                 "timeout": 300 if event == "Stop" else 2 if event == "SessionEnd" else 10}]}]
+             for event in EVENTS.get(runtime, BASE_EVENTS)}
+    hooks["SessionStart"].append({"hooks": [{"type": "command", "timeout": 10,
+                                             "command": command + " " + WORKSPACE_ARG + " # harness:" + WORKSPACE_MARKER}]})
+    return {"hooks": hooks}
 
 
-def main(runtime):
+def workspace(runtime, payload):
+    """The workspace entry's answer: `workspace-session` alone, `{}` on any other event."""
+    if runtime not in ("claude-code", "codex") or payload.get("hook_event_name") != "SessionStart":
+        return {}
+    _SWITCHES.append(switches())
+    try:
+        return invoke("workspace-session", payload)
+    finally:
+        _SWITCHES.pop()
+
+
+def main(runtime, argv=None):
     os.environ["HARNESS_RUNTIME"] = runtime
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == [WORKSPACE_ARG]:
+        # A workspace block that fails, bad input included, is left out: it prints `{}` and
+        # never speaks for policy or blocks.
+        try:
+            payload = json.load(sys.stdin)
+            result = workspace(runtime, payload) if isinstance(payload, dict) else {}
+        except Exception:
+            result = {}
+        print(json.dumps(result or {}))
+        return
     kind = ""
     try:
         payload = json.load(sys.stdin)

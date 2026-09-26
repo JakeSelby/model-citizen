@@ -78,9 +78,9 @@
           "doc": "docs/compatibility.md"
         },
         {
-          "name": "A worktree per agent",
-          "line": "Parallel agents do not step on your checkout or on each other. Each claims the paths it will write, and an edit to a live sibling's claim is warned, then denied.",
-          "doc": "primitives/skills/worktree-per-agent"
+          "name": "Worktrees and workspaces",
+          "line": "Each agent works in its own worktree and claims the paths it writes. Your .code-workspace files decide which repositories a session sees, instructions included.",
+          "doc": "docs/workspaces.md"
         }
       ]
     },
@@ -238,11 +238,6 @@
       "title": "The superpowers mode",
       "line": "One switch hands planning and testing to Superpowers while every hook stays on, and doctor names the mode when it finds the plugin.",
       "issue": 558
-    },
-    {
-      "issue": 935,
-      "title": "Workspaces from your .code-workspace files",
-      "line": "Your .code-workspace files decide which repositories belong together, citizen workspace open launches Claude Code or Codex across them, and a session in any member folder gets the others' instructions."
     }
   ],
   "topics": [

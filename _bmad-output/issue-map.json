@@ -6865,6 +6865,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S272",
+      "github_number": 936,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/936",
+      "title": "Workspace members' instructions at session start, on every surface",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S272.md",
+      "parent_bmad_id": "AH-E002",
+      "parent_github_number": 116,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C081",
       "github_number": 940,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/940",

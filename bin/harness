@@ -744,10 +744,22 @@ def claude_native_values(telemetry: Dict[str, Any], cfg: Dict[str, Any]) -> Tupl
     return values, omitted
 
 
+# Claude Code loads an `--add-dir` folder's CLAUDE.md and rules only with this set; docs/workspaces.md.
+WORKSPACE_ENV = "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"
+
+
+def claude_workspace_values(cfg: Dict[str, Any]) -> Dict[Tuple[str, ...], str]:
+    """The Claude settings field workspace support sets, while `workspaces_dir` is set."""
+    value = cfg.get("workspaces_dir")
+    return {("env", WORKSPACE_ENV): "1"} if isinstance(value, str) and value.strip() else {}
+
+
 def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
                         telemetry: Dict[str, Any], cfg: Dict[str, Any],
                         ownership: Dict[str, Any]) -> Tuple[List[List[str]], List[str]]:
-    """Fold the runtime's telemetry settings into `merged`; returns its owned paths and notices.
+    """Fold the runtime's telemetry and workspace settings into `merged`; returns its owned
+    paths and notices. The workspace block (`claude.workspaces` in OWNERSHIP.json) is owned by
+    exactly the same rules as the telemetry block, while `workspaces_dir` is set.
 
     Ownership is per variable, never the whole `env` map, because the map is the user's: a
     variable they set is not read, changed or removed, and `held` — the keys `reconcile.Store`
@@ -759,13 +771,25 @@ def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict
     harness would write is taken over, since there is nothing to lose. Turning `native` off
     restores what each key held before the harness first wrote it.
     """
-    block = ownership.get("claude", {}).get("native_telemetry", {})
-    paths = ([["env", key] for key in block.get("env_keys", [])]
-             + [[key] for key in block.get("settings_keys", [])])
-    values, omitted = claude_native_values(telemetry, cfg)
+    telemetry_values, omitted = claude_native_values(telemetry, cfg)
     notices = ["telemetry label {} carries a comma, an equals sign or whitespace, which "
                "OTEL_RESOURCE_ATTRIBUTES cannot; it is left off the native labels and still "
                "travels with the ledger export".format(name) for name in omitted]
+    claude = ownership.get("claude", {})
+    groups = [("native telemetry", claude.get("native_telemetry", {}), telemetry_values),
+              ("workspace support", claude.get("workspaces", {}), claude_workspace_values(cfg))]
+    kept: List[List[str]] = []
+    for label, block, values in groups:
+        paths = ([["env", key] for key in block.get("env_keys", [])]
+                 + [[key] for key in block.get("settings_keys", [])])
+        kept.extend(_apply_owned(merged, live, held, paths, values, label, notices))
+    return kept, notices
+
+
+def _apply_owned(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
+                 paths: List[List[str]], values: Dict[Tuple[str, ...], str], label: str,
+                 notices: List[str]) -> List[List[str]]:
+    """One ownership block's pass of `apply_native_claude`; appends to `notices`."""
     kept: List[List[str]] = []
     for path in paths:
         record = held.get(json.dumps(path))
@@ -775,9 +799,9 @@ def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict
         current = reconcile.lookup(live, path)
         if wanted is not None and record is None and current["present"] and current["value"] != wanted:
             notices.append(
-                "{} in {} already holds a value the harness did not write; native telemetry "
+                "{} in {} already holds a value the harness did not write; {} "
                 "left it alone. Remove it to let `sync` manage it.".format(
-                    ".".join(path), claude_dir() / "settings.json"))
+                    ".".join(path), claude_dir() / "settings.json", label))
             continue
         item = ({"present": True, "value": wanted} if wanted is not None
                 else deepcopy(record.get("prior") or {"present": False, "value": None}))
@@ -785,7 +809,7 @@ def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict
             continue  # already back to what it held before; there is nothing left to take out
         reconcile.assign(merged, path, item)
         kept.append(path)
-    return kept, notices
+    return kept
 
 
 def codex_native_otel(telemetry: Dict[str, Any], live: Optional[Dict[str, Any]],
@@ -1599,7 +1623,7 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
             say(f"  native  claude-code exports its own telemetry to "
                 f"{telemetry.get('endpoint', '')} ({CLAUDE_OTEL_PROTOCOL}, {helper})")
             say(f"          labels {attributes}")
-        elif native_paths:
+        elif [p for p in native_paths if p != ["env", WORKSPACE_ENV]]:
             say("  native  telemetry.native no longer names claude-code; removing the Claude "
                 "telemetry settings sync added")
         store.json(settings_file, merged, owned_paths, hook_lists=hook_paths)

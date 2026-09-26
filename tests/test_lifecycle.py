@@ -102,7 +102,11 @@ class LifecycleTests(unittest.TestCase):
         for runtime, events in (("codex", 5), ("claude-code", 8)):
             hooks = lifecycle.registration(Path("/fixture with spaces"), runtime)["hooks"]
             self.assertEqual(len(hooks), events)
-            self.assertTrue(all(len(entries) == len(entries[0]["hooks"]) == 1 for entries in hooks.values()))
+            for event, entries in hooks.items():
+                # SessionStart carries a second entry, the workspace block, with its own output cap.
+                self.assertEqual(len(entries), 2 if event == "SessionStart" else 1, event)
+                self.assertTrue(all(len(entry["hooks"]) == 1 for entry in entries), event)
+            self.assertIn("harness:" + lifecycle.WORKSPACE_MARKER, hooks["SessionStart"][1]["hooks"][0]["command"])
 
     def test_codex_transcript_cumulative_usage_and_unknown_metrics(self):
         module = lifecycle.load("usage-log")

@@ -31,7 +31,11 @@
       "env_keys": ["CLAUDE_CODE_ENABLE_TELEMETRY", "OTEL_METRICS_EXPORTER", "OTEL_LOGS_EXPORTER", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES"],
       "settings_keys": ["otelHeadersHelper"]
     },
-    "never_touch": ["model", "theme", "viewMode", "effortLevel", "alwaysThinkingEnabled", "skipDangerousModePermissionPrompt", "env except native_telemetry.env_keys", "otelHeadersHelper unless telemetry.native is true", "permissions.deny", "permissions.ask", "autoUpdatesChannel", "remoteControlAtStartup", "agentPushNotifEnabled"]
+    "workspaces": {
+      "_comment": "Written only while workspaces_dir is set, and owned by the native_telemetry rules: a value equal to the harness's is taken over, a different one is reported and left, and on unset a key is taken back out only when the reconciliation journal holds it.",
+      "env_keys": ["CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD"]
+    },
+    "never_touch": ["model", "theme", "viewMode", "effortLevel", "alwaysThinkingEnabled", "skipDangerousModePermissionPrompt", "env except native_telemetry.env_keys and workspaces.env_keys", "otelHeadersHelper unless telemetry.native is true", "permissions.deny", "permissions.ask", "autoUpdatesChannel", "remoteControlAtStartup", "agentPushNotifEnabled"]
   },
   "vscode": {
     "owned_keys": ["claudeCode.focusView", "claudeCode.preferredLocation", "claudeCode.hideOnboarding"],

@@ -73,6 +73,7 @@ development_status:
   ah-s219-architecture-viewer-the-mailbox-adapter-behind: ready-for-dev
   ah-s221-log-every-session-archive-search-with-a: ready-for-dev
   ah-s271-workspace-map-from-code-workspace-files-with: ready-for-dev
+  ah-s272-workspace-members-instructions-at-session-start: ready-for-dev
   ah-sp008-choose-the-neutral-session-turn-row-nirsession: ready-for-dev
 
   ah-e003-close-the-loop-jev-as-the-controller-between: in-progress

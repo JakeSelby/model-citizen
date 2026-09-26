@@ -430,6 +430,9 @@ flowchart TB
   - Approvals never transfer.
   - A workspace shares history by pointing its folders' project keys at one store, and never merges an
     existing store.
+  - The `.code-workspace` files are the only workspace map, derived on every call and never stored.
+  - One SessionStart hook with its own entry supplies the member instructions the runtime does not load,
+    never a member it loaded natively, and never blocks a session.
 
 ### AD-21: Dependencies [ADOPTED]
 
