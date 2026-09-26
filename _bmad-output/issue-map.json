@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 115,
-    "chore": 83,
+    "chore": 84,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7641,6 +7641,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-SP018.md",
       "parent_bmad_id": "AH-E026",
       "parent_github_number": 959,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C083",
+      "github_number": 1005,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1005",
+      "title": "Record the Studio field check as a research digest",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C083.md",
+      "parent_bmad_id": "AH-E022",
+      "parent_github_number": 955,
       "lifecycle": "active",
       "provenance": "authored"
     }
