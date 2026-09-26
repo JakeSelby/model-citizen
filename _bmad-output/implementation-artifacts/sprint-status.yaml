@@ -317,6 +317,17 @@ development_status:
   ah-s268-rename-the-plugin-to-model-citizen-and-keep: ready-for-dev
   ah-s269-rename-the-product-copy-to-model-citizen: ready-for-dev
 
+  ah-e021-run-a-burndown-bot-for-owner-labelled-bugs-and: in-progress
+  ah-s273-keep-bot-work-out-of-benchmark-task-mining-and: ready-for-dev
+  ah-s274-give-the-burndown-bot-its-own-github-app: ready-for-dev
+  ah-s275-hold-the-burndown-bot-to-a-hard-budget-with-a: ready-for-dev
+  ah-s276-pre-register-the-burndown-bot-s-randomised: ready-for-dev
+  ah-s277-claude-lane-fix-an-owner-labelled-bug-in-its: ready-for-dev
+  ah-s278-work-coderabbit-through-to-merge-on-the-burndown: ready-for-dev
+  ah-s279-codex-lane-send-a-fixed-share-of-eligible-bugs: ready-for-dev
+  ah-s280-vuln-lane-scan-weekly-and-file-each-finding-as-a: ready-for-dev
+  ah-sp016-spike-which-identity-and-surface-can-trigger: ready-for-dev
+
   ah-e022-open-the-studio-one-local-ui-that-shows-the: in-progress
   ah-c082-file-the-studio-epics-and-stories: ready-for-dev
   ah-s281-citizen-studio-start-open-detach-check-and-stop: backlog
@@ -447,6 +458,7 @@ development_status:
   ah-b108-governance-attributes-a-piped-push-after-a: ready-for-dev
   ah-b110-policy-file-guard-gates-commands-that-only: ready-for-dev
   ah-b111-grade-bash-grades-a-redirect-only-segment-after: ready-for-dev
+  ah-b112-lock-the-intent-overlap-counter-s-read-modify: ready-for-dev
   ah-b113-test-worker-context-budget-rewrites-a-tracked: ready-for-dev
   ah-b114-the-governance-config-set-check-gates-commands: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
@@ -493,6 +505,8 @@ development_status:
   ah-c075-re-derive-the-prd-s-stale-unreleased-status: backlog
   ah-c076-file-the-coderabbit-build-session-s-follow-ups: ready-for-dev
   ah-c077-add-the-bmad-issue-map-audit-to-the-agents-md: ready-for-dev
+  ah-c080-restore-headroom-in-the-always-loaded-budget: ready-for-dev
+  ah-c081-file-the-burndown-bot-epic-and-its-stories: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done

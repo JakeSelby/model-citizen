@@ -44,6 +44,7 @@ How to read it:
 | Cost benchmarks (FR-55 to FR-58) | AH-E013, AH-E011 |
 | Session operations (FR-8, FR-59 to FR-63) | AH-E001, AH-E002, AH-E015, AH-E017, AH-E018 |
 | Public planning (FR-9, FR-64, FR-65) | AH-E004, AH-E012, AH-E016 |
+| Unattended maintenance (FR-71 to FR-74) | AH-E021 |
 | Studio (FR-75 to FR-84) | AH-E022, AH-E023, AH-E024, AH-E025, AH-E026 |
 
 ## Epics
@@ -446,6 +447,22 @@ How to read it:
   - AH-S268 [#878](https://github.com/JakeSelby/agent-harness/issues/878): Rename the plugin to model-citizen and keep recognizing the old ID (open)
   - AH-S269 [#879](https://github.com/JakeSelby/agent-harness/issues/879): Rename the product copy to Model Citizen (open)
   - AH-C079 [#880](https://github.com/JakeSelby/agent-harness/issues/880): Point hardcoded links at the new repo and domain, and add the retired-name lint rule (open)
+
+### AH-E021: Run a burndown bot for owner-labelled bugs and scanned vulnerabilities ([#941](https://github.com/JakeSelby/model-citizen/issues/941), open)
+
+- **Milestones:** v0.15.0
+- **Goal:** Owner-labelled bugs are fixed without a live session, in a Claude lane and a Codex lane under the bot's own GitHub App and worked through CodeRabbit to merge; scanned vulnerabilities reach a private draft advisory first; every attempt is randomised and recorded for the v0.17.0 field experiment (#803).
+- **Covers:** FR-71, FR-72, FR-73, FR-74
+- **Stories:**
+  - AH-SP016 [#943](https://github.com/JakeSelby/model-citizen/issues/943): Spike: which identity and surface can trigger `@codex` (open)
+  - AH-S273 [#944](https://github.com/JakeSelby/model-citizen/issues/944): Keep bot work out of benchmark task mining and require an explicit `--tag` (open)
+  - AH-S274 [#945](https://github.com/JakeSelby/model-citizen/issues/945): Give the burndown bot its own GitHub App identity and an owner-label gate (open)
+  - AH-S275 [#946](https://github.com/JakeSelby/model-citizen/issues/946): Hold the burndown bot to a hard budget with a pause switch and a clean stop (open)
+  - AH-S276 [#947](https://github.com/JakeSelby/model-citizen/issues/947): Pre-register the burndown bot's randomised stream and record every attempt as assigned (open)
+  - AH-S277 [#948](https://github.com/JakeSelby/model-citizen/issues/948): Claude lane: fix an owner-labelled bug in its assigned arm and open one pull request (open)
+  - AH-S278 [#949](https://github.com/JakeSelby/model-citizen/issues/949): Work CodeRabbit through to merge on the burndown bot's pull requests (open)
+  - AH-S279 [#950](https://github.com/JakeSelby/model-citizen/issues/950): Codex lane: send a fixed share of eligible bugs to `@codex` (open)
+  - AH-S280 [#951](https://github.com/JakeSelby/model-citizen/issues/951): Vuln lane: scan weekly and file each finding as a draft security advisory (open)
 
 ### AH-E022: Open the Studio: one local UI that shows the whole harness, live ([#955](https://github.com/JakeSelby/model-citizen/issues/955), open)
 

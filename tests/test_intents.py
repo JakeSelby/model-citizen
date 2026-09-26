@@ -15,6 +15,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -234,6 +236,94 @@ class SharedSessionTests(Base):
         self.assertEqual(intents.hit("S", str(self.a), "shared.py", self.env), 1)
         self.assertEqual(intents.hit("S", str(self.b), "shared.py", self.env), 1)
         self.assertEqual(intents.hit("S", str(self.b), "shared.py", self.env), 2)
+        self.assertEqual(intents.hit("S", str(self.a), "shared.py", self.env), 2)
+
+
+class ConcurrentHitTests(Base):
+    """Two edits at once from one session and worktree, such as parallel tool calls."""
+
+    def test_two_concurrent_hits_on_one_claim_warn_once_and_deny_once(self):
+        read = intents._read
+
+        def slow_read(path):
+            # Widen the read-modify-write window so an unlocked pair would both read zero.
+            data = read(path)
+            time.sleep(0.3)
+            return data
+
+        start = threading.Barrier(2)
+        counts = []
+
+        def edit():
+            start.wait()
+            counts.append(intents.hit("S", str(self.a), "shared.py", self.env))
+
+        intents._read = slow_read
+        self.addCleanup(setattr, intents, "_read", read)
+        workers = [threading.Thread(target=edit) for _ in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(10)
+        self.assertEqual(sorted(counts), [1, 2])
+        self.assertEqual(sorted(intents.answer_for(c, "deny") for c in counts), ["deny", "warn"])
+        stored = json.loads((intents.hits_dir(self.env) / intents.slot("S", str(self.a)))
+                            .read_text())
+        self.assertEqual(stored, {"shared.py": 2})
+
+    # Hooks run one process per event, and dispatch captures a hook's output by redirecting the
+    # process-wide stdout, so the hook path is raced from two processes, never two threads.
+    EDIT_PROCESS = """
+import json, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from harness_core import intents, lifecycle
+hits, read_text = intents.hits_dir(), Path.read_text
+def slow_read_text(path, *args, **kwargs):
+    # The hook loads its own copy of the ledger, so widen the window at the file read.
+    text = read_text(path, *args, **kwargs)
+    if Path(path).parent == hits:
+        time.sleep(0.3)
+    return text
+Path.read_text = slow_read_text
+payload = json.loads(sys.argv[2])
+time.sleep(max(0.0, float(sys.argv[3]) - time.time()))
+print(json.dumps(lifecycle.dispatch("claude-code", payload)))
+"""
+
+    def test_two_concurrent_edits_through_the_hook_warn_once_and_deny_once(self):
+        os.environ["CLAUDE_PID"] = str(os.getpid())
+        intents.claim(["shared.py"], cwd=str(self.b), session="B", pid=os.getpid(), env=self.env)
+        payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Edit",
+                              "session_id": "A", "cwd": str(self.a),
+                              "tool_input": {"file_path": str(self.a / "shared.py"),
+                                             "old_string": "x", "new_string": "y"}})
+        start = str(time.time() + 1.5)
+        children = [subprocess.Popen([sys.executable, "-c", self.EDIT_PROCESS, str(REPO / "lib"),
+                                      payload, start], stdout=subprocess.PIPE, text=True)
+                    for _ in range(2)]
+        results = [json.loads(child.communicate(timeout=60)[0].strip().splitlines()[-1])
+                   for child in children]
+        denied = [r for r in results
+                  if r.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"]
+        warned = [r for r in results if "intent-overlap warning"
+                  in r.get("hookSpecificOutput", {}).get("additionalContext", "")]
+        self.assertEqual((len(denied), len(warned)), (1, 1))
+        self.assertEqual(sorted(r["deterministic_answer"] for r in self.rows()),
+                         ["deny", "warn"])
+
+    def test_a_held_lock_falls_back_to_an_unlocked_count_within_the_budget(self):
+        import fcntl
+        hits = intents.hits_dir(self.env)
+        hits.mkdir(parents=True, exist_ok=True)
+        with open(str(hits / ".lock"), "a") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            began = time.monotonic()
+            count = intents.hit("S", str(self.a), "shared.py", self.env)
+            elapsed = time.monotonic() - began
+        self.assertEqual(count, 1)
+        self.assertGreaterEqual(elapsed, intents.HITS_LOCK_BUDGET)
+        self.assertLess(elapsed, intents.HITS_LOCK_BUDGET + 2)
         self.assertEqual(intents.hit("S", str(self.a), "shared.py", self.env), 2)
 
 

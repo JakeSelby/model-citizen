@@ -1332,6 +1332,55 @@ makes stale, in the same pull request:
   carries a changelog fragment (#610). A daily traceability audit reports drift between the issue map and
   live GitHub.
 
+### 4.15 Unattended maintenance
+
+**Description:** A burndown bot fixes owner-labelled bugs and files scanned vulnerabilities privately,
+without a live session, on the subscriptions the project already holds. Its randomised attempts are a
+stream of the v0.17.0 field experiment. The epic is #941.
+
+#### FR-71: Unattended bug-fix lanes
+The project must fix owner-labelled bug issues without a live session. A Claude lane and a Codex lane each
+open one pull request per bug, to `main` only, under the bot's own GitHub App, which holds no ruleset
+bypass, administration or workflow permission. The bot runs inside a hard budget. **Status:** planned
+(v0.15.0, #941). **Scope:** repository process.
+
+**Consequences (testable):**
+- An issue labelled by anyone but the owner gets no action.
+- A patch touching `.github/` or aimed at any base but `main` is refused.
+- With the pause switch set or a cap reached no agent starts, and an unexpected stop defers the bug to the
+  next run.
+
+#### FR-72: Review through to merge
+A bot pull request must be worked through CodeRabbit, three rounds at most, and merge only when every
+condition an agent-landed pull request needs holds; a switch holds merges for the owner. **Status:**
+planned (v0.15.0, #949). **Scope:** repository process.
+
+**Consequences (testable):**
+- A human comment or a fourth round stops the bot and labels the pull request for the owner.
+- A skipped review or an empty thread-reply review never counts as a pass.
+
+#### FR-73: Private vulnerability lane
+Scheduled scans must file each finding as a draft repository security advisory with a proposed patch.
+Nothing about an unfixed finding may appear in a public issue, pull request, run log, step summary or
+artifact. **Status:** planned (v0.15.0, #951). **Scope:** repository process.
+
+**Consequences (testable):**
+- A seeded finding creates one draft advisory and no public trace.
+- A repeated finding creates no second advisory.
+
+#### FR-74: Randomised real-work stream
+Every bug-lane attempt must be assigned before its first turn (its lane by a fixed share, and harness or
+bare within the Claude lane) and recorded as assigned, so the v0.17.0 field experiment can analyse it by
+intention to treat. Bot-authored work must never enter the benchmark task set, and a live benchmark run
+must name the harness ref it measures. **Status:** planned (v0.15.0, #944, #947). **Scope:** repository
+process.
+
+**Consequences (testable):**
+- The pre-registration merges before the first assignment.
+- A deferred or crashed attempt appears in the attempt table as assigned.
+- A bot-authored mined task fails validation.
+- `cost_bench.py replay` without `--tag` exits non-zero.
+
 ### 4.16 Studio
 
 **Description:** `citizen studio` opens a local web UI over the harness. A developer sees the effective
@@ -1690,6 +1739,7 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - the two-by-two unit design (#754) and per-rule attribution (#514);
   - a scorecard, and soft estimates labelled as such;
   - delegation fixed or disproved (#429, #513);
+  - the burndown bot (FR-71 to FR-74, #941), whose randomised stream feeds v0.17.0's field experiment;
   - proof set 1;
   - the coexistence spike with a methodology library (#553).
 - **The MVP line falls after v0.15.0.** The claim ships when `harness evidence verify` passes on proof set 1,
