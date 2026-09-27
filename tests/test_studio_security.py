@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -89,7 +90,8 @@ class HttpBoundaryTests(StudioSecurityFixture):
         probe.close()
 
     def test_anonymous_api_and_static_requests_are_unauthorized_without_redirects(self):
-        for path in ("/api/session", "/api/not-registered", "/"):
+        for path in ("/api/session", "/api/not-registered", "/",
+                     "/assets/index-abcdefgh.js"):
             with self.subTest(path=path):
                 status, headers, body = self.request("GET", path)
                 self.assertEqual(status, 401)
@@ -129,6 +131,29 @@ class HttpBoundaryTests(StudioSecurityFixture):
         replay, _headers, replay_body = self.request("POST", server.BOOTSTRAP, headers, form)
         self.assertEqual(replay, 401)
         self.assertNotIn(issued["token"].encode(), replay_body)
+
+    def test_static_html_nonces_mantine_styles_without_weakening_scripts(self):
+        _issued, status, bootstrap_headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        cookie = self.cookie(bootstrap_headers)
+
+        responses = [self.request("GET", "/", {"Cookie": cookie}) for _ in range(2)]
+        nonces = []
+        for status, headers, body in responses:
+            self.assertEqual(status, 200)
+            policy = headers["Content-Security-Policy"]
+            match = re.search(r"style-src-elem 'self' 'nonce-([A-Za-z0-9_-]{32})'", policy)
+            self.assertIsNotNone(match, policy)
+            assert match is not None
+            nonce = match.group(1)
+            nonces.append(nonce)
+            self.assertIn(b'name="studio-style-nonce" content="' + nonce.encode() + b'"', body)
+            self.assertNotIn(server.STYLE_NONCE_MARKER, body)
+            self.assertIn("script-src 'self'", policy)
+            self.assertNotIn("script-src 'unsafe-inline'", policy)
+            self.assertNotIn("'unsafe-eval'", policy)
+            self.assertIn("style-src-attr 'unsafe-inline'", policy)
+        self.assertNotEqual(*nonces)
 
     def test_bootstrap_refuses_cookie_foreign_origin_media_type_and_oversized_body(self):
         cases = (
@@ -201,6 +226,18 @@ class HttpBoundaryTests(StudioSecurityFixture):
 
 
 class SerializationAndFileBoundaryTests(unittest.TestCase):
+    def test_style_nonce_policy_is_narrow_and_rejects_malformed_values(self):
+        nonce = "a" * 32
+        policy = auth.csp_with_style_nonce(nonce)
+        self.assertIn("style-src-elem 'self' 'nonce-%s'" % nonce, policy)
+        self.assertIn("style-src-attr 'unsafe-inline'", policy)
+        self.assertIn("script-src 'self'", policy)
+        self.assertNotIn("script-src 'unsafe-inline'", policy)
+        for malformed in ("short", "a" * 31, "a" * 33, "a" * 31 + "!"):
+            with self.subTest(malformed=malformed):
+                with self.assertRaisesRegex(auth.SecurityError, "style nonce refused"):
+                    auth.csp_with_style_nonce(malformed)
+
     def test_secret_values_are_redacted_but_reference_names_are_displayable(self):
         marker = "not-a-real-sensitive-value"
         config = {"provider": {"api_key": marker,

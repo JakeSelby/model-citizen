@@ -35,6 +35,7 @@ reviews:
     - "!claude/CLAUDE.md"
     - "!claude/CLAUDE.personal.template.md"
     - "!compatibility/evidence/**"
+    - "!studio/dist/**"
   path_instructions:
     - path: "primitives/**"
       instructions: >-

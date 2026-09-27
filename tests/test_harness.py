@@ -543,6 +543,23 @@ class LintTests(TempHome):
                 self.assertTrue(any(label in hit for hit in matching), (label, matching))
         self.assertTrue(any("studio/src/contact.txt" in hit and "email address" in hit for hit in hits), hits)
 
+    def test_generated_studio_bundle_is_skipped_but_source_is_linted(self):
+        root = self._fixture()
+        subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)
+        address = "upstream" + "@" + "example.com"
+        generated = root / "studio" / "dist" / "assets" / "index-deadbeef.js"
+        source = root / "studio" / "src" / "contact.ts"
+        generated.parent.mkdir(parents=True)
+        source.parent.mkdir(parents=True)
+        generated.write_text(address + "\n")
+        source.write_text(address + "\n")
+        subprocess.run(["git", "-C", str(root), "add", "studio"], check=True)
+
+        for hits in (harness.lint_tree(root, NO_TERMS), harness.lint_staged(root)):
+            self.assertFalse(any("studio/dist/" in hit for hit in hits), hits)
+            self.assertTrue(any("studio/src/contact.ts" in hit and "email address" in hit
+                                for hit in hits), hits)
+
     def test_terms_file_and_maintainer_name_rules(self):
         root = self._fixture()
         (root / "claude" / "bad.md").write_text("Hand this to Ada; ship to Example Corp; see Widgetron docs.\n")

@@ -214,6 +214,7 @@ ALWAYS_LOADED_CAP = 225
 NAME_FORBIDDEN_DIRS = {"claude", "vscode", "codex", "templates", "primitives", "adapters"}
 NAME_FORBIDDEN_FILES = {"config.example.json"}
 LINT_SKIP_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache"}
+LINT_SKIP_PREFIXES = ("studio/dist/",)
 LOCAL_WORK_DIR = ".agent-harness"
 
 
@@ -2700,15 +2701,20 @@ def lint_tree(root: Path, terms: Optional[Tuple[List[str], List[str]]] = None) -
         if out.returncode != 0:
             raise RuntimeError(out.stderr)
         return [f for f in out.stdout.split("\0") if f]
+    def included(path: Path) -> bool:
+        relative = path.relative_to(root).as_posix()
+        return not any(relative.startswith(prefix) for prefix in LINT_SKIP_PREFIXES)
     try:
         tracked = listed("--cached")
         untracked = [f for f in listed("--others", "--exclude-standard")
                      if not f.startswith(LOCAL_WORK_DIR + "/")]
-        files = sorted(root / f for f in set(tracked + untracked))
+        files = sorted(path for path in (root / f for f in set(tracked + untracked))
+                       if included(path))
         return lint_files(root, files, terms) + check_detectors(root)
     except Exception:
         pass
-    return lint_files(root, sorted(p for p in root.rglob("*") if p.is_file()), terms) + check_detectors(root)
+    return lint_files(root, sorted(p for p in root.rglob("*")
+                                   if p.is_file() and included(p)), terms) + check_detectors(root)
 
 
 def _line_count(path: Path) -> int:
@@ -2823,7 +2829,9 @@ def check_context_cap(root: Path) -> List[str]:
 def lint_staged(root: Path) -> List[str]:
     out = subprocess.run(["git", "-C", str(root), "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
                          capture_output=True, text=True, timeout=10)
-    files = [root / f for f in out.stdout.split() if (root / f).is_file()]
+    files = [root / f for f in out.stdout.split()
+             if (root / f).is_file()
+             and not any(f.startswith(prefix) for prefix in LINT_SKIP_PREFIXES)]
     return lint_files(root, files)
 
 
@@ -4533,7 +4541,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
     if args.action and (args.detach or args._serve or args.port or args.no_open):
         raise SystemExit("studio status and stop accept only --json")
     root = studio.state_root(home())
-    static_root = REPO / "studio" / "placeholder"
+    static_root = REPO / "studio" / "dist"
     try:
         if args._serve:
             studio.serve(static_root, root, args.port)

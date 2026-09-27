@@ -451,6 +451,41 @@ def run_experiment(source, evidence, runs):
     return report
 
 
+def verify_committed(source, committed):
+    """Rebuild source once in isolation and compare every emitted file with committed."""
+    source = Path(source).resolve()
+    committed = Path(committed).resolve()
+    expected = expected_runtime(source)
+    enforce_runtime(expected, runtime_metadata(source))
+    with tempfile.TemporaryDirectory(prefix="studio-verify-") as temp:
+        temp_root = Path(temp)
+        archive = temp_root / "source.tar"
+        _archive_source(source, archive)
+        extracted = temp_root / "source"
+        _extract_source(archive, extracted)
+        cache = temp_root / "npm-cache"
+        cache.mkdir()
+        env = os.environ.copy()
+        env.update(NORMALIZED_ENV)
+        env["npm_config_cache"] = str(cache)
+        enforce_runtime(expected, runtime_metadata(extracted, env))
+        subprocess.run(["npm", "ci"], cwd=str(extracted), env=env, check=True)
+        subprocess.run(["npm", "run", "build"], cwd=str(extracted), env=env, check=True)
+        expected_manifest = temp_root / "expected.json"
+        committed_manifest = temp_root / "committed.json"
+        write_json(expected_manifest, build_manifest(extracted / "dist"))
+        write_json(committed_manifest, build_manifest(committed))
+        return compare_manifests([expected_manifest, committed_manifest])
+
+
+def stale_paths(report):
+    paths = set()
+    for comparison in report["comparisons"]:
+        for key in ("missing", "extra", "differing"):
+            paths.update(comparison[key])
+    return sorted(paths)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -473,6 +508,9 @@ def main(argv=None):
     inventory.add_argument("--license-evidence", required=True)
     inventory.add_argument("--output", required=True)
     inventory.add_argument("--notices-output", required=True)
+    verify = subparsers.add_parser("verify")
+    verify.add_argument("--source", required=True)
+    verify.add_argument("--committed", required=True)
     args = parser.parse_args(argv)
 
     if args.command == "create":
@@ -492,6 +530,15 @@ def main(argv=None):
         notices.parent.mkdir(parents=True, exist_ok=True)
         notices.write_bytes(build_runtime_notices(args.lock, args.license_evidence).encode("utf-8"))
         return 0
+    if args.command == "verify":
+        report = verify_committed(args.source, args.committed)
+        if report["identical"]:
+            print("studio bundle: committed bundle matches source")
+            return 0
+        print("studio bundle: committed bundle is stale", file=sys.stderr)
+        for path in stale_paths(report):
+            print("  studio/dist/{}".format(path), file=sys.stderr)
+        return 1
     if args.runs < 2:
         parser.error("--runs must be at least 2")
     return 0 if run_experiment(args.source, args.evidence, args.runs)["identical"] else 1

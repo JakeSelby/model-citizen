@@ -3,3 +3,5 @@ _bmad-output/issue-map.json merge=bmad-issue-map
 _bmad-output/implementation-artifacts/sprint-status.yaml merge=bmad-sprint-status
 # Generated legal evidence embeds upstream bytes, including their original line endings.
 studio/public/THIRD_PARTY_NOTICES.txt -text whitespace=-trailing-space
+studio/dist/** linguist-generated=true
+studio/dist/THIRD_PARTY_NOTICES.txt -text whitespace=-trailing-space

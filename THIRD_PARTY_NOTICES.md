@@ -31,6 +31,13 @@ closer and a good/bad example pair from its voice directive. Modifications: rewo
 merged into six reply shapes and seven rules. Upstream licence texts are in `THIRD_PARTY_NOTICES`.
 Claude Code's built-in Concise style is selected by name; none of its text is included.
 
+## Studio browser bundle
+
+`studio/dist/` contains the browser bundle built from the exact npm dependency tree in
+`studio/package-lock.json`. `studio/public/third-party.json` records every package, version, licence,
+artifact and integrity digest; `studio/public/THIRD_PARTY_NOTICES.txt` preserves the licence text for
+every runtime package and is copied into the distributed bundle by the build.
+
 ## Not included, on purpose
 
 The code of conduct is original text. The Contributor Covenant was not vendored because its

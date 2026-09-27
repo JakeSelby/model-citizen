@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import http.client
 import os
+import re
 import signal
 import socket
 import stat
@@ -161,9 +162,24 @@ class StateTests(StudioFixture):
 
 
 class LifecycleTests(StudioFixture):
+    def test_static_page_without_the_nonce_marker_fails_closed(self):
+        handler = mock.Mock()
+        handler.server.static_files.read_bytes.return_value = b"<!doctype html><title>Studio</title>"
+        route = studio_server.ROUTES.resolve("GET", "/")
+        assert route is not None
+
+        studio_server._static(handler, route)
+
+        handler._send.assert_called_once_with(
+            503, b"Studio bundle is unavailable\n", "text/plain; charset=utf-8")
+
     def test_static_control_and_health_routes_are_registered_with_owned_schemas(self):
         routes = {(route.method, route.path): route for route in studio_server.ROUTES.entries}
         for key in (("GET", "/"), ("HEAD", "/"), ("GET", "/index.html"),
+                    ("GET", studio_server.STATIC_ASSET_ROUTES["css"]),
+                    ("HEAD", studio_server.STATIC_ASSET_ROUTES["css"]),
+                    ("GET", studio_server.STATIC_ASSET_ROUTES["js"]),
+                    ("HEAD", studio_server.STATIC_ASSET_ROUTES["js"]),
                     ("POST", studio_server.BOOTSTRAP), ("GET", "/api/session"),
                     ("GET", studio_server.CONTROL_HEALTH),
                     ("POST", studio_server.CONTROL_BOOTSTRAP),
@@ -201,6 +217,19 @@ class LifecycleTests(StudioFixture):
             self.assertEqual(response.headers.get_content_type(), "text/html")
             self.assertEqual(response.headers["Content-Type"], static_route.media_type)
             static_route.response_schema.validate(body)
+        asset_path = re.search(rb'["\']\./(assets/[^"\']+)["\']', body)
+        assert asset_path is not None
+        relative = asset_path.group(1).decode("ascii")
+        asset_route = studio_server.ROUTES.resolve("GET", "/" + relative)
+        assert asset_route is not None
+        asset_request = urllib.request.Request(started["url"] + relative,
+                                               headers={"Cookie": cookie})
+        with urllib.request.urlopen(asset_request, timeout=2) as response:
+            asset_body = response.read()
+            self.assertEqual(response.headers["Content-Type"], asset_route.media_type)
+            self.assertEqual(response.headers["Cache-Control"],
+                             "public, max-age=31536000, immutable")
+            asset_route.response_schema.validate(asset_body)
         record = json.loads((state_root(self.home) / "instance.json").read_text())
         request = urllib.request.Request(started["url"] + studio_server.CONTROL_HEALTH,
                                          headers={"Authorization": "Bearer " +
@@ -447,7 +476,7 @@ with Store(Path({root!r})) as store:
     server.run(Path({static!r}), store, 0, ready)
 print("clean")
 """.format(library=str(REPO / "lib"), root=str(root),
-           static=str(REPO / "studio" / "placeholder"))
+           static=str(REPO / "studio" / "dist"))
         for phase in ("state", "ready"):
             with self.subTest(phase=phase):
                 done = subprocess.run([sys.executable, "-c", script, phase], env=self.env,
@@ -483,7 +512,7 @@ with Store(Path({root!r})) as store:
     server.run(Path({static!r}), store, 0)
 print("clean")
 """.format(library=str(REPO / "lib"), root=str(root),
-           static=str(REPO / "studio" / "placeholder"))
+           static=str(REPO / "studio" / "dist"))
         done = subprocess.run([sys.executable, "-c", script], env=self.env, capture_output=True,
                               text=True, timeout=5)
         self.assertEqual(done.returncode, 0, done.stderr)

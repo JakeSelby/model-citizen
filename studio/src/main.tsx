@@ -1,25 +1,31 @@
 import "@mantine/core/styles.css";
 import "./styles.css";
 
+import { MantineProvider } from "@mantine/core";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter } from "react-router-dom";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MantineProvider } from "@mantine/core";
+import { HashRouter } from "react-router-dom";
 
 import { StudioApp } from "./StudioApp";
+import { studioTheme } from "./theme";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: Infinity } },
 });
+const nonceElement = document.querySelector<HTMLMetaElement>('meta[name="studio-style-nonce"]');
+const styleNonce = nonceElement?.content;
+const getStyleNonce = styleNonce && !styleNonce.startsWith("__STUDIO_")
+  ? () => styleNonce
+  : undefined;
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <MantineProvider defaultColorScheme="light">
+    <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce} theme={studioTheme}>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+        <HashRouter>
           <StudioApp />
-        </BrowserRouter>
+        </HashRouter>
       </QueryClientProvider>
     </MantineProvider>
   </StrictMode>,

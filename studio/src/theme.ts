@@ -1,0 +1,42 @@
+import {
+  createTheme,
+  defaultVariantColorsResolver,
+  type MantineColorsTuple,
+  type VariantColorsResolver,
+} from "@mantine/core";
+
+const clear: MantineColorsTuple = [
+  "#E8F4F1",
+  "#E8F4F1",
+  "#E8F4F1",
+  "#7CDDD0",
+  "#7CDDD0",
+  "#14635E",
+  "#14635E",
+  "#14635E",
+  "#14635E",
+  "#14635E",
+];
+
+const clearVariantColors: VariantColorsResolver = (input) => {
+  const colors = defaultVariantColorsResolver(input);
+  if (input.variant === "filled" && input.color === "clear") {
+    return { ...colors, color: "var(--studio-primary-foreground)" };
+  }
+  return colors;
+};
+
+export const studioTheme = createTheme({
+  autoContrast: true,
+  colors: { clear },
+  primaryColor: "clear",
+  primaryShade: { light: 6, dark: 3 },
+  variantColorResolver: clearVariantColors,
+  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+  fontFamilyMonospace: "ui-monospace, SFMono-Regular, Consolas, monospace",
+  defaultRadius: "md",
+  headings: {
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    fontWeight: "650",
+  },
+});

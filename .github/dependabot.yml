@@ -1,5 +1,10 @@
 version: 2
 updates:
+  - package-ecosystem: "npm"
+    directory: "/studio"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "studio"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

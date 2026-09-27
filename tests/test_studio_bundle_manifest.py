@@ -2,11 +2,14 @@
 """Tests for deterministic Studio bundle manifests."""
 
 import importlib.util
+import io
 import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parent.parent
@@ -73,6 +76,38 @@ class ManifestTests(unittest.TestCase):
         comparison = manifest.compare_manifests([a, b])["comparisons"][0]
         self.assertEqual(comparison["missing"], ["only-a.js"])
         self.assertEqual(comparison["extra"], ["only-b.js"])
+
+    def test_stale_paths_names_every_changed_bundle_file(self):
+        report = {
+            "comparisons": [{
+                "missing": ["assets/removed.js"],
+                "extra": ["assets/added.css"],
+                "differing": ["index.html"],
+            }]
+        }
+        self.assertEqual(
+            manifest.stale_paths(report),
+            ["assets/added.css", "assets/removed.js", "index.html"],
+        )
+
+    def test_verify_command_fails_and_names_stale_files(self):
+        report = {
+            "identical": False,
+            "comparisons": [{
+                "missing": [],
+                "extra": ["assets/old.js"],
+                "differing": ["index.html"],
+            }],
+        }
+        output = io.StringIO()
+        with mock.patch.object(manifest, "verify_committed", return_value=report):
+            with redirect_stderr(output):
+                result = manifest.main([
+                    "verify", "--source", "studio", "--committed", "studio/dist"
+                ])
+        self.assertEqual(result, 1)
+        self.assertIn("studio/dist/assets/old.js", output.getvalue())
+        self.assertIn("studio/dist/index.html", output.getvalue())
 
     def test_group_comparison_checks_every_reference_candidate_pair(self):
         matching = {
@@ -256,15 +291,16 @@ class ManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "npm version mismatch"):
             manifest.enforce_runtime(expected, {"node": "22.22.3", "npm": ".".join(("10", "9", "7"))})
 
-    def test_workflow_compares_all_committed_and_linux_manifests(self):
+    def test_workflow_checks_the_committed_bundle_and_frontend(self):
         workflow = (REPO / ".github" / "workflows" / "studio-bundle-repro.yml").read_text(
             encoding="utf-8"
         )
-        self.assertIn("compare-groups", workflow)
-        self.assertIn("studio/reproducibility/macos-arm64/run-{1,2,3}.json", workflow)
-        self.assertIn("evidence/linux-x64/run-{1,2,3}.json", workflow)
-        self.assertIn("evidence/cross-platform-comparison.json", workflow)
-        self.assertIn('test "$CROSS_PLATFORM_STATUS" = "0"', workflow)
+        self.assertIn("merge_group:", workflow)
+        self.assertIn("npm run lint --prefix studio", workflow)
+        self.assertIn("npm test --prefix studio", workflow)
+        self.assertIn("npm run typecheck --prefix studio", workflow)
+        self.assertIn("studio_bundle_manifest.py verify", workflow)
+        self.assertIn("--committed studio/dist", workflow)
         self.assertIn('npm install --global "npm@$required_npm"', workflow)
         self.assertIn("cmp \"$evidence_dir/third-party.json\" studio/public/third-party.json", workflow)
         self.assertIn("cmp \"$evidence_dir/THIRD_PARTY_NOTICES.txt\" studio/public/THIRD_PARTY_NOTICES.txt", workflow)
