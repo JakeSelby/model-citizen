@@ -117,7 +117,7 @@ class HookMatrixTests(unittest.TestCase):
     def test_template_ignores_an_inherited_repository_location(self):
         with tempfile.TemporaryDirectory() as tmp:
             other = Path(tmp) / "other"
-            subprocess.run(["git", "init", "-q", str(other)], check=True)
+            subprocess.run(["git", "init", "-q", str(other)], check=True, env=HM.git_env())
             before = sorted(str(p.relative_to(other)) for p in other.rglob("*"))
             saved = list(HM._TEMPLATE)
             HM._TEMPLATE[:] = []
@@ -130,8 +130,7 @@ class HookMatrixTests(unittest.TestCase):
                 HM._TEMPLATE[:] = saved
             self.assertEqual(sorted(str(p.relative_to(other)) for p in other.rglob("*")), before)
             head = subprocess.run(["git", "--git-dir", str(template), "rev-parse", "--verify", "-q", "HEAD"],
-                                  capture_output=True, text=True, env=dict(
-                                      (k, v) for k, v in os.environ.items() if not k.startswith("GIT_")))
+                                  capture_output=True, text=True, env=HM.git_env())
             self.assertEqual(head.returncode, 0, head.stderr)
 
     def test_template_git_calls_disable_background_maintenance(self):

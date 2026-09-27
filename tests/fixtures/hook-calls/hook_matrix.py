@@ -123,14 +123,20 @@ _TEMPLATE = []
 QUIET_GIT = ["-c", "maintenance.auto=false", "-c", "gc.auto=0"]
 
 
+def git_env():
+    """This process's environment without any inherited `GIT_*` variable.
+
+    `GIT_DIR`, `GIT_WORK_TREE` and the rest of the repository-location family outrank `-C`, so a
+    caller's value would aim a git command at another repository.
+    """
+    return dict((k, v) for k, v in os.environ.items() if not k.startswith("GIT_"))
+
+
 def _template():
     """A `.git` directory with one empty commit, made once per process and copied per call."""
     if not _TEMPLATE:
         where = _scratch("hook-matrix-git-")
-        # Every inherited `GIT_*` variable is dropped: `GIT_DIR`, `GIT_WORK_TREE` and the rest of
-        # the repository-location family outrank `-C`, so a caller's would aim init and commit at
-        # another repository.
-        env = dict((k, v) for k, v in os.environ.items() if not k.startswith("GIT_"))
+        env = git_env()
         env.update(GIT_AUTHOR_NAME="Example", GIT_AUTHOR_EMAIL="",
                    GIT_COMMITTER_NAME="Example", GIT_COMMITTER_EMAIL="",
                    GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z",
