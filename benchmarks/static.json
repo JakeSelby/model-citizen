@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "harness_version": "0.13.1",
+  "harness_version": "0.14.0",
   "chars_per_token": 4.0,
   "scopes": {
     "always_loaded": "claude/CLAUDE.md, claude/rules/, claude/output-styles/ and the stance variant config.example.json selects, for the default selection",
@@ -11,28 +11,28 @@
   },
   "always_loaded": {
     "files": 21,
-    "lines": 272,
-    "chars": 18718,
-    "est_tokens": 4680
+    "lines": 266,
+    "chars": 18280,
+    "est_tokens": 4570
   },
   "listings": {
     "files": 33,
     "lines": 33,
-    "chars": 8285,
-    "est_tokens": 2071
+    "chars": 8292,
+    "est_tokens": 2073
   },
   "total": {
     "files": 54,
-    "lines": 305,
-    "chars": 27003,
-    "est_tokens": 6751
+    "lines": 299,
+    "chars": 26572,
+    "est_tokens": 6643
   },
-  "worst_case_est_tokens": 6802,
+  "worst_case_est_tokens": 7132,
   "largest": [
     {
       "path": "claude/output-styles/scannable.md",
-      "lines": 56,
-      "chars": 3426
+      "lines": 55,
+      "chars": 3358
     },
     {
       "path": "claude/rules/working-style.md",
@@ -47,7 +47,7 @@
     {
       "path": "claude/rules/transcript-hygiene.md",
       "lines": 13,
-      "chars": 972
+      "chars": 987
     },
     {
       "path": "claude/stances/delegation/tiered.md",
@@ -57,102 +57,102 @@
   ],
   "usd": {
     "claude-fable-5": {
-      "session_start": 0.084388,
-      "later_turn": 0.006751
+      "session_start": 0.083038,
+      "later_turn": 0.006643
     },
     "claude-fable-5-1": {
-      "session_start": 0.084388,
-      "later_turn": 0.001688
+      "session_start": 0.083038,
+      "later_turn": 0.001661
     },
     "claude-haiku-4-5": {
-      "session_start": 0.008439,
-      "later_turn": 0.000675
+      "session_start": 0.008304,
+      "later_turn": 0.000664
     },
     "claude-opus-4-6": {
-      "session_start": 0.042194,
-      "later_turn": 0.003376
+      "session_start": 0.041519,
+      "later_turn": 0.003321
     },
     "claude-opus-4-8": {
-      "session_start": 0.042194,
-      "later_turn": 0.003376
+      "session_start": 0.041519,
+      "later_turn": 0.003321
     },
     "claude-opus-5": {
-      "session_start": 0.042194,
-      "later_turn": 0.003376
+      "session_start": 0.041519,
+      "later_turn": 0.003321
     },
     "claude-sonnet-5": {
-      "session_start": 0.016878,
-      "later_turn": 0.00135
+      "session_start": 0.016608,
+      "later_turn": 0.001329
     }
   },
   "files": {
     "claude/CLAUDE.md": {
       "group": "always_loaded",
-      "chars": 636,
-      "est_tokens": 159,
+      "chars": 542,
+      "est_tokens": 136,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.001988,
-          "later_turn": 0.000159
+          "session_start": 0.001694,
+          "later_turn": 0.000135
         },
         "claude-fable-5-1": {
-          "session_start": 0.001988,
-          "later_turn": 4e-05
+          "session_start": 0.001694,
+          "later_turn": 3.4e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000199,
-          "later_turn": 1.6e-05
+          "session_start": 0.000169,
+          "later_turn": 1.4e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.000994,
-          "later_turn": 7.9e-05
+          "session_start": 0.000847,
+          "later_turn": 6.8e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.000994,
-          "later_turn": 7.9e-05
+          "session_start": 0.000847,
+          "later_turn": 6.8e-05
         },
         "claude-opus-5": {
-          "session_start": 0.000994,
-          "later_turn": 7.9e-05
+          "session_start": 0.000847,
+          "later_turn": 6.8e-05
         },
         "claude-sonnet-5": {
-          "session_start": 0.000398,
-          "later_turn": 3.2e-05
+          "session_start": 0.000339,
+          "later_turn": 2.7e-05
         }
       }
     },
     "claude/rules/cache-hygiene.md": {
       "group": "always_loaded",
-      "chars": 301,
-      "est_tokens": 75,
+      "chars": 326,
+      "est_tokens": 82,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.000941,
-          "later_turn": 7.5e-05
+          "session_start": 0.001019,
+          "later_turn": 8.2e-05
         },
         "claude-fable-5-1": {
-          "session_start": 0.000941,
-          "later_turn": 1.9e-05
+          "session_start": 0.001019,
+          "later_turn": 2e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 9.4e-05,
+          "session_start": 0.000102,
           "later_turn": 8e-06
         },
         "claude-opus-4-6": {
-          "session_start": 0.00047,
-          "later_turn": 3.8e-05
+          "session_start": 0.000509,
+          "later_turn": 4.1e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.00047,
-          "later_turn": 3.8e-05
+          "session_start": 0.000509,
+          "later_turn": 4.1e-05
         },
         "claude-opus-5": {
-          "session_start": 0.00047,
-          "later_turn": 3.8e-05
+          "session_start": 0.000509,
+          "later_turn": 4.1e-05
         },
         "claude-sonnet-5": {
-          "session_start": 0.000188,
-          "later_turn": 1.5e-05
+          "session_start": 0.000204,
+          "later_turn": 1.6e-05
         }
       }
     },
@@ -193,36 +193,36 @@
     },
     "claude/rules/decisions-and-plans.md": {
       "group": "always_loaded",
-      "chars": 877,
-      "est_tokens": 219,
+      "chars": 707,
+      "est_tokens": 177,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.002741,
-          "later_turn": 0.000219
+          "session_start": 0.002209,
+          "later_turn": 0.000177
         },
         "claude-fable-5-1": {
-          "session_start": 0.002741,
-          "later_turn": 5.5e-05
+          "session_start": 0.002209,
+          "later_turn": 4.4e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000274,
-          "later_turn": 2.2e-05
+          "session_start": 0.000221,
+          "later_turn": 1.8e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.00137,
-          "later_turn": 0.00011
+          "session_start": 0.001105,
+          "later_turn": 8.8e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.00137,
-          "later_turn": 0.00011
+          "session_start": 0.001105,
+          "later_turn": 8.8e-05
         },
         "claude-opus-5": {
-          "session_start": 0.00137,
-          "later_turn": 0.00011
+          "session_start": 0.001105,
+          "later_turn": 8.8e-05
         },
         "claude-sonnet-5": {
-          "session_start": 0.000548,
-          "later_turn": 4.4e-05
+          "session_start": 0.000442,
+          "later_turn": 3.5e-05
         }
       }
     },
@@ -298,70 +298,70 @@
     },
     "claude/rules/secrets.md": {
       "group": "always_loaded",
-      "chars": 887,
-      "est_tokens": 222,
+      "chars": 800,
+      "est_tokens": 200,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.002772,
-          "later_turn": 0.000222
+          "session_start": 0.0025,
+          "later_turn": 0.0002
         },
         "claude-fable-5-1": {
-          "session_start": 0.002772,
-          "later_turn": 5.5e-05
+          "session_start": 0.0025,
+          "later_turn": 5e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000277,
-          "later_turn": 2.2e-05
+          "session_start": 0.00025,
+          "later_turn": 2e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.001386,
-          "later_turn": 0.000111
+          "session_start": 0.00125,
+          "later_turn": 0.0001
         },
         "claude-opus-4-8": {
-          "session_start": 0.001386,
-          "later_turn": 0.000111
+          "session_start": 0.00125,
+          "later_turn": 0.0001
         },
         "claude-opus-5": {
-          "session_start": 0.001386,
-          "later_turn": 0.000111
+          "session_start": 0.00125,
+          "later_turn": 0.0001
         },
         "claude-sonnet-5": {
-          "session_start": 0.000554,
-          "later_turn": 4.4e-05
+          "session_start": 0.0005,
+          "later_turn": 4e-05
         }
       }
     },
     "claude/rules/transcript-hygiene.md": {
       "group": "always_loaded",
-      "chars": 972,
-      "est_tokens": 243,
+      "chars": 987,
+      "est_tokens": 247,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.003037,
-          "later_turn": 0.000243
+          "session_start": 0.003084,
+          "later_turn": 0.000247
         },
         "claude-fable-5-1": {
-          "session_start": 0.003037,
-          "later_turn": 6.1e-05
+          "session_start": 0.003084,
+          "later_turn": 6.2e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000304,
-          "later_turn": 2.4e-05
+          "session_start": 0.000308,
+          "later_turn": 2.5e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.001519,
-          "later_turn": 0.000121
+          "session_start": 0.001542,
+          "later_turn": 0.000123
         },
         "claude-opus-4-8": {
-          "session_start": 0.001519,
-          "later_turn": 0.000121
+          "session_start": 0.001542,
+          "later_turn": 0.000123
         },
         "claude-opus-5": {
-          "session_start": 0.001519,
-          "later_turn": 0.000121
+          "session_start": 0.001542,
+          "later_turn": 0.000123
         },
         "claude-sonnet-5": {
-          "session_start": 0.000607,
+          "session_start": 0.000617,
           "later_turn": 4.9e-05
         }
       }
@@ -403,36 +403,36 @@
     },
     "claude/rules/voice-and-format.md": {
       "group": "always_loaded",
-      "chars": 400,
-      "est_tokens": 100,
+      "chars": 299,
+      "est_tokens": 75,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.00125,
-          "later_turn": 0.0001
+          "session_start": 0.000934,
+          "later_turn": 7.5e-05
         },
         "claude-fable-5-1": {
-          "session_start": 0.00125,
-          "later_turn": 2.5e-05
+          "session_start": 0.000934,
+          "later_turn": 1.9e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000125,
-          "later_turn": 1e-05
+          "session_start": 9.3e-05,
+          "later_turn": 7e-06
         },
         "claude-opus-4-6": {
-          "session_start": 0.000625,
-          "later_turn": 5e-05
+          "session_start": 0.000467,
+          "later_turn": 3.7e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.000625,
-          "later_turn": 5e-05
+          "session_start": 0.000467,
+          "later_turn": 3.7e-05
         },
         "claude-opus-5": {
-          "session_start": 0.000625,
-          "later_turn": 5e-05
+          "session_start": 0.000467,
+          "later_turn": 3.7e-05
         },
         "claude-sonnet-5": {
-          "session_start": 0.00025,
-          "later_turn": 2e-05
+          "session_start": 0.000187,
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -473,36 +473,36 @@
     },
     "claude/output-styles/scannable.md": {
       "group": "always_loaded",
-      "chars": 3426,
-      "est_tokens": 856,
+      "chars": 3358,
+      "est_tokens": 840,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.010706,
-          "later_turn": 0.000856
+          "session_start": 0.010494,
+          "later_turn": 0.000839
         },
         "claude-fable-5-1": {
-          "session_start": 0.010706,
-          "later_turn": 0.000214
+          "session_start": 0.010494,
+          "later_turn": 0.00021
         },
         "claude-haiku-4-5": {
-          "session_start": 0.001071,
-          "later_turn": 8.6e-05
+          "session_start": 0.001049,
+          "later_turn": 8.4e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.005353,
-          "later_turn": 0.000428
+          "session_start": 0.005247,
+          "later_turn": 0.00042
         },
         "claude-opus-4-8": {
-          "session_start": 0.005353,
-          "later_turn": 0.000428
+          "session_start": 0.005247,
+          "later_turn": 0.00042
         },
         "claude-opus-5": {
-          "session_start": 0.005353,
-          "later_turn": 0.000428
+          "session_start": 0.005247,
+          "later_turn": 0.00042
         },
         "claude-sonnet-5": {
-          "session_start": 0.002141,
-          "later_turn": 0.000171
+          "session_start": 0.002099,
+          "later_turn": 0.000168
         }
       }
     },
@@ -788,36 +788,36 @@
     },
     "claude/stances/voice/scannable.md": {
       "group": "always_loaded",
-      "chars": 381,
-      "est_tokens": 95,
+      "chars": 423,
+      "est_tokens": 106,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.001191,
-          "later_turn": 9.5e-05
+          "session_start": 0.001322,
+          "later_turn": 0.000106
         },
         "claude-fable-5-1": {
-          "session_start": 0.001191,
-          "later_turn": 2.4e-05
+          "session_start": 0.001322,
+          "later_turn": 2.6e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 0.000119,
-          "later_turn": 1e-05
+          "session_start": 0.000132,
+          "later_turn": 1.1e-05
         },
         "claude-opus-4-6": {
-          "session_start": 0.000595,
-          "later_turn": 4.8e-05
+          "session_start": 0.000661,
+          "later_turn": 5.3e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.000595,
-          "later_turn": 4.8e-05
+          "session_start": 0.000661,
+          "later_turn": 5.3e-05
         },
         "claude-opus-5": {
-          "session_start": 0.000595,
-          "later_turn": 4.8e-05
+          "session_start": 0.000661,
+          "later_turn": 5.3e-05
         },
         "claude-sonnet-5": {
-          "session_start": 0.000238,
-          "later_turn": 1.9e-05
+          "session_start": 0.000264,
+          "later_turn": 2.1e-05
         }
       }
     },
@@ -1768,36 +1768,36 @@
     },
     "claude/commands/close-out.md": {
       "group": "listings",
-      "chars": 149,
-      "est_tokens": 37,
+      "chars": 156,
+      "est_tokens": 39,
       "usd": {
         "claude-fable-5": {
-          "session_start": 0.000466,
-          "later_turn": 3.7e-05
+          "session_start": 0.000487,
+          "later_turn": 3.9e-05
         },
         "claude-fable-5-1": {
-          "session_start": 0.000466,
-          "later_turn": 9e-06
+          "session_start": 0.000487,
+          "later_turn": 1e-05
         },
         "claude-haiku-4-5": {
-          "session_start": 4.7e-05,
+          "session_start": 4.9e-05,
           "later_turn": 4e-06
         },
         "claude-opus-4-6": {
-          "session_start": 0.000233,
+          "session_start": 0.000244,
           "later_turn": 1.9e-05
         },
         "claude-opus-4-8": {
-          "session_start": 0.000233,
+          "session_start": 0.000244,
           "later_turn": 1.9e-05
         },
         "claude-opus-5": {
-          "session_start": 0.000233,
+          "session_start": 0.000244,
           "later_turn": 1.9e-05
         },
         "claude-sonnet-5": {
-          "session_start": 9.3e-05,
-          "later_turn": 7e-06
+          "session_start": 9.7e-05,
+          "later_turn": 8e-06
         }
       }
     },

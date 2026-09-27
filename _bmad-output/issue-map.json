@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 117,
-    "chore": 86,
+    "chore": 87,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7717,6 +7717,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C085.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C086",
+      "github_number": 1024,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1024",
+      "title": "Open the 0.14.0 candidate",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C086.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
