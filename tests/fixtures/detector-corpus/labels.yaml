@@ -20,17 +20,7 @@ version: 1
 # measured against. The floor is not lowered for it: the entry says what is known to be wrong,
 # and `scripts/detector_corpus.py` fails again the moment the measurement moves or the detector
 # climbs above the floor its entry names. Run at a lower floor the entry is simply dormant.
-known_below_floor:
-  - detector: secrets/git-add-secret-file
-    floor: 0.9
-    precision: 0.83
-    recall: 1.0
-    note: any basename holding id_rsa is a hit, so a runbook named after a key is one too
-  - detector: autonomy/denied-by-grade
-    floor: 0.9
-    precision: 0.83
-    recall: 1.0
-    note: the signature is matched anywhere in a result, so a grep that prints it is a hit
+known_below_floor: []
 
 sessions:
 
@@ -95,7 +85,7 @@ sessions:
         note: a Read result, whose text is not a subagent's return
 
   - session: secrets-git-add.jsonl
-    note: five credential-shaped paths staged, and five paths that only look like one
+    note: six credential-shaped paths staged, and six paths that only look like one
     labels:
       - at: "1:tu-s1"
         fire: [secrets/git-add-secret-file]
@@ -121,6 +111,12 @@ sessions:
         note: a suffixed env file that is not one of the example spellings
       - at: "5:tu-p5"
         near: [secrets/git-add-secret-file]
+      - at: "6:tu-s6"
+        fire: [secrets/git-add-secret-file]
+        note: a private key by its default name, which is the only id_ shape that fires
+      - at: "6:tu-p6"
+        near: [secrets/git-add-secret-file]
+        note: the public half of the same pair
 
   - session: research-search-over-cap.jsonl
     note: the search that takes the session past the per-session cap, in one response
@@ -335,7 +331,7 @@ sessions:
         note: an export with no command after it runs nothing
 
   - session: autonomy-denied.jsonl
-    note: five commands the grade gate denied, and five results that only mention the hook
+    note: six commands the grade gate denied, and seven results that only mention or quote it
     labels:
       - at: "1:tu-g1"
         fire: [autonomy/denied-by-grade]
@@ -363,6 +359,12 @@ sessions:
       - at: "6:tu-k6"
         near: [autonomy/denied-by-grade]
         note: a grep that prints the signature out of a test file, which is not a denial
+      - at: "7:tu-g6"
+        fire: [autonomy/denied-by-grade]
+        note: the reason behind the prefix the client writes before a hook's denial
+      - at: "7:tu-k7"
+        near: [autonomy/denied-by-grade]
+        note: a grep that prints a whole deny reason behind its file and line, not a denial
 
   - session: commits-messages.jsonl
     note: five non-conventional subjects and five missing trailers, overlapping on four

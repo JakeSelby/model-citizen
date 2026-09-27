@@ -194,6 +194,9 @@ def secrets():
     b.user("finally the production settings")
     b.bash("tu-s5", "git add .env.production")
     b.bash("tu-p5", "git add .env.sample")
+    b.user("and the CI key pair")
+    b.bash("tu-s6", "git add keys/id_ed25519")
+    b.bash("tu-p6", "git add keys/id_ed25519.pub")
     return b
 
 
@@ -417,6 +420,11 @@ def denied():
     b.bash("tu-k6", "grep -n 'grade-bash hook,' tests/test_grade_bash.py")
     b.result("tu-k6", "486:            \"\u2014 this cannot be undone "
                       "(grade-bash hook, autonomy=execute)\")")
+    b.user("and the release branch")
+    b.bash("tu-g6", "git push --force origin release/1.0")
+    b.result("tu-g6", "PreToolUse:Bash hook error: " + DENY % "git push --force origin release/1.0")
+    b.bash("tu-k7", "grep -rn 'grade 3, irreversible' notes/")
+    b.result("tu-k7", "notes/incident.md:12: " + DENY % "git push --force origin main")
     return b
 
 

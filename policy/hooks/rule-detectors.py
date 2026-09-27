@@ -96,6 +96,14 @@ BUDGET_RE = re.compile(
 _COMMENT_RE = re.compile(r"^(?:\s*(?:#[^\n]*)?\n)+")
 _CONFIRMED_RE = re.compile(r"^\s*(?:env\s+)?HARNESS_CONFIRMED=1\s*;?\s*")
 GRADE_SIGNATURE = "(grade-bash hook,"
+# The whole deny as Claude Code records it: the reason opens the result, behind at most the
+# client's own `PreToolUse:Bash hook error:` prefix, and the signature closes it. A result that
+# only quotes the signature, such as a grep over a test that asserts it, is not a denial.
+GRADE_DENY_RE = re.compile(r"\s*(?:[\w:]+ hook error:\s*)?grade [0-3], [a-z -]+: .*?"
+                           + re.escape(GRADE_SIGNATURE) + r" autonomy=[\w-]+\)", re.S)
+# The private halves of an SSH key pair by their default names, whole: a runbook named after
+# one, or its public half, is not the key.
+SSH_KEY_NAMES = frozenset(("id_rsa", "id_ed25519"))
 # A path that says it holds a credential, by basename; see `_is_secret_path`.
 ENV_EXAMPLES = frozenset(("example", "sample", "template", "dist"))
 KEY_SUFFIXES = (".pem", ".p12", ".pfx")
@@ -181,7 +189,7 @@ def _is_secret_path(path):
         return base.split(".", 2)[2].lower() not in ENV_EXAMPLES
     if base.lower().endswith(KEY_SUFFIXES):
         return True
-    if "id_rsa" in base or "id_ed25519" in base:
+    if base in SSH_KEY_NAMES:
         return True
     return base.split(".", 1)[0] == "credentials"
 
@@ -427,14 +435,15 @@ def confirmed_irreversible(events, ctx):
 
 
 def denied_by_grade(events, ctx):
-    """A Bash result carrying the grade hook's signature: the gate fired and the command
-    never ran. The hook signs its own deny reason, so the string is the evidence — the
-    detector never imports it, and reads no other hook's output as a denial."""
+    """A Bash result that is the grade hook's deny reason: the gate fired and the command
+    never ran. The hook signs its own reason, so the string is the evidence — the detector
+    never imports it, and reads no other hook's output, nor a quotation of this one's, as a
+    denial; see `GRADE_DENY_RE`."""
     hits = []
     for event in events:
         if event.get("kind") != "tool_result" or event.get("tool_name") != "Bash":
             continue
-        if GRADE_SIGNATURE in text_of(event.get("text")):
+        if GRADE_DENY_RE.match(text_of(event.get("text"))):
             hits.append((event.get("turn", 0), event.get("tool_use_id") or None))
     return hits
 
