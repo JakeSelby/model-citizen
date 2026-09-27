@@ -330,15 +330,15 @@ class DecisionLogTests(Home):
 class ReplayTests(Home):
     def test_the_bare_arm_is_named_bare_and_the_harness_arm_carries_its_profile(self):
         opts = {"home": self.home, "harness_source": None, "profile_root": REPO}
-        env = bench.arm_env("harness", None)
-        self.assertEqual(bench.arm_profile("bare", bench.arm_env("bare", self.home), opts), "bare")
+        env = bench.arm_env("harness")
+        self.assertEqual(bench.arm_profile("bare", bench.arm_env("bare"), opts), "bare")
         self.assertEqual(bench.arm_profile("harness", env, opts),
                          posture.fingerprint(dict(env, HOME=str(self.home)), root=REPO))
 
     def test_the_harness_arms_stance_override_reaches_its_fingerprint(self):
         opts = {"home": self.home, "profile_root": REPO}
-        plain = bench.arm_profile("harness", bench.arm_env("harness", None), opts)
-        lean = bench.arm_profile("harness", bench.arm_env("harness", None, stance_cost="lean"), opts)
+        plain = bench.arm_profile("harness", bench.arm_env("harness"), opts)
+        lean = bench.arm_profile("harness", bench.arm_env("harness", stance_cost="lean"), opts)
         self.assertNotEqual(plain, lean)
 
 

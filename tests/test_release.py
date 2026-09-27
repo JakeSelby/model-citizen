@@ -39,7 +39,8 @@ class ReleaseTests(unittest.TestCase):
         version = (REPO / "VERSION").read_text().strip()
         self.assertIn("blob/v" + version + "/docs/compatibility-policy.md", text)
         self.assertIn("## Migration", text)
-        self.assertIn("harness sync --dry-run", text)
+        # From 0.14.0 the migration names the command `citizen`; `harness` stays its alias.
+        self.assertRegex(text, r"`(citizen|harness) sync --dry-run`")
         self.assertIn("architecture-viewer preview is inert", text)
         self.assertIn("### Recovery", text)
 
