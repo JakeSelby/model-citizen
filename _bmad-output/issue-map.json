@@ -7723,6 +7723,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B117",
+      "github_number": 1013,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1013",
+      "title": "Adherence emissions are never settled in a live session, so no response row is written",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B117.md",
+      "parent_bmad_id": "AH-E013",
+      "parent_github_number": 632,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B118",
       "github_number": 1014,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1014",
