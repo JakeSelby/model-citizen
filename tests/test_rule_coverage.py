@@ -194,6 +194,27 @@ class DeclarativeDetectors(unittest.TestCase):
         self.assertEqual(lines[0], "rules: 1 measured, 0 dark, 0 unmeasured (100% measured)")
         self.assertTrue(lines[1].startswith("  measured   house-style"))
 
+    def test_an_override_that_changes_the_rule_moves_the_measurement(self):
+        """A reused shipped id replaces the shipped detector, as the hook's registry does, so
+        the rule it named loses it rather than staying measured by a detector that never runs."""
+        write(self.repo / ".ruleprobe" / "detectors.yaml", DETECTOR_FILE.replace(
+            "house-style/sudo-install", "secrets/git-add-secret-file"))
+        secrets = [d.id for d in rd.DETECTORS.values() if d.rule == "secrets"]
+        self.assertEqual(secrets, ["secrets/secret-in-write", "secrets/git-add-secret-file"])
+        rules_dir = self.repo / "rules"
+        surface = [("secrets", write(rules_dir / "secrets.md", "# Secrets\n")),
+                   ("house-style", write(rules_dir / "house-style.md", "# House style\n"))]
+        lines = harness.rule_coverage_lines(self.repo, surface=surface, stances={})
+        self.assertEqual(lines[0], "rules: 2 measured, 0 dark, 0 unmeasured (100% measured)")
+        # With the shipped `secret-in-write` gone too, `secrets` would be unmeasured.
+        only = write(self.repo / ".ruleprobe" / "detectors.yaml", DETECTOR_FILE.replace(
+            "house-style/sudo-install", "secrets/secret-in-write") + DETECTOR_FILE.replace(
+            "detectors:\n", "").replace("house-style/sudo-install", "secrets/git-add-secret-file"))
+        self.assertTrue(only.is_file())
+        lines = harness.rule_coverage_lines(self.repo, surface=surface, stances={})
+        self.assertEqual(lines[0], "rules: 1 measured, 0 dark, 1 unmeasured (50% measured)")
+        self.assertTrue(lines[1].startswith("  unmeasured secrets"), lines)
+
     def test_it_fires_in_the_session_hook(self):
         write(self.repo / ".ruleprobe" / "detectors.yaml", DETECTOR_FILE)
         path = write(Path(self.tmp.name) / "session.jsonl", "".join(json.dumps(e) + "\n" for e in [

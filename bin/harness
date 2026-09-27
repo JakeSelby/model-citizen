@@ -4509,7 +4509,12 @@ def rule_coverage_lines(cwd: Optional[Path] = None, surface: Optional[List[Tuple
         if stances is None:
             stances = dict(cfg.get("stances") or {})
     loaded, problems = module.declarative(str(cwd or Path.cwd()))
-    detectors = list(module.DETECTORS.values()) + loaded
+    # The session hook's registry replaces a shipped detector whose id a loaded one reuses, so
+    # the rule it named is no longer measured by it; the list classified here does the same.
+    by_id = dict(module.DETECTORS)
+    for detector in loaded:
+        by_id[detector.id] = detector
+    detectors = list(by_id.values())
     rules, findings = rule_coverage.classify(surface, detectors, dict(module.OPT_OUT), stances,
                                              module.read_rule_file)
     findings = [rule_coverage.Finding(f.path, f.line, f.reason) for f in problems] + findings
