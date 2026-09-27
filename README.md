@@ -101,6 +101,7 @@ Planned, not promised.
 
 - **Measured against bare:** Proof set 1 runs the harness against bare Claude Code, and harness evidence verify re-derives every published figure from its rows, whatever they show.
 - **The superpowers mode:** One switch hands planning and testing to Superpowers while every hook stays on, and doctor names the mode when it finds the plugin.
+- **A local Studio for the whole harness:** One loopback-only dashboard will show health, configuration, experiments, reports and activity, with every action backed by the same core as the CLI.
 
 ## The delivery loop
 

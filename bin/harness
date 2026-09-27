@@ -31,6 +31,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen integration check|apply NAME [REPO] [--force]
     citizen bmad    check|apply [REPO] [--force]   (alias for `integration ... bmad`)
     citizen remote-control install [--dry-run] | status | uninstall
+    citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
     citizen --version
 
 `harness` is a supported alias for `citizen`: the same program under its earlier name.
@@ -65,6 +66,7 @@ from harness_core import codex_client, keychain, collisions, importer, cache_pre
 from harness_core import intents
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
+from harness_core import studio
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -4404,6 +4406,82 @@ def cmd_remote_control_heal(args: argparse.Namespace) -> int:
     return 0
 
 
+def _studio_report(result: Dict[str, Any], as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")), flush=True)
+        return
+    if result.get("running") is False:
+        say("Studio is not running")
+        return
+    if result.get("stopped"):
+        say("Studio stopped")
+        return
+    if result.get("port_fallback"):
+        say("port %s was unavailable; using %s" %
+            (result.get("requested_port"), result.get("port")))
+    say(str(result["url"]))
+
+
+def cmd_studio(args: argparse.Namespace) -> int:
+    if args.port < 0 or args.port > 65535:
+        raise SystemExit("--port must be between 0 and 65535")
+    if args.action and (args.detach or args._serve or args.port or args.no_open):
+        raise SystemExit("studio status and stop accept only --json")
+    root = studio.state_root(home())
+    static_root = REPO / "studio" / "placeholder"
+    try:
+        if args._serve:
+            studio.serve(static_root, root, args.port)
+            return 0
+        if args.action == "status":
+            record = studio.current(root)
+            if record is None:
+                result = {"running": False}
+                _studio_report(result, args.json)
+                return 1
+            result = {"running": True, "url": record["url"], "port": record["port"],
+                      "pid": record["pid"]}
+            _studio_report(result, args.json)
+            return 0
+        if args.action == "stop":
+            result = studio.stop(root)
+            if result is None:
+                result = {"running": False, "stopped": False}
+                _studio_report(result, args.json)
+                return 1
+            _studio_report(result, args.json)
+            return 0
+
+        record = studio.current(root)
+        if record is not None:
+            result = {"url": record["url"], "port": record["port"], "pid": record["pid"],
+                      "reused": True, "port_fallback": False}
+            _studio_report(result, args.json)
+            if not args.no_open:
+                import webbrowser
+                webbrowser.open(str(result["url"]))
+            return 0
+        if args.detach:
+            command = [sys.executable, str(REPO / "bin" / "harness")]
+            result = studio.launch_detached(command, root, args.port)
+            _studio_report(result, args.json)
+            if not args.no_open:
+                import webbrowser
+                webbrowser.open(str(result["url"]))
+            return 0
+
+        def ready(result):
+            _studio_report(result, args.json)
+            if not args.no_open:
+                import webbrowser
+                webbrowser.open(str(result["url"]))
+
+        studio.serve(static_root, root, args.port, ready)
+        return 0
+    except studio.InstanceError as exc:
+        raise SystemExit("studio: " + str(exc))
+
+
 def reconnect_lost_sessions(folders: List[Path], projects_root: Path, state: Dict[str, Any],
                             dry: bool) -> bool:
     """Re-queue each active but disconnected session on an environment this Mac holds.
@@ -5722,6 +5800,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     rc_heal.add_argument("--preserve-worktrees", action="store_true",
                          help="WIP-commit dirty bridge-cse_* worktrees so host cleanup cannot delete them")
     rc_heal.set_defaults(func=cmd_remote_control_heal)
+
+    p = sub.add_parser("studio", help="open the loopback-only local Studio")
+    p.add_argument("action", nargs="?", choices=["status", "stop"])
+    p.add_argument("--no-open", action="store_true", help="do not open the default browser")
+    p.add_argument("--port", type=int, default=0,
+                   help="preferred loopback port; falls back to a free port when occupied")
+    p.add_argument("--detach", action="store_true", help="keep running after this command exits")
+    p.add_argument("--json", action="store_true", help="print one machine-readable result object")
+    p.add_argument("--_serve", action="store_true", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_studio)
 
     p = sub.add_parser("init", help="write the config file by answering questions")
     p.add_argument("--force", action="store_true", help="replace an existing config file")

@@ -238,6 +238,11 @@
       "title": "The superpowers mode",
       "line": "One switch hands planning and testing to Superpowers while every hook stays on, and doctor names the mode when it finds the plugin.",
       "issue": 558
+    },
+    {
+      "title": "A local Studio for the whole harness",
+      "line": "One loopback-only dashboard will show health, configuration, experiments, reports and activity, with every action backed by the same core as the CLI.",
+      "issue": 955
     }
   ],
   "topics": [
