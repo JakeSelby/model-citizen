@@ -117,6 +117,13 @@ untouched; do not move or replace either tag.
    rollback, conflicts and uninstall. Store its JSON output with the candidate evidence. This is a
    filesystem/configuration lifecycle check; it does not qualify a native client.
 
+   Run `python3 scripts/studio_lifecycle_acceptance.py --output
+   compatibility/evidence/studio-<platform>-<version>.json` on macOS and Linux at the frozen source
+   commit. Commit both records. Each must name current stable Chrome and pass every lifecycle,
+   security and browser-flow case; the qualification round's smoke tier runs the same command and
+   stops the round before any paid target when it fails. Release preflight also rebuilds `studio/`
+   from the exact lockfile and refuses any path, size or digest that differs from `studio/dist/`.
+
 5. Tag the verified commit with the matching immutable `v<version>` tag and push that tag.
    The release workflow repeats qualification and source gates before publishing. Never move an
    existing tag to repair a failed release; fix the source and use a new version.

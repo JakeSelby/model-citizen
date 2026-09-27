@@ -12,8 +12,22 @@ sys.path.insert(0, str(ROOT / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness_core import catalog, compatibility
 import sync_about
+import studio_bundle_manifest
+import studio_lifecycle_acceptance
 
 GH_SKIPPED = "release warning: About and On-the-way checks skipped, gh is not authenticated"
+
+
+def studio_bundle_errors(root):
+    """Rebuild the browser source and name every committed output that drifted."""
+    try:
+        report = studio_bundle_manifest.verify_committed(root / "studio", root / "studio" / "dist")
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        return ["Studio bundle could not be verified: " + str(error)]
+    if report["identical"]:
+        return []
+    paths = studio_bundle_manifest.stale_paths(report)
+    return ["Studio committed bundle differs from source: " + ", ".join(paths)]
 
 
 def git(root, *args):
@@ -45,6 +59,7 @@ def published_surfaces(root, runner):
 
 def check(root, runner=sync_about.gh, warn=print):
     errors = compatibility.release_errors(root)
+    compatibility_data = compatibility.catalog(root)
     version = (root / "VERSION").read_text().strip()
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         errors.append("VERSION is not a stable semantic version")
@@ -52,6 +67,11 @@ def check(root, runner=sync_about.gh, warn=print):
         errors.append("release checkout is dirty")
     if catalog.projection_drift(root):
         errors.append("native source projections have drifted")
+    errors.extend(studio_bundle_errors(root))
+    source_commit = compatibility.qualification_source(compatibility_data)
+    if source_commit == "HEAD":
+        source_commit = git(root, "rev-parse", "HEAD")
+    errors.extend(studio_lifecycle_acceptance.evidence_errors(root, source_commit))
     if sync_about.authenticated(runner):
         try:
             errors.extend(published_surfaces(root, runner))

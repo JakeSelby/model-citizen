@@ -74,7 +74,7 @@
         },
         {
           "name": "Honest compatibility",
-          "line": "The catalog says which clients are qualified and where the gaps are: two runtimes today, and the headline does not claim more.",
+          "line": "The catalogs say which agent clients and Studio browser/platform tuples are qualified, tie each claim to release evidence, and name the gaps.",
           "doc": "docs/compatibility.md"
         },
         {

@@ -20,9 +20,21 @@ def load(name):
 class ReleaseTests(unittest.TestCase):
     def test_native_gaps_block_preflight_even_with_a_clean_tree(self):
         module = load("release_preflight")
-        with patch.object(module, "git", return_value=""), patch.object(module.compatibility, "release_errors", return_value=["fixture is unqualified"]):
+        with patch.object(module, "git", return_value=""), \
+                patch.object(module.compatibility, "release_errors", return_value=["fixture is unqualified"]), \
+                patch.object(module, "studio_bundle_errors", return_value=[]), \
+                patch.object(module.studio_lifecycle_acceptance, "evidence_errors", return_value=[]):
             errors = module.check(REPO)
         self.assertTrue(any("unqualified" in error for error in errors))
+
+    def test_bundle_drift_blocks_release_preflight_and_names_changed_output(self):
+        module = load("release_preflight")
+        report = {"identical": False, "comparisons": [{
+            "missing": [], "extra": ["assets/old.js"], "differing": ["index.html"]}]}
+        with patch.object(module.studio_bundle_manifest, "verify_committed", return_value=report):
+            errors = module.studio_bundle_errors(REPO)
+        self.assertEqual(errors, [
+            "Studio committed bundle differs from source: assets/old.js, index.html"])
 
     def test_preflight_takes_no_downstream_site_checkout(self):
         result = subprocess.run([sys.executable, str(REPO / "scripts" / "release_preflight.py"),

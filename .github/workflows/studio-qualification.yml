@@ -1,0 +1,34 @@
+name: studio-qualification
+
+on:
+  push:
+    branches: [main, feature/v0.18.0-studio]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: studio-lifecycle-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Qualify lifecycle, security and Chrome flows
+        run: |
+          python3 scripts/studio_lifecycle_acceptance.py \
+            --output "$RUNNER_TEMP/studio-lifecycle.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = json.loads((Path(os.environ["RUNNER_TEMP"]) / "studio-lifecycle.json").read_text())
+          assert all(case["status"] == "passed" for case in record["cases"])
+          print(json.dumps(record, indent=2, sort_keys=True))
+          PY

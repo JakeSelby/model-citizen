@@ -161,6 +161,11 @@ class PreflightGithubChecksTests(unittest.TestCase):
                             (self.module.catalog, "projection_drift")):
             patcher = patch.object(owner, name, return_value=[] if name == "release_errors" else False)
             patcher.start(); self.addCleanup(patcher.stop)
+        patcher = patch.object(self.module, "studio_bundle_errors", return_value=[])
+        patcher.start(); self.addCleanup(patcher.stop)
+        patcher = patch.object(self.module.studio_lifecycle_acceptance, "evidence_errors",
+                               return_value=[])
+        patcher.start(); self.addCleanup(patcher.stop)
 
     def check(self, runner):
         warnings = []
