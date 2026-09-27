@@ -178,8 +178,9 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   served its whole prefix.
 - **Every attempt counts.** An errored, crashed or timed-out run is a failed attempt whose cost is
   in the arm's cost per passed task, as the evidence standard's intention to treat requires; its
-  `error` field keeps it countable apart, and a run with no readable cost leaves the figure
-  undefined rather than cheaper. The per-run cap is soft, so the runner also stops
+  `error` field keeps it countable apart. A timed-out run with no readable cost is charged at the
+  per-run cap; another error with no readable cost leaves the figure undefined rather than cheaper.
+  The per-run cap is soft, so the runner also stops
   before any launch that could take reported spend past `--spend-cap`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across

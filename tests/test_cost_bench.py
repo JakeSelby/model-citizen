@@ -467,6 +467,7 @@ class ReplayRunTests(unittest.TestCase):
             self.assertTrue(name.startswith("model-citizen-arm-run-"))
             self.assertEqual(kill, ["docker", "rm", "--force", name])
             self.assertEqual(rows[0]["error_kind"], "timeout")
+            self.assertEqual(rows[0]["cost_usd"], 2.0)
 
     def test_each_arm_must_write_its_mounted_snapshot_before_anything_is_measured(self):
         """A snapshot made by another user id can be read-only to the image's user, or refused by

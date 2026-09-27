@@ -790,7 +790,8 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
                                                            opts["run_cap"], task["max_turns"]),
                               opts, container_name(task["id"], arm, rep), launch)
         except subprocess.TimeoutExpired:
-            return dict(row, error=True, error_kind="timeout", wall_seconds=round(time.time() - started, 1))
+            return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
+                        wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
         if opts.get("raw"):
             Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
@@ -942,7 +943,8 @@ def summarise(rows, field="cost_usd"):
     """Per arm: cost per passed task and passes, each the mean of reps. By intention to treat every
     attempt counts: an errored, crashed or timed-out run is a failed attempt whose cost is in the
     figure, and `errors` still counts them apart. A rep in which an arm passed nothing, or holds a
-    run with no readable cost, has no cost per passed task."""
+    non-timeout run with no readable cost, has no cost per passed task. A timeout is recorded at
+    the run cap before it reaches this function."""
     out = {}
     for arm in ARMS:
         mine = [r for r in rows if r["arm"] == arm]
