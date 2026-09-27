@@ -211,7 +211,8 @@ def arm_record(arm, ref="v9.9.9"):
     decl = {"schema": 1, "arm": arm, "base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.0",
             "harness": harness, "components": [{"name": "base-image", "version": "base@sha256:" + "0" * 64},
                                                {"name": "@anthropic-ai/claude-code", "version": "1.0"}]
-            + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else [])}
+            + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else []),
+            "effort": "high"}
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
             "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": arm_manifest(decl),
