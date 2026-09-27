@@ -7710,6 +7710,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C085",
+      "github_number": 1017,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1017",
+      "title": "Move repository-internal agent instructions into a path-scoped rule",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C085.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S321",
       "github_number": 1018,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1018",
