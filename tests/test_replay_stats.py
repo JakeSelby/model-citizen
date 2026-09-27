@@ -238,6 +238,15 @@ class RederivationTests(unittest.TestCase):
                 BENCH.main(["summarise", "--results", tmp])
         self.assertIn("unavailable", BENCH.sm2(rows))
 
+    def test_a_nonnumeric_saved_cost_is_reported_as_a_row_error(self):
+        row = {"task": "a", "arm": "bare", "rep": 1, "passed": True, "cost_usd": []}
+        with self.assertRaisesRegex(ValueError, "row 1 has a nonnumeric cost_usd"):
+            STATS.attempts([row])
+        with tempfile.TemporaryDirectory() as tmp:
+            BENCH.write_jsonl(Path(tmp) / BENCH.RESULTS, [row])
+            with self.assertRaisesRegex(SystemExit, "row 1 has a nonnumeric cost_usd"):
+                BENCH.main(["summarise", "--results", tmp])
+
     def test_the_history_row_carries_the_sm2_result_and_the_ledger_prints_it(self):
         rows = rows_for(cheaper_set(tasks=3, trials=2))
         for r in rows:
