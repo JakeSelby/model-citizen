@@ -69,7 +69,10 @@ def main():
     for error in errors:
         print("release blocked: " + error)
     if not errors:
-        print("release source verified; run the repository gates before publishing")
+        data = compatibility.catalog(ROOT)
+        print("release source verified; qualification basis: "
+              + compatibility.qualification_disclosure(data)
+              + "; run the repository gates before publishing")
     return int(bool(errors))
 
 

@@ -11,13 +11,224 @@ SOURCE_PATHS = ("VERSION", "bin", "lib", "adapters", "primitives", "policy", "te
                 "config.example.json")
 FREEZE_STATES = {"open", "frozen"}
 SCOPE_VERSION = 1
+REUSE_KINDS = {"carry-forward", "v0.14.1-bootstrap"}
+REUSE_FIELDS = {"schema_version", "kind", "prior_version", "prior_tag", "evidence_version",
+                "qualification_source_commit", "includes_bootstrap_exception", "limitation"}
+BOOTSTRAP_BEHAVIOR_PATHS = {
+    "lib/harness_core/compatibility.py",
+    "scripts/release_notes.py",
+    "scripts/release_preflight.py",
+    "tests/test_compatibility.py",
+    "tests/test_release.py",
+    "tests/test_release_upkeep.py",
+}
+PRESENTATION_PATHS = {"VERSION", "README.md", "CHANGELOG.md", "product.json",
+                      "compatibility/catalog.json", "compatibility/freeze.json",
+                      "compatibility/migration.json"}
+PRESENTATION_PREFIXES = ("_bmad-output/", "changelog.d/", "docs/")
+MAX_REUSE_DEPTH = 32
+SEMVER = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
+CATALOG_FIELDS = {"schema_version", "harness_version", "release_state", "required_cases",
+                  "evidence_invalidation", "clients", "limitations",
+                  "qualification_source_commit", "qualification_reuse"}
+
+
+def canonical_reuse_limitation(kind, current, prior_tag, evidence, includes_bootstrap):
+    """The exact public limitation admitted for one reuse kind and provenance chain."""
+    if kind == "v0.14.1-bootstrap":
+        return ("Native evidence for v0.14.0 was carried into v0.14.1 under the one-release "
+                "v0.14.1 bootstrap exception; no native client was rerun.")
+    through = " through " + prior_tag
+    if includes_bootstrap:
+        through += " including the one-release v0.14.1 bootstrap exception"
+    return ("Native evidence for v" + evidence + " was carried forward" + through
+            + "; no native client was rerun for v" + current + ".")
+
+
+def string_list(value):
+    return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+
+
+def same_json(left, right):
+    """Type-sensitive JSON equality; unlike Python equality, true never equals 1."""
+    return (type(left) is type(right)
+            and json.dumps(left, sort_keys=True, separators=(",", ":"))
+            == json.dumps(right, sort_keys=True, separators=(",", ":")))
+
+
+def reuse_metadata(data):
+    """Return structurally valid evidence-reuse metadata, or None when none is declared."""
+    declared = data.get("qualification_reuse")
+    if declared is None:
+        return None
+    if not isinstance(declared, dict):
+        raise ValueError("qualification reuse must be an object")
+    unknown = sorted(set(declared) - REUSE_FIELDS)
+    missing = sorted(REUSE_FIELDS - set(declared))
+    if unknown:
+        raise ValueError("qualification reuse has unknown field: " + unknown[0])
+    if missing:
+        raise ValueError("qualification reuse requires " + missing[0])
+    if type(declared["schema_version"]) is not int or declared["schema_version"] != 1:
+        raise ValueError("qualification reuse requires schema_version 1")
+    for key in ("kind", "prior_version", "prior_tag", "evidence_version",
+                "qualification_source_commit", "limitation"):
+        if not isinstance(declared[key], str) or not declared[key].strip():
+            raise ValueError("qualification reuse requires " + key)
+    if not isinstance(declared["includes_bootstrap_exception"], bool):
+        raise ValueError("qualification reuse includes_bootstrap_exception must be true or false")
+    if declared["kind"] not in REUSE_KINDS:
+        raise ValueError("qualification reuse kind must be one of: "
+                         + ", ".join(sorted(REUSE_KINDS)))
+    if not SEMVER.fullmatch(declared["prior_version"]):
+        raise ValueError("qualification reuse prior_version must be a stable semantic version")
+    if not SEMVER.fullmatch(declared["evidence_version"]):
+        raise ValueError("qualification reuse evidence_version must be a stable semantic version")
+    if declared["prior_tag"] != "v" + declared["prior_version"]:
+        raise ValueError("qualification reuse prior_tag must match prior_version")
+    if not re.fullmatch(r"[0-9a-f]{40,64}", declared["qualification_source_commit"]):
+        raise ValueError("qualification reuse requires a full qualification_source_commit")
+    current = data.get("harness_version", "")
+    expected = canonical_reuse_limitation(
+        declared["kind"], current, declared["prior_tag"], declared["evidence_version"],
+        declared["includes_bootstrap_exception"])
+    if declared["limitation"] != expected:
+        raise ValueError("qualification reuse limitation must equal the canonical "
+                         + declared["kind"] + " disclosure")
+    return declared
+
+
+def evidence_version(data):
+    """The harness version an evidence record truthfully observed."""
+    reuse = reuse_metadata(data)
+    return reuse["evidence_version"] if reuse else data["harness_version"]
+
+
+def qualification_disclosure(data):
+    """Describe whether the release has new evidence, carried evidence, or the bootstrap exception."""
+    reuse = reuse_metadata(data)
+    if not reuse:
+        return "native evidence recorded for this release"
+    return reuse["limitation"]
+
+
+def resolve_tag(root, tag, required=True):
+    """Resolve one exact tag ref to its commit, never accepting a branch of the same name."""
+    done = subprocess.run(["git", "-C", str(root), "rev-parse", "--verify",
+                           "refs/tags/" + tag + "^{commit}"], capture_output=True, text=True)
+    if done.returncode:
+        if required:
+            raise ValueError("qualification reuse release tag is unavailable: " + tag)
+        return None
+    commit = done.stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+        raise ValueError("qualification reuse release tag did not resolve to a full commit: " + tag)
+    return commit
+
+
+def release_target(root, data):
+    """Use the immutable current tag after release; candidates validate their clean HEAD."""
+    version = data.get("harness_version")
+    return resolve_tag(root, "v" + version, required=False) if isinstance(version, str) else None
+
+
+def allowed_release_path(path, bootstrap):
+    if path in PRESENTATION_PATHS or any(path.startswith(prefix) for prefix in PRESENTATION_PREFIXES):
+        return True
+    return bootstrap and path in BOOTSTRAP_BEHAVIOR_PATHS
+
+
+def qualification_reuse(root, data, target=None, seen=None, depth=0):
+    """Validate a patch release's explicit reuse of an immutable prior release's evidence."""
+    reuse = reuse_metadata(data)
+    if reuse is None:
+        return None
+    if depth >= MAX_REUSE_DEPTH:
+        raise ValueError("qualification reuse chain exceeds " + str(MAX_REUSE_DEPTH) + " releases")
+    if data.get("release_state") != "released":
+        raise ValueError("qualification reuse requires a released catalog")
+    current = data.get("harness_version", "")
+    if not SEMVER.fullmatch(current):
+        raise ValueError("qualification reuse requires a stable semantic version")
+    prior_parts = tuple(map(int, reuse["prior_version"].split(".")))
+    current_parts = tuple(map(int, current.split(".")))
+    if current_parts[:2] != prior_parts[:2] or current_parts[2] <= prior_parts[2]:
+        raise ValueError("qualification reuse requires a later patch in the same release line")
+    if reuse["kind"] == "v0.14.1-bootstrap" and \
+            (reuse["prior_version"], current) != ("0.14.0", "0.14.1"):
+        raise ValueError("the bootstrap qualification exception applies only to v0.14.1")
+    if reuse["kind"] == "v0.14.1-bootstrap" and not reuse["includes_bootstrap_exception"]:
+        raise ValueError("the bootstrap qualification exception must be disclosed in its chain")
+    if data.get("qualification_source_commit") != reuse["qualification_source_commit"]:
+        raise ValueError("qualification reuse qualification source differs from the catalog")
+    prior_commit = resolve_tag(root, reuse["prior_tag"])
+    target_commit = target or release_target(root, data) or "HEAD"
+    ancestor = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                               prior_commit, target_commit], capture_output=True)
+    if ancestor.returncode:
+        raise ValueError("qualification reuse prior release tag is not an ancestor of "
+                         + target_commit)
+    try:
+        prior = json.loads(git_output(root, "show", prior_commit + ":compatibility/catalog.json"))
+    except (ValueError, json.JSONDecodeError) as error:
+        raise ValueError("qualification reuse prior catalog is unavailable: " + str(error)) from error
+    if not isinstance(prior, dict):
+        raise ValueError("qualification reuse prior catalog must be an object")
+    if prior.get("release_state") != "released" or \
+            prior.get("harness_version") != reuse["prior_version"]:
+        raise ValueError("qualification reuse prior catalog is not the named released version")
+    if git_output(root, "show", prior_commit + ":VERSION").strip() != reuse["prior_version"]:
+        raise ValueError("qualification reuse prior tag VERSION does not match prior_version")
+    if prior.get("qualification_source_commit") != reuse["qualification_source_commit"]:
+        raise ValueError("qualification reuse qualification source differs from the prior release")
+    chain = set() if seen is None else set(seen)
+    if prior_commit in chain:
+        raise ValueError("qualification reuse chain contains a repeated prior tag")
+    chain.add(prior_commit)
+    qualification_reuse(root, prior, target=prior_commit, seen=chain, depth=depth + 1)
+    if reuse["evidence_version"] != evidence_version(prior):
+        raise ValueError("qualification reuse evidence version differs from the prior release")
+    prior_reuse = reuse_metadata(prior)
+    prior_bootstrap = (prior_reuse["includes_bootstrap_exception"] if prior_reuse else False)
+    if reuse["includes_bootstrap_exception"] != (reuse["kind"] == "v0.14.1-bootstrap"
+                                                   or prior_bootstrap):
+        raise ValueError("qualification reuse bootstrap provenance differs from the prior release")
+    if not same_json(data.get("required_cases"), prior.get("required_cases")):
+        raise ValueError("qualification reuse required cases differ from the prior release")
+    if not same_json(data.get("evidence_invalidation"), prior.get("evidence_invalidation")):
+        raise ValueError("qualification reuse invalidation claims differ from the prior release")
+    if not same_json(data.get("clients"), prior.get("clients")):
+        raise ValueError("qualification reuse client and evidence claims differ from the prior release")
+    if not string_list(prior.get("limitations")) or not string_list(data.get("limitations")):
+        raise ValueError("qualification reuse limitations must be lists of nonempty strings")
+    expected_limitations = prior["limitations"] + [reuse["limitation"]]
+    if not same_json(data["limitations"], expected_limitations):
+        raise ValueError("qualification reuse limitations differ from the prior release plus disclosure")
+    unknown = sorted((set(data) | set(prior)) - CATALOG_FIELDS)
+    if unknown:
+        raise ValueError("qualification reuse catalog has unknown field: " + unknown[0])
+    allowed_differences = {"harness_version", "qualification_reuse", "limitations"}
+    for key in sorted(CATALOG_FIELDS - allowed_differences):
+        if not same_json(data.get(key), prior.get(key)):
+            raise ValueError("qualification reuse catalog field differs from prior release: " + key)
+    changed = changed_files(root, prior_commit, target_commit, ["."], [])
+    if changed is None:
+        raise ValueError("qualification reuse source delta is unavailable")
+    refused = [path for path in changed
+               if not allowed_release_path(path, reuse["kind"] == "v0.14.1-bootstrap")]
+    if refused:
+        raise ValueError("qualification reuse release delta contains ineligible path: " + refused[0])
+    if "VERSION" not in changed:
+        raise ValueError("qualification reuse release delta must change VERSION")
+    return reuse
 
 
 def qualification_source(data):
     """Return the source identity a catalog's evidence qualifies."""
     if data.get("release_state") != "released":
         return "HEAD"
-    commit = data.get("qualification_source_commit")
+    reuse = reuse_metadata(data)
+    commit = reuse["qualification_source_commit"] if reuse else data.get("qualification_source_commit")
     if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40,64}", commit):
         raise ValueError("released compatibility catalog requires a full qualification source commit")
     return commit
@@ -25,6 +236,16 @@ def qualification_source(data):
 
 def source_drift(root, data):
     """A released claim stays readable, but changed source needs new qualification."""
+    if reuse_metadata(data):
+        target = release_target(root, data) or "HEAD"
+        qualification_reuse(root, data, target=target)
+        if target == "HEAD":
+            return False
+        ancestry = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                                   target, "HEAD"], capture_output=True)
+        unchanged = subprocess.run(["git", "-C", str(root), "diff", "--quiet", target,
+                                    "HEAD", "--", *SOURCE_PATHS], capture_output=True)
+        return bool(ancestry.returncode or unchanged.returncode)
     target = qualification_source(data)
     if target == "HEAD":
         return False
@@ -291,6 +512,7 @@ def catalog(root):
                                    capture_output=True)
         if available.returncode:
             raise ValueError("released qualification source commit is unavailable")
+    qualification_reuse(root, data)
     for row in data["clients"]:
         if row.get("status") not in STATES:
             raise ValueError("invalid compatibility status")
@@ -327,7 +549,7 @@ def evidence_errors(root, data, client):
         if not isinstance(record, dict):
             errors.append("evidence record must be an object")
             continue
-        if record.get("client") != client["id"] or record.get("harness_version") != data["harness_version"]:
+        if record.get("client") != client["id"] or record.get("harness_version") != evidence_version(data):
             errors.append("evidence version or client mismatch")
             continue
         if any(not client.get(key) or record.get(key) != client[key]
