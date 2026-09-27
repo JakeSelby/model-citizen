@@ -356,7 +356,7 @@ development_status:
 
   ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress
   ah-s297-suite-catalog-and-run-supervisor-with-citizen: ready-for-dev
-  ah-s298-run-store-every-run-recorded-with-benchmark-and: backlog
+  ah-s298-run-store-every-run-recorded-with-benchmark-and: ready-for-dev
   ah-s299-launch-watch-and-stop-the-free-local-suites-from: backlog
   ah-s300-run-history-and-run-detail-with-flaky-test-marks: backlog
   ah-s301-targets-run-against-the-installed-version-a: backlog
