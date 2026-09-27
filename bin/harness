@@ -4564,7 +4564,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
             _studio_report(result, args.json)
             if not args.no_open:
                 import webbrowser
-                webbrowser.open(str(result["url"]))
+                webbrowser.open(studio.prepare_browser(root).as_uri())
             return 0
         if args.detach:
             command = [sys.executable, str(REPO / "bin" / "harness")]
@@ -4572,16 +4572,17 @@ def cmd_studio(args: argparse.Namespace) -> int:
             _studio_report(result, args.json)
             if not args.no_open:
                 import webbrowser
-                webbrowser.open(str(result["url"]))
+                webbrowser.open(studio.prepare_browser(root).as_uri())
             return 0
 
         def ready(result):
+            launch_path = result.pop("_launch_path", None)
             _studio_report(result, args.json)
-            if not args.no_open:
+            if launch_path is not None:
                 import webbrowser
-                webbrowser.open(str(result["url"]))
+                webbrowser.open(Path(launch_path).as_uri())
 
-        studio.serve(static_root, root, args.port, ready)
+        studio.serve(static_root, root, args.port, ready, browser=not args.no_open)
         return 0
     except studio.InstanceError as exc:
         raise SystemExit("studio: " + str(exc))

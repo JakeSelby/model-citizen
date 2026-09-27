@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional
 
 from harness_core import workers
 
+from . import auth
 from . import server
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, StateError, Store
 
@@ -29,16 +29,23 @@ def state_root(home: Path) -> Path:
 
 
 def _request(record: Dict[str, object], path: str, method: str = "GET") -> Dict[str, object]:
-    request = urllib.request.Request(str(record["url"]).rstrip("/") + path, method=method,
-                                     headers={"Authorization": "Bearer " + str(record["control_credential"])})
+    connection = http.client.HTTPConnection("127.0.0.1", int(record["port"]), timeout=0.5)
     try:
-        with urllib.request.urlopen(request, timeout=0.5) as response:
-            value = json.loads(response.read().decode("utf-8"))
-            if not isinstance(value, dict):
-                raise ValueError("control response is not an object")
-            return value
-    except (OSError, UnicodeError, ValueError, urllib.error.HTTPError) as exc:
+        connection.request(method, path, headers={
+            "Authorization": "Bearer " + str(record["control_credential"]),
+            "Host": str(record["host"]),
+        })
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError("control response was refused")
+        value = json.loads(response.read().decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("control response is not an object")
+        return value
+    except (OSError, UnicodeError, ValueError) as exc:
         raise InstanceError("Studio instance did not complete its control handshake") from exc
+    finally:
+        connection.close()
 
 
 def _matches(record: Dict[str, object], health: Dict[str, object]) -> bool:
@@ -80,10 +87,11 @@ def current(root: Path) -> Optional[Dict[str, object]]:
         raise InstanceError(str(exc)) from exc
 
 
-def serve(static_root: Path, root: Path, requested_port: int, ready=None) -> None:
+def serve(static_root: Path, root: Path, requested_port: int, ready=None,
+          browser: bool = False) -> None:
     try:
         with Store(root) as store:
-            server.run(static_root, store, requested_port, ready)
+            server.run(static_root, store, requested_port, ready, browser=browser)
     except (OSError, StateError, RuntimeError) as exc:
         raise InstanceError(str(exc)) from exc
 
@@ -125,6 +133,19 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
         pass
     raise InstanceError("detached Studio did not become ready" +
                         ((": " + str(last_error)) if last_error else ""))
+
+
+def prepare_browser(root: Path) -> Path:
+    record = current(root)
+    if record is None:
+        raise InstanceError("Studio is not running")
+    bootstrap = _request(record, server.CONTROL_BOOTSTRAP, method="POST")
+    token = bootstrap.get("token")
+    form_name = bootstrap.get("form_name")
+    if not isinstance(token, str) or not isinstance(form_name, str):
+        raise InstanceError("Studio instance did not complete its control handshake")
+    return auth.write_launcher_form(root, form_name,
+                                    str(record["url"]).rstrip("/") + server.BOOTSTRAP, token)
 
 
 def stop(root: Path) -> Optional[Dict[str, object]]:

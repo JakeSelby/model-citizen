@@ -241,7 +241,7 @@
     },
     {
       "title": "A local Studio for the whole harness",
-      "line": "One loopback-only dashboard will show health, configuration, experiments, reports and activity, with every action backed by the same core as the CLI.",
+      "line": "One launcher-authenticated, loopback-only dashboard will show health, configuration, experiments, reports and activity, with every action backed by the same core as the CLI.",
       "issue": 955
     }
   ],
