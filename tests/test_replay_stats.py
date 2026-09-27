@@ -247,6 +247,14 @@ class RederivationTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "row 1 has a nonnumeric cost_usd"):
                 BENCH.main(["summarise", "--results", tmp])
 
+    def test_a_non_finite_or_negative_saved_cost_is_refused(self):
+        row = {"task": "a", "arm": "bare", "rep": 1, "passed": True}
+        for cost in (float("nan"), float("inf"), -0.01):
+            with self.subTest(cost=cost):
+                with self.assertRaisesRegex(ValueError,
+                                            "row 1 has a non-finite or negative cost_usd"):
+                    STATS.attempts([dict(row, cost_usd=cost)])
+
     def test_the_history_row_carries_the_sm2_result_and_the_ledger_prints_it(self):
         rows = rows_for(cheaper_set(tasks=3, trials=2))
         for r in rows:

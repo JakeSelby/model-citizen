@@ -51,6 +51,8 @@ def attempts(rows):
             cost = None if cost is None else float(cost)
         except (TypeError, ValueError) as exc:
             raise ValueError("row %d has a nonnumeric cost_usd" % index) from exc
+        if cost is not None and (not math.isfinite(cost) or cost < 0):
+            raise ValueError("row %d has a non-finite or negative cost_usd" % index)
         out.append({"task": row["task"], "arm": row["arm"], "trial": row.get("rep", row.get("trial")),
                     "passed": passed, "cost": cost,
                     "long": bool(row.get("task_long"))})
