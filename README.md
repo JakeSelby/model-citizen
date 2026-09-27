@@ -46,7 +46,7 @@ Sync keeps a journal of what it changed and refuses to overwrite what it does no
 - [Same policy on both](docs/runtime-controls.md): A Claude Code spawn and a Codex spawn resolve to the same delegation policy.
 - [Declared integrations](docs/bmad.md): A planning framework declares itself in one descriptor. citizen integration check|apply installs its overrides, and the spawn hook confines its review layers.
 - [Honest compatibility](docs/compatibility.md): The catalog says which clients are qualified and where the gaps are: two runtimes today, and the headline does not claim more.
-- [Worktrees and workspaces](docs/workspaces.md): Each agent works in its own worktree and claims the paths it writes. Your .code-workspace files decide which repositories a session sees, instructions included.
+- [Drafts, worktrees and workspaces](docs/workspaces.md): Drafts isolate harness changes and private configuration; agent worktrees claim their paths, and workspaces decide which repositories a session sees.
 
 ### See and steer what your agents spend
 

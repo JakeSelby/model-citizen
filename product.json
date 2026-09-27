@@ -78,8 +78,8 @@
           "doc": "docs/compatibility.md"
         },
         {
-          "name": "Worktrees and workspaces",
-          "line": "Each agent works in its own worktree and claims the paths it writes. Your .code-workspace files decide which repositories a session sees, instructions included.",
+          "name": "Drafts, worktrees and workspaces",
+          "line": "Drafts isolate harness changes and private configuration; agent worktrees claim their paths, and workspaces decide which repositories a session sees.",
           "doc": "docs/workspaces.md"
         }
       ]
