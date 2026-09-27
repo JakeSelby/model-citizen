@@ -116,8 +116,26 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   than its declaration names; whose settings, hooks, rules, skills, agents, plugins or instruction
   files are not the declared harness's (a link into its checkout, or the settings files its sync
   writes; the bare arm has none); whose recorded inputs name your home directory, this checkout or
-  an ambient `CLAUDE_CONFIG_DIR`; or whose run is neither pre-registered nor exploratory. Every
-  `docker run` is refused the same way when a mount or a variable names one of those paths.
+  an ambient `CLAUDE_CONFIG_DIR`; whose declaration pins no reasoning effort; or whose run is
+  neither pre-registered nor exploratory. Every `docker run` is refused the same way when a mount
+  or a variable names one of those paths.
+- **The two arms differ by the harness and nothing else.** After each arm is admitted,
+  `replay_arms.admit_pair` compares the pair and refuses the replay, printing every difference,
+  when their declarations differ in anything but the harness component (base digest, Claude Code
+  version, Dockerfile, lister or effort), when their manifests differ in Claude Code, agent
+  clients or roots, or when any manifest entry outside the harness component is not identical in
+  both. The harness component is its checkout and what its sync and trust write under the image
+  user's home: `.claude`, `.claude.json`, `.codex`, `.agents`, `.config/agent-harness`,
+  `.local/state/agent-harness` and `.local/bin`, plus the directories above them.
+- **Every run pins its reasoning effort.** `--effort` (`low`, `medium`, `high`, `xhigh` or `max`;
+  default `high`) is recorded in each arm's declaration and passed to Claude Code as `--effort` on
+  every launch, the pre-flight's included, so no arm takes its model's default, which differs by
+  model. Every row records it as `effort`. The effort is a launch input, so it changes the
+  declaration's digest but not the image. `CLAUDE_CODE_EFFORT_LEVEL` outranks `--effort`, so no
+  arm is given it and an arm that is is refused. Each row also records `observed_effort`, the
+  level the `init` event reports; a run whose observed effort differs from the pinned one is an
+  errored row and stops the set, with no override. Claude Code sends that field only to Remote
+  Control clients, so on a headless run it is normally `null` and the pin rests on the flag.
 - **Every row records the container it ran in**: `arm_image`, `arm_image_id`,
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
@@ -130,7 +148,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   gate container is named, and one that times out is removed by name. The credential is
   passed by name, so its value is on no command line and in no row. The container runs with
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
-  `--model`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
+  `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
@@ -154,6 +172,18 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   Stop hook's decisions, so each row records `stop_hooks`, how often the hook ran, and
   `hook_blocks`, how often it refused the stop. A raw file kept in the older single-document form
   still reads, with both fields `null`.
+- **Every row records the loaded surface, as the CLI reports it.** The stream's `init` event lists
+  what the session loaded, so each row carries `init_skills`, `init_agents`,
+  `init_slash_commands`, `init_tools`, `init_mcp_servers` and `init_memory_paths`, the length of
+  each list; all six are `null` for a stream with no `init` event, and one is `null` when the event
+  lacks its key. Within a set, each run is compared with its own arm's first run that reported a
+  surface. A difference is written on the row as `surface_drift`, one `field: before -> after`
+  line each, and stops the set once that row is written, printing the difference.
+  `--allow-surface-drift` runs on instead and stamps every row of the set
+  `surface_drift_allowed: true`. Beside `first_call_cache_write`, each row carries
+  `first_call_context`, the first call's input, cache write and cache read together: the write
+  alone moves with how warm the cache was and the total does not, so compare runs on the total.
+  `backfill` derives all of these for sets already on disk.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its

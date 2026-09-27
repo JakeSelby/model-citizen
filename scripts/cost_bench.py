@@ -98,9 +98,13 @@ INHERITED = "inherited"
 CONFIG_GLOBS = ("CLAUDE.md", "CLAUDE.personal.md", "rules/**/*.md", "skills/*/SKILL.md",
                 "agents/*.md", "output-styles/*.md")
 SPAWN_TOOLS = ("Task", "Agent")
+# The loaded surface: the CLI's own `init` event, counted. Each list's length becomes the row's
+# `init_<key>`, so two runs of one arm can be compared on what their sessions loaded.
+SURFACE_KEYS = ("skills", "agents", "slash_commands", "tools", "mcp_servers", "memory_paths")
+SURFACE_FIELDS = tuple("init_" + key for key in SURFACE_KEYS)
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
-STREAM_FIELDS = ("first_call_cache_write", "tool_counts", "spawns", "stop_hooks", "hook_blocks",
-                 "cache_miss_ratio")
+STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "stop_hooks",
+                 "hook_blocks", "cache_miss_ratio", "observed_effort") + SURFACE_FIELDS
 RESULTS = "results.jsonl"
 ENRICHED = "results.enriched.jsonl"
 
@@ -366,7 +370,7 @@ def config_fingerprint(config_dir, home=None):
             "personal_bytes": dict(listed).get("CLAUDE.personal.md", 0)}
 
 
-def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None):
+def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT):
     """One command line for every arm, run inside its container: the arms differ by image and by
     nothing else.
 
@@ -374,9 +378,13 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None):
     the only settings passed deny the web tools, which run in the CLI's own process (`NO_WEB`).
     The output is `stream-json` with hook events, because hook lifecycle events are the only
     place a Stop hook's decision appears and the CLI emits them in no other format. `max_turns`
-    is the task's own cap; without it a run is bounded only by the soft budget and the timeout."""
+    is the task's own cap; without it a run is bounded only by the soft budget and the timeout.
+    `effort` is the arm's pinned reasoning effort, passed as `--effort` on every launch so no run
+    takes the model's default, which differs by model."""
+    if effort not in arms.EFFORT_LEVELS:
+        raise SystemExit("cost-bench: effort %r is not one of %s" % (effort, ", ".join(arms.EFFORT_LEVELS)))
     turns = ["--max-turns", str(int(max_turns))] if max_turns else []
-    return [claude, "-p", prompt, "--model", model, "--output-format", "stream-json",
+    return [claude, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "stream-json",
             "--include-hook-events", "--verbose", "--strict-mcp-config", "--no-session-persistence",
             "--max-budget-usd", "%g" % run_cap, "--permission-mode", PERMISSION_MODE] + turns + [
             "--settings", json.dumps(ARM_SETTINGS)]
@@ -534,6 +542,36 @@ def stop_hook_counts(messages, streamed):
     return len(stops), sum(1 for m in stops if _hook_blocked(m))
 
 
+def loaded_surface(messages):
+    """(`init_*` counts, observed effort) from the first `system`/`init` event: the length of each
+    of `SURFACE_KEYS`, None for a key the event lacks, and every count None when there is no
+    event. The effort is the event's `effort` level, None when it reports none, which is how
+    Claude Code sends it to a headless client (its SDK reference: only Remote Control's copy of the
+    event carries it)."""
+    init = next((m for m in messages if isinstance(m, dict) and m.get("type") == "system"
+                 and m.get("subtype") == "init"), None)
+    if init is None:
+        return {field: None for field in SURFACE_FIELDS}, None
+    counts = {}
+    for key, field in zip(SURFACE_KEYS, SURFACE_FIELDS):
+        value = init.get(key)
+        counts[field] = len(value) if isinstance(value, (list, dict)) else None
+    effort = init.get("effort")
+    return counts, effort if isinstance(effort, str) and effort else None
+
+
+def surface_of(row):
+    """A row's loaded surface as `{field: count}`, or None when its stream carried no `init` event."""
+    surface = {field: row.get(field) for field in SURFACE_FIELDS}
+    return None if all(value is None for value in surface.values()) else surface
+
+
+def surface_drift(first, now):
+    """Each `init_*` count that moved between an arm's first run and this one, as `field: a -> b`."""
+    return ["%s: %s -> %s" % (field, first.get(field), now.get(field)) for field in SURFACE_FIELDS
+            if first.get(field) != now.get(field)]
+
+
 def parse_result(stdout):
     """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
     is no result to read.
@@ -543,14 +581,19 @@ def parse_result(stdout):
 
     `first_call_cache_write` is the standing prefix: the cache write of the first assistant message
     carrying a usage block, which is what the session paid to put its instruction layer in the
-    cache, as against the run's total writes. `tool_counts` counts every `tool_use` content block
+    cache, as against the run's total writes. `first_call_context` is that message's whole input,
+    `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
+    total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
     by name, and `spawns` is the subagent share of it.
 
     `stop_hooks` and `hook_blocks` are how often the Stop hook ran and how often it refused the
     stop. Hook lifecycle events carry them, and the CLI emits those only under
     `--include-hook-events`, which works only with `--output-format=stream-json`; for output kept
-    in the older single-document form both are None, never zero. See `stop_hook_counts`."""
+    in the older single-document form both are None, never zero. See `stop_hook_counts`.
+
+    The `init_*` counts and `observed_effort` come from the `init` event (`loaded_surface`)."""
     messages, streamed = cli_messages(stdout)
+    surface, effort = loaded_surface(messages)
     stops, blocks = stop_hook_counts(messages, streamed)
     results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
     if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
@@ -562,7 +605,7 @@ def parse_result(stdout):
                   for kind, key in zip(TOKEN_KINDS, MODEL_USAGE_KEYS)}
     else:
         tokens = {kind: int((result.get("usage") or {}).get(kind) or 0) for kind in TOKEN_KINDS}
-    first_turns, seen, first_write, tools = [], set(), None, {}
+    first_turns, seen, first_write, first_context, tools = [], set(), None, None, {}
     cache = {"cache_read": 0, "cache_write": 0, "turns": 0, "known": True}
     for message in messages:
         if not isinstance(message, dict) or message.get("type") != "assistant":
@@ -577,6 +620,8 @@ def parse_result(stdout):
             continue
         if first_write is None:
             first_write = int(body["usage"].get("cache_creation_input_tokens") or 0)
+            first_context = sum(int(body["usage"].get(key) or 0) for key in
+                                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
         for field, key in (("cache_read", "cache_read_input_tokens"),
                            ("cache_write", "cache_creation_input_tokens")):
             if key not in body["usage"]:
@@ -591,10 +636,10 @@ def parse_result(stdout):
     return {"cost_usd": float(result["total_cost_usd"]), "tokens": tokens,
             "turns": int(result.get("num_turns") or 0), "is_error": bool(result.get("is_error")),
             "subtype": str(result.get("subtype") or ""), "first_turns": first_turns,
-            "first_call_cache_write": first_write, "tool_counts": tools,
+            "first_call_cache_write": first_write, "first_call_context": first_context, "tool_counts": tools,
             "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
             "hook_blocks": blocks,
-            "cache_miss_ratio": run_miss_ratio(cache)}
+            "cache_miss_ratio": run_miss_ratio(cache), "observed_effort": effort, **surface}
 
 
 def run_miss_ratio(cache):
@@ -784,23 +829,26 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
 
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
+    effort = record["declaration"]["effort"]
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
-               first_call_cache_write=None, tool_counts={}, spawns=None, stop_hooks=None, hook_blocks=None,
-               cache_miss_ratio=None,
+               first_call_cache_write=None, first_call_context=None, tool_counts={}, spawns=None,
+               stop_hooks=None, hook_blocks=None, cache_miss_ratio=None, effort=effort, observed_effort=None,
+               surface_drift=[],
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
                profile_fingerprint=arm_profile(arm, env, opts),
                context_attribution=arm_attribution(arm, env, opts),
-               **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS}))
+               **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
+                      **{field: None for field in SURFACE_FIELDS}))
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
     started = time.time()
     try:
         mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         try:
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
-                                                           opts["run_cap"], task["max_turns"]),
+                                                           opts["run_cap"], task["max_turns"], effort),
                               opts, container_name(task["id"], arm, rep), launch)
         except subprocess.TimeoutExpired:
             return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
@@ -817,6 +865,10 @@ def _attempt(task, rep, arm, opts, launch):
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),
                    **{field: parsed[field] for field in STREAM_FIELDS})
+        if parsed["observed_effort"] is not None and parsed["observed_effort"] != effort:
+            # The stream says the run went at another effort than the one pinned: not this arm.
+            return dict(row, error=True, cache_miss_ratio=None,
+                        error_kind="effort: observed %s, pinned %s" % (parsed["observed_effort"], effort))
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
@@ -878,7 +930,7 @@ def preflight(tasks, opts, launch=subprocess.run):
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
             command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
-                                  PREFLIGHT_TURNS)
+                                  PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
                                   container_name("preflight", arm), launch)
@@ -921,9 +973,16 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     Every arm passes `replay_arms.admit` first: the one place an arm is refused before anything
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
-    Its own cost counts against the same cumulative cap."""
+    Its own cost counts against the same cumulative cap.
+
+    The pair must differ by the harness alone (`replay_arms.admit_pair`). During the set, each
+    row's loaded surface (`SURFACE_FIELDS`) is compared with its arm's first run that reported
+    one; a difference is recorded on the row as `surface_drift` and stops the set once that row
+    is written, unless the stamp says `surface_drift_allowed`. A run whose stream reports another
+    effort than the pinned one stops the set whatever the stamp says."""
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
+    arms.admit_pair(opts["arms"]["bare"], opts["arms"]["harness"])
     probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):
@@ -936,15 +995,27 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
             print("cost-bench: refusing the replay; no scored run launched", file=sys.stderr)
             raise SystemExit(2)
         opts = dict(opts, preflight="passed")
+    firsts, allowed = {}, bool(opts["stamp"].get("surface_drift_allowed"))
     for task, rep, arm in schedule(tasks, opts["reps"]):
         if spent + opts["run_cap"] > opts["spend_cap"]:
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
+        surface = surface_of(row)
+        if surface is not None:
+            row["surface_drift"] = surface_drift(firsts.setdefault(arm, surface), surface)
         spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
         rows.append(row)
         if out:
             with open(str(out), "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
+        where = "the %s arm's run of %s rep %d" % (arm, task["id"], rep)
+        if row.get("observed_effort") is not None and row["observed_effort"] != row["effort"]:
+            raise SystemExit("cost-bench: stopping the set: %s ran at effort %s, pinned %s"
+                             % (where, row["observed_effort"], row["effort"]))
+        if row["surface_drift"] and not allowed:
+            raise SystemExit("cost-bench: stopping the set: %s loaded a different surface from the arm's "
+                             "first run:\n  %s\nthe %d row(s) so far are written; --allow-surface-drift "
+                             "runs on and stamps every row" % (where, "\n  ".join(row["surface_drift"]), len(rows)))
     return rows, False
 
 
@@ -1211,13 +1282,15 @@ def tag_version(repo, commit, ref):
     return done.stdout.strip() if not done.returncode and done.stdout.strip() else ref
 
 
-def declarations(tags, repo=None):
+def declarations(tags, repo=None, effort=arms.DEFAULT_EFFORT):
     """`(bare declaration, [(tag, harness declaration)])` for a replay, each ref resolved to its
-    full commit first, so a typo costs nothing and a moved tag is a new declaration."""
+    full commit first, so a typo costs nothing and a moved tag is a new declaration. Every arm
+    declares the one pinned `effort` it launches at."""
     repo, inputs = repo or ROOT, arms.qualification_inputs()
-    harness = [(tag, arms.declaration("harness", inputs, {"ref": tag, "commit": resolve_tag(repo, tag)}))
+    harness = [(tag, arms.declaration("harness", inputs, {"ref": tag, "commit": resolve_tag(repo, tag)},
+                                      effort=effort))
                for tag in tags]
-    return arms.declaration("bare", inputs), harness
+    return arms.declaration("bare", inputs, effort=effort), harness
 
 
 def refuse_candidate(tags):
@@ -1262,12 +1335,15 @@ def cmd_replay(args):
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
-    bare_decl, harness_decls = declarations(tags)  # every ref resolves before anything is built
+    bare_decl, harness_decls = declarations(tags, effort=args.effort)  # every ref resolves before anything is built
     plan = schedule(tasks, args.reps)
-    print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s, %g USD per run, "
-          "stop at %g USD reported per tag"
+    print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s at effort %s, "
+          "%g USD per run, stop at %g USD reported per tag"
           % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(ARMS), args.reps,
-             args.model, args.run_cap, args.spend_cap))
+             args.model, args.effort, args.run_cap, args.spend_cap))
+    if args.allow_surface_drift:
+        print("cost-bench: --allow-surface-drift: a set whose loaded surface moves runs on, and every "
+              "row says surface_drift_allowed")
     if args.dry_run:  # nothing is built and nothing is spent
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
         for tag, decl in harness_decls:
@@ -1324,6 +1400,7 @@ def replay_tag(tag, args, common, harness):
                           "cli_version": common["cli_version"],
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
                           "harness_version": version, "harness_sha": commit,
+                          "surface_drift_allowed": bool(args.allow_surface_drift),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
         out.mkdir(parents=True, exist_ok=True)
@@ -1399,6 +1476,12 @@ def main(argv=None):
                      "writes its own history row. Required")
     run.add_argument("--model", help="the one model id every arm runs")
     run.add_argument("--reps", type=int, default=DEFAULT_REPS, help="trials per task and arm")
+    run.add_argument("--effort", choices=arms.EFFORT_LEVELS, default=arms.DEFAULT_EFFORT,
+                     help="the reasoning effort every arm launches at, passed as --effort and recorded "
+                     "in each arm's declaration and on every row; default %(default)s")
+    run.add_argument("--allow-surface-drift", action="store_true", help="run on when a run's loaded "
+                     "surface differs from its arm's first run, instead of stopping the set; every "
+                     "row of the set says surface_drift_allowed")
     run.add_argument("--run-cap", type=float, default=RUN_CAP_USD, help="--max-budget-usd per run; soft")
     run.add_argument("--spend-cap", type=float, default=SPEND_CAP_USD, help="stop before passing "
                      "this; it applies to each tag's schedule on its own")

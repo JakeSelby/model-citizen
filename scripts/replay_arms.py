@@ -61,6 +61,16 @@ CLIENT_ENV = ("HOME", "USER", "PATH", "TERM", "DOCKER_HOST", "DOCKER_CONTEXT", "
 HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
 BUILD_TIMEOUT = 3600
 MANIFEST_TIMEOUT = 300
+# The reasoning effort a run is launched at, pinned with `--effort` on every arm's command line.
+# Claude Code's levels; `ultracode` is left out, since it also turns on workflow orchestration.
+# The variable overrides `--effort` (Claude Code's environment variable reference), so no arm is
+# ever given it: `_pins_its_effort` refuses one that is.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT = "high"
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
+# Declaration keys that change how an arm is launched and not what its image holds; the image
+# name and build label are the digest of the rest, so changing one never rebuilds an image.
+LAUNCH_INPUTS = ("effort",)
 
 
 def digest(value):
@@ -93,12 +103,15 @@ def qualification_inputs(path=QUALIFICATION_DOCKERFILE):
     return {"base_image": base.group(1), "claude_code_version": version.group(1)}
 
 
-def declaration(arm, inputs, harness=None, claude_code_version=None):
+def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None):
     """What one arm is built from, as a dict: every input that could change what it holds.
 
     `harness` is `{ref, commit}` for the harness arm and None for the bare one; the commit is the
     full sha the ref resolved to, so a moved tag is a different declaration. The Dockerfile and
-    the manifest lister are inputs too, by content."""
+    the manifest lister are inputs too, by content. `effort` is the pinned launch input: the
+    reasoning effort every run of the arm is started at, None for an arm that is only built."""
+    if effort is not None and effort not in EFFORT_LEVELS:
+        raise SystemExit("replay-arms: effort %r is not one of %s" % (effort, ", ".join(EFFORT_LEVELS)))
     if arm not in ARMS:
         raise SystemExit("replay-arms: unknown arm %r; the arms are %s" % (arm, ", ".join(ARMS)))
     if (arm == "harness") != bool(harness):
@@ -114,7 +127,12 @@ def declaration(arm, inputs, harness=None, claude_code_version=None):
             "claude_code_version": version,
             "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
             "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
-            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT)}
+            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort}
+
+
+def build_inputs(decl):
+    """The declaration less its launch inputs: what the image itself is built from."""
+    return {key: value for key, value in decl.items() if key not in LAUNCH_INPUTS}
 
 
 def label(decl):
@@ -123,9 +141,9 @@ def label(decl):
 
 
 def image_name(decl, tag=None):
-    """`model-citizen-arm-<arm>:<tag>`, the tag defaulting to the declaration's digest, so one set
-    of inputs always names one image and a changed input a new one."""
-    return "%s%s:%s" % (IMAGE_PREFIX, decl["arm"], tag or digest(decl)[:12])
+    """`model-citizen-arm-<arm>:<tag>`, the tag defaulting to the digest of the declaration's build
+    inputs, so one set of inputs always names one image and a changed input a new one."""
+    return "%s%s:%s" % (IMAGE_PREFIX, decl["arm"], tag or digest(build_inputs(decl))[:12])
 
 
 def build_context(decl, parent, snapshot, repo=ROOT):
@@ -142,7 +160,7 @@ def build_command(decl, context, image, no_cache=False):
     command = ["docker", "build", "--quiet", "-f", str(ARM_DOCKERFILE), "--target", decl["arm"],
                "--build-arg", "BASE_IMAGE=" + decl["base_image"],
                "--build-arg", "CLAUDE_CODE_VERSION=" + decl["claude_code_version"],
-               "--label", "org.model-citizen.arm.declaration=" + digest(decl)]
+               "--label", "org.model-citizen.arm.declaration=" + digest(build_inputs(decl))]
     if decl["harness"]:
         command += ["--build-arg", "HARNESS_COMMIT=" + decl["harness"]["commit"]]
     if no_cache:
@@ -401,8 +419,19 @@ def _is_preregistered_or_exploratory(record):
     return "no committed pre-registration and not labelled exploratory"
 
 
+def _pins_its_effort(record):
+    """The arm declares the reasoning effort it launches at, and nothing it is given by value can
+    override that: the effort variable outranks `--effort`."""
+    effort = (record.get("declaration") or {}).get("effort")
+    if effort not in EFFORT_LEVELS:
+        return "no reasoning effort pinned in its declaration (got %r)" % (effort,)
+    if EFFORT_ENV in ARM_ENV:
+        return "%s is set for every arm and would override --effort" % EFFORT_ENV
+    return None
+
+
 ADMISSION_CHECKS.extend([_has_its_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
-                         _is_preregistered_or_exploratory])
+                         _is_preregistered_or_exploratory, _pins_its_effort])
 
 
 def admit(record, checks=None):
@@ -411,6 +440,84 @@ def admit(record, checks=None):
         reason = check(record)
         if reason:
             raise SystemExit("replay-arms: refusing the %s arm: %s" % (record.get("label") or "?", reason))
+
+
+# --- Pair parity: the two arms differ by the declared treatment and nothing else ----------------
+
+# Where the harness component lives in the harness arm, besides its checkout: the paths under the
+# agent user's home that its sync and trust write. Relative to the home directory.
+TREATMENT_HOME = (".claude", ".claude.json", ".codex", ".agents", ".config/agent-harness",
+                  ".local/state/agent-harness", ".local/bin")
+# Declaration keys that name the treatment itself; every other one must be equal across the pair.
+TREATMENT_KEYS = ("arm", "harness", "components")
+# Manifest keys that describe the treatment or are derived from the entries compared below.
+MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
+
+
+def _home_rel(path):
+    return path[len("home:"):] if path.startswith("home:") else None
+
+
+def _is_treatment(path):
+    """Whether a manifest path belongs to the harness component: its checkout, or a path under
+    the home directory its sync writes."""
+    if path.startswith("harness:"):
+        return True
+    rel = _home_rel(path)
+    return rel is not None and any(rel == p or rel.startswith(p + "/") for p in TREATMENT_HOME)
+
+
+def _is_treatment_parent(entry):
+    """A directory the sync had to create to reach one of `TREATMENT_HOME`, such as `.config`."""
+    rel = _home_rel(entry.get("path") or "")
+    return entry.get("kind") == "dir" and rel is not None and any(p.startswith(rel + "/") for p in TREATMENT_HOME)
+
+
+def pair_differences(bare, harness):
+    """Every way the two arms' declarations and manifests differ beyond the harness component, one
+    line each; empty when the harness is the only difference. The per-arm checks above say each
+    arm holds its own declaration; this says the pair holds the same everything else."""
+    out = []
+    left, right = bare.get("declaration") or {}, harness.get("declaration") or {}
+    for key in sorted((set(left) | set(right)) - set(TREATMENT_KEYS)):
+        if left.get(key) != right.get(key):
+            out.append("declaration %s: bare %r, harness %r" % (key, left.get(key), right.get(key)))
+    shared = [c for c in right.get("components") or [] if c.get("name") != "model-citizen"]
+    if (left.get("components") or []) != shared:
+        out.append("declaration components: bare %r, harness less its own %r" % (left.get("components"), shared))
+    left, right = bare.get("manifest") or {}, harness.get("manifest") or {}
+    for key in sorted((set(left) | set(right)) - set(MANIFEST_TREATMENT_KEYS)):
+        if left.get(key) != right.get(key):
+            out.append("manifest %s: bare %r, harness %r" % (key, left.get(key), right.get(key)))
+    roots = {k: v for k, v in (right.get("roots") or {}).items() if k != "harness"}
+    if (left.get("roots") or {}) != roots:
+        out.append("manifest roots: bare %r, harness %r" % (left.get("roots"), right.get("roots")))
+    ours = {e.get("path"): e for e in left.get("entries") or []}
+    theirs = {e.get("path"): e for e in right.get("entries") or []}
+    for path in sorted(set(ours) | set(theirs)):
+        if _is_treatment(path):
+            continue
+        if path not in theirs:
+            out.append("only in the bare arm: %s" % path)
+        elif path not in ours:
+            if not _is_treatment_parent(theirs[path]):
+                out.append("only in the harness arm, outside the harness component: %s" % path)
+        elif ours[path] != theirs[path]:
+            fields = sorted(k for k in set(ours[path]) | set(theirs[path]) if ours[path].get(k) != theirs[path].get(k))
+            out.append("differs outside the harness component: %s (%s)" % (path, ", ".join(fields)))
+    return out
+
+
+PAIR_LINES = 40
+
+
+def admit_pair(bare, harness):
+    """SystemExit listing every difference `pair_differences` finds; None when there is none."""
+    lines = pair_differences(bare, harness)
+    if lines:
+        shown = lines[:PAIR_LINES] + (["... and %d more" % (len(lines) - PAIR_LINES)] if len(lines) > PAIR_LINES else [])
+        raise SystemExit("replay-arms: refusing the pair bare and %s: they differ by more than the harness:\n  %s"
+                         % (harness.get("label") or "harness", "\n  ".join(shown)))
 
 
 # --- Egress: an internal network whose one way out is the allowlist proxy ----------------------
