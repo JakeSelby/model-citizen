@@ -341,7 +341,7 @@ development_status:
   ah-s287-library-every-module-with-its-manifest: backlog
   ah-s288-activity-what-the-harness-decided-and-what: backlog
   ah-s289-live-updates-a-change-from-the-cli-an-agent-or: backlog
-  ah-sp017-spike-can-the-committed-ui-bundle-be-rebuilt: backlog
+  ah-sp017-spike-can-the-committed-ui-bundle-be-rebuilt: ready-for-dev
   ah-t035-write-the-studio-s-ux-specification: ready-for-dev
   ah-t036-record-the-studio-s-architecture-decisions-in: ready-for-dev
 

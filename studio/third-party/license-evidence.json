@@ -1,0 +1,15 @@
+{
+  "packages": [
+    {
+      "basis": "The package metadata and bundled README declare MIT; the canonical upstream file supplies the omitted notice text.",
+      "license": "MIT",
+      "name": "react-remove-scroll-bar",
+      "path": "licenses/react-remove-scroll-bar-2.3.8-LICENSE",
+      "sha256": "a79aae0c0f21990d9d963bb3c5a79cdcea9a46f8523ba55c58d7fe776b6ebc84",
+      "source_commit": "8ca9ba5ea52de03308fe8ced94f7b159a44d28ff",
+      "source_url": "https://github.com/theKashey/react-remove-scroll-bar/blob/8ca9ba5ea52de03308fe8ced94f7b159a44d28ff/LICENSE",
+      "version": "2.3.8"
+    }
+  ],
+  "schema_version": 1
+}
