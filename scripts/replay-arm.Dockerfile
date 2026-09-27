@@ -6,7 +6,8 @@
 # `CLAUDE_CODE_VERSION` are read out of `scripts/linux-target.Dockerfile` by the runner and passed
 # here, so the two files cannot drift apart. Only Claude Code is installed. The base template ships
 # a Codex client of its own, which is removed: an arm holds its declared components and no other
-# agent client, and the manifest's `cli_packages` shows what is left.
+# agent client, and the manifest's `cli_packages` shows what is left. Git trusts /work, where the
+# runner mounts a snapshot made by whichever user runs it; the file this writes is in the manifest.
 #
 #   bare     the base image plus Claude Code, and nothing else
 #   harness  the bare stage plus this repository at one commit, synced for the agent user
@@ -22,7 +23,8 @@ RUN test -n "${CLAUDE_CODE_VERSION}" \
     && npm uninstall -g @openai/codex \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
     && npm cache clean --force \
-    && ! command -v codex
+    && ! command -v codex \
+    && git config --global --add safe.directory /work
 CMD ["bash"]
 
 FROM bare AS harness

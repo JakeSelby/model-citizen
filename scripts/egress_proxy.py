@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """An allowlist CONNECT proxy: the only way out of a replay arm's network.
 
-`python3 egress_proxy.py PORT HOST [HOST ...]` listens on PORT and opens a tunnel only for a
+`python3 egress_proxy.py PORT HOST [HOST ...]` listens on PORT, at its own address on the arms'
+internal network and nowhere else (`bind_address`), and opens a tunnel only for a
 `CONNECT HOST:443` whose host is named exactly. Every other request, a plain HTTP one or a tunnel
 to any other host or port, is answered `403` and closed. It runs in a container of its own on
 the arms' internal Docker network and on one network that reaches the internet, from the bare
@@ -86,13 +87,30 @@ def handle(client, hosts):
         client.close()
 
 
-def main(argv):
+def bind_address():
+    """This container's address on the arms' internal network, the only one the proxy listens on.
+
+    The proxy starts attached to that network alone, and Docker writes the container's address
+    there against its hostname, so the hostname resolves to it. The runner joins the proxy to the
+    outbound network only after this line has been logged. A loopback or unresolvable answer
+    stops the proxy rather than let it listen anywhere else."""
+    try:
+        address = socket.gethostbyname(socket.gethostname())
+    except OSError as exc:
+        raise SystemExit("egress proxy: cannot resolve its own address: %s" % exc)
+    if address.startswith("127.") or address in ("0.0.0.0", ""):
+        raise SystemExit("egress proxy: its own address resolved to %s; refusing to listen" % address)
+    return address
+
+
+def main(argv, address=None):
     port, hosts = int(argv[0]), {h.lower() for h in argv[1:]}
+    address = address or bind_address()
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("0.0.0.0", port))
+    server.bind((address, port))
     server.listen(64)
-    sys.stderr.write("egress proxy on %d for %s\n" % (port, ", ".join(sorted(hosts))))
+    sys.stderr.write("egress proxy on %s:%d for %s\n" % (address, port, ", ".join(sorted(hosts))))
     sys.stderr.flush()
     while True:
         client, _ = server.accept()

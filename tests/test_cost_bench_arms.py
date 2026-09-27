@@ -28,6 +28,7 @@ def load(name):
 ARMS = load("replay_arms")
 LISTER = load("arm_manifest")
 PROXY = load("egress_proxy")
+PROXY_SOURCE = (REPO / "scripts" / "egress_proxy.py").read_text(encoding="utf-8")
 INPUTS = {"base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.2.3"}
 COMMIT = "c" * 40
 
@@ -44,6 +45,8 @@ class Docker:
 
     def __call__(self, command, **kwargs):
         self.calls.append((command, kwargs))
+        if command[:2] == ["docker", "logs"]:
+            return done("", 0, "egress proxy on 192.0.2.10:3128 for api.anthropic.com\n")
         if command[:3] == ["docker", "image", "inspect"]:
             return done("sha256:" + "9" * 64 + "\n")
         if command[:2] == ["docker", "run"] and command[-2:] == ["python3", "-"]:
@@ -250,6 +253,19 @@ class RunTests(unittest.TestCase):
         self.assertEqual(connect, ["docker", "network", "connect", "bridge", names["proxy"]])
         self.assertEqual(ARMS.arm_env(ARMS.proxy_url(names))["HTTPS_PROXY"], "http://%s:3128" % names["proxy"])
 
+    def test_the_proxy_joins_the_outbound_network_only_after_it_has_bound_its_internal_address(self):
+        docker = Docker()
+        with ARMS.egress("img", docker, "t") as net:
+            self.assertEqual(net["bound"], "192.0.2.10:3128")
+        order = [c[1] if c[1] != "network" else "network " + c[2] for c, _ in docker.calls]
+        self.assertEqual(order[:4], ["network create", "run", "logs", "network connect"])
+
+    def test_a_proxy_that_never_reports_its_address_stops_the_run(self):
+        silent = lambda command, **kw: done()
+        with mock.patch.object(ARMS, "PROXY_WAIT", (3, 0)):
+            with self.assertRaises(SystemExit):
+                ARMS.wait_for_proxy(ARMS.egress_names("t"), silent, sleep=lambda s: None)
+
     def test_the_egress_is_torn_down_even_when_the_replay_raises(self):
         docker = Docker()
         with self.assertRaises(ValueError):
@@ -381,7 +397,39 @@ class ManifestListerTests(unittest.TestCase):
             self.assertFalse([p for p in paths if p.startswith("harness:.git")])
 
 
+class WorkdirTests(unittest.TestCase):
+    def test_the_image_trusts_the_mount_for_git(self):
+        self.assertIn("safe.directory /work", ARMS.ARM_DOCKERFILE.read_text(encoding="utf-8"))
+
+    def test_the_probe_writes_and_asks_git_inside_the_mount_with_no_network(self):
+        command = ARMS.workdir_probe_command("img", "/tmp/snap", "probe-1")
+        self.assertEqual(command[command.index("--network") + 1], "none")
+        self.assertEqual(command[command.index("--name") + 1], "probe-1")
+        self.assertIn("touch /work/", command[-1])
+        self.assertIn("git -C /work rev-parse", command[-1])
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", command)
+
+    def test_a_probe_that_fails_refuses_the_arm_with_its_reason(self):
+        failing = lambda command, **kw: done("", 128, "fatal: detected dubious ownership in repository at '/work'")
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.probe_workdir({"label": "bare", "image": "img"}, "/tmp/snap", failing)
+        self.assertIn("dubious ownership", str(caught.exception))
+        self.assertIsNone(ARMS.probe_workdir({"label": "bare", "image": "img"}, "/tmp/snap",
+                                             lambda command, **kw: done()))
+
+
 class EgressProxyTests(unittest.TestCase):
+    def test_the_proxy_listens_only_on_its_own_resolved_address_never_everywhere(self):
+        with mock.patch.object(PROXY.socket, "gethostname", lambda: "proxy"), \
+                mock.patch.object(PROXY.socket, "gethostbyname", lambda name: "192.0.2.10"):
+            self.assertEqual(PROXY.bind_address(), "192.0.2.10")
+        for answer in ("127.0.0.1", "0.0.0.0"):
+            with mock.patch.object(PROXY.socket, "gethostbyname", lambda name, a=answer: a):
+                with self.assertRaises(SystemExit):
+                    PROXY.bind_address()
+        self.assertNotIn('"0.0.0.0", port', PROXY_SOURCE)
+
+
     def test_only_a_connect_to_an_allowed_host_on_443_is_let_through(self):
         hosts = {"api.anthropic.com"}
         self.assertTrue(PROXY.allowed(PROXY.target_of(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n"), hosts))
@@ -397,7 +445,8 @@ class EgressProxyTests(unittest.TestCase):
         probe.close()
         err = io.StringIO()
         with mock.patch.object(sys, "stderr", err):
-            threading.Thread(target=PROXY.main, args=([str(port), "api.anthropic.com"],), daemon=True).start()
+            threading.Thread(target=PROXY.main, args=([str(port), "api.anthropic.com"], "127.0.0.1"),
+                             daemon=True).start()
             for _ in range(50):
                 try:
                     client = socket.create_connection(("127.0.0.1", port), timeout=5)

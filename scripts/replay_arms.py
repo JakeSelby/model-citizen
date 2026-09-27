@@ -300,14 +300,36 @@ def proxy_url(names):
     return "http://%s:%d" % (names["proxy"], PROXY_PORT)
 
 
+PROXY_READY = "egress proxy on "
+PROXY_WAIT = (50, 0.2)  # attempts, seconds between them
+
+
 def egress_commands(image, names, hosts=MODEL_API_HOSTS):
     """The commands that stand the egress up, in order: an internal network (no route out), the
-    proxy on it, and the proxy's second leg on the default bridge, which does route out."""
+    proxy on it, and the proxy's second leg on the default bridge, which does route out. The
+    runner waits for the proxy to report its address between the second and the third: the proxy
+    binds only its address on the internal network, which it can tell apart only while that is
+    the one network it is on."""
     source = PROXY_SCRIPT.read_text(encoding="utf-8")
     return [["docker", "network", "create", "--internal", names["network"]],
             ["docker", "run", "-d", "--rm", "--name", names["proxy"], "--network", names["network"]]
             + HARDENING + [image, "python3", "-c", source, str(PROXY_PORT)] + list(hosts),
             ["docker", "network", "connect", "bridge", names["proxy"]]]
+
+
+def wait_for_proxy(names, launch=subprocess.run, sleep=None):
+    """The address the proxy bound, once its log reports it; SystemExit if it never does."""
+    import time
+    attempts, pause = PROXY_WAIT
+    for _ in range(attempts):
+        done = launch(["docker", "logs", names["proxy"]], env=client_env(), stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE, universal_newlines=True)
+        text = (done.stdout or "") + (done.stderr or "")
+        for line in text.splitlines():
+            if line.startswith(PROXY_READY):
+                return line[len(PROXY_READY):].split(" ", 1)[0]
+        (sleep or time.sleep)(pause)
+    raise SystemExit("replay-arms: the egress proxy %s never reported its address" % names["proxy"])
 
 
 def teardown_commands(names):
@@ -319,9 +341,12 @@ def egress(image, launch=subprocess.run, token=None, hosts=MODEL_API_HOSTS):
     """The egress for one replay, torn down afterwards whatever happens; yields its names and URL."""
     names = egress_names(token or "%d" % os.getpid())
     try:
-        for command in egress_commands(image, names, hosts):
-            _run(launch, command)
-        yield dict(names, url=proxy_url(names))
+        create, proxy, connect = egress_commands(image, names, hosts)
+        _run(launch, create)
+        _run(launch, proxy)
+        bound = wait_for_proxy(names, launch)
+        _run(launch, connect)
+        yield dict(names, url=proxy_url(names), bound=bound)
     finally:
         for command in teardown_commands(names):
             launch(command, env=client_env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -364,6 +389,47 @@ def check_command(image, workdir, argv, env=None, name=None, stdin=False):
 
 def kill_command(name):
     return ["docker", "rm", "--force", name]
+
+
+# --- The snapshot as the image's user sees it ---------------------------------------------------
+
+# Run in a fresh container of the arm before anything is measured: the image's user must be able
+# to write the mounted snapshot and git must treat it as a repository it may use. The image
+# trusts WORKDIR for git (`safe.directory`); this proves both on the mount that will be used.
+WORKDIR_PROBE = ("touch {w}/.model-citizen-write-probe && rm {w}/.model-citizen-write-probe"
+                 " && git -C {w} rev-parse --verify HEAD >/dev/null").format(w=WORKDIR)
+
+
+def open_for_image(root):
+    """Make a snapshot writable by any user, so the image's `agent` user can write it whatever
+    user id created it on this machine. It is a throwaway tree made for one run, so nothing else
+    can be affected, and no root is needed: the invoking user owns every file in it."""
+    root = Path(root)
+    for path in [root] + sorted(root.rglob("*")):
+        if path.is_symlink():
+            continue
+        mode = path.stat().st_mode
+        extra = 0o777 if path.is_dir() else (0o666 | (0o111 if mode & 0o100 else 0))
+        os.chmod(str(path), mode | extra)
+    return root
+
+
+def workdir_probe_command(image, workdir, name=None):
+    return check_command(image, workdir, ["sh", "-c", WORKDIR_PROBE], None, name)
+
+
+def probe_workdir(record, workdir, launch=subprocess.run, name=None):
+    """SystemExit naming the arm when its image's user cannot write `workdir` or git refuses it.
+    The run fails closed here rather than measuring an arm that cannot do the task."""
+    done = launch(workdir_probe_command(record["image"], workdir, name), env=client_env(),
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True,
+                  timeout=MANIFEST_TIMEOUT)
+    if done.returncode:
+        reason = ((done.stderr or "") + (done.stdout or "")).strip().splitlines()
+        raise SystemExit("replay-arms: refusing the %s arm: its user cannot write the mounted snapshot "
+                         "or git will not use it (exit %d): %s"
+                         % (record.get("label") or record.get("arm"), done.returncode,
+                            reason[-1] if reason else "no message"))
 
 
 # --- The egress rule, proved from inside an arm container without a model call -----------------

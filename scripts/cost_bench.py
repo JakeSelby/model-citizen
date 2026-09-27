@@ -18,6 +18,7 @@ import argparse
 import datetime
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import platform
@@ -375,10 +376,34 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None):
             "--settings", json.dumps(ARM_SETTINGS)]
 
 
+_NAMES = itertools.count(1)
+
+
 def container_name(*parts):
-    """A per-run container name, so a run that times out can be stopped by name."""
-    text = "-".join(str(p) for p in parts)
+    """A container name unique to this process, so one that times out can be stopped by name."""
+    text = "-".join(str(p) for p in parts + (next(_NAMES),))
     return "%srun-%d-%s" % (arms.IMAGE_PREFIX, os.getpid(), re.sub(r"[^a-zA-Z0-9_.-]", "-", text))
+
+
+def run_check(launch, image, workdir, argv, env=None, name=None, **kwargs):
+    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`).
+    On a timeout the container is removed by name before the timeout is raised on: killing the
+    Docker client alone would leave it running the code it was checking."""
+    name = name or container_name("check")
+    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs)
+    client = arms.client_env()
+    try:
+        return launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT, universal_newlines=True, **kwargs)
+    except subprocess.TimeoutExpired:
+        launch(arms.kill_command(name), env=client, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+               universal_newlines=True)
+        raise
+
+
+def mounted_snapshot(repo, sha, dest):
+    """`snapshot`, opened so the image's user can write it (`replay_arms.open_for_image`)."""
+    return arms.open_for_image(snapshot(repo, sha, dest))
 
 
 def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run):
@@ -657,13 +682,11 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
     repository's history first; an oracle is sent on stdin, so nothing else is mounted."""
     workdir = Path(workdir)
     tests = task["tests"]
-    client = arms.client_env()
+    name = name or container_name("check", task["id"])
     if task["kind"] == "synthetic":
         source = (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8")
         stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR)
-        command = arms.check_command(image, workdir, ["python3", "-"], {}, name, stdin=True)
-        done = launch(command, input=stdin, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
-                      stderr=subprocess.STDOUT, universal_newlines=True)
+        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, input=stdin)
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
@@ -671,9 +694,7 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
         return (not errors, "; ".join(errors[:3]))
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
-    command = arms.check_command(image, workdir, _unittest_command(task, "python3"), env, name)
-    done = launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
-                  stderr=subprocess.STDOUT, universal_newlines=True)
+    done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
     return _ran(done)
 
 
@@ -685,9 +706,8 @@ def repo_gate(workdir, commands, image, launch=subprocess.run):
     configuration and go red for that instead."""
     out = []
     for command in commands:
-        done = launch(arms.check_command(image, workdir, command, {"PYTHONPATH": arms.WORKDIR + "/lib"}),
-                      env=arms.client_env(), timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
-                      stderr=subprocess.STDOUT, universal_newlines=True)
+        done = run_check(launch, image, workdir, command, {"PYTHONPATH": arms.WORKDIR + "/lib"},
+                         container_name("gate"))
         out.append((" ".join(command), done.returncode))
     return out
 
@@ -697,7 +717,7 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
     and every check run in containers of `image`, the bare arm, as the replay's checks do."""
     errors = []
     for task in tasks:
-        before = snapshot(repo, task["parent_sha"], Path(parent) / (task["id"] + "-parent"))
+        before = mounted_snapshot(repo, task["parent_sha"], Path(parent) / (task["id"] + "-parent"))
         if task["kind"] == "issue" and reaches(before, task["good_sha"]):
             errors.append("%s: the commit that solved it is present in the snapshot" % task["id"])
         for command, code in repo_gate(before, gate or [], image, launch):
@@ -707,7 +727,7 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
         if score(task, before, repo, image, launch)[0]:
             errors.append("%s: the check already passes at the parent sha" % task["id"])
         if task["kind"] == "issue":
-            after = snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
+            after = mounted_snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)
@@ -762,7 +782,7 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
     started = time.time()
     try:
-        snapshot(opts["repo"], task["parent_sha"], workdir)
+        mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         try:
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
                                                            opts["run_cap"], task["max_turns"]),
@@ -840,7 +860,7 @@ def preflight(tasks, opts, launch=subprocess.run):
     for arm in ARMS:
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
         try:
-            snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
+            mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
             command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
                                   PREFLIGHT_TURNS)
             try:
@@ -866,16 +886,29 @@ def preflight(tasks, opts, launch=subprocess.run):
     return checks, spent
 
 
+def probe_workdirs(tasks, opts, launch=subprocess.run):
+    """Refuse the replay unless each arm's user can write a snapshot mounted as a run mounts it and
+    git will use it there (`replay_arms.probe_workdir`), before anything is spent."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-probe-", dir=opts.get("tmp")))
+    try:
+        workdir = mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], parent / "repo")
+        for arm in ARMS:
+            arms.probe_workdir(opts["arms"][arm], workdir, launch, container_name("probe", arm))
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
 def replay(tasks, opts, launch=subprocess.run, out=None):
     """(rows, stopped). Stops before a launch that could take reported spend past the cap; the
     per-run cap is soft, so a run with no readable cost is counted at the full run cap.
 
     Every arm passes `replay_arms.admit` first: the one place an arm is refused before anything
-    of it launches. A red pre-flight then refuses the whole replay with exit 2 before any scored
+    of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
     for arm in ARMS:
         arms.admit(opts["arms"][arm])
+    probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):
         checks, spent = preflight(tasks, opts, launch)

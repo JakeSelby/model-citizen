@@ -162,10 +162,14 @@ def config_tree(root, personal="p" * 64, rules=2):
 
 class Launch:
     """Stands in for Docker: replays recorded output and records how it was called."""
-    def __init__(self, outputs):
-        self.outputs, self.calls = list(outputs), []
+    def __init__(self, outputs, probe_exit=0):
+        self.outputs, self.calls, self.probes, self.probe_exit = list(outputs), [], [], probe_exit
 
     def __call__(self, command, **kwargs):
+        if BENCH.arms.WORKDIR_PROBE in command:  # the writable-snapshot probe, answered apart
+            self.probes.append(command)
+            return types.SimpleNamespace(stdout="", stderr="touch: cannot touch '/work/x': Permission denied",
+                                         returncode=self.probe_exit)
         self.calls.append((command, kwargs))
         if command[:2] == ["docker", "rm"]:  # removing a timed-out container prints nothing to replay
             return types.SimpleNamespace(stdout="", stderr="", returncode=0)
@@ -448,6 +452,57 @@ class ReplayRunTests(unittest.TestCase):
             self.assertTrue(name.startswith("model-citizen-arm-run-"))
             self.assertEqual(kill, ["docker", "rm", "--force", name])
             self.assertEqual(rows[0]["error_kind"], "timeout")
+
+    def test_each_arm_must_write_its_mounted_snapshot_before_anything_is_measured(self):
+        """A snapshot made by another user id can be read-only to the image's user, or refused by
+        git as dubious ownership. The replay fails closed rather than measure a broken arm."""
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([json.dumps(result())] * 2)
+            BENCH.replay([TASK], options(tmp, reps=1), launch)
+            self.assertEqual(len(launch.probes), 2)
+            for probe, arm in zip(launch.probes, ("bare", "harness")):
+                self.assertIn("model-citizen-arm-%s:test" % arm, probe)
+                self.assertEqual(probe[probe.index("--network") + 1], "none")
+                self.assertEqual(len(mounts(probe)), 1)
+                self.assertIn("--name", probe)
+            refused = Launch([], probe_exit=1)
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], options(Path(tmp) / "again", reps=1), refused)
+            self.assertIn("cannot write the mounted snapshot", str(caught.exception))
+            self.assertIn("Permission denied", str(caught.exception))
+            self.assertEqual(refused.calls, [])
+
+    def test_a_mounted_snapshot_is_writable_by_any_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            clone = BENCH.mounted_snapshot(repo, "HEAD", Path(tmp) / "clone")
+            for path in [clone] + list(clone.rglob("*")):
+                if not path.is_symlink():
+                    self.assertEqual(path.stat().st_mode & 0o006, 0o006, path)
+            self.assertTrue((clone / ".git").stat().st_mode & 0o001)
+
+    def test_a_check_that_times_out_has_its_container_removed_by_name(self):
+        calls = []
+
+        def launch(command, **kwargs):
+            calls.append(command)
+            if command[:2] == ["docker", "run"]:
+                raise subprocess.TimeoutExpired("docker", 1)
+            return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+        issue = dict(TASK, kind="issue", good_sha="HEAD", tests={"copy": [], "pattern": "test_*.py"})
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                BENCH.score(issue, tmp, tmp, "model-citizen-arm-bare:test", launch)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                BENCH.repo_gate(tmp, [["python3", "bin/harness", "lint"]], "model-citizen-arm-bare:test", launch)
+        runs = [c for c in calls if c[:2] == ["docker", "run"]]
+        kills = [c for c in calls if c[:2] == ["docker", "rm"]]
+        self.assertEqual(len(runs), 2)
+        for run, kill in zip(runs, kills):
+            name = run[run.index("--name") + 1]
+            self.assertTrue(name.startswith("model-citizen-arm-run-"))
+            self.assertEqual(kill, ["docker", "rm", "--force", name])
+        self.assertNotEqual(runs[0][runs[0].index("--name") + 1], runs[1][runs[1].index("--name") + 1])
 
     def test_an_arm_the_admission_seam_refuses_launches_nothing(self):
         """`replay_arms.admit` is the one place an arm is refused before anything of it runs."""

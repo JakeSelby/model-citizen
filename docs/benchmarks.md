@@ -107,7 +107,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
   manifest digest, ref and commit.
 - **A run is `docker run --rm` with one mount.** The task's snapshot is mounted at `/work`, which
-  has no instruction file above it; nothing else from your machine is mounted. The credential is
+  has no instruction file above it; nothing else from your machine is mounted. Every snapshot is
+  made writable for any user, since the image's user id may differ from yours, and the images
+  trust `/work` for git. Before anything is measured, each arm's container must write a mounted
+  snapshot and have git read it, or the replay is refused with the reason. Every run, check and
+  gate container is named, and one that times out is removed by name. The credential is
   passed by name, so its value is on no command line and in no row. The container runs with
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
   `--model`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
@@ -115,7 +119,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
   out. The only other container on it is `scripts/egress_proxy.py`, a standard-library CONNECT
-  proxy run from the bare image and also joined to the default bridge, which opens a tunnel to
+  proxy run from the bare image. It listens only on its own address on that network, and is
+  joined to the default bridge only once it has reported that address; it opens a tunnel to
   `api.anthropic.com:443` and answers everything else `403`. The arms get `HTTPS_PROXY` pointing at
   it and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. `arms probe-egress` proves the rule from an
   arm container: the model API answers through the proxy, `example.com` is refused, and the model
