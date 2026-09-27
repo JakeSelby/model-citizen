@@ -1,0 +1,69 @@
+{
+  "comparisons": [
+    {
+      "candidate": "evidence/linux-x64/run-1.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-1.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-2.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-1.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-3.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-1.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-1.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-2.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-2.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-2.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-3.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-2.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-1.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-3.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-2.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-3.json"
+    },
+    {
+      "candidate": "evidence/linux-x64/run-3.json",
+      "differing": [],
+      "extra": [],
+      "missing": [],
+      "reference": "studio/reproducibility/macos-arm64/run-3.json"
+    }
+  ],
+  "identical": true,
+  "schema_version": 1
+}

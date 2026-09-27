@@ -1,0 +1,22 @@
+:root {
+  color: #18302b;
+  background: #f7fbfa;
+}
+
+body {
+  margin: 0;
+}
+
+.chart {
+  height: 240px;
+}
+
+.editor {
+  overflow: hidden;
+  border: 1px solid #d8e2df;
+  border-radius: 8px;
+}
+
+.cm-editor {
+  min-height: 160px;
+}

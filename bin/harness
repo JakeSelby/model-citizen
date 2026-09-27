@@ -141,6 +141,12 @@ SHAPE_PATTERNS = [
     ("identity-provider tenant", r"\b[a-z0-9-]+\.(?:us|eu|au|jp)\.auth0\.com\b|\bdev-[a-z0-9]{16}\b"),
     ("private IPv4 address", r"\b(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?:\.\d{1,3})?\b"),
 ]
+# These exact legal artifacts preserve an upstream contact address. Only that shape is exempt;
+# personal terms, every other shape, secrets and retired names remain checked on every line.
+LINT_SHAPE_EXEMPTIONS = {
+    "studio/public/THIRD_PARTY_NOTICES.txt": {"email address"},
+    "studio/third-party/licenses/react-remove-scroll-bar-2.3.8-LICENSE": {"email address"},
+}
 
 
 def load_posture(root: Path = REPO):
@@ -2541,6 +2547,7 @@ def lint_files(root: Path, files: List[Path], terms: Optional[Tuple[List[str], L
         # The project was renamed; retired_names says what stays out and what keeps it on purpose.
         check_retired = retired and retired_names.allowed_path(rel.as_posix()) is None
         released = retired_names.released_lines(rel.as_posix(), text.splitlines()) if check_retired else set()
+        shape_exemptions = LINT_SHAPE_EXEMPTIONS.get(rel.as_posix(), set())
         for n, line in enumerate(text.splitlines(), 1):
             low = line.lower()
             for term in everywhere:
@@ -2555,7 +2562,7 @@ def lint_files(root: Path, files: List[Path], terms: Optional[Tuple[List[str], L
                     if rx.search(line):
                         hits.append(f"{rel}:{n}: maintainer name in installed content")
             for label, rx in shapes:
-                if rx.search(line):
+                if label not in shape_exemptions and rx.search(line):
                     hits.append(f"{rel}:{n}: {label}")
             for rx in secrets:
                 if rx.search(line):

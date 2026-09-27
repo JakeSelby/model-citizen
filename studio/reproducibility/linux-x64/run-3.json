@@ -1,0 +1,40 @@
+{
+  "environment": {
+    "arch": "x64",
+    "node": "22.22.3",
+    "npm": [
+      "10",
+      "9",
+      "8"
+    ],
+    "os": "linux"
+  },
+  "files": [
+    {
+      "path": "THIRD_PARTY_NOTICES.txt",
+      "sha256": "7cff08e4aef4e48a4c4e20c625731adf06d494ae6f9c7dc1479d555b30d7d1fe",
+      "size": 48686
+    },
+    {
+      "path": "assets/index-83nrFCSQ.js",
+      "sha256": "b3716bd48b90459136480c2b1f4515a1ff218dbe13474f0aa877323d138666e6",
+      "size": 824606
+    },
+    {
+      "path": "assets/index-DCw64SHH.css",
+      "sha256": "49c1025d60906934c124225c6b35fcfe38f67ca14103d74825aa06d64171c79f",
+      "size": 237819
+    },
+    {
+      "path": "index.html",
+      "sha256": "5711fd68fb2eb0ece9a29f15c937860dd7a82693602456a456dc54236cbe803a",
+      "size": 418
+    },
+    {
+      "path": "third-party.json",
+      "sha256": "249441b5c4b0351f9e01d59152c657a8b5eda611f6ffd34f7905e131ac42c82f",
+      "size": 63718
+    }
+  ],
+  "schema_version": 1
+}
