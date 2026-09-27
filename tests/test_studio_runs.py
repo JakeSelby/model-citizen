@@ -85,8 +85,10 @@ class StudioRunTests(unittest.TestCase):
         token = "a" * 32
         with supervisor.lock():
             record = supervisor._read(run_id)
-            record["status"] = "starting"
+            record["status"] = "admitted"
             record["admission_token"] = token
+            supervisor._write(record)
+            record["status"] = "starting"
             record["runner_pid"] = os.getpid()
             record["runner_identity"] = runs.process_identity(os.getpid())
             supervisor._write(record)
@@ -410,7 +412,15 @@ class StudioRunTests(unittest.TestCase):
         try:
             with supervisor.lock():
                 record = supervisor._read(reserved["run_id"])
+                record["status"] = "admitted"
+                record["admission_token"] = "b" * 32
+                supervisor._write(record)
+                record["status"] = "starting"
+                record["runner_pid"] = owner.pid
+                record["runner_identity"] = runs.process_identity(owner.pid)
+                supervisor._write(record)
                 record["status"] = "orphaned"
+                record.pop("admission_token")
                 record["command_pid"] = owner.pid
                 record["command_identity"] = runs.process_identity(owner.pid)
                 record["started_at"] = runs.utc_now()

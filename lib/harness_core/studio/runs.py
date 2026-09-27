@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store
+from . import run_store
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -369,8 +370,16 @@ class RunSupervisor:
         except (OSError, StateError) as exc:
             raise RunError(str(exc)) from exc
         self._runs_fd = _open_directory(self._state_fd, "runs", create=True)
+        try:
+            self.history = run_store.RunStore(self.state_root)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
 
     def __del__(self):
+        history = getattr(self, "history", None)
+        if history is not None:
+            with contextlib.suppress(Exception):
+                history.close()
         for name in ("_runs_fd", "_state_fd"):
             descriptor = getattr(self, name, None)
             if descriptor is not None:
@@ -408,7 +417,31 @@ class RunSupervisor:
     def _read(self, run_id: str) -> Dict[str, Any]:
         descriptor = self._run_directory(run_id)
         try:
-            return self._validate_record(_load_json(descriptor, "run.json"), run_id)
+            try:
+                authoritative, authority = self.history.read_studio(descriptor, run_id)
+            except run_store.RunStoreError as exc:
+                raise RunError(str(exc)) from exc
+            if authoritative is None:
+                record = self._validate_record(_load_json(descriptor, "run.json"), run_id)
+                try:
+                    self.history.append_studio(descriptor, record)
+                    record, authority = self.history.read_studio(descriptor, run_id)
+                    self.history.upsert(run_store.studio_record(record, authority or {}))
+                except run_store.RunStoreError as exc:
+                    raise RunError(str(exc)) from exc
+                return record
+            record = self._validate_record(authoritative, run_id)
+            try:
+                self.history.upsert(run_store.studio_record(record, authority or {}))
+            except run_store.RunStoreError as exc:
+                raise RunError(str(exc)) from exc
+            try:
+                cached = self._validate_record(_load_json(descriptor, "run.json"), run_id)
+            except RunError:
+                cached = None
+            if cached != record:
+                _atomic_json(descriptor, "run.json", record)
+            return record
         finally:
             os.close(descriptor)
 
@@ -416,7 +449,9 @@ class RunSupervisor:
     def _validate_record(record: Dict[str, Any], run_id: str) -> Dict[str, Any]:
         required = {"schema_version", "run_id", "suite_id", "suite_version", "parameters",
                     "target", "argv", "cost_class", "expected_duration_seconds",
-                    "timeout_seconds", "status", "queue_sequence", "created_at"}
+                    "timeout_seconds", "status", "queue_sequence", "created_at",
+                    "case_identities", "spend_estimate", "spend_cap", "pricing_identity",
+                    "canonical_run_digest"}
         optional = {"admission_token", "runner_pid", "runner_identity", "command_pid", "command_identity",
                     "started_at", "completed_at", "reason", "returncode", "capacity_reserved"}
         if set(record) - required - optional or required - set(record):
@@ -442,10 +477,19 @@ class RunSupervisor:
                        for name, value in parameters.items())):
             raise RunError("run state record has invalid parameters")
         target = record.get("target")
-        if (not isinstance(target, dict) or set(target) != {"kind", "ref"}
+        if (not isinstance(target, dict)
+                or set(target) != {"kind", "ref", "revision", "draft", "config_digest"}
                 or target.get("kind") not in TARGET_KINDS
                 or not isinstance(target.get("ref"), str) or not target["ref"]
-                or len(target["ref"]) > 4096 or "\0" in target["ref"]):
+                or len(target["ref"]) > 4096 or "\0" in target["ref"]
+                or (target.get("revision") is not None
+                    and (not isinstance(target["revision"], str) or not target["revision"]
+                         or len(target["revision"]) > 4096 or "\0" in target["revision"]))
+                or (target.get("config_digest") is not None
+                    and (not isinstance(target["config_digest"], str)
+                         or not target["config_digest"] or len(target["config_digest"]) > 4096
+                         or "\0" in target["config_digest"]))
+                or target.get("draft") != (target["ref"] if target["kind"] == "draft" else None)):
             raise RunError("run state record has an invalid target")
         argv = record.get("argv")
         if (not isinstance(argv, list) or not argv
@@ -453,6 +497,19 @@ class RunSupervisor:
             raise RunError("run state record has invalid argv")
         if record.get("cost_class") not in ("free", "spends_usage"):
             raise RunError("run state record has an invalid cost class")
+        case_identities = record.get("case_identities")
+        if (case_identities is not None
+                and (not isinstance(case_identities, list)
+                     or any(not isinstance(value, str) or not value for value in case_identities)
+                     or len(set(case_identities)) != len(case_identities))):
+            raise RunError("run state record has invalid case identities")
+        for name in ("spend_estimate", "spend_cap", "pricing_identity"):
+            if record.get(name) is not None:
+                raise RunError("run state record has unsupported " + name)
+        try:
+            run_store._immutable_digest(record)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
         expected = record.get("expected_duration_seconds")
         timeout = record.get("timeout_seconds")
         if (not isinstance(expected, int) or isinstance(expected, bool)
@@ -535,6 +592,12 @@ class RunSupervisor:
         validated = self._validate_record(dict(record), run_id)
         descriptor = self._run_directory(run_id, create=True)
         try:
+            try:
+                self.history.append_studio(descriptor, validated)
+                _, authority = self.history.read_studio(descriptor, run_id)
+                self.history.upsert(run_store.studio_record(validated, authority or {}))
+            except run_store.RunStoreError as exc:
+                raise RunError(str(exc)) from exc
             _atomic_json(descriptor, "run.json", validated)
         finally:
             os.close(descriptor)
@@ -542,13 +605,17 @@ class RunSupervisor:
     def _records(self) -> List[Dict[str, Any]]:
         records = []
         for run_id in sorted(os.listdir(self._runs_fd)):
-            descriptor = self._run_directory(run_id)
-            try:
-                record = _load_json(descriptor, "run.json")
-                records.append(self._validate_record(record, run_id))
-            finally:
-                os.close(descriptor)
+            records.append(self._read(run_id))
         return records
+
+    def reindex(self, repository: Path) -> Dict[str, Any]:
+        """Rebuild the disposable index from sidecars and recognized repository evidence."""
+        with self.lock():
+            self._records()  # bootstrap sidecars for runs created before the index existed
+            try:
+                return self.history.reindex(Path(repository), self._runs_fd)
+            except run_store.RunStoreError as exc:
+                raise RunError(str(exc)) from exc
 
     def _next_sequence(self) -> int:
         try:
@@ -778,15 +845,26 @@ class RunSupervisor:
                 "suite_id": suite.suite_id,
                 "suite_version": suite.version,
                 "parameters": dict(sorted(parameters.items())),
-                "target": {"kind": target_kind, "ref": target_ref},
+                "target": {
+                    "kind": target_kind,
+                    "ref": target_ref,
+                    "revision": None,
+                    "draft": target_ref if target_kind == "draft" else None,
+                    "config_digest": None,
+                },
                 "argv": argv,
                 "cost_class": suite.cost_class,
                 "expected_duration_seconds": suite.expected_duration_seconds,
                 "timeout_seconds": suite.timeout_seconds,
+                "case_identities": None,
+                "spend_estimate": None,
+                "spend_cap": None,
+                "pricing_identity": None,
                 "status": "queued",
                 "queue_sequence": self._next_sequence(),
                 "created_at": utc_now(),
             }
+            record["canonical_run_digest"] = run_store._canonical_run_digest(record)
             self._write(record)
             self._admit_locked()
             return self._public(self._read(run_id))
