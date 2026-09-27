@@ -453,9 +453,9 @@ flowchart TB
     every required license text and notice is preserved in the distributed artifact. Node and npm remain
     contributor-only build tools and are absent at runtime. No Studio release ships unless CI builds from
     that lockfile, verifies the committed bundle against its reviewed source and verifies that the shipped
-    notices and license texts cover the lockfile. AH-SP017 (#963) chooses byte-identical rebuild or the
-    release-build verification mechanism; it does not decide whether verification runs. This exception
-    does not weaken the standard-library Python 3.9 runtime rule.
+    notices and license texts cover the lockfile. AH-SP017 (#963) proved byte-identical rebuilds across
+    three macOS arm64 and three Linux x64 runs, so CI rebuild-and-compare is the selected blocking
+    mechanism. This exception does not weaken the standard-library Python 3.9 runtime rule.
 
 ### AD-22: Modules declare a manifest [PLANNED: fields and checks v0.14.0, #554; scorecard v0.15.0; slots and adapters v0.16.0]
 
@@ -621,9 +621,9 @@ flowchart TB
   - React, TypeScript, Vite and Mantine build one committed SPA bundle from an exact lockfile; clean
     installs need no Node.
   - `DESIGN.md` semantic tokens override Mantine, and AD-21 governs the source, bundle and notices.
-  - CI and release preflight must verify source, exact lockfile, committed bundle and distributed notices
-    as one release unit. AH-SP017 chooses between byte-identical rebuild verification and a release-build
-    mechanism; either result is a blocking check before the Studio can ship.
+  - CI and release preflight verify source, exact lockfile, committed bundle and distributed notices as
+    one release unit by rebuilding and comparing every emitted path, size and SHA-256. AH-SP017 proved
+    three macOS arm64 and three Linux x64 builds byte-identical, including all nine cross-platform pairs.
 - **Rejected:** server-rendered HTML with htmx, which is too weak for streaming logs, a diff editor and
   interval charts; Svelte or Solid, whose editor, chart and accessible-component ecosystems are thinner;
   Electron or Tauri, whose signing and packaging add no gain over a loopback tab.
@@ -770,9 +770,10 @@ flowchart TB
 | `react-dom` (planned Studio; AH-SP017 candidate) | 19.3.0 |
 | `@types/react`, `@types/react-dom` (planned Studio; AH-SP017 candidates) | 19.3.0 |
 | TypeScript (planned Studio; candidate verified 2026-09-27) | 7.0.2 |
-| Vite (planned Studio; candidate verified 2026-09-27; Node >=22.12) | 8.3.1 |
-| `@vitejs/plugin-react` (planned Studio; candidate verified 2026-09-27) | 6.1.1 |
-| `@mantine/core`, `@mantine/hooks` (planned Studio; direct-package licenses verified 2026-09-27; transitive review waits on exact lockfile) | 9.6.3 |
+| Vite (planned Studio; AH-SP017 verified 2026-09-27; Node >=22.12) | 7.3.6 |
+| `@vitejs/plugin-react` (planned Studio; AH-SP017 verified 2026-09-27) | 5.1.4 |
+| `@mantine/core`, `@mantine/hooks` (planned Studio; exact lockfile reviewed 2026-09-27) | 9.6.3 |
+| Chart.js, `react-chartjs-2` (planned Studio chart base; exact lockfile reviewed 2026-09-27) | 4.5.1, 5.3.1 |
 
 ## Structural Seed
 
@@ -874,11 +875,8 @@ flowchart LR
 - **Capability-level qualification.** Qualification stays per target until it is decided before 1.0.
 - **A 3.9 syntax check on each pull request.** It stays a gap until CI adds the matrix. It is listed
   under the operational envelope.
-- **Committed-bundle verification mechanism.** Verification is mandatory under AD-21 and AD-28.
-  AH-SP017 (#963) decides whether CI proves it by byte-identical rebuild or by the release-build
-  mechanism; no mechanism is assumed before the spike.
-- **Exact chart and editor packages.** The UX currently requires an accessible local SVG plus equivalent
-  table and names no editor dependency. Package selection, if any, waits for implementation licensing,
-  accessibility and bundle review; the architecture does not preselect one.
+- **Additional chart and editor packages.** AH-SP017 licensed and exercised Chart.js and CodeMirror 6 as
+  the candidate bases. Their accessible wrappers, chart/table parity and editor behavior remain subject
+  to implementation accessibility and bundle review.
 - **Phone network reach.** Responsive phone-width behavior remains required. AH-SP018 (#1003) decides
   whether a separate phone may reach the loopback-only Studio without weakening AD-27.
