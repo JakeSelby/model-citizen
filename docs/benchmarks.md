@@ -79,6 +79,31 @@ python3 scripts/cost_bench.py arms check --tag v0.13.1               # build eac
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
 ```
 
+### Micro mechanism tier
+
+`--tier micro` runs the three tasks in `benchmarks/micro/tasks.json` on the model pinned by that
+manifest. It uses two repetitions in both arms, a 0.10 USD per-run cap, 0.05 USD preflights and a
+1.90 USD stop. The twelve scored runs plus both preflights therefore fit below 2 USD at their caps.
+The budget flag is soft, so the stop remains the binding protection if a final turn overshoots.
+
+```sh
+python3 scripts/cost_bench.py replay --tier micro --verify-tasks
+python3 scripts/cost_bench.py replay --tier micro --tag <frozen-sha> --exploratory --dry-run
+python3 scripts/cost_bench.py replay --tier micro --tag <frozen-sha> --raw <scratch-dir> \
+    --pre-registration <plan>
+```
+
+Each task still has a held-back pass/fail oracle. Beside it, `mechanism_fired` says `true`, `false`
+or `null`: delegation reads the stream's spawn count, the stop gate reads its block count, and the
+output-style task reads the named offline detectors. Missing or unreadable evidence is unknown,
+never “no.” A completed run prints pass/fail, mechanism firing and reported cost together.
+
+Micro rows carry `tier: micro`, use a tier-specific series, and write only
+`benchmarks/micro/micro-history.jsonl` and `micro-history.md`; the history writer refuses to mix
+them with production rows even when both are pointed at one directory. A small model showing that
+a mechanism can fire is a smoke test, not evidence that it fires on the production model and not a
+cost or savings claim. Production replay remains the release calibration.
+
 - **A run is pre-registered or exploratory.** `--pre-registration` names a committed, dated plan
   filled from the [pre-registration template](pre-registration-template.md); without one the run
   needs `--exploratory`, labels every row exploratory and writes no history row. The protocol is in

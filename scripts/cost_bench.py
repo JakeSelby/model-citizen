@@ -39,6 +39,7 @@ import replay_arms as arms  # noqa: E402  the containers every arm and every che
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
 import replay_detect  # noqa: E402  which rules fired, read from the saved streams
+import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -927,17 +928,18 @@ def preflight(tasks, opts, launch=subprocess.run):
     spends its turns on that instead of on the task, and the comparison measures the runner rather
     than the harness. The verdict is read from the gate's own output (`gate_passed`)."""
     checks, spent = [], 0.0
+    preflight_cap = opts.get("preflight_cap", PREFLIGHT_CAP_USD)
     for arm in ARMS:
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
-            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
+            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, preflight_cap,
                                   PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
                                   container_name("preflight", arm), launch)
             except subprocess.TimeoutExpired:
-                spent += PREFLIGHT_CAP_USD
+                spent += preflight_cap
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None})
                 continue
             if opts.get("raw"):
@@ -948,7 +950,7 @@ def preflight(tasks, opts, launch=subprocess.run):
                 cost = parse_result(done.stdout)["cost_usd"]
             except ValueError:
                 cost = None
-            spent += PREFLIGHT_CAP_USD if cost is None else cost
+            spent += preflight_cap if cost is None else cost
             checks.append({"arm": arm, "passed": gate_passed(done.stdout), "reply": reply,
                            "cost_usd": cost})
         finally:
@@ -1151,6 +1153,10 @@ def upsert_history(path, row):
     key = lambda r: (r["date"], r["series"], r["harness_version"], r["harness_sha"], r.get("bucket", ""))
     old = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] \
         if path.is_file() else []
+    tiers = set(micro.tier_of(r) for r in old)
+    if tiers and tiers != {micro.tier_of(row)}:
+        raise SystemExit("cost-bench: refusing to mix %s rows into the %s history"
+                         % (micro.tier_of(row), ", ".join(sorted(tiers))))
     kept = [r for r in old if key(r) != key(row)] + [row]
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in kept), encoding="utf-8")
@@ -1332,7 +1338,29 @@ def verify_command(args, tasks):
 
 
 def cmd_replay(args):
+    # Several callers construct a Namespace directly; absence means the original production tier.
+    args.tier = getattr(args, "tier", micro.PRODUCTION)
+    args.tasks = args.tasks or str(ROOT / (micro.TASKS if args.tier == micro.MICRO else TASKS))
+    document = micro.load_document(args.tasks) if args.tier == micro.MICRO else None
     tasks = load_tasks(args.tasks)
+    if args.tier == micro.MICRO:
+        detector_ids = replay_detect.load_detectors().DETECTORS
+        errors = micro.check_manifest(document, detector_ids)
+        if errors:
+            raise SystemExit("cost-bench: invalid micro manifest:\n  " + "\n  ".join(errors))
+        pinned = document["model"]
+        if args.model and args.model != pinned:
+            raise SystemExit("cost-bench: the micro manifest pins model %s, not %s" % (pinned, args.model))
+        args.model = pinned
+        args.reps = micro.REPS if args.reps is None else args.reps
+        args.run_cap = micro.RUN_CAP_USD if args.run_cap is None else args.run_cap
+        args.spend_cap = micro.SPEND_CAP_USD if args.spend_cap is None else args.spend_cap
+        if not (args.verify_tasks or args.dry_run or args.raw):
+            raise SystemExit("cost-bench: --tier micro requires --raw so its mechanisms can be scored")
+    else:
+        args.reps = DEFAULT_REPS if args.reps is None else args.reps
+        args.run_cap = RUN_CAP_USD if args.run_cap is None else args.run_cap
+        args.spend_cap = SPEND_CAP_USD if args.spend_cap is None else args.spend_cap
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
     if args.verify_tasks:
@@ -1391,8 +1419,9 @@ def replay_tag(tag, args, common, harness):
     # The arms are part of what is compared, so they rotate the series: a container run is not
     # comparable with one whose harness arm read a host profile.
     series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
-                            + b"|container").hexdigest()[:8]
-    out = (common["out"] or ROOT / "benchmarks" / version) / tag
+                            + ("|container|" + args.tier).encode()).hexdigest()[:8]
+    default_out = ROOT / (micro.HISTORY_DIR if args.tier == micro.MICRO else Path("benchmarks")) / version
+    out = (common["out"] or default_out) / tag
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
         (parent / "home").mkdir()
@@ -1402,12 +1431,14 @@ def replay_tag(tag, args, common, harness):
                 "prices": common["prices"], "arms": {"bare": common["bare"], "harness": harness},
                 "network": common["network"], "proxy": common["proxy"], "client_env": common["client_env"],
                 "stance_cost": args.stance_cost, "raw": args.raw, "tmp": args.tmp,
+                "preflight_cap": micro.PREFLIGHT_CAP_USD if args.tier == micro.MICRO else PREFLIGHT_CAP_USD,
                 "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
                 "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
                           "cli_version": common["cli_version"],
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
                           "harness_version": version, "harness_sha": commit,
                           "surface_drift_allowed": bool(args.allow_surface_drift),
+                          **({"tier": micro.MICRO} if args.tier == micro.MICRO else {}),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
         out.mkdir(parents=True, exist_ok=True)
@@ -1419,16 +1450,31 @@ def replay_tag(tag, args, common, harness):
         # Now, before the next tag's runs overwrite these streams under the same names.
         detections = replay_detect.detect_rows(rows, [Path(args.raw)], cli_messages, replay_detect.load_detectors())
         write_jsonl(out / DETECTIONS, detections)
+        if args.tier == micro.MICRO:
+            rows = micro.score_rows(rows, tasks, detections)
+            write_jsonl(out / RESULTS, rows)
+            for line in micro.report_lines(rows):
+                print(line)
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
     if rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
-        home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
+        home_dir = Path(args.history_dir) if args.history_dir else ROOT / (
+            micro.HISTORY_DIR if args.tier == micro.MICRO else Path("benchmarks"))
         home_dir.mkdir(parents=True, exist_ok=True)
-        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series, detections))
-        (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
+        if args.tier == micro.MICRO:
+            built = micro.history_row(rows, series, ARMS, arm_records(rows))
+            history_name, markdown_name = micro.HISTORY_NAME, micro.HISTORY_MD_NAME
+            renderer = micro.render_history
+        else:
+            built = history_row(rows, series, detections)
+            history_name, markdown_name = HISTORY.name, HISTORY_MD.name
+            renderer = render_history
+        kept = upsert_history(home_dir / history_name, built)
+        (home_dir / markdown_name).write_text(renderer(kept, ARMS) if args.tier == micro.MICRO
+                                               else renderer(kept), encoding="utf-8")
         print(json.dumps(kept[-1], indent=2))
     else:
         print("cost-bench: a partial set is not a history row; results are in %s" % out, file=sys.stderr)
@@ -1505,22 +1551,24 @@ def main(argv=None):
                       "unexplained growth of the total")
     run = sub.add_parser("replay", help="run the pinned tasks in a bare and a harness container; "
                          "spends usage")
-    run.add_argument("--tasks", default=str(ROOT / TASKS))
+    run.add_argument("--tier", choices=micro.TIERS, default=micro.PRODUCTION,
+                     help="production cost comparison, or the isolated small-model mechanism check")
+    run.add_argument("--tasks", help="task manifest; defaults to the selected tier's manifest")
     run.add_argument("--task", action="append", help="run only this task id; repeatable")
     run.add_argument("--tag", action="append", help="the harness ref the harness arm is built from: a "
                      "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
                      "writes its own history row. Required")
     run.add_argument("--model", help="the one model id every arm runs")
-    run.add_argument("--reps", type=int, default=DEFAULT_REPS, help="trials per task and arm")
+    run.add_argument("--reps", type=int, help="trials per task and arm; defaults to the tier's protocol")
     run.add_argument("--effort", choices=arms.EFFORT_LEVELS, default=arms.DEFAULT_EFFORT,
                      help="the reasoning effort every arm launches at, passed as --effort and recorded "
                      "in each arm's declaration and on every row; default %(default)s")
     run.add_argument("--allow-surface-drift", action="store_true", help="run on when a run's loaded "
                      "surface differs from its arm's first run, instead of stopping the set; every "
                      "row of the set says surface_drift_allowed")
-    run.add_argument("--run-cap", type=float, default=RUN_CAP_USD, help="--max-budget-usd per run; soft")
-    run.add_argument("--spend-cap", type=float, default=SPEND_CAP_USD, help="stop before passing "
-                     "this; it applies to each tag's schedule on its own")
+    run.add_argument("--run-cap", type=float, help="--max-budget-usd per run; defaults to the tier's cap")
+    run.add_argument("--spend-cap", type=float, help="stop before passing the tier's default or this value; "
+                     "it applies to each tag's schedule on its own")
     run.add_argument("--stance-cost", help="HARNESS_STANCE_COST for the harness arm")
     run.add_argument("--bucket", default="", help="the one change this run measures, e.g. A; names the "
                      "history row so several buckets can share a day and a commit")
