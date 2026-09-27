@@ -71,6 +71,22 @@ def detectors():
     return sibling("rule-detectors")
 
 
+def rule_hits(module, events, stances, cwd, errors):
+    """`{detector_id: hit count}` for one session: the registry's detectors plus the
+    declarative ones in the `.ruleprobe/detectors.yaml` of the session's repository.
+
+    A detector file's bad entries are skipped, never fatal; `usage --rules` names them with
+    their line. With no detector file the call is the registry's alone, unchanged.
+    """
+    extra = []
+    loader = getattr(module, "declarative", None)
+    if cwd and loader is not None and os.path.isdir(cwd):
+        extra = loader(cwd)[0]
+    hits = (module.run(events, stances, errors=errors, extra=extra) if extra
+            else module.run(events, stances, errors=errors))
+    return dict((did, len(found)) for did, found in hits.items())
+
+
 def stances(env=None):
     """The resolved `{dimension: variant}` map, from `posture.py` and nowhere else.
 
@@ -1233,8 +1249,7 @@ def scan(transcript, session_id="", cwd="", prior=None, rescan=False, agents=Non
         module = detectors()
         record["counts"] = module.counts(events)
         errors = []
-        record["rules"] = dict((did, len(hits))
-                               for did, hits in module.run(events, record["stances"], errors=errors).items())
+        record["rules"] = rule_hits(module, events, record["stances"], cwd, errors)
         if errors:
             record["rules_errors"] = errors
     except Exception as exc:
@@ -1520,7 +1535,7 @@ def scan_codex(transcript, session_id="", cwd="", prior=None, rescan=False):
     try:
         module = detectors()
         record["counts"] = module.counts(events)
-        record["rules"] = {did: len(hits) for did, hits in module.run(events, record["stances"], errors=errors).items()}
+        record["rules"] = rule_hits(module, events, record["stances"], cwd, errors)
         if errors:
             record["rules_errors"] = errors
     except Exception as exc:

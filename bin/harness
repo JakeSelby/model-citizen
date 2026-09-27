@@ -65,6 +65,7 @@ from harness_core import codex_client, keychain, collisions, importer, cache_pre
 from harness_core import intents
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
+from harness_core import rule_coverage
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -4462,19 +4463,67 @@ def folded_rules(row: Dict[str, Any], renamed: Dict[str, str]) -> Dict[str, int]
     return out
 
 
-def rule_ids(rows: List[Dict[str, Any]]) -> List[str]:
-    """Every detector id to report on: the registry's, so a rule with no hit is still a line,
-    plus any id a record carries that the registry no longer defines — under its current name
-    when the registry says it was renamed."""
+def rule_ids(rows: List[Dict[str, Any]], extra: Iterable[str] = ()) -> List[str]:
+    """Every detector id to report on: the registry's and `extra`'s, the declarative ones, so
+    a detector with no hit is still a line, plus any id a record carries that the registry no
+    longer defines — under its current name when the registry says it was renamed."""
     module = load_detectors()
     renamed = renamed_ids()
     ids = set(getattr(module, "DETECTORS", {}) or {})
+    ids.update(extra)
     for row in rows:
         ids.update(renamed.get(k, k) for k in (row.get("rules") or {}) if isinstance(k, str))
     return sorted(ids)
 
 
-def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
+def rule_surface(cfg: Dict[str, Any], selection: Dict[str, Any]) -> List[Tuple[str, Path]]:
+    """Every rule file in the loaded instruction surface, as `(name, path)`: this repository's
+    rules less those the selection switches off, each registered primitive root's rules, and
+    each stance at its selected variant, named by its dimension."""
+    off = switched_off(selection)["rules"]
+    surface = [(p.stem, p) for p in sorted((REPO / "primitives" / "rules").glob("*.md"))
+               if p.stem not in off]
+    externals, _warnings = external_primitive_roots(cfg)
+    for entry in externals:
+        surface += [(p.stem, p) for p in entry["rules"] if p.stem not in off]
+    try:
+        stances = primitive_catalog.resolve_stances(REPO, cfg, strict=False)
+    except ValueError:
+        stances = {}  # a selection that does not resolve loads no stance to list
+    surface += [(name, stances[name]) for name in sorted(stances)]
+    return surface
+
+
+def rule_coverage_lines(cwd: Optional[Path] = None, surface: Optional[List[Tuple[str, Path]]] = None,
+                        stances: Optional[Dict[str, str]] = None) -> List[str]:
+    """`usage --rules`'s coverage block: every loaded rule as measured, dark or unmeasured,
+    the share measured, and the findings of the declarative detector file. `rule_coverage`
+    says what each state means."""
+    module = load_detectors()
+    if module is None:
+        return ["rules: not classified; claude/hooks/rule-detectors.py is missing or does not import"]
+    if surface is None or stances is None:
+        cfg = load_config()
+        if surface is None:
+            surface = rule_surface(cfg, load_selection())
+        if stances is None:
+            stances = dict(cfg.get("stances") or {})
+    loaded, problems = module.declarative(str(cwd or Path.cwd()))
+    detectors = list(module.DETECTORS.values()) + loaded
+    rules, findings = rule_coverage.classify(surface, detectors, dict(module.OPT_OUT), stances,
+                                             module.read_rule_file)
+    findings = [rule_coverage.Finding(f.path, f.line, f.reason) for f in problems] + findings
+    return rule_coverage.summary(rules, findings, relative_to=str(cwd or Path.cwd()))
+
+
+def declarative_ids(cwd: Optional[Path] = None) -> List[str]:
+    """The ids the working directory's `.ruleprobe/detectors.yaml` defines, for the table."""
+    module = load_detectors()
+    loader = getattr(module, "declarative", None)
+    return [d.id for d in loader(str(cwd or Path.cwd()))[0]] if loader else []
+
+
+def rule_report(rows: List[Dict[str, Any]], by: str, days: int, extra_ids: Iterable[str] = ()) -> int:
     """`usage --rules`: hits per detector, or per repo or stance variant.
 
     Only a record that carries a `rules` map is evidence. One written before the detectors
@@ -4501,7 +4550,7 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
         head = f"{'detector':<38}{'hits':>7}{'sessions':>10}{'of':>6}{'share':>8}  note"
         say(head)
         say("-" * len(head))
-        for did in rule_ids(measured):
+        for did in rule_ids(measured, extra_ids):
             hits = sum(hits_of.get(did, 0) for _, hits_of in counted)
             seen = sum(1 for _, hits_of in counted if hits_of.get(did, 0) > 0)
             share = seen / total if total else 0.0
@@ -5121,7 +5170,13 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if by == "role":
         return role_report(delegated, args.days, table)
     if rules_mode:
-        return rule_report(kept, by, args.days)
+        if by != "rule":
+            return rule_report(kept, by, args.days)
+        status = rule_report(kept, by, args.days, declarative_ids())
+        say("")
+        for line in rule_coverage_lines():
+            say(line)
+        return status
     if not groups:
         say(f"no sessions recorded in the last {args.days} day(s); looked in {path}")
         return 0

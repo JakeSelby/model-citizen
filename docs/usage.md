@@ -38,6 +38,38 @@ that hit in none of them. Neither is printed below 20 measured sessions
 carrying a `rules` map counts toward either, so the denominator is measured sessions and not
 rows.
 
+Under the table, `--rules` lists every rule in your loaded instruction surface: this
+repository's rules less any you switched off, the rules of each registered primitive root, and
+each stance at its selected variant, named by its dimension. Each is one of three states, with
+the share measured on the first line:
+
+```text
+rules: 10 measured, 2 dark, 7 unmeasured (52% measured)
+  measured   cache-hygiene               primitives/rules/cache-hygiene.md
+  dark       conciseness                 primitives/rules/conciseness.md: a comment's redundancy is ...
+  unmeasured cost                        primitives/stances/cost/balanced.md: no detector names it and it has no opt-out
+```
+
+- **measured**: a detector that runs under your stances names the rule;
+- **dark**: nothing measures it on purpose, and the reason is printed: an `OPT_OUT` entry in
+  the registry, or `opt_out: <reason>` in the rule file's front matter;
+- **unmeasured**: neither, with the reason, such as a detector gated off by your stances.
+
+The share counts dark rules in its denominator and is floored, so one gap never reads 100
+percent. A detector names a rule, not a file, so when two files share a name, as the
+`delegation` rule and stance do, the first holds its detectors and the second is listed
+unmeasured, saying why.
+
+**Your own detectors** go in `.ruleprobe/detectors.yaml` at your repository's root, in the
+format standalone [ruleprobe](https://github.com/JakeSelby/ruleprobe) reads, through the same
+vendored engine, so one file serves both. The session hook runs them over every session in that
+repository, the report counts their rules as measured and lists a detector with no hit as a
+zero line, all without a code change. A bad entry is skipped and printed with its file and line
+under `findings:`, and the rest of the file still loads. Two differences from `ruleprobe`: the
+per-user `~/.config/ruleprobe/detectors.yaml` is not read, and a `detector:` block in a rule
+file's front matter is not run, so that rule is reported unmeasured rather than measured by a
+detector that never fires.
+
 What each detector looks for, how a rename folds and why a rescanned session is excluded from
 the stance grouping are under [rule telemetry](#rule-telemetry) below. Running the measurement
 without the rest of the harness is [standalone measurement](standalone-measurement.md).

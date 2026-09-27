@@ -31,6 +31,8 @@ from ruleprobe import Registry, analyse, counts, run as _run  # noqa: E402,F401
 from ruleprobe.detectors import common as generic  # noqa: E402
 from ruleprobe.events import hit, input_of, text_of  # noqa: E402
 from ruleprobe.registry import Detector as _Detector  # noqa: E402
+from ruleprobe.rules import discover as _discover, load_file as _load_file  # noqa: E402
+from ruleprobe.rules import read_rule_file  # noqa: E402,F401
 from ruleprobe.shell import (MAX_COMMAND, MARKER_RE, SUB_PLACEHOLDER, git_calls,  # noqa: E402
                              has_redirect, normalise, operands, pipelines, strip_heredocs)
 
@@ -491,10 +493,34 @@ OPT_OUT = {
 }
 
 
-def run(events, stances=None, strict=False, errors=None):
+def declarative(cwd):
+    """`(detectors, findings)` from the `.ruleprobe/detectors.yaml` of the repository `cwd` is
+    in, found by walking up as `ruleprobe` does; `([], [])` for an empty `cwd` or none found.
+
+    The file is read by the engine's own loader, so one detector file works in the harness and
+    in standalone `ruleprobe`. A bad entry is a finding with its file and line, and the rest of
+    the file still loads. Only the repository file is read, not `ruleprobe`'s per-user one: a
+    session is measured by the detectors its repository ships.
+    """
+    detectors, findings = [], []
+    if not cwd:
+        return detectors, findings
+    for path in _discover(cwd=str(cwd), user=False):
+        found, problems = _load_file(path)
+        detectors.extend(found)
+        findings.extend(problems)
+    return detectors, findings
+
+
+def run(events, stances=None, strict=False, errors=None, extra=()):
     """Every detector over one session's events; detectors with no hits are omitted.
 
     The registry is built per call from `_REGISTRY`, which is a list so a test can add a
     detector to it and take it away again; the cost is once per session, not once per event.
+    `extra` are declarative detectors (`declarative`); one whose id is already registered
+    replaces it, which is how a repository overrides a shipped detector, as in `ruleprobe`.
     """
-    return _run(events, stances, registry=Registry(_REGISTRY), strict=strict, errors=errors)
+    registry = Registry(_REGISTRY)
+    for detector in extra:
+        registry.add(detector)
+    return _run(events, stances, registry=registry, strict=strict, errors=errors)
