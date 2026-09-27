@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -112,6 +113,26 @@ class HookMatrixTests(unittest.TestCase):
             with mock.patch.object(shutil, "copyfile", vanishing):
                 HM._copy_repo(src, dst)
             self.assertEqual(sorted(p.name for p in (dst / "objects").iterdir()), ["kept"])
+
+    def test_template_ignores_an_inherited_repository_location(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            other = Path(tmp) / "other"
+            subprocess.run(["git", "init", "-q", str(other)], check=True)
+            before = sorted(str(p.relative_to(other)) for p in other.rglob("*"))
+            saved = list(HM._TEMPLATE)
+            HM._TEMPLATE[:] = []
+            try:
+                with mock.patch.dict(os.environ, {"GIT_DIR": str(other / ".git"),
+                                                  "GIT_WORK_TREE": str(other),
+                                                  "GIT_INDEX_FILE": str(other / ".git" / "index")}):
+                    template = HM._template()
+            finally:
+                HM._TEMPLATE[:] = saved
+            self.assertEqual(sorted(str(p.relative_to(other)) for p in other.rglob("*")), before)
+            head = subprocess.run(["git", "--git-dir", str(template), "rev-parse", "--verify", "-q", "HEAD"],
+                                  capture_output=True, text=True, env=dict(
+                                      (k, v) for k, v in os.environ.items() if not k.startswith("GIT_")))
+            self.assertEqual(head.returncode, 0, head.stderr)
 
     def test_template_git_calls_disable_background_maintenance(self):
         self.assertIn("maintenance.auto=false", HM.QUIET_GIT)
