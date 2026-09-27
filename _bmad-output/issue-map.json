@@ -4,12 +4,12 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 118,
-    "chore": 85,
+    "bug": 120,
+    "chore": 87,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 320,
+    "story": 322,
     "task": 37
   },
   "items": [
@@ -7710,6 +7710,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S320",
+      "github_number": 1010,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1010",
+      "title": "Every cost, efficacy or system-change test is a controlled, pre-registered experiment in fresh containers",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S320.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B117",
       "github_number": 1013,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1013",
@@ -7719,6 +7732,71 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B117.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B118",
+      "github_number": 1014,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1014",
+      "title": "citizen config cannot unset workspaces_dir, so workspaces cannot be switched off from the CLI",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B118.md",
+      "parent_bmad_id": "AH-E002",
+      "parent_github_number": 116,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C085",
+      "github_number": 1017,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1017",
+      "title": "Move repository-internal agent instructions into a path-scoped rule",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C085.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S321",
+      "github_number": 1018,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1018",
+      "title": "Four-arm replay: the superpowers arms and pair parity on the container arms",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S321.md",
+      "parent_bmad_id": "AH-E011",
+      "parent_github_number": 552,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B119",
+      "github_number": 1019,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1019",
+      "title": "The harness arm's image holds a checkout with every task's fix, so a harness-arm pass can be a copy",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B119.md",
+      "parent_bmad_id": "AH-E013",
+      "parent_github_number": 632,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C086",
+      "github_number": 1024,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1024",
+      "title": "Open the 0.14.0 candidate",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C086.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     }

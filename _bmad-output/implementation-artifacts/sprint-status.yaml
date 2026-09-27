@@ -46,6 +46,7 @@ development_status:
   ah-s088-qualify-codex-vs-code-and-desktop-for-0-9-0: done
 
   ah-e002-complete-the-harness-stance-and-settings: in-progress
+  ah-b118-citizen-config-cannot-unset-workspaces-dir-so: ready-for-dev
   ah-c045-say-once-that-subagents-never-message-each-other: done
   ah-c046-reserve-bmad-ids-for-the-orchestration-conflict: done
   ah-d002-decide-how-project-and-session-stance-selections: ready-for-dev
@@ -197,6 +198,7 @@ development_status:
   ah-s232-module-manifest-claims-surface-instruments-slot: ready-for-dev
   ah-s244-the-slot-model-and-the-adapter-contract: backlog
   ah-s246-the-four-arm-bench-and-layer-swaps: backlog
+  ah-s321-four-arm-replay-the-superpowers-arms-and-pair: backlog
   ah-sp009-does-a-headless-superpowers-session-finish-a: ready-for-dev
 
   ah-e012-re-baseline-the-bmad-corpus-and-make-story-files: done
@@ -225,6 +227,7 @@ development_status:
   ah-e013-measurement-the-cost-benchmark-detector: in-progress
   ah-b095-the-delegation-stance-never-fires-zero-subagent: backlog
   ah-b117-adherence-emissions-are-never-settled-in-a-live: ready-for-dev
+  ah-b119-the-harness-arm-s-image-holds-a-checkout-with: backlog
   ah-s138-record-the-first-live-cost-replay-results: done
   ah-s194-trim-the-harness-s-12-607-token-standing-context: ready-for-dev
   ah-s215-tighten-the-two-detectors-the-corpus-records: ready-for-dev
@@ -514,6 +517,8 @@ development_status:
   ah-c080-restore-headroom-in-the-always-loaded-budget: ready-for-dev
   ah-c081-file-the-burndown-bot-epic-and-its-stories: ready-for-dev
   ah-c084-file-the-studio-filing-session-s-follow-ups: ready-for-dev
+  ah-c085-move-repository-internal-agent-instructions-into: ready-for-dev
+  ah-c086-open-the-0-14-0-candidate: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
@@ -611,6 +616,7 @@ development_status:
   ah-s263-name-the-review-complete-signal-in-build-step-6: ready-for-dev
   ah-s264-say-whether-land-waits-on-checks-that-are-not: ready-for-dev
   ah-s265-grant-agents-a-standing-go-ahead-to-merge-pull: ready-for-dev
+  ah-s320-every-cost-efficacy-or-system-change-test-is-a: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
