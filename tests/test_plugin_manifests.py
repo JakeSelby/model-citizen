@@ -34,6 +34,11 @@ class MarketplaceManifestTests(unittest.TestCase):
         self.assertEqual(len(MARKETPLACE["plugins"]), 1)
         self.assertTrue(entry()["description"])
 
+    def test_the_plugin_listing_links_to_public_documentation_and_support(self):
+        self.assertEqual(PLUGIN["documentationUrl"], "https://model-citizen.dev/")
+        self.assertEqual(PLUGIN["supportUrl"],
+                         "https://github.com/JakeSelby/model-citizen/issues")
+
     def test_the_entry_resolves_to_the_plugin_manifest_rather_than_copying_it(self):
         source = (REPO / entry()["source"]).resolve()
         self.assertTrue((source / ".claude-plugin" / "plugin.json").is_file())

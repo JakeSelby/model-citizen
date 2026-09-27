@@ -6,6 +6,8 @@
   "author": { "name": "Jake Selby", "url": "https://github.com/JakeSelby" },
   "license": "MIT",
   "homepage": "https://model-citizen.dev",
+  "documentationUrl": "https://model-citizen.dev/",
+  "supportUrl": "https://github.com/JakeSelby/model-citizen/issues",
   "repository": "https://github.com/JakeSelby/model-citizen.git",
   "keywords": ["claude-code", "codex", "agent-skills", "subagents", "context-engineering"],
   "skills": "./primitives/skills/",
