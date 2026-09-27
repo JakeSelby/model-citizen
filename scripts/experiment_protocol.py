@@ -77,13 +77,13 @@ def _git(root, *args):
 
 
 def _first_filled_commit(root, rel):
-    """The first commit whose version of `rel` has every required field filled."""
+    """The first commit and text whose version of `rel` has every required field filled."""
     _, history = _git(root, "log", "--reverse", "--format=%H", "--", rel.as_posix())
     for commit in history.splitlines():
         code, text = _git(root, "show", "%s:%s" % (commit, rel.as_posix()))
         if not code and not missing_fields(text):
-            return commit
-    return None
+            return commit, text
+    return None, None
 
 
 def locate(path, root, cwd=None):
@@ -143,10 +143,14 @@ def check(path, root, today=None, cwd=None):
     _, shallow = _git(root, "rev-parse", "--is-shallow-repository")
     if shallow == "true":
         errors.append("the repository is shallow; full history is required to identify the plan commit")
-    commit = None if shallow == "true" else _first_filled_commit(root, rel)
+    commit, registered_text = ((None, None) if shallow == "true"
+                               else _first_filled_commit(root, rel))
     if not commit:
         errors.append("the pre-registration %s has no commit containing a filled plan"
                       % rel.as_posix())
+    elif not text.startswith(registered_text):
+        errors.append("the pre-registration %s changes the registered plan; after registration "
+                      "only append entries to its deviation log" % rel.as_posix())
     return errors, {"evidence": PREREGISTERED, "pre_registration": rel.as_posix(),
                     "pre_registration_commit": commit or None}
 

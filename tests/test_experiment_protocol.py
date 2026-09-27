@@ -109,6 +109,18 @@ class CheckTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertEqual(record["pre_registration_commit"], filled)
 
+    def test_a_later_commit_cannot_change_a_registered_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = new_repo(Path(tmp) / "r")
+            path = commit_plan(repo)
+            path.write_text(path.read_text(encoding="utf-8").replace(
+                "- **Question:** filled", "- **Question:** changed after registration", 1),
+                encoding="utf-8")
+            git(repo, "add", "--", str(path))
+            git(repo, "commit", "-qm", "docs(benchmarks): rewrite the question")
+            errors, _ = PROTOCOL.check(str(path), repo, today=DAY)
+            self.assertTrue(any("changes the registered plan" in error for error in errors), errors)
+
     def test_a_shallow_checkout_is_refused_even_when_the_plan_is_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = new_repo(Path(tmp) / "source")
