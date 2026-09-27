@@ -1,0 +1,19 @@
+{
+  "comparisons": [
+    {
+      "candidate": "run-2.json",
+      "differing": [],
+      "extra": [],
+      "missing": []
+    },
+    {
+      "candidate": "run-3.json",
+      "differing": [],
+      "extra": [],
+      "missing": []
+    }
+  ],
+  "identical": true,
+  "reference": "run-1.json",
+  "schema_version": 1
+}

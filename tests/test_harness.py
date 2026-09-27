@@ -519,6 +519,30 @@ class LintTests(TempHome):
         for want in ("12-digit account id", "email address", "home-directory path", "secret pattern", "hosted-zone id", "identity-provider tenant"):
             self.assertIn(want, labels, msg=want)
 
+    def test_legal_artifacts_exempt_only_upstream_email_addresses(self):
+        root = self._fixture()
+        address = "upstream" + "@" + "example.com"
+        account = str(10 ** 11 + 4242)
+        home = "/" + "Users" + "/someone/secret.txt"
+        key = "AKIA" + "Q" * 16
+        paths = [
+            root / "studio" / "public" / "THIRD_PARTY_NOTICES.txt",
+            root / "studio" / "third-party" / "licenses" / "react-remove-scroll-bar-2.3.8-LICENSE",
+        ]
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("\n".join((address, account, home, key, "Example Corp")) + "\n")
+        source = root / "studio" / "src" / "contact.txt"
+        source.parent.mkdir(parents=True)
+        source.write_text(address + "\n")
+        hits = harness.lint_files(root, paths + [source], (["example corp"], []))
+        for path in paths:
+            matching = [hit for hit in hits if str(path.relative_to(root)) in hit]
+            self.assertFalse(any("email address" in hit for hit in matching), matching)
+            for label in ("12-digit account id", "home-directory path", "secret pattern", "lint-terms"):
+                self.assertTrue(any(label in hit for hit in matching), (label, matching))
+        self.assertTrue(any("studio/src/contact.txt" in hit and "email address" in hit for hit in hits), hits)
+
     def test_terms_file_and_maintainer_name_rules(self):
         root = self._fixture()
         (root / "claude" / "bad.md").write_text("Hand this to Ada; ship to Example Corp; see Widgetron docs.\n")

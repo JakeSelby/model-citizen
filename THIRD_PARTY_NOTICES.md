@@ -45,4 +45,7 @@ is implied.
 The CI workflows run [actions/checkout](https://github.com/actions/checkout) v7.0.1 and
 [actions/setup-python](https://github.com/actions/setup-python) v6.3.0, both MIT-licensed by GitHub,
 Inc. and pinned by full commit SHA in `.github/workflows/`. They execute on GitHub's runners and are
-not redistributed by this repository.
+not redistributed by this repository. The Studio bundle reproducibility workflow likewise runs
+[actions/setup-node](https://github.com/actions/setup-node) v7.0.0 and
+[actions/upload-artifact](https://github.com/actions/upload-artifact) v7.0.1, both MIT-licensed by
+GitHub, Inc. and pinned by full commit SHA.

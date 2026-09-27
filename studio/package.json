@@ -1,0 +1,33 @@
+{
+  "name": "model-citizen-studio-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@1\u0030.9.8",
+  "engines": {
+    "node": "22.22.3"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && vite build"
+  },
+  "dependencies": {
+    "@codemirror/lang-json": "6.0.2",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.13",
+    "@mantine/core": "9.6.3",
+    "@mantine/hooks": "9.6.3",
+    "@tanstack/react-query": "5.104.0",
+    "chart.js": "4.5.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-chartjs-2": "5.3.1",
+    "react-router-dom": "7.18.4"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.1.4",
+    "typescript": "7.0.2",
+    "vite": "7.3.6"
+  }
+}
