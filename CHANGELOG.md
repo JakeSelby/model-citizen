@@ -93,7 +93,8 @@ All notable changes to this project are documented here. The format follows
 
 - Added a manifest for every switchable module. Each shipped rule, skill, role and workflow declares
   its claims, surface, instruments, slot, dependencies and conflicts in `primitives/manifests.json`,
-  and hooks will declare theirs in `policy/hooks/manifests.json` once they have switch ids. The
+  and hooks without switch ids remain outside `policy/hooks/manifests.json`; hooks with switch ids
+  already declare theirs there. The
   selection resolver refuses a shipped module with no manifest or a missing field, a switched-on
   module whose dependency is off, two switched-on modules that conflict, and two that claim one slot
   unless one cedes it, naming each module involved. `harness selection` shows each switch unit's
