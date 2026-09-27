@@ -72,6 +72,35 @@ class GradeDenyTests(unittest.TestCase):
         text = CLIENT_PREFIX + deny_reason("--force origin main\necho done")
         self.assertEqual(hits(DENIED, [result(text)]), 1)
 
+    def test_the_tails_the_hook_appends_are_part_of_a_denial(self):
+        governance = " Governance: coding.git_push on origin is level 3 (deny)."
+        tails = (grade.DENY_TAIL, grade.APPROVAL_TAIL % "AQIADR", governance,
+                 governance + grade.DENY_TAIL, grade.DENY_TAIL + "\n")
+        for tail in tails:
+            with self.subTest(tail=tail[:40]):
+                self.assertEqual(hits(DENIED, [result(CLIENT_PREFIX + deny_reason() + tail)]), 1)
+
+    def test_an_unresolved_stance_label_is_a_denial(self):
+        text = grade.reason(3, "git push", "--force origin main", "git-push",
+                            grade.STRICTEST + ", unresolved: the stance resolver did not answer")
+        self.assertEqual(hits(DENIED, [result(text)]), 1)
+
+    def test_the_copied_tails_are_the_hooks_own(self):
+        self.assertEqual(rd.GRADE_DENY_TAIL, grade.DENY_TAIL)
+        self.assertEqual(rd.GRADE_APPROVAL_TAIL, grade.APPROVAL_TAIL)
+
+    def test_another_hook_events_prefix_is_not_a_denial(self):
+        for prefix in ("PostToolUse:Bash hook error: ", "Stop hook error: ",
+                       "PreToolUse:Edit hook error: "):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(hits(DENIED, [result(prefix + deny_reason())]), 0)
+
+    def test_a_denial_followed_by_other_output_is_not(self):
+        for tail in ("\nEverything up-to-date", " and then the push went through",
+                     grade.DENY_TAIL + "\nlater output"):
+            with self.subTest(tail=tail[:40]):
+                self.assertEqual(hits(DENIED, [result(deny_reason() + tail)]), 0)
+
     def test_a_result_that_only_quotes_the_signature_is_not(self):
         quoted = (
             "486:            \"— this cannot be undone (grade-bash hook, autonomy=execute)\")",

@@ -425,6 +425,11 @@ def denied():
     b.result("tu-g6", "PreToolUse:Bash hook error: " + DENY % "git push --force origin release/1.0")
     b.bash("tu-k7", "grep -rn 'grade 3, irreversible' notes/")
     b.result("tu-k7", "notes/incident.md:12: " + DENY % "git push --force origin main")
+    b.user("and the docs branch")
+    b.bash("tu-k8", "git push --force origin docs")
+    b.result("tu-k8", "PostToolUse:Bash hook error: " + DENY % "git push --force origin docs")
+    b.bash("tu-k9", "cat notes/incident.md")
+    b.result("tu-k9", DENY % "git push --force origin main" + "\nThe push was retried by hand.")
     return b
 
 

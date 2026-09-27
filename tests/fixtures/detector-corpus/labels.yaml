@@ -331,7 +331,7 @@ sessions:
         note: an export with no command after it runs nothing
 
   - session: autonomy-denied.jsonl
-    note: six commands the grade gate denied, and seven results that only mention or quote it
+    note: six commands the grade gate denied, and nine results that only mention or quote it
     labels:
       - at: "1:tu-g1"
         fire: [autonomy/denied-by-grade]
@@ -365,6 +365,12 @@ sessions:
       - at: "7:tu-k7"
         near: [autonomy/denied-by-grade]
         note: a grep that prints a whole deny reason behind its file and line, not a denial
+      - at: "8:tu-k8"
+        near: [autonomy/denied-by-grade]
+        note: a reason behind another hook event's prefix, which is not where this hook denies
+      - at: "8:tu-k9"
+        near: [autonomy/denied-by-grade]
+        note: a file opening with a deny reason, then carrying text the hook never appends
 
   - session: commits-messages.jsonl
     note: five non-conventional subjects and five missing trailers, overlapping on four
