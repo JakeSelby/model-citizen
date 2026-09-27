@@ -118,6 +118,9 @@ def _scratch(prefix):
 
 
 _TEMPLATE = []
+# No background maintenance or garbage collection in the template: either would write inside it
+# while a copy of it is being taken.
+QUIET_GIT = ["-c", "maintenance.auto=false", "-c", "gc.auto=0"]
 
 
 def _template():
@@ -129,10 +132,25 @@ def _template():
                    GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z",
                    GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
         for args in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "init"]):
-            subprocess.run(["git", "-C", str(where)] + args, check=True, env=env,
+            subprocess.run(["git", "-C", str(where)] + QUIET_GIT + args, check=True, env=env,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         _TEMPLATE.append(where / ".git")
     return _TEMPLATE[0]
+
+
+def _copy_repo(src, dst):
+    """Copy a `.git` directory, leaving out lock files and tolerating a file that vanishes.
+
+    A lock is another git process's, never part of the repository, and git's own housekeeping may
+    create and remove one, or a temporary object, while the copy walks the directory.
+    """
+    def copy(source, target):
+        try:
+            return shutil.copy2(source, target)
+        except FileNotFoundError:
+            return target
+
+    shutil.copytree(str(src), str(dst), ignore=shutil.ignore_patterns("*.lock"), copy_function=copy)
 
 
 _BIN = []
@@ -170,7 +188,7 @@ def _stage(home, document):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     if document.get("git"):
-        shutil.copytree(str(_template()), str(home / REPO_DIR / ".git"))
+        _copy_repo(_template(), home / REPO_DIR / ".git")
     return _fill(document["payload"], tokens)
 
 

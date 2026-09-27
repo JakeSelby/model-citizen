@@ -11,9 +11,13 @@ Run: python3 -m unittest discover tests
 """
 import importlib.util
 import json
+import os
 import re
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO = Path(__file__).resolve().parent.parent
 FIXTURE = REPO / "tests" / "fixtures" / "hook-calls"
@@ -89,6 +93,29 @@ class HookMatrixTests(unittest.TestCase):
             self.assertIn(payload["hook_event_name"], EVENTS, name)
             self.assertIn(payload["cwd"], ("/workspace/example-repo", "{repo}"), name)
             self.assertIsNone(home.search(json.dumps(document)), name)
+
+    def test_repository_copy_survives_a_vanishing_file_and_skips_locks(self):
+        # Git's background maintenance creates and removes `maintenance.lock` inside the template
+        # while it is copied; a file removed between listing and copying must not fail the run.
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp) / "src", Path(tmp) / "dst"
+            (src / "objects").mkdir(parents=True)
+            for name in ("kept", "gone", "maintenance.lock"):
+                (src / "objects" / name).write_text(name)
+            real = shutil.copyfile
+
+            def vanishing(source, target, **kwargs):
+                if os.path.basename(source) == "gone":
+                    os.remove(source)
+                return real(source, target, **kwargs)
+
+            with mock.patch.object(shutil, "copyfile", vanishing):
+                HM._copy_repo(src, dst)
+            self.assertEqual(sorted(p.name for p in (dst / "objects").iterdir()), ["kept"])
+
+    def test_template_git_calls_disable_background_maintenance(self):
+        self.assertIn("maintenance.auto=false", HM.QUIET_GIT)
+        self.assertIn("gc.auto=0", HM.QUIET_GIT)
 
     def test_decision_shape(self):
         self.assertEqual(HM.decision({}), "none")
