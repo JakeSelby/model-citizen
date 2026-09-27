@@ -96,6 +96,19 @@ class CheckTests(unittest.TestCase):
             self.assertEqual(errors, [])
             self.assertEqual(record["pre_registration_commit"], added)
 
+    def test_a_blank_template_committed_first_names_the_later_filled_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = new_repo(Path(tmp) / "r")
+            path = commit_plan(repo, text=TEMPLATE)
+            path.write_text(filled_plan(), encoding="utf-8")
+            git(repo, "add", "--", str(path))
+            git(repo, "commit", "-qm", "docs(benchmarks): fill pre-registration")
+            filled = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"],
+                                    stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+            errors, record = PROTOCOL.check(str(path), repo, today=DAY)
+            self.assertEqual(errors, [])
+            self.assertEqual(record["pre_registration_commit"], filled)
+
     def test_a_shallow_checkout_is_refused_even_when_the_plan_is_visible(self):
         with tempfile.TemporaryDirectory() as tmp:
             source = new_repo(Path(tmp) / "source")
@@ -154,6 +167,18 @@ class CheckTests(unittest.TestCase):
             self.assertIn("not inside the repository", errors[0])
             errors, _ = PROTOCOL.check("benchmarks/preregistrations/2026-10-01-none.md", repo, today=DAY, cwd=tmp)
             self.assertIn("does not exist", errors[0])
+
+    def test_a_committed_plan_outside_the_preregistration_directory_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = new_repo(Path(tmp) / "r")
+            path = repo / "benchmarks" / "2026-10-01-x.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(filled_plan(), encoding="utf-8")
+            git(repo, "add", "--", str(path))
+            git(repo, "commit", "-qm", "docs(benchmarks): put plan in wrong directory")
+            errors, record = PROTOCOL.check(str(path), repo, today=DAY)
+            self.assertIsNone(record)
+            self.assertIn("must be under benchmarks/preregistrations", errors[0])
 
 
 class AdmitTests(unittest.TestCase):

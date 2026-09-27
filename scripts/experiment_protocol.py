@@ -76,6 +76,16 @@ def _git(root, *args):
     return done.returncode, done.stdout.strip()
 
 
+def _first_filled_commit(root, rel):
+    """The first commit whose version of `rel` has every required field filled."""
+    _, history = _git(root, "log", "--reverse", "--format=%H", "--", rel.as_posix())
+    for commit in history.splitlines():
+        code, text = _git(root, "show", "%s:%s" % (commit, rel.as_posix()))
+        if not code and not missing_fields(text):
+            return commit
+    return None
+
+
 def locate(path, root, cwd=None):
     """The plan's path relative to `root`, or None when it is outside the repository."""
     candidate = Path(path).expanduser()
@@ -94,6 +104,9 @@ def check(path, root, today=None, cwd=None):
     rel = locate(path, root, cwd)
     if rel is None:
         return ["the pre-registration %s is not inside the repository at %s" % (path, root)], None
+    if DIRECTORY not in rel.parents:
+        return ["the pre-registration %s must be under %s"
+                % (rel.as_posix(), DIRECTORY.as_posix())], None
     full = Path(root) / rel
     if not full.is_file():
         return ["the pre-registration %s does not exist" % rel.as_posix()], None
@@ -130,9 +143,10 @@ def check(path, root, today=None, cwd=None):
     _, shallow = _git(root, "rev-parse", "--is-shallow-repository")
     if shallow == "true":
         errors.append("the repository is shallow; full history is required to identify the plan commit")
-    _, commit = _git(root, "log", "--diff-filter=A", "-1", "--format=%H", "--", rel.as_posix())
+    commit = None if shallow == "true" else _first_filled_commit(root, rel)
     if not commit:
-        errors.append("the pre-registration %s has no commit" % rel.as_posix())
+        errors.append("the pre-registration %s has no commit containing a filled plan"
+                      % rel.as_posix())
     return errors, {"evidence": PREREGISTERED, "pre_registration": rel.as_posix(),
                     "pre_registration_commit": commit or None}
 
