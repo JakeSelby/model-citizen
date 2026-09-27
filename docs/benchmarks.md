@@ -68,9 +68,10 @@ it is run by hand on a release candidate and never in CI. It needs Docker, and
 ```sh
 python3 scripts/cost_bench.py replay --verify-tasks                  # prove every check in a container; calls no model
 python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --dry-run   # the arms and the schedule
-python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 5 reps
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
+python3 scripts/cost_bench.py summarise --results <dir>                # SM-2's verdict from the saved rows; calls no model
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -94,6 +95,9 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   stamped with the version and commit of the ref that ran; the bare image is built once. Every ref
   resolves before anything is built, so a typo costs nothing, and `--spend-cap` applies to each
   tag's schedule on its own.
+- **The defaults size one full set.** `--reps` is five trials per task and arm, SM-2's minimum.
+  `--spend-cap` defaults to 140.50 USD: 7 tasks x 5 trials x 2 arms at the 2 USD per-run cap, plus
+  each arm's 0.25 USD preflight, so a full default set launches every run.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
   Dockerfile and the lister. The manifest is every file, link and directory under the image user's
@@ -178,14 +182,38 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   served its whole prefix.
 - **Every attempt counts.** An errored, crashed or timed-out run is a failed attempt whose cost is
   in the arm's cost per passed task, as the evidence standard's intention to treat requires; its
-  `error` field keeps it countable apart. A timed-out run with no readable cost is charged at the
-  per-run cap; another error with no readable cost leaves the figure undefined rather than cheaper.
-  The per-run cap is soft, so the runner also stops
+  `error` field keeps it countable apart and its `outcome` is `fail`. A timed-out run with no
+  readable cost is charged at the per-run cap; another error with no readable cost leaves the
+  figure undefined rather than cheaper. The per-run cap is soft, so the runner also stops
   before any launch that could take reported spend past `--spend-cap`.
+- **SM-2 decides the result, from the saved rows alone.** Every row names its `task`, `arm`, trial
+  (`rep`), `outcome` (`pass` or `fail`), `cost_usd` and `task_long`, so `summarise` re-derives
+  every figure from `results.jsonl` without calling a model; rows that saved no pass or fail, as
+  the 2026-09-23 runs did, are refused rather than scored. It reports, per arm, Cost-of-Pass (the
+  total cost of every attempt over total passes, pooled across the set) and the pass rate with a
+  Wilson 95% interval, which is descriptive only. The harness-over-bare ratio and the pass-rate
+  difference (harness minus bare) carry paired, task-clustered 95% intervals from a percentile
+  bootstrap that resamples tasks and keeps both arms' trials of a task together; it prints its seed
+  and resample count (`--seed`, `--resamples`, default 795 and 10,000) and gives the same interval
+  for the same seed. The ratio is undefined, never zero or infinity, when either arm passes
+  nothing or a run has no readable cost, and an interval bound that lands on a resample where an
+  arm passed nothing is undefined too.
+- **The verdict is supported, not supported or inconclusive, whatever it shows.** Supported needs
+  the ratio's interval wholly below 1.0 and the difference's lower bound above -0.125. Not
+  supported means the data rule that out: the ratio's interval wholly at or above 1.0, or the
+  difference's wholly below -0.125. Anything else is inconclusive, with the reason. "At least 15%
+  cheaper" is claimed only when the ratio's upper bound is at or below 0.85. A task marked
+  `"long": true` in `benchmarks/tasks.json` joins the long-task subset, whose ratio interval is
+  reported beside the whole set's, and a saving is claimed only when it too lies wholly below 1.0.
+  No task is marked yet.
+- **A Pareto view sits beside it:** a table of each arm's mean cost per attempt against its pass
+  rate, naming the arm on the frontier and any arm another dominates.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
-  days, never dollars. The publishable threshold is fixed in the script: the harness costs at most
-  85% of bare per passed task while passing no fewer than bare minus one, mean of reps.
+  days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.
+  The older mean-of-reps `status` (at most 85% of bare per passed task, passing no fewer than bare
+  minus one) is kept beside it so earlier rows stay comparable; SM-2's verdict is the one that
+  decides a claim.
 - **What is faked:** single-shot prompts stand in for interactive sessions, 2 of the 7 tasks are
   synthetic, and a tagged run measures the tag's default configuration rather than a configured
   one. The arms run on Linux; a macOS arm is not built.
