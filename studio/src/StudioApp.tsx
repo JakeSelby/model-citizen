@@ -16,6 +16,7 @@ import { type MouseEvent, useEffect } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
+import { ConfigurePage } from "./configure/ConfigurePage";
 
 const reportCards = [
   {
@@ -200,7 +201,8 @@ function StudioFrame() {
         <Text className="visually-hidden" component="span">Current page: {title}</Text>
         <Routes>
           <Route path="/" element={<Hub />} />
-          {Object.entries(pages).map(([path, description]) => (
+          <Route path="/configure" element={<ConfigurePage />} />
+          {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route
               element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
               key={path}
