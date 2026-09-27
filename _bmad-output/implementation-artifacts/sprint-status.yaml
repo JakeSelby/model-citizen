@@ -243,7 +243,7 @@ development_status:
   ah-s253-record-the-cli-s-own-account-of-the-loaded: backlog
   ah-s254-price-every-rule-stance-variant-skill-and-agent: ready-for-dev
   ah-s255-replay-stored-transcripts-through-the-rule: backlog
-  ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
+  ah-s256-run-every-hook-against-recorded-tool-calls-under: ready-for-dev
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: backlog
   ah-s258-nudge-delegation-from-the-existing-detector: backlog
   ah-s259-per-rule-cost-attribution-across-the-whole: backlog
