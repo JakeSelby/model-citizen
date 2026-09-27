@@ -3700,6 +3700,8 @@ def cmd_import(args: argparse.Namespace) -> int:
 def cmd_config(args: argparse.Namespace) -> int:
     if args.action == "set":
         return config_set(args.key, args.value)
+    if args.action == "unset":
+        return config_unset(args.key, args.value)
     cfg = load_config()
     node: Any = cfg
     for part in args.key.split("."):
@@ -3873,6 +3875,37 @@ def config_set(key: str, value: Optional[str]) -> int:
         say(f"{key} = {json.dumps(coerced)}  ({path})")
     say("applies to new viewer sessions" if key.startswith("integrations.")
         else "applies from the next hook event" if key.startswith("hooks.") else "run `citizen sync` to apply it")
+    return 0
+
+
+# Keys `config unset` removes. Only an optional key whose absence is a documented state belongs
+# here: an unset bypasses the checks `config_set` runs, so a switch, an acknowledgement or a
+# governance key is never unset, only set to a value those checks accept.
+UNSET_KEYS = ("workspaces_dir",)
+
+
+def config_unset(key: str, value: Optional[str]) -> int:
+    """Remove one optional key from the user config, leaving everything else as written."""
+    if key not in UNSET_KEYS:
+        raise SystemExit(f"{key} is not a key this command unsets; it unsets {', '.join(UNSET_KEYS)}. "
+                         f"Set it to another value with `citizen config set {key} VALUE` instead")
+    if value is not None:
+        raise SystemExit(f"config unset takes no value: citizen config unset {key}")
+    path = config_path()
+    try:
+        with reconcile.lock(path.parent):
+            if path.is_symlink():
+                raise ValueError("configuration cannot be a symlink")
+            cfg = read_json(path)
+            if not isinstance(cfg, dict) or key not in cfg:
+                say(f"{key} is not set  ({path})")
+                return 0
+            del cfg[key]
+            reconcile.atomic_text(path, json.dumps(cfg, indent=2) + "\n")
+    except ValueError as exc:
+        raise SystemExit(str(exc))
+    say(f"{key} unset  ({path})")
+    say("run `citizen sync` to apply it")
     return 0
 
 
@@ -6055,8 +6088,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--timezone", help="identity.timezone for --yes (default: detected)")
     p.set_defaults(func=cmd_init)
 
-    p = sub.add_parser("config", help="read or write one config value, e.g. `config get identity.name`")
-    p.add_argument("action", choices=["get", "set"])
+    p = sub.add_parser("config", help="read, write or unset one config value, e.g. `config get identity.name`")
+    p.add_argument("action", choices=["get", "set", "unset"])
     p.add_argument("key")
     p.add_argument("value", nargs="?")
     p.set_defaults(func=cmd_config)

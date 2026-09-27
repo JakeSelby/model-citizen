@@ -62,6 +62,19 @@ def decisions():
     return _DECISIONS[0]
 
 
+def settle_adherence():
+    """Answer every adherence emission now due, once per session start (`adherence.settle`).
+
+    Session start is where an earlier session's window is over, and it runs once, not per prompt.
+    Adherence is observation, so what it returns is dropped and any failure is swallowed: the
+    start-up answer is the same whether it wrote a row, found nothing due, or could not run.
+    """
+    try:
+        load("adherence").settle()
+    except Exception:
+        pass
+
+
 def normalize(payload):
     event = dict(payload)
     name = str(event.get("tool_name", "")).rsplit(".", 1)[-1]
@@ -899,6 +912,7 @@ def _dispatch(runtime, payload):
             invoke("approvals", event)
         return invoke("usage-feed", event)
     if kind == "SessionStart":
+        settle_adherence()
         return invoke("harness-session", event)
     if kind == "Stop":
         return invoke("stop-gate", event)

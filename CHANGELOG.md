@@ -6,6 +6,504 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-09-27
+
+### Added
+
+- The static context figure now prices every always-loaded rule, selected stance variant and listed
+  description on its own, in a `files` map in `benchmarks/static.json` that sums to the totals within
+  rounding. `scripts/cost_bench.py static --check` prints the token and dollar delta of every file
+  that moved since the committed figure, so a pull request that grows one rule names that rule. The
+  5% growth gate and `benchmarks/allow.json` still apply to the total. (#509)
+
+- Added a write-intent ledger for parallel writers. `harness intent claim` records the paths and
+  globs a session will write, planned new files included, and `harness intent release` drops them;
+  a claim whose process has died is ignored and swept. On Claude Code, an Edit, Write, MultiEdit or
+  NotebookEdit to a path a live sibling session in the same repository has claimed is warned the
+  first time and denied the second; `coordination.repeat_overlap: "warn"` in the config never denies.
+  Codex raises no edit event, so its builders run `harness intent check` before committing. Every
+  warning and denial is an `intent-overlap` row in the decision log, `harness intent merge` records
+  whether a landing branch merged cleanly, and `harness usage --conflicts` reports both per week. The
+  check is the `intent-overlap` hook id, so `citizen config set hooks.intent-overlap off`
+  switches it off. (#542)
+
+- Added one selection document and one resolver for it. Stances, rules, hooks, skills, workflows and
+  roles are all kinds in one JSON shape, read from a mode file, the user configuration, the project
+  file `HARNESS_PROJECT_CONFIG` names, and a new session file named by `HARNESS_SESSION_CONFIG`, in
+  that precedence below `HARNESS_MODE` and `HARNESS_STANCE_*`. `harness selection` lists every unit
+  of every kind with its value and the layer that set it, and its JSON reads back unchanged as a
+  session file. A project or session file may now select any kind, and one carrying identity,
+  permissions or another non-selection key is refused with the key named. Switch kinds are resolved
+  and reported here; sync does not yet act on an `off` rule, skill, workflow, role or hook. (#554)
+
+- Added hook ids and the `hooks` switch kind. Every policy module that answers a lifecycle event has
+  an id, its basename under `policy/hooks/`, and `harness config set hooks.<id> off` stops the
+  dispatcher loading it from the next event on both Claude Code and Codex, with no sync. Inline
+  logic follows its owner: Bash grading and its ask to `grade-bash`, read-only and plan-mode allows
+  to `allow-readonly-bash`, band routing and the integration notice to `tier-agent-spawns`. Role
+  confinement, by name, marker, framework mapping or evasion, and the Workflow launch guard have no
+  id and stay on with every hook off. The four core ids,
+  `grade-bash`, `stop-gate`, `brief-guard` and `neutralize-tool-output`, may be `off` only while the
+  user configuration sets `core_switches_acknowledged` true; `config set`, `sync` and `harness
+  selection` refuse otherwise before writing anything, and a hook meeting an unacknowledged `off`
+  keeps running. `harness catalog` lists the ids with kind `hooks`, and each declares its manifest
+  in `policy/hooks/manifests.json`. (#555)
+
+- Added switches for rules, skills, workflows and roles that sync acts on. A unit set `off`, for
+  example with `harness config set rules.decisions-and-plans off`, is absent from both runtimes: no
+  rule link or Codex `AGENTS.md` section, no skill link in either skills home, no command or
+  generated Codex skill, no agent definition in either home, and the spawn hook does not route to
+  an `off` band worker. A projection an earlier sync made is retired, and `harness diff` reports a
+  switch changed since the last sync. The repository's rules are now linked one file at a time into
+  a real `~/.claude/rules/harness/` directory; the directory link earlier releases made there is
+  migrated on the next sync and journaled, and uninstall removes the directory. `harness selection`
+  prints the always-loaded line count of the selection in force; the lint cap is unchanged. (#556)
+
+- Added modes: named selection bundles in `primitives/modes/<name>.json`, selected with
+  `harness config set mode <name>` or `HARNESS_MODE` for one session. Two ship: `full`, the
+  defaults, and `minimal`, which keeps every hook and the cost, delegation and autonomy stances,
+  turns the other stances off or light and switches every workflow off. A mode sits below every key
+  you typed and above the stances `harness init` wrote as defaults, which `config.json` now records
+  under `init_defaults`; `harness selection` names each mode key a higher layer shadowed. An unknown
+  mode, a mode file naming an uninstalled unit or a non-selection key, a mode name two roots both
+  define, and a mode switching a core hook off without `core_switches_acknowledged` are refused
+  before sync writes anything. See `docs/modes.md`. (#557)
+
+- Qualification evidence is now invalidated per acceptance case inside each target. The catalog's
+  versioned `case_paths` map names the source paths each required case depends on, so a change
+  under a mapped path makes only the cases that name it stale, and a rerun of those cases alone
+  completes the claim. A change under a path no case maps still invalidates the whole record. Each
+  new evidence record states the map version and digest it assumed, and a record without them keeps
+  the whole-target rule. The first map assigns both runtimes' `worker.py` to the four cases that run
+  a role worker. (#582)
+
+- Added `--codex-session-login` to `scripts/native_acceptance.py`. With it, each case's disposable
+  `CODEX_HOME` gets an `auth.json` symlink to the operator's Codex session login, read from
+  `CODEX_HOME` or `~/.codex`, the way the Codex worker adapter links it, so a Codex target can be
+  driven by the runner instead of by hand. The flag is off by default, refused for a Claude Code
+  target and when no login file exists, and every string in the login file is redacted from each
+  observation, the progress log and the record. Codex verdicts stay `unverified` until an operator
+  compares a runner-driven case against a hand run and passes `--home-confirmed`. (#612)
+
+- Every row the usage ledger and the decision log write now names its `schema_version`, and every
+  reader carries fields and versions it does not know instead of refusing them, so a ledger written
+  by a newer release reads without error in an older one. A renamed field ships a fold map in the
+  writing module and is read under its new name, and no existing row is rewritten to get there.
+  The rule is documented under "Ledger schema" in docs/usage.md. (#644)
+
+- Added a manifest for every switchable module. Each shipped rule, skill, role and workflow declares
+  its claims, surface, instruments, slot, dependencies and conflicts in `primitives/manifests.json`,
+  and hooks without switch ids remain outside `policy/hooks/manifests.json`; hooks with switch ids
+  already declare theirs there. The
+  selection resolver refuses a shipped module with no manifest or a missing field, a switched-on
+  module whose dependency is off, two switched-on modules that conflict, and two that claim one slot
+  unless one cedes it, naming each module involved. `harness selection` shows each switch unit's
+  instruments, or `unmeasured`. A module from your own primitive root may omit its manifest and keeps
+  resolving. (#788)
+
+- Every new row in the usage ledger and the decision log now names the `profile_fingerprint` of the
+  profile that wrote it: a digest of each switched-on module's content, the stance variants, the
+  configuration that reaches the model or a hook, and the harness version. A row whose profile
+  could not be resolved carries `null`. Role workers and replay rows carry it too, with `bare` for
+  the replay arm that loads no harness. The field ships under schema version 1, which this release
+  is the first to carry. A row written before this reads as unattributed and is never given a
+  guessed fingerprint, and `harness usage --by profile` tells two profiles apart by their rows alone. (#789)
+
+- A session row in the usage ledger now carries `context_attribution`: the tokens each switched-on
+  rule, skill, role and workflow and each stance put into context before the first prompt, labelled
+  a soft estimate and naming its method, four characters a token over the module's resident text.
+  A skill, role or workflow counts its listing entry, never the body it loads on demand. Replay rows
+  carry it too, with no module for the bare arm, and a rescan never attributes a past session to
+  today's selection. Every decision-log row now names the `module` whose hook made the decision, as
+  `hooks/<id>`, or `null` for a point no hook owns. (#790)
+
+- An observation-only hook entry point, `adapters/<runtime>/observe.py`, sits beside `hook.py` and
+  outside its dispatcher. It appends one identifier-only row per hook event to
+  `~/.local/state/agent-harness/observation.jsonl`, never a message body, and fails open and silent:
+  exit 0, no output, errors to a local error log. Its registration reads the same event table as
+  `hook.py`, and `harness_core.observation.bare_install` writes a bare arm's whole footprint, the
+  entry point and its registration. A zero-footprint test drives a scripted session against a stub
+  model through every installed hook event and proves each model request byte-identical with
+  observation on and off, in the bare arm and the harness arm. `harness sync` does not register the
+  entry point yet. (#791)
+
+- Adherence events. When the usage feed says the fresh-session line, it now appends an `emitted` row
+  to `~/.local/state/agent-harness/adherence.jsonl` naming the recommendation, the emitting module,
+  the session and the turn. `policy/hooks/adherence.py` answers each emission from the observation
+  ledger as `followed`, `not_followed` or `unknown`, and computes a rate per recommendation from
+  identifiers alone. Recording never changes what the feed says. The observation entry point is not
+  registered in live sessions yet, so each session start answers a live emission `unknown` once
+  it is a day old. (#792)
+
+- Added an evidence standard for published results, `docs/evidence-standard.md`, which lists the
+  twelve things every proof set must carry and what satisfies each, quoting SM-2 where it defines
+  the terms. Added `docs/pre-registration-template.md`, the plan a proof run fills in and commits
+  before its first trial, so the order of plan and trial can be checked from the history. (#794)
+
+- Added a `concise` voice variant. It picks each reply's shape by what the reply is for (a one-line
+  done message, a short answer, a report, a decision, a brief or a deep dive) and holds every reply
+  to seven rules. On Claude Code it also selects the built-in Concise output style, verified present
+  in Claude Code 2.1.280, with earlier versions unverified; Codex receives the same stance text
+  through AGENTS.md. The default voice is unchanged. The What-changed reply template no longer
+  appears in the always-loaded rules, and two new detectors count template labels and heading-first
+  replies under this voice. The always-loaded caps rise to 225 lines and by the stance's 620 tokens
+  to pay for it. (#811)
+
+- Branches that each reserve a BMad ID now merge without an issue-map conflict. A git merge driver
+  keeps main's map, adds the branch's entries and the larger `next_ids`, and lets main's entry win
+  when both sides mapped one issue; a second driver makes the merge commit carry a freshly rendered
+  sprint status. `citizen worktree create` registers both where the repository ships them, and a
+  genuine duplicate still conflicts and fails the audit. (#819)
+
+- The `local` decision provider now reads a user-level `governance.json` beside `config.json` under
+  the repository's `.agent-harness/governance.json`: the repository file wins for defaults and pair
+  entries, and caps combine by the lower value. A `repo:<name>` pair applies to every branch of that
+  repository, after an exact `repo:<name>/<branch>` pair and before the class default, and
+  `coding.pr_merge` is a new action class. Every answer names the file that supplied its level, and
+  `harness decide` and `harness doctor` list the policy files read. (#874)
+
+- Added the `citizen` command; `harness` remains a supported alias. (#877)
+
+- Bound the decision provider into Bash command grading. When `governance.provider` is not `none`,
+  `grade-bash` classifies each simple command as `coding.git_push`, `coding.git_commit`,
+  `coding.pr_merge`, `coding.deploy` or `coding.shell_exec`, derives its `repo:<name>/<branch>`
+  counterparty from the directory it runs in (`git -C <dir>` and an earlier `cd <dir>` included, and
+  the repository's name rather than a worktree directory's), and asks the provider about every
+  command the autonomy stance lets through. The provider only tightens: its `ask` is an ask in a
+  prompting mode and a deny with an approval code in auto mode, and a configured provider that
+  raises asks, naming the error, instead of allowing. An agent write to a governance policy file or to the
+  user `config.json`, by Bash or a file tool, and any `harness config set governance...`, is always
+  asked about, and each governed decision is one `governance` row in
+  the decision log. Under provider `none` the hook's output is unchanged. (#884)
+
+- Added the workspace map: set `workspaces_dir` to the folder holding your `.code-workspace` files
+  and they become the only definition of which folders belong together, worked out on every call
+  with an optional `overrides.json` for shared folders. `citizen workspace list` shows each
+  workspace's members and instruction size and how every shared folder resolves, and
+  `citizen workspace open NAME` launches Claude Code, or Codex with `--codex`, in the first folder
+  with the others as `--add-dir`. See `docs/workspaces.md`. (#935)
+
+- A session opened in any member folder of a workspace now learns, at start-up, the workspace's
+  other folders and their instructions: a new `workspace-session` hook, registered as its own
+  SessionStart entry on Claude Code and Codex so it has its own output cap, supplies each member's
+  `CLAUDE.md` or `AGENTS.md`, local file and unscoped rules, skipping on Claude Code the members the
+  running session already loads through `--add-dir`. Past 9,000 characters the instructions go to a
+  file under `~/.local/state/agent-harness/workspaces/` that the session is told to read first, and
+  in the desktop app Claude is told to request a member folder on first use. While `workspaces_dir`
+  is set, `sync` also owns `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD=1`, by the native telemetry
+  rules. See `docs/workspaces.md`. (#936)
+
+### Changed
+
+- A project or session stance selection that differs from the synced one now reaches the model as
+  that variant's text at session start, counted against the always-loaded token budget `citizen
+  lint` enforces, less what the sync already loads; a variant that does not fit is named with a
+  pointer to its file. A session whose selection matches the synced one gets nothing injected, and
+  the `custom-stance` qualification case now observes a session selection natively beside the
+  project one. (#276)
+
+- `scripts/cost_bench.py replay` runs its two arms as fresh Docker containers instead of profile
+  directories, so nothing from your machine reaches either one: the bare arm is the Linux
+  qualification image's pinned base plus Claude Code, with the base's own Codex client removed, and
+  the harness arm adds this repository at the full commit a `--tag` names. The installed harness is no
+  longer an arm, and `--bare-config`, `--harness-config`, `--harness-repo` and `--claude` are gone.
+  Each build writes a declaration of its inputs and a hashed manifest of everything the image holds;
+  `cost_bench.py arms check` builds each arm twice with no cache and fails if the manifests differ. A
+  run mounts only the task snapshot, passes `CLAUDE_CODE_OAUTH_TOKEN` by name, reaches only the model
+  API through an allowlist proxy (`arms probe-egress` proves it), and scores the agent's work in a
+  fresh container. `--verify-tasks` runs each task's gate and checks in that container too, where they
+  no longer read your live configuration through HOME and go red for it. Every row records the image,
+  its manifest and declaration digests, and the harness ref and commit. This closes the personal-layer
+  leak in #428. (#559)
+
+- CI now holds the Python 3.9 floor on every pull request and merge queue run. The required `test`
+  check parses every tracked Python source under a real Python 3.9, so newer syntax fails it, and a new
+  `test-py39` job runs the whole suite under Python 3.9 to catch newer standard-library use. That job
+  is not yet a required check. (#640)
+
+- The "on the way" list in `product.json` and the README now names only planned work the roadmap
+  backs, each entry tied to an open issue on a milestone: proof set 1 against bare Claude Code (#799)
+  and the superpowers mode (#558). The README carries no em dash, including the compatibility note
+  generated into it, and a test keeps its "on the way" list equal to `product.json`. (#648)
+
+- A red smoke tier now stops the qualification round: `scripts/qualification_round.py` launches no
+  target when the tier fails or times out, records the tier's result, why the round stopped and the
+  targets it did not run in `round.json`, and exits non-zero. This enforces FR-52, which says a round
+  passes the model-free tier before any native case runs; `--skip-smoke` still records the tier as
+  `skipped` and runs every target. (#688)
+
+- Five native case drivers now observe what their qualification procedure step asks for.
+  `cost-posture` checks that every role the cost variant leaves unchanged is still the same link
+  rather than an identical copy, and that the band worker's brief ends with its row's budget
+  sentence. `spawn-confinement` judges its routed review run a second time with the run's worker
+  state moved aside and requires that judgement to fail. `hook-composition` requires the harness's
+  own `PostToolUse` notice in the write turn's transcript beside the user's hook. `migration-uninstall`
+  reads the hand edit as drift from `harness diff` before uninstalling. The procedure now states the
+  narrower claims no run shows: on Claude Code a multi-file patch is one turn's file-tool writes,
+  and the auto posture is claimed as a mode, not as a restriction. (#742)
+
+- `/build` gains a step that answers a review bot's threads before a pull request goes up for
+  approval: it fixes or replies to each one and resolves it, asks the bot for one more review after a
+  fix, and leaves a human's thread alone. `/land` stops on an unresolved review thread and names it,
+  instead of learning about it when a branch rule refuses the merge. This repository now runs
+  CodeRabbit on its own pull requests, from a `.coderabbit.yaml` tuned to it. (#785)
+
+- The repository's `## Gate` block now runs `scripts/bmad_issue_sync.py sprint-status --check` and
+  `scripts/bmad_issue_sync.py audit` before the unit tests, as CI's `test` job does, so a story
+  whose filled sections change its derived status fails the local gate and the `stop-gate` hook
+  instead of only the pull request's `test` check. (#820)
+
+- The `plan-authoring` skill now has you run the repository's named lint on a plan before posting it
+  and after each revision, since `/build` commits the approved plan into its pull request and a plan
+  reworded at build time is no longer the one that was approved. For the harness lint, copy the plan
+  alone into an empty directory and run the checkout's `bin/citizen lint` on that directory. (#821)
+
+- `/build` step 6 now says what a finished bot review looks like: the bot's commit status on the
+  head commit completing, such as CodeRabbit's `success: Review completed`. The empty review a bot's
+  thread reply creates no longer reads as a pass, a `Review skipped` status or a review that never
+  starts now prompts a request with the bot's review command, and the wait for a pass rises from ten
+  minutes to fifteen, since a requested re-review can take close to nine. (#822)
+
+- `bmad-code-review` in this repository now runs straight through when an approved plan invokes it,
+  or when it is invoked with `unattended`: it proceeds past the context summary, applies every patch,
+  records every finding in the story and ends with only the decision-needed findings as numbered
+  questions. Invoked any other way it still halts at each checkpoint, and blocking halts stop it in
+  both modes. (#823)
+
+- `/land` now gates only on required checks, and on an issue-ownership or closing-link check where
+  the repository runs one. It names every other check or commit status with its state but never waits
+  on it, so a review bot's status that sits pending for minutes no longer reads as a reason to stop. (#824)
+
+- The plugin is now `model-citizen@model-citizen`. An existing `agent-harness@agent-harness` install
+  keeps its ID and fails to load once Claude Code updates its copy of the marketplace, so move it:
+  with a checkout installed, run `citizen upgrade` (or `citizen upgrade --dry-run` to see the
+  commands first). It uninstalls `agent-harness@agent-harness`, removes the `agent-harness`
+  marketplace, adds the marketplace again from its recorded source and installs
+  `model-citizen@model-citizen`, in that order, through the `claude plugin` commands. A plugin-only
+  install runs the same four steps with `/plugin` in a session; adding the marketplace again before
+  removing the old one does nothing. Skills move from `/agent-harness:<name>` to
+  `/model-citizen:<name>`. `citizen doctor` recognizes either ID, and it and `citizen sync` name
+  `citizen upgrade` while the old ID is enabled. (#878)
+
+- Renamed the product to Model Citizen. (#879)
+
+- Links now point at the renamed repository, `JakeSelby/model-citizen`, and the new site,
+  https://model-citizen.dev: the installer, the release notes, the issue sync tool's `bootstrap`
+  default, the issue template, README, CONTRIBUTING, the install and release docs, and the plugin
+  manifest's `homepage` and `repository`. The landing copy names the site as the repository homepage
+  and trades the `coding-agent` topic for `model-citizen`. A new `retired-name` rule in
+  `citizen lint` fails a line in this repository that names the old brand, repository slug or site
+  host, outside the dated areas that keep them on purpose and the "Formerly" lines. Existing links
+  keep working, since GitHub and the old host redirect. (#880)
+
+- The always-loaded set is ten lines and about 160 tokens lighter, down to 213 of its 225-line cap and
+  about 4,204 of 4,822 tokens, so the next rule or stance line fits without raising the cap. The cuts
+  remove only restatement and detail a pointed-to skill or document already carries: the concise
+  voice's closing summary of every shape's opener and one rationale clause, the decision block's shape
+  (in `plan-authoring`), the credentials bullet folded into one line that keeps its sources and bans,
+  the `brief-guard` hook's behaviour, and the global instructions' note on why the cap exists (in
+  `harness-authoring`). (#933)
+
+- Every test of cost, efficacy or a change to the system now follows an eleven-point experiment
+  protocol in `docs/evidence-standard.md`: pre-registered, run in fresh containers holding exactly the
+  named components, and never from a host profile, a live checkout or a disposable home. Section 3 no
+  longer allows a run without a container. `scripts/cost_bench.py replay` refuses to start without
+  `--pre-registration <path>`, a committed, dated plan with its question, hypothesis, primary metric,
+  decision rule and sample size filled; `--exploratory` runs without one, labels every row
+  exploratory and writes no history row. Before any launch the replay also refuses an arm whose
+  manifest differs from its declaration, which carries settings, hooks or other configuration no
+  declared component supplies, or which names your home directory, your profile or this checkout in
+  its recorded inputs, a mount or a variable. An errored, crashed or timed-out run now counts as a
+  failed attempt with its cost in the summary and verdict, and stays countable apart by its `error`
+  field. (#1010)
+
+### Fixed
+
+- The `cost=max` stance allowed compaction while the always-loaded `cache-hygiene.md` rule still said
+  never to compact and the `cache-hygiene/compact` detector counted every compaction as a miss. The
+  rule now names the exception, the detector no longer counts a compaction under a `cost` variant
+  whose `compaction` switch is `compact-allowed`, and `docs/preferences.md` documents that the switch
+  decides and that a session override lifts the rule for that session only. (#117)
+
+- The preferences guide no longer says a sync links a `HARNESS_STANCE_*` value. Such a variable is a
+  session selection: `citizen stances` and the hooks resolve it and the session-start hook injects its
+  text, while a sync keeps linking your user-level variant. `citizen diff` now says, when a project or
+  session selection changes a resolved stance, that it compares against your user-level selection
+  and does not count that selection as drift. (#294)
+
+- A Claude Code `Workflow` script could run a constrained role such as `reviewer` in session,
+  unconfined, because a script's `agent()` calls never reach the spawn hooks. The pre-tool hook now
+  reads the launch: it refuses a script that names a constrained role in `agentType` or carries a
+  `harness-role:` marker for one, with the same `harness role run` instruction a native spawn gets,
+  refuses a script file too long to read in full and every launch under `delegation: off`, and
+  writes a `workflow-launch` row to the decision log. A script's other agents are still not routed
+  to a band. (#576)
+
+- `harness usage --by role` now reports Workflow-tool agents in their own `(workflow)` bucket
+  instead of under the role their agent definition is named for, so they no longer move that
+  role's percentiles. The usage ledger marks such a row `unconfined: true` and records its soft
+  budget as `null`, because the tool launched it without a spawn hook or a budgeted brief. (#577)
+
+- Qualification provisioning now excludes its `.harness-round-clone` marker in the frozen clone's
+  own `.git/info/exclude` and refuses to finish if the clone is still dirty, so a freshly
+  provisioned round runs without hand edits instead of failing every case on the runner's
+  clean-checkout check. (#677)
+
+- Under the `delegation: off` stance, the `tier-agent-spawns` hook asked for confirmation of every
+  spawn while the stance said a spawn is denied outright. The lifecycle already denies the spawn
+  before this hook runs, which is why the engine was seen denying it; the hook now denies too, with
+  the lifecycle's reason, and its header comment says so, so a direct run of the hook agrees with the
+  stance. (#687)
+
+- A resumed qualification round ran every case again. `scripts/native_acceptance.py` now skips each
+  case its durable log already holds a `passed` or `failed` verdict for at the same source commit,
+  client version and routing, and says so on stderr. A failure is kept rather than rerun so its
+  evidence survives the resume; an `unverified` case runs again and its new result supersedes the
+  old one. (#689)
+
+- A framework review layer's spawn whose brief the model wrote in its own words is now refused when
+  it tells the subagent to follow or apply one of the layer's declared prompt files, in any wording.
+  A brief that edits, updates or rewrites that file, or reads it for another reason, still runs.
+  Step 9 of the qualification procedure again requires that refusal, and the `spawn-confinement`
+  case fails when the model's own brief runs, so the catalog's lexical-recognition limitation is
+  dropped. (#739)
+
+- `harness role run` launched from inside a Claude Code session logged in with
+  `CLAUDE_CODE_OAUTH_TOKEN` alone started a Claude worker that failed with "Not logged in", because
+  the client strips the token from its tool subprocesses. Inside a session the Claude adapter now
+  runs `claude auth status` under the worker's environment first and refuses before launch, naming
+  the missing token and the two fixes, when no login is confirmed. The token is never written
+  anywhere. (#759)
+
+- A native spawn refused because it names a constrained role, by `subagent_type` or by a
+  `harness-role:` line in its brief, now writes a `role-confinement` deny row to the decision log
+  naming the role and what named it, as framework-spawn and evasion refusals already did. The usage
+  ledger no longer counts a refused `Agent` call, one whose result is an error and which left no
+  subagent transcript, in a session's `subagents` figure; a session file in the older format, with
+  subagent turns written in as sidechain lines, still counts every call. (#760)
+
+- The refusal a natively spawned constrained role gets now names the CLI by the absolute path of the
+  checkout's `bin/harness` instead of a bare `harness`, which no documented install puts on `PATH`.
+  A test runs the command the refusal names with no `harness` on `PATH`. (#761)
+
+- Qualification provisioning with `--bmad` now installs BMad with the exact command `docs/bmad.md`
+  gives the optional integration suite, `--shims` included, so `harness integration apply bmad` on
+  a freshly provisioned framework root exits 0 instead of reporting legacy review-name drift. (#762)
+
+- `harness role run` accepted a `--read-dir` as broad as `/tmp`, so a review worker could read every
+  other run's files, including an earlier report naming a blind review's planted defects. It now
+  refuses `/`, the home directory, each system temporary root and any directory above one of them,
+  naming the directory and a dedicated `mktemp -d` subdirectory to grant instead. (#772)
+
+- A release pull request that assembles the changelog fragments into a new version section now passes the lint's fragment rule without adding a waiver, so no waiver outlives the release. (#773)
+
+- The live replay's two arms are comparable again. Each scored run passes its task's `max_turns` to
+  the CLI, denies `WebFetch` and `WebSearch` to both arms whatever their profile allows, trusts its
+  snapshot for the stop-gate hook for that run only, and is captured as `stream-json` with hook
+  events, so every row records how often the Stop hook ran and blocked. `usage-prices` leaves the
+  task set for the manifest's new `retired` list, since no arm could pass it honestly, and a test
+  now fails when the benchmark docs state a task count the manifest does not hold. (#793)
+
+- The Scannable output style, the default voice, now declares `keep-coding-instructions: true`, so
+  selecting it keeps Claude Code's default coding instructions in the system prompt instead of
+  replacing them. A test now requires the key on every output style the harness ships. (#810)
+
+- `/close-out` now asks once, before it lands anything, for a go-ahead that names its follow-ups,
+  the merges and any pull request the filing needs. When filing writes tracked files, such as an
+  issue map or story files, it runs from a new worktree off the updated default branch and puts what
+  it wrote in its own pull request, which the close-out lands itself, and it no longer archives until
+  that pull request has merged. Before, nothing landed the filing's changes, so they were left unmerged
+  when the session archived. (#816)
+
+- Files an agent sends with `SendUserFile` in a Remote Control session now open in the app. Claude
+  Code serves a sent file only from under the session's working directory, so a new
+  `stage-user-files` policy copies a file from anywhere else — a temp or scratch directory, a task
+  worktree, the main checkout seen from a worktree — into `.agent-harness/outbox/` there, which git
+  ignores, and sends the copy. (#817)
+
+- Changing a stance variant no longer leaves the old variant in place when its link was made through
+  `claude/stances`, the alias of `primitives/stances`. Sync used to report the harness's own link as
+  a user redirect, exit 2, and refuse to relink even with `--adopt`; a link that resolves to the
+  recorded file is now relinked, and a link to a file outside the stance sources is still preserved. (#828)
+
+- Files an agent sends from a session a Remote Control host started now open in the app. Claude Code
+  gives such a session no upload route, so every file arrived marked "not delivered" and the iOS
+  app greyed its card out. Every host `harness remote-control install` writes now sets
+  `CLAUDE_CODE_BRIEF_UPLOAD=1`, an undocumented Claude Code variable its sessions inherit, so the
+  file is uploaded with the signed-in account; a folder's `env` can set it to an empty string to turn
+  it off. Re-run `harness remote-control install` to apply it to running hosts. (#858)
+
+- In `auto` mode the classifier refused the `HARNESS_CONFIRMED=1` marker as a bypass of a safety
+  hook, so a command `grade-bash` gated could never run, whatever the user said. The auto-mode deny
+  now names an approval code; the user replies `approve <code>` as the whole message, a new
+  `approvals` UserPromptSubmit hook records it (a prompt with any other text records nothing, so a
+  notification turn carrying agent-controlled text cannot approve anything), and the same command, with no marker, passes once in that session within thirty
+  minutes. A Bash write to the approvals store grades 3 and a file-tool write to it is denied. The
+  marker still confirms in `bypassPermissions`, and prompting modes still ask. (#859)
+
+- The read-only Bash grammar read an operator written directly after a closing parenthesis as part
+  of the preceding token, so `(true);ls` was split as one command. Separators directly after a
+  closing parenthesis or brace, a separator directly before an opening parenthesis, and a redirect
+  directly after a closing parenthesis are now split as they are with spaces around them, in both
+  `allow-readonly-bash` and `grade-bash`. (#896)
+
+- With a decision provider configured, `grade-bash` no longer treats issue and pull request text
+  that mentions a policy path as a policy-file write: a quoted `--body` or `--title` value, or a
+  quoted here-document fed to `--body-file -`, on a single `gh issue` or `gh pr` create, comment,
+  edit or review command with nothing else on the line. Every other line that names a policy path
+  is still a level-1 write, because almost any command may run code that writes a path it only
+  names, and redirects, `tee`, `sed -i`, `cp` and `mv` targets are still judged as before. (#898)
+
+- The `grade-bash` hook graded a segment made only of a redirect, as after a subshell in
+  `(ls) > out.txt` or `(ls)>out.txt`, at 0, so the `ask` and `confirm-writes` stances let the file
+  write through without a prompt. A redirect that writes a file now grades at least 1 whatever the
+  segment around it, and a `/dev/null` target still grades 0. (#899)
+
+- `grade-bash` told the user that `gh repo rename` locks the repository read-only for everyone,
+  because the rename shared the archive branch and so printed the archive's reason. The rename
+  still grades 3, but its reason now says it moves the repository to a new name and that the old
+  URLs redirect only while no repository takes the old name. (#900)
+
+- Governance attributed a piped command after a literal `cd` to `repo:unknown/local`, so
+  `cd <repo> && git push origin HEAD 2>&1 | tail -1` was refused where the same push without the
+  pipe was allowed. The directory walk in `grade-bash` now follows Bash precedence: every element of
+  a pipeline starts in the directory in effect when the pipeline begins, and only a `cd` inside a
+  pipeline element, a subshell or a background job is confined to it. (#903)
+
+- `scripts/bmad_issue_sync.py` sent every GitHub API call to the issue map's stored slug, which still
+  names the repository's old name. GitHub answers a write to an old slug with a 307 that `gh api` does
+  not follow, so after the rename `new` failed before filing and `apply` could not update issues. API
+  calls now go to the repository's current slug, and the planning-block links keep the slug the map
+  stores. (#904)
+
+- Two edits at once from one session and worktree could both read an intent-overlap counter of zero
+  and both be warned, so the repeat overlap was never denied. The counter's read-modify-write now
+  holds an exclusive lock on the hit-counter directory, so the second concurrent edit is denied. (#930)
+
+- The governance check on `harness config set governance` no longer gates issue and pull request
+  text that only mentions the command. It takes the same one exemption as the policy-file guard,
+  judged by the same lexer: quoted text passed to gh's built-in issue and pull request create,
+  comment, edit and review subcommands. A real invocation stays a level-1 action wherever it sits,
+  including after a separator or a pipe, in a subshell, or under `eval`, a shell or an interpreter. (#931)
+
+- The worker context-budget test that proves a renamed skill directory refuses the spawn no longer
+  rewrites `primitives/roles/design-judge.md` in the checkout while it runs. It breaks a copy of the
+  role tree in a temporary root instead, so a sync, a live spawn or a second test run reading the
+  checkout at the same moment never sees a role that names an unknown skill. (#932)
+
+- Adherence emissions are now answered in a live session. Nothing outside the tests called
+  `adherence.settle`, so the ledger held `emitted` rows that never got a `response`. Each session
+  start now settles every emission that is due, writing one response row per emission, holding no
+  message text and adding nothing to what the session is told. (#1013)
+
+- `citizen config unset workspaces_dir` switches workspace support off from the CLI. Before it,
+  the key could be removed only by editing the user configuration by hand, since `config set` refuses
+  an empty value. The new `config unset` removes only keys whose absence is a documented state, so
+  it cannot bypass the checks `config set` runs on switches, acknowledgements and governance keys. (#1014)
+
+- Recognize a framework layer prompt through an explanatory em-dash clause, so a later directive to
+  follow those instructions cannot run the layer as an unconfined native subagent. (#1031)
+
 ## [0.13.1] — 2026-09-24
 
 ### Changed
