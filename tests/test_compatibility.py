@@ -15,9 +15,9 @@ class CompatibilityTests(unittest.TestCase):
     def test_current_catalog_is_honest_and_blocks_release_only_for_its_state(self):
         data = compatibility.catalog(REPO)
         required = [row["id"] for row in data["clients"] if row.get("required_for_release")]
-        # 0.13.1, like 0.13.0, requires the two Claude Code CLI targets. Codex CLI defers to 0.14.0: FR-12 admits
-        # it only once a scripted round agrees with a hand-driven one, and the runner cannot drive
-        # Codex until #612 (#700). codex-cli-linux ships as a stated limitation for the same reason.
+        # 0.14.0, like 0.13.x, requires the two Claude Code CLI targets. Codex CLI stays out: FR-12
+        # admits it only once a scripted round agrees with a hand-driven one (#700), and no such
+        # round has run. codex-cli-linux ships as a stated limitation for the same reason.
         self.assertEqual(required, ["claude-code-cli-macos", "claude-code-cli-linux"])
         # Released: exactly the required clients are qualified. Candidate: none is yet.
         qualified = [row["id"] for row in data["clients"] if row["status"] == "qualified"]
