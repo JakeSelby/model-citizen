@@ -3,6 +3,7 @@ anything is built. No test here builds an image or launches an agent: the builde
 are replaced by fakes that record what they were asked for."""
 import argparse
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_cost_bench import BENCH, arm_record
+from test_experiment_protocol import commit_plan, filled_plan
 
 TASK = {"id": "demo", "kind": "synthetic", "parent_sha": "HEAD", "good_sha": None,
         "prompt": ["do", "it"], "tests": {"oracle": "none"}, "max_turns": 5}
@@ -47,8 +49,14 @@ def replay_args(work, **over):
               "spend_cap": 25.0, "stance_cost": None, "bucket": "", "predicted_ratio": None,
               "history_dir": str(Path(work) / "history"), "change_note": "",
               "out": str(Path(work) / "out"), "arms_dir": str(Path(work) / "arms"), "raw": None,
-              "tmp": None, "skip_preflight": True, "dry_run": False}
+              "tmp": None, "skip_preflight": True, "dry_run": False, "exploratory": False,
+              "pre_registration": None}
     values.update(over)
+    repo = Path(work) / "repo"
+    if not values["exploratory"] and values["pre_registration"] is None and (repo / ".git").is_dir():
+        today = datetime.date.today().isoformat()  # the gate itself is test_experiment_protocol's
+        plan = repo / "benchmarks" / "preregistrations" / ("%s-demo.md" % today)
+        values["pre_registration"] = str(plan if plan.is_file() else commit_plan(repo, plan.name, filled_plan(today)))
     Path(values["tasks"]).write_text(json.dumps({"tasks": [TASK]}), encoding="utf-8")
     return argparse.Namespace(**values)
 

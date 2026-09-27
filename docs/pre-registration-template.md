@@ -1,10 +1,22 @@
 # Pre-registration template
 
-Copy this file for each proof run, fill every section, and commit the copy before the run's first
-trial. Name the copy for the date and the question, for example
-`benchmarks/preregistrations/2026-10-01-harness-vs-bare.md`, and merge its pull request before the
-first trial, so the plan's publication time is one GitHub records rather than a date you set. This is
-item 1 of the [evidence standard](evidence-standard.md), which says how the order is checked.
+Copy this file for every run that is not exploratory, whether a proof run, a pilot or an ad hoc
+eval, fill every section, and commit the copy before the run's first trial. A plan lives in
+`benchmarks/preregistrations/`, named `<YYYY-MM-DD>-<slug>.md` for the date it was registered and
+the question, for example `benchmarks/preregistrations/2026-10-01-harness-vs-bare.md`; its **Date
+registered** field carries the same date. Merge its pull request before the first trial, so the
+plan's publication time is one GitHub records rather than a date you set. This is protocol point 1
+and item 1 of the [evidence standard](evidence-standard.md), which says how the order is checked.
+
+Name the plan to the run: `scripts/cost_bench.py replay --pre-registration <path>`. The run refuses
+to start unless the file is inside this repository, committed with no uncommitted change, named
+with its date, and has these fields filled, with no `<...>` left in them: **Question** and **Date
+registered** under Run, **Primary** under Hypotheses, **Metric** under Primary metric, **Tasks** and
+**Trials per task and arm** under Sample size, and the Decision rule section. Every row then names
+the plan and the commit that first added the filled plan. A later committed deviation-log entry
+does not move that identity. A run without a plan must pass `--exploratory`; its
+rows are labelled exploratory, it writes no history row, and it is never cited as evidence. The gate
+checks those fields only; every other section is still required by the evidence standard.
 
 Replace each `<...>` with a value. A section that does not apply says "none" and why; a blank or a
 leftover `<...>` fails the check. SM-2's values are filled in as defaults; change one only by

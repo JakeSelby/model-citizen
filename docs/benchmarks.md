@@ -67,14 +67,19 @@ it is run by hand on a release candidate and never in CI. It needs Docker, and
 
 ```sh
 python3 scripts/cost_bench.py replay --verify-tasks                  # prove every check in a container; calls no model
-python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --dry-run   # the arms and the schedule
-python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1      # 7 tasks x 2 arms x 2 reps
-python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0   # two versions, one run
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --dry-run   # the arms and the schedule
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
+    --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
 ```
 
+- **A run is pre-registered or exploratory.** `--pre-registration` names a committed, dated plan
+  filled from the [pre-registration template](pre-registration-template.md); without one the run
+  needs `--exploratory`, labels every row exploratory and writes no history row. The protocol is in
+  the [evidence standard](evidence-standard.md).
 - **Each arm is a fresh image from pinned inputs, and nothing from your machine reaches it.**
   Both are built by `scripts/replay-arm.Dockerfile` from the Linux qualification image's pinned
   base digest and `CLAUDE_CODE_VERSION`, read out of `scripts/linux-target.Dockerfile` so the two
@@ -102,6 +107,13 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   them entry by entry, prints every difference and removes both images; it exits 1 on any
   difference, and `--dry-run` prints every command without building. `replay --dry-run` prints the
   image each arm will be.
+- **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
+  refuses an arm whose manifest holds a Claude Code version, agent client or harness commit other
+  than its declaration names; whose settings, hooks, rules, skills, agents, plugins or instruction
+  files are not the declared harness's (a link into its checkout, or the settings files its sync
+  writes; the bare arm has none); whose recorded inputs name your home directory, this checkout or
+  an ambient `CLAUDE_CONFIG_DIR`; or whose run is neither pre-registered nor exploratory. Every
+  `docker run` is refused the same way when a mount or a variable names one of those paths.
 - **Every row records the container it ran in**: `arm_image`, `arm_image_id`,
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
@@ -164,8 +176,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   turns report neither reads nor writes, is `null` and is left out of the arm's mean; so is an
   errored run, whose turns are not the spend it would have had. Never zero: zero is a run that
   served its whole prefix.
-- **An errored run is an error, never a failure.** It sits outside both cost per passed task and
-  the pass count, and is counted beside them. The per-run cap is soft, so the runner also stops
+- **Every attempt counts.** An errored, crashed or timed-out run is a failed attempt whose cost is
+  in the arm's cost per passed task, as the evidence standard's intention to treat requires; its
+  `error` field keeps it countable apart. A timed-out run with no readable cost is charged at the
+  per-run cap; another error with no readable cost leaves the figure undefined rather than cheaper.
+  The per-run cap is soft, so the runner also stops
   before any launch that could take reported spend past `--spend-cap`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across

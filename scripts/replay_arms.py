@@ -23,8 +23,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import experiment_protocol  # noqa: E402  the evidence labels the admission check reads
+import arm_manifest  # noqa: E402  re-derive the configuration summary before trusting it
 
 ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_DOCKERFILE = ROOT / "scripts" / "linux-target.Dockerfile"
@@ -267,8 +272,8 @@ def two_build_check(decl, out_dir, snapshot, launch=subprocess.run, repo=ROOT, d
 
 # Callables `check(record) -> reason or None`, run by `admit` in order. The replay calls `admit`
 # once per arm, after its build and before the first launch of that arm; a check that refuses
-# stops the replay before anything is spent. The protocol's refusals (a manifest that differs
-# from its declaration, a missing pre-registration) are added here.
+# stops the replay before anything is spent. The protocol's refusals (docs/evidence-standard.md)
+# are the checks below.
 ADMISSION_CHECKS = []
 
 
@@ -279,7 +284,125 @@ def _has_its_records(record):
     return None
 
 
-ADMISSION_CHECKS.append(_has_its_records)
+# Where the harness arm's declared component is installed, and the two files its sync writes
+# into the profile rather than linking; every other configuration entry is a link into it.
+HARNESS_ROOT = "/opt/model-citizen"
+HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md")
+# Declared components that are not global npm packages; every other one is, as `name@version`.
+NOT_PACKAGES = ("base-image", "model-citizen")
+
+
+def _matches_its_declaration(record):
+    """The manifest holds exactly the declared Claude Code, agent clients and harness commit."""
+    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    if manifest.get("claude_code_version") != decl.get("claude_code_version"):
+        return "the manifest holds Claude Code %r, the declaration %r" % (
+            manifest.get("claude_code_version"), decl.get("claude_code_version"))
+    declared = sorted("%s@%s" % (c["name"], c["version"]) for c in decl.get("components") or []
+                      if c["name"] not in NOT_PACKAGES)
+    held = sorted(manifest.get("cli_packages") or [])
+    if held != declared:
+        return "the manifest's agent clients %s differ from the declared %s" % (held, declared)
+    commit = (decl.get("harness") or {}).get("commit")
+    if manifest.get("harness_commit") != commit:
+        return "the manifest's harness commit %r differs from the declared %r" % (manifest.get("harness_commit"), commit)
+    if ("harness" in (manifest.get("roots") or {})) != bool(commit):
+        return "the manifest %s a harness checkout the declaration %s" % (
+            ("holds", "does not name") if not commit else ("lacks", "names"))
+    return None
+
+
+def _inside(path, root):
+    return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def _configuration_is_declared(record):
+    """Every setting, hook, rule, skill, agent, plugin and instruction file in the manifest comes
+    from a declared component: the bare arm has none, and the harness arm's are links into its
+    declared checkout or the files its sync writes. Anything else was inherited."""
+    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    harness = bool(decl.get("harness"))
+    listed = manifest.get("entries") or []
+    entries = {e.get("path"): e for e in listed}
+    expected = arm_manifest.summary(listed)
+    actual = manifest.get("summary") or {}
+    normalised = dict((kind, sorted(actual.get(kind) or [])) for kind in expected)
+    if normalised != expected or set(actual) - set(expected):
+        return "the manifest summary does not match its entries"
+    for kind, paths in sorted((manifest.get("summary") or {}).items()):
+        for path in paths:
+            entry = entries.get(path) or {}
+            if harness and (entry.get("kind") == "dir" or path in HARNESS_WRITES
+                            or (entry.get("kind") == "link" and _inside(entry.get("target", ""), HARNESS_ROOT))):
+                continue
+            return "%s entry %s is not in the declaration" % (kind, path)
+    return None
+
+
+def host_paths(base=None, home=None):
+    """The host paths no arm may see: the home directory, which holds the profile and the live
+    checkout, this checkout, and an ambient CLAUDE_CONFIG_DIR. Resolved; the root itself is never
+    one, since every path is under it."""
+    base = os.environ if base is None else base
+    found = [str(home or Path.home()), str(ROOT)] + ([base["CLAUDE_CONFIG_DIR"]] if base.get("CLAUDE_CONFIG_DIR") else [])
+    out = []
+    for path in found:
+        for form in (path, os.path.realpath(path)):
+            if form not in out and form.rstrip("/"):
+                out.append(form.rstrip("/"))
+    return out
+
+
+def host_path_reason(sources=(), env=None, strings=(), paths=None):
+    """The first host path reaching an arm: a mount source under one, an env value naming one, or
+    one of `strings` (recorded inputs) naming one. None when there is none."""
+    paths = host_paths() if paths is None else paths
+    for source in sources:
+        for form in (source, os.path.realpath(source)):
+            if any(_inside(form, p) for p in paths):
+                return "the mount %s is under the host path %s" % (source, next(p for p in paths if _inside(form, p)))
+    named = [("the variable %s" % key, str(value)) for key, value in sorted((env or {}).items())]
+    named += [("the recorded input %r" % value, value) for value in strings]
+    for what, value in named:
+        for path in paths:
+            if value == path or path + "/" in value:
+                return "%s names the host path %s" % (what, path)
+    return None
+
+
+def _strings(value):
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return [value] if isinstance(value, str) else []
+
+
+def _no_host_path(record):
+    """No recorded input names a host path: the declaration and manifest link targets.
+
+    Manifest roots are paths inside the isolated image, not inputs from the host. Mounts and
+    environment are refused at launch by `run_command`."""
+    manifest = record.get("manifest") or {}
+    strings = _strings(record.get("declaration") or {})
+    strings += [e["target"] for e in manifest.get("entries") or [] if e.get("kind") == "link" and e.get("target")]
+    return host_path_reason(strings=strings)
+
+
+def _is_preregistered_or_exploratory(record):
+    """A run is exploratory, or names its committed plan; `experiment_protocol.admit` decides which
+    before anything is built, and the replay passes its stamp here as `protocol`."""
+    protocol = record.get("protocol") or {}
+    if protocol.get("evidence") == experiment_protocol.EXPLORATORY:
+        return None
+    if protocol.get("evidence") == experiment_protocol.PREREGISTERED and protocol.get("pre_registration") \
+            and protocol.get("pre_registration_commit"):
+        return None
+    return "no committed pre-registration and not labelled exploratory"
+
+
+ADMISSION_CHECKS.extend([_has_its_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
+                         _is_preregistered_or_exploratory])
 
 
 def admit(record, checks=None):
@@ -370,7 +493,12 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     """`docker run --rm` of an arm: the snapshot at WORKDIR is the only mount, `env` goes by value,
     the credential by name alone, and the network is the one given (the egress network for a run,
     `none` for a check). With no `workdir` nothing at all is mounted; `stdin` keeps standard input
-    attached, which Docker otherwise drops, for a program sent on it."""
+    attached, which Docker otherwise drops, for a program sent on it. A mount or a value that
+    names a host path in `host_paths` is refused, so no launch can reach the host's home, profile
+    or live checkout."""
+    reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
+    if reason:
+        raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
     command = ["docker", "run", "--rm"] + (["-i"] if stdin else []) + (["--name", name] if name else []) + [
         "--network", network] + HARDENING
     if workdir is not None:

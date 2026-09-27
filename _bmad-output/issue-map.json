@@ -7710,6 +7710,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S320",
+      "github_number": 1010,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1010",
+      "title": "Every cost, efficacy or system-change test is a controlled, pre-registered experiment in fresh containers",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S320.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C085",
       "github_number": 1017,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1017",
