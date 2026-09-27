@@ -232,6 +232,39 @@ class DeclarativeDetectors(unittest.TestCase):
         elsewhere = usage_log.scan(path, "s-1", str(Path(self.tmp.name)))
         self.assertNotIn("house-style/sudo-install", elsewhere.get("rules", {}))
 
+    def session(self, command):
+        return write(Path(self.tmp.name) / "session.jsonl", "".join(json.dumps(e) + "\n" for e in [
+            {"type": "user", "sessionId": "s-1", "cwd": str(self.repo), "timestamp": STAMP,
+             "message": {"role": "user", "content": "go"}},
+            {"type": "assistant", "sessionId": "s-1", "cwd": str(self.repo), "timestamp": STAMP,
+             "message": {"id": "m1", "model": "model-a", "content": [
+                 {"type": "tool_use", "id": "toolu_1", "name": "Bash",
+                  "input": {"command": command}}]}},
+        ]))
+
+    def test_a_loaded_detector_with_no_hit_is_recorded_as_zero(self):
+        """The ledger carries the zero, so a report run from another repository shows it."""
+        write(self.repo / ".ruleprobe" / "detectors.yaml", DETECTOR_FILE)
+        record = usage_log.scan(self.session("uv pip install ruff"), "s-1", str(self.repo))
+        self.assertEqual(record["rules"].get("house-style/sudo-install"), 0)
+        lines = []
+        real_say = harness.say
+        harness.say = lines.append
+        try:
+            harness.rule_report([dict(record, repo="elsewhere")], "repo", 30)
+        finally:
+            harness.say = real_say
+        self.assertNotIn("house-style/sudo-install 0", "\n".join(lines))
+
+    def test_a_malformed_entry_does_not_unmeasure_the_session(self):
+        """A finding is not a `rules_errors` entry, which would drop the whole session."""
+        write(self.repo / ".ruleprobe" / "detectors.yaml", MALFORMED)
+        record = usage_log.scan(self.session("sudo pip install ruff"), "s-1", str(self.repo))
+        self.assertNotIn("rules_errors", record)
+        self.assertNotIn("rules_error", record)
+        self.assertEqual(record["rules"].get("house-style/sudo-install"), 1)
+        self.assertNotIn("house-style/broken", record["rules"])
+
     def test_a_zero_hit_detector_is_still_a_line(self):
         lines = []
         real_say = harness.say

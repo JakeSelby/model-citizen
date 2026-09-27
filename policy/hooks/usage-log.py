@@ -75,8 +75,11 @@ def rule_hits(module, events, stances, cwd, errors):
     """`{detector_id: hit count}` for one session: the registry's detectors plus the
     declarative ones in the `.ruleprobe/detectors.yaml` of the session's repository.
 
-    A detector file's bad entries are skipped, never fatal; `usage --rules` names them with
-    their line. With no detector file the call is the registry's alone, unchanged.
+    A detector file's bad entries are skipped, never fatal, and are not `rules_errors`: that
+    field drops the whole session from the report, and a typo in one entry must not unmeasure
+    every other detector. `usage --rules` names them with their line instead. Every loaded
+    declarative id is recorded, zero included, so a report read from another repository still
+    shows its line. With no detector file the call is the registry's alone, unchanged.
     """
     extra = []
     loader = getattr(module, "declarative", None)
@@ -84,7 +87,9 @@ def rule_hits(module, events, stances, cwd, errors):
         extra = loader(cwd)[0]
     hits = (module.run(events, stances, errors=errors, extra=extra) if extra
             else module.run(events, stances, errors=errors))
-    return dict((did, len(found)) for did, found in hits.items())
+    counts = dict((detector.id, 0) for detector in extra)
+    counts.update((did, len(found)) for did, found in hits.items())
+    return counts
 
 
 def stances(env=None):

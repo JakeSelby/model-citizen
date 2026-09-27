@@ -4593,7 +4593,8 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int, extra_ids: Itera
     say("-" * len(head))
     for key in sorted(groups):
         sessions, counts = groups[key]
-        top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
+        # A declarative detector's recorded zero is a line in the table, not a top detector.
+        top = sorted(((d, n) for d, n in counts.items() if n), key=lambda kv: (-kv[1], kv[0]))[:3]
         say(f"{key[:42]:<42}{sessions:>9}{sum(counts.values()):>7}  "
             + (", ".join(f"{d} {n}" for d, n in top) or "-"))
     return 0
