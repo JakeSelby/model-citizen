@@ -10,6 +10,7 @@ import os
 import tempfile
 import unittest
 import unittest.mock
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from test_harness import harness, REPO
@@ -43,6 +44,25 @@ class MarketplaceManifestTests(unittest.TestCase):
         targets = [PLUGIN["skills"], PLUGIN["commands"], PLUGIN["outputStyles"], *PLUGIN["agents"]]
         for target in targets:
             self.assertTrue((REPO / target).exists(), msg=target)
+            self.assertFalse((REPO / target).is_symlink(), msg=target)
+
+    def test_the_directory_icon_is_a_regular_square_svg(self):
+        icon = REPO / ".claude-plugin" / "icon.svg"
+        self.assertTrue(icon.is_file())
+        self.assertFalse(icon.is_symlink())
+        root = ET.parse(icon).getroot()
+        self.assertEqual(root.attrib["width"], root.attrib["height"])
+        self.assertGreaterEqual(int(root.attrib["width"]), 128)
+
+    def test_complex_command_argument_hints_are_quoted(self):
+        for command in (REPO / "claude" / "commands").glob("*.md"):
+            block = command.read_text(encoding="utf-8").split("---", 2)[1]
+            hints = [line.split(":", 1)[1].strip() for line in block.splitlines()
+                     if line.startswith("argument-hint:")]
+            for hint in hints:
+                if hint.count("[") > 1 or ": " in hint:
+                    self.assertTrue(hint.startswith(('"', "'")), msg=command.name)
+                    self.assertEqual(hint[-1], hint[0], msg=command.name)
 
     def test_the_plugin_ships_no_hooks_because_a_synced_home_already_registers_them(self):
         # Plugin hooks merge with user hooks rather than replacing them, so a machine running

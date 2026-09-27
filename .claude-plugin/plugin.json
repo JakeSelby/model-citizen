@@ -23,5 +23,5 @@
     "./claude/agents/worker-c.md"
   ],
   "commands": "./claude/commands/",
-  "outputStyles": "./claude/output-styles/"
+  "outputStyles": "./primitives/presentation/"
 }
