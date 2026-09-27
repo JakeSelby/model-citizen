@@ -11,8 +11,8 @@ rendered at sync time.
 pinned git ref of this repository, one history row per `--tag`. Nothing from the machine running
 it reaches either arm (`replay_arms.py`). It reads cost from the CLI's own JSON result and scores
 each run with a held-back check, itself run in a fresh container. It calls a model and spends real
-usage. `arms` builds and checks the arm images without calling a model. Reading and limits:
-docs/benchmarks.md.
+usage. `arms` builds and checks the arm images without calling a model, and `detect` reads which
+rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
 import datetime
@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
+import replay_detect  # noqa: E402  which rules fired, read from the saved streams
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -106,6 +107,7 @@ SURFACE_FIELDS = tuple("init_" + key for key in SURFACE_KEYS)
 STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "stop_hooks",
                  "hook_blocks", "cache_miss_ratio", "observed_effort") + SURFACE_FIELDS
 RESULTS = "results.jsonl"
+DETECTIONS = replay_detect.DETECTIONS
 ENRICHED = "results.enriched.jsonl"
 
 
@@ -1093,23 +1095,27 @@ def verdict(summary):
     return ratio, "passed" if ratio <= THRESHOLD else "failed"
 
 
-def history_row(rows, series):
+def history_row(rows, series, detections=None):
     """One line for `history.jsonl`: a harness version against bare on the same day and model.
 
     It carries the per-task breakdown as well as the aggregate, because one task moving is the
-    usual shape of a regression and the aggregate alone cannot tell that from a broad one."""
+    usual shape of a regression and the aggregate alone cannot tell that from a broad one. With
+    the set's detections it also carries `mechanisms`, what fired in the harness arm per task."""
     first = rows[0]
     reported, normalised = summarise(rows), summarise(rows, "cost_normalised_usd")
     ratio, status = verdict(reported)
-    return {"date": first["date"], "series": series, "bucket": first.get("bucket", ""),
-            "predicted_ratio": first.get("predicted_ratio"),
-            "harness_version": first["harness_version"],
-            "harness_sha": first["harness_sha"], "tag": first["tag"], "model": first["model"],
-            "cli_version": first["cli_version"], "reps": max(r["rep"] for r in rows), "runs": len(rows),
-            "change_note": first.get("change_note", ""), "per_task": per_task(rows),
-            "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
-            "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
-            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+    row = {"date": first["date"], "series": series, "bucket": first.get("bucket", ""),
+           "predicted_ratio": first.get("predicted_ratio"),
+           "harness_version": first["harness_version"],
+           "harness_sha": first["harness_sha"], "tag": first["tag"], "model": first["model"],
+           "cli_version": first["cli_version"], "reps": max(r["rep"] for r in rows), "runs": len(rows),
+           "change_note": first.get("change_note", ""), "per_task": per_task(rows),
+           "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
+           "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
+           "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+    if detections is not None:
+        row["mechanisms"] = replay_detect.mechanisms(detections)
+    return row
 
 
 def sm2(rows, seed=replay_stats.SEED, resamples=replay_stats.RESAMPLES):
@@ -1190,6 +1196,7 @@ def render_history(rows):
                          % (task or "n/a", usd(cell.get("bare")), usd(cell.get("harness")),
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
+        lines.extend(replay_detect.render_mechanisms(r.get("mechanisms") or {}))
     return "\n".join(lines) + "\n"
 
 
@@ -1407,6 +1414,11 @@ def replay_tag(tag, args, common, harness):
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
+    detections = None
+    if args.raw and rows:
+        # Now, before the next tag's runs overwrite these streams under the same names.
+        detections = replay_detect.detect_rows(rows, [Path(args.raw)], cli_messages, replay_detect.load_detectors())
+        write_jsonl(out / DETECTIONS, detections)
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
@@ -1415,12 +1427,36 @@ def replay_tag(tag, args, common, harness):
     elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
         home_dir.mkdir(parents=True, exist_ok=True)
-        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series))
+        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series, detections))
         (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
         print(json.dumps(kept[-1], indent=2))
     else:
         print("cost-bench: a partial set is not a history row; results are in %s" % out, file=sys.stderr)
     return 1 if stopped else 0
+
+
+def cmd_detect(args):
+    """Every rule detector over saved streams, calling no model: one `--raw` directory, or every
+    set under a `--backfill` root, whose `results.jsonl` files are read and never written."""
+    module = replay_detect.load_detectors()
+    if args.raw:
+        raw = Path(args.raw).expanduser()
+        if not raw.is_dir():
+            raise SystemExit("cost-bench: %s is not a directory" % raw)
+        rows, runs = replay_detect.detect_dir(raw, ARMS, cli_messages, module)
+        write_jsonl(raw / DETECTIONS, rows)
+        unread = len(set(r["source"] for r in rows if r.get("count") is None))
+        print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))
+        return 0
+    root = Path(args.backfill).expanduser()
+    if not root.is_dir():
+        raise SystemExit("cost-bench: %s is not a directory" % root)
+    report = replay_detect.backfill(root, cli_messages, module)
+    for target, runs, unread in report:
+        print("detected over %d run(s), %d without a readable stream, into %s" % (runs, unread, target))
+    if not report:
+        print("cost-bench: no %s under %s" % (RESULTS, root), file=sys.stderr)
+    return 0
 
 
 def cmd_arms(args):
@@ -1536,7 +1572,14 @@ def main(argv=None):
     where.add_argument("--config-dir", help="the profile those runs used; its files are measured now")
     where.add_argument("--inherited", action="store_true", help="those runs inherited ~/.claude (default)")
     back.add_argument("--in-place", action="store_true", help="also rewrite %s" % RESULTS)
+    detect = sub.add_parser("detect", help="run every rule detector over saved streams; calls no model")
+    source = detect.add_mutually_exclusive_group(required=True)
+    source.add_argument("--raw", help="a --raw directory; writes %s there" % DETECTIONS)
+    source.add_argument("--backfill", help="a root to search for %s files; writes %s beside each "
+                        "and never rewrites them" % (RESULTS, DETECTIONS))
     args = parser.parse_args(argv)
+    if args.command == "detect":
+        return cmd_detect(args)
     if args.command == "replay":
         return cmd_replay(args)
     if args.command == "backfill":
