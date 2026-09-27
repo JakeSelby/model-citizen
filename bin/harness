@@ -18,6 +18,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
+    citizen runs    start|list|show|cancel [OPTIONS] [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen draft create NAME [--base installed|TAG] [--json]
@@ -5733,6 +5734,37 @@ def cmd_tiers(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_runs(args: argparse.Namespace) -> int:
+    """Launch and inspect allowlisted suites through the shared Studio run core."""
+    try:
+        supervisor = studio.runs.RunSupervisor(
+            state_dir() / "studio", studio.runs.default_catalog_path(REPO))
+        if args.runs_action == "start":
+            result = supervisor.start(args.suite, studio.runs.parse_parameters(args.param),
+                                      args.target_kind, args.target_ref)
+        elif args.runs_action == "list":
+            result = supervisor.list()
+        elif args.runs_action == "show":
+            result = supervisor.show(args.run_id)
+        else:
+            result = supervisor.cancel(args.run_id)
+    except (OSError, studio.runs.RunError) as exc:
+        message = str(exc) if isinstance(exc, studio.runs.RunError) else "run state I/O failed"
+        if args.json:
+            print(json.dumps({"error": message}, sort_keys=True))
+        else:
+            print("runs: " + message, file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif isinstance(result, list):
+        for record in result:
+            say(record["run_id"] + "  " + record["status"] + "  " + record["suite_id"])
+    else:
+        say(result["run_id"] + "  " + result["status"] + "  " + result["suite_id"])
+    return 0
+
+
 def program_name(argv0: Optional[str] = None) -> str:
     """The name usage text shows: `citizen` or its alias `harness` as invoked, else `citizen`."""
     name = os.path.basename(sys.argv[0] if argv0 is None else argv0)
@@ -5823,6 +5855,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--conflicts", action="store_true",
                    help="landing merge conflicts and intent overlaps per week, from the decision log")
     p.set_defaults(func=cmd_usage)
+
+    p = sub.add_parser("runs", help="launch and inspect suites from the allowlisted Studio catalog")
+    runs_sub = p.add_subparsers(dest="runs_action", required=True)
+    start = runs_sub.add_parser("start", help="start or queue one catalog suite")
+    start.add_argument("suite")
+    start.add_argument("--target-kind", required=True, choices=sorted(studio.runs.TARGET_KINDS))
+    start.add_argument("--target-ref", required=True)
+    start.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
+    start.add_argument("--json", action="store_true")
+    start.set_defaults(func=cmd_runs)
+    listing = runs_sub.add_parser("list", help="list supervised runs")
+    listing.add_argument("--json", action="store_true")
+    listing.set_defaults(func=cmd_runs)
+    show = runs_sub.add_parser("show", help="show one supervised run")
+    show.add_argument("run_id")
+    show.add_argument("--json", action="store_true")
+    show.set_defaults(func=cmd_runs)
+    cancel = runs_sub.add_parser("cancel", help="cancel one queued or running run")
+    cancel.add_argument("run_id")
+    cancel.add_argument("--json", action="store_true")
+    cancel.set_defaults(func=cmd_runs)
 
     p = sub.add_parser("intent", help="claim the paths this session will write, so a sibling's overlap is caught")
     intent_sub = p.add_subparsers(dest="intent_action", required=True)
