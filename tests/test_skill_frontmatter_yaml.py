@@ -11,8 +11,9 @@ SKILLS = REPO / "primitives" / "skills"
 class SkillFrontmatterYamlTests(unittest.TestCase):
     def test_plain_descriptions_do_not_contain_a_mapping_separator(self):
         for path in sorted(SKILLS.glob("*/SKILL.md")):
-            header = path.read_text(encoding="utf-8").split("---", 2)[1]
-            description = next(line.partition(":")[2].strip() for line in header.splitlines()
+            lines = path.read_text(encoding="utf-8").splitlines()
+            header = lines[1:lines.index("---", 1)]
+            description = next(line.partition(":")[2].strip() for line in header
                                if line.startswith("description:"))
             if description[:1] in ('"', "'"):
                 continue
