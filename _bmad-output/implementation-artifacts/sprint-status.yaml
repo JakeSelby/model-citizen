@@ -354,8 +354,8 @@ development_status:
   ah-s295-review-and-apply-a-draft-through-the-governed: backlog
   ah-s296-roll-back-an-applied-draft: backlog
 
-  ah-e024-run-from-the-studio-any-suite-or-single-test: backlog
-  ah-s297-suite-catalog-and-run-supervisor-with-citizen: backlog
+  ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress
+  ah-s297-suite-catalog-and-run-supervisor-with-citizen: ready-for-dev
   ah-s298-run-store-every-run-recorded-with-benchmark-and: backlog
   ah-s299-launch-watch-and-stop-the-free-local-suites-from: backlog
   ah-s300-run-history-and-run-detail-with-flaky-test-marks: backlog
