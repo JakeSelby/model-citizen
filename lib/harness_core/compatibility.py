@@ -241,9 +241,11 @@ def source_drift(root, data):
         qualification_reuse(root, data, target=target)
         if target == "HEAD":
             return False
+        ancestry = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor",
+                                   target, "HEAD"], capture_output=True)
         unchanged = subprocess.run(["git", "-C", str(root), "diff", "--quiet", target,
                                     "HEAD", "--", *SOURCE_PATHS], capture_output=True)
-        return bool(unchanged.returncode)
+        return bool(ancestry.returncode or unchanged.returncode)
     target = qualification_source(data)
     if target == "HEAD":
         return False

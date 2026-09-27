@@ -194,6 +194,15 @@ class QualificationReuseTests(unittest.TestCase):
         self.assertIn("current runtime source differs from the released qualification source",
                       compatibility.release_errors(root))
 
+    def test_reuse_tag_not_ancestral_to_head_is_drift_even_when_runtime_files_match(self):
+        root, data, git = self.fixture()
+        git("tag", "v1.2.4")
+        git("checkout", "--quiet", "--orphan", "unrelated")
+        git("commit", "--quiet", "-m", "unrelated but identical tree")
+        self.assertTrue(compatibility.source_drift(root, data))
+        self.assertIn("current runtime source differs from the released qualification source",
+                      compatibility.release_errors(root))
+
     def test_chained_reuse_retains_and_validates_the_version_the_evidence_observed(self):
         root, prior, git = self.fixture()
         git("tag", "v1.2.4")
