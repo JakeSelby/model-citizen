@@ -89,7 +89,7 @@ def locate(path, root, cwd=None):
 
 
 def check(path, root, today=None, cwd=None):
-    """(errors, record). The record names the plan and the commit that last changed it."""
+    """(errors, record). The record names the plan and the commit that added the filled plan."""
     today = today or datetime.date.today()
     rel = locate(path, root, cwd)
     if rel is None:
@@ -127,7 +127,10 @@ def check(path, root, today=None, cwd=None):
     if dirty:
         errors.append("the pre-registration %s has uncommitted changes; a plan is fixed by its "
                       "commit, and a later change is a dated entry in its deviation log" % rel.as_posix())
-    _, commit = _git(root, "log", "-1", "--format=%H", "--", rel.as_posix())
+    _, shallow = _git(root, "rev-parse", "--is-shallow-repository")
+    if shallow == "true":
+        errors.append("the repository is shallow; full history is required to identify the plan commit")
+    _, commit = _git(root, "log", "--diff-filter=A", "-1", "--format=%H", "--", rel.as_posix())
     if not commit:
         errors.append("the pre-registration %s has no commit" % rel.as_posix())
     return errors, {"evidence": PREREGISTERED, "pre_registration": rel.as_posix(),

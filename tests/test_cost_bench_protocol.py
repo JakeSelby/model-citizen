@@ -84,6 +84,12 @@ class InheritedConfigurationTests(unittest.TestCase):
         settings = {"path": "home:.claude/settings.json", "kind": "file", "sha256": "0"}
         self.assertIsNone(refusal(self.with_entry("harness", "settings", settings)))
 
+    def test_an_entry_omitted_from_the_manifest_summary_is_refused(self):
+        record = copy.deepcopy(admitted("harness"))
+        record["manifest"]["entries"].append(
+            {"path": "home:.claude/hooks/hidden.py", "kind": "file", "sha256": "0"})
+        self.assertIn("summary does not match", refusal(record))
+
 
 class HostPathTests(unittest.TestCase):
     def test_a_recorded_input_naming_the_host_home_is_refused(self):
@@ -96,6 +102,11 @@ class HostPathTests(unittest.TestCase):
         record["manifest"]["entries"].append({"path": "home:.bashrc", "kind": "link",
                                               "target": str(ARMS.ROOT / "AGENTS.md")})
         self.assertIn("names the host path", refusal(record))
+
+    def test_an_image_home_that_matches_the_host_home_is_not_a_host_input(self):
+        record = copy.deepcopy(admitted())
+        record["manifest"]["roots"]["home"] = str(Path.home())
+        self.assertIsNone(refusal(record))
 
     def test_a_mount_or_variable_reaching_the_host_is_refused_at_launch(self):
         for workdir in (Path.home() / "snap", ARMS.ROOT / "benchmarks"):

@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import experiment_protocol  # noqa: E402  the evidence labels the admission check reads
+import arm_manifest  # noqa: E402  re-derive the configuration summary before trusting it
 
 ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_DOCKERFILE = ROOT / "scripts" / "linux-target.Dockerfile"
@@ -321,7 +322,13 @@ def _configuration_is_declared(record):
     declared checkout or the files its sync writes. Anything else was inherited."""
     decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
     harness = bool(decl.get("harness"))
-    entries = {e.get("path"): e for e in manifest.get("entries") or []}
+    listed = manifest.get("entries") or []
+    entries = {e.get("path"): e for e in listed}
+    expected = arm_manifest.summary(listed)
+    actual = manifest.get("summary") or {}
+    normalised = dict((kind, sorted(actual.get(kind) or [])) for kind in expected)
+    if normalised != expected or set(actual) - set(expected):
+        return "the manifest summary does not match its entries"
     for kind, paths in sorted((manifest.get("summary") or {}).items()):
         for path in paths:
             entry = entries.get(path) or {}
@@ -372,10 +379,12 @@ def _strings(value):
 
 
 def _no_host_path(record):
-    """No recorded input names a host path: the declaration, and the manifest's roots and link
-    targets. Mounts and environment are refused at launch by `run_command`."""
+    """No recorded input names a host path: the declaration and manifest link targets.
+
+    Manifest roots are paths inside the isolated image, not inputs from the host. Mounts and
+    environment are refused at launch by `run_command`."""
     manifest = record.get("manifest") or {}
-    strings = _strings(record.get("declaration") or {}) + _strings(manifest.get("roots") or {})
+    strings = _strings(record.get("declaration") or {})
     strings += [e["target"] for e in manifest.get("entries") or [] if e.get("kind") == "link" and e.get("target")]
     return host_path_reason(strings=strings)
 

@@ -13,7 +13,8 @@ to start unless the file is inside this repository, committed with no uncommitte
 with its date, and has these fields filled, with no `<...>` left in them: **Question** and **Date
 registered** under Run, **Primary** under Hypotheses, **Metric** under Primary metric, **Tasks** and
 **Trials per task and arm** under Sample size, and the Decision rule section. Every row then names
-the plan and the commit that last changed it. A run without a plan must pass `--exploratory`; its
+the plan and the commit that first added the filled plan. A later committed deviation-log entry
+does not move that identity. A run without a plan must pass `--exploratory`; its
 rows are labelled exploratory, it writes no history row, and it is never cited as evidence. The gate
 checks those fields only; every other section is still required by the evidence standard.
 

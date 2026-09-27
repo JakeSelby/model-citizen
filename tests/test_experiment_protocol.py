@@ -82,6 +82,31 @@ class CheckTests(unittest.TestCase):
                                       "pre_registration": "benchmarks/preregistrations/2026-10-01-harness-vs-bare.md",
                                       "pre_registration_commit": head})
 
+    def test_a_committed_deviation_keeps_the_commit_that_added_the_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = new_repo(Path(tmp) / "r")
+            path = commit_plan(repo)
+            added = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], stdout=subprocess.PIPE,
+                                   universal_newlines=True).stdout.strip()
+            path.write_text(path.read_text(encoding="utf-8") + "\n- 2026-10-02: observed deviation\n",
+                            encoding="utf-8")
+            git(repo, "add", "--", str(path))
+            git(repo, "commit", "-qm", "docs(benchmarks): record deviation")
+            errors, record = PROTOCOL.check(str(path), repo, today=DAY)
+            self.assertEqual(errors, [])
+            self.assertEqual(record["pre_registration_commit"], added)
+
+    def test_a_shallow_checkout_is_refused_even_when_the_plan_is_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = new_repo(Path(tmp) / "source")
+            commit_plan(source)
+            clone = Path(tmp) / "clone"
+            subprocess.run(["git", "clone", "--quiet", "--depth=1", source.resolve().as_uri(), str(clone)],
+                           check=True)
+            path = clone / PROTOCOL.DIRECTORY / "2026-10-01-harness-vs-bare.md"
+            errors, _ = PROTOCOL.check(str(path), clone, today=DAY)
+            self.assertTrue(any("repository is shallow" in error for error in errors), errors)
+
     def test_an_uncommitted_plan_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = new_repo(Path(tmp) / "r")
