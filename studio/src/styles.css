@@ -58,6 +58,12 @@ button:focus-visible {
   outline-offset: 3px;
 }
 
+input:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid var(--studio-primary);
+  outline-offset: 2px;
+}
+
 .studio-frame { min-height: 100vh; }
 
 .skip-link {
@@ -220,6 +226,49 @@ button:focus-visible {
 
 .foundation-panel { min-height: 260px; }
 
+.draft-loader,
+.settings-section,
+.save-bar { background: var(--studio-surface-raised); }
+
+.draft-name { min-width: min(100%, 28rem); }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.settings-field { min-width: 0; }
+
+.field-provenance {
+  display: inline-block;
+  margin-top: 6px;
+  color: var(--studio-ink-secondary);
+  background: transparent;
+  font-size: 11px;
+}
+
+.json-field textarea { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+.message-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.message-list li + li { margin-top: 6px; }
+
+.save-bar {
+  position: sticky;
+  z-index: 10;
+  bottom: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-color: var(--studio-primary);
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -241,6 +290,7 @@ button:focus-visible {
 
   .primary-navigation { justify-content: flex-start; }
   .hub-grid { grid-template-columns: 1fr; }
+  .settings-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 36rem) {
@@ -258,6 +308,12 @@ button:focus-visible {
   }
 
   .primary-navigation { gap: 4px; }
+
+  .draft-loader .mantine-Group-root,
+  .save-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
 
   .nav-link {
     padding: 0 10px;

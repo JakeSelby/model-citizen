@@ -253,6 +253,37 @@ def list_drafts(repo: Path) -> List[Dict[str, Any]]:
     return sorted(drafts, key=lambda item: (item["name"], item["draft_id"]))
 
 
+def read_config(repo: Path, name: str) -> Dict[str, Any]:
+    """Read one draft's private configuration under the draft writer lock."""
+    worktree, _ = find(repo, name)
+    with _locked(worktree):
+        state = _recover(worktree, _read_state(worktree))
+        path = _paths(worktree)["config"]
+        try:
+            value = json.loads(
+                path.read_text(encoding="utf-8"),
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+            ) if path.is_file() else {}
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise DraftError("invalid-config", "draft configuration is unavailable") from exc
+        if not isinstance(value, dict):
+            raise DraftError("invalid-config", "draft configuration must be a JSON object")
+        return {"draft": describe(repo, worktree, state), "config": value}
+
+
+def checkpoint_config(repo: Path, name: str, base_revision: str, idempotency_key: str,
+                      config: Dict[str, Any], check_command: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Save validated structured configuration through the normal draft transaction."""
+    if not isinstance(config, dict):
+        raise DraftError("invalid-config", "draft configuration must be a JSON object")
+    try:
+        content = (json.dumps(config, allow_nan=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise DraftError("invalid-config", "draft configuration must contain finite JSON values") from exc
+    return checkpoint(repo, name, base_revision, idempotency_key,
+                      config=content, check_command=check_command)
+
+
 def _text_diff(before: Optional[bytes], after: Optional[bytes], before_name: str, after_name: str) -> str:
     old = [] if before is None else before.decode("utf-8", "replace").splitlines(keepends=True)
     new = [] if after is None else after.decode("utf-8", "replace").splitlines(keepends=True)

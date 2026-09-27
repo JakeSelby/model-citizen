@@ -19,7 +19,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import workers
 
-from . import auth
+from . import auth, settings
+from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
 CONTROL_HEALTH = "/__studio/control/health"
@@ -67,7 +68,12 @@ class ResponseSchema:
         if set(payload) != {name for name, _ in self.fields}:
             raise ValueError("route response fields do not match its schema")
         types = {"boolean": bool, "integer": int, "string": str}
+        types.update({"array": list, "object": dict})
         for name, type_name in self.fields:
+            if type_name == "object-or-null":
+                if payload[name] is not None and not isinstance(payload[name], dict):
+                    raise ValueError("route response field %s is not object-or-null" % name)
+                continue
             expected = types[type_name]
             value = payload[name]
             if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
@@ -81,8 +87,9 @@ class Route:
     media_type: str
     response_schema: ResponseSchema
     handler: Callable[["Handler", "Route"], None]
-    parity_exemption: str
+    parity_exemption: Optional[str]
     request_media_type: Optional[str] = None
+    cli_command: Optional[Tuple[str, ...]] = None
 
 
 class RouteRegistry:
@@ -97,8 +104,10 @@ class RouteRegistry:
             key = (route.method, route.path)
             if route.method != route.method.upper() or not route.path.startswith("/"):
                 raise ValueError("route method and path must be canonical")
-            if route.parity_exemption not in PARITY_EXEMPTIONS:
+            if route.parity_exemption is not None and route.parity_exemption not in PARITY_EXEMPTIONS:
                 raise ValueError("unsupported Studio parity exemption: " + route.parity_exemption)
+            if route.parity_exemption is None and not route.cli_command:
+                raise ValueError("Studio domain route must name its citizen command")
             if key in self._routes:
                 raise ValueError("duplicate Studio route: %s %s" % key)
             self._routes[key] = route
@@ -120,6 +129,7 @@ class Server(ThreadingHTTPServer):
 
     def __init__(self, address: Tuple[str, int], static_root: Path, credential: str, store: Store):
         self.static_root = Path(static_root)
+        self.repo_root = self.static_root.parent.parent
         self.control_credential = credential
         self.store = store
         super().__init__(address, Handler)
@@ -127,11 +137,15 @@ class Server(ThreadingHTTPServer):
             self.static_files = auth.KnownRoots({"static": self.static_root})
             self.host = "%s.localhost:%d" % (secrets.token_hex(16), self.server_address[1])
             self.sessions = auth.Sessions(self.host)
+            self.mutations = MutationExecutor()
         except BaseException:
             super().server_close()
             raise
 
     def server_close(self):
+        mutations = getattr(self, "mutations", None)
+        if mutations is not None:
+            mutations.close()
         static_files = getattr(self, "static_files", None)
         if static_files is not None:
             static_files.close()
@@ -357,6 +371,64 @@ def _session_info(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _required_request(handler: Handler, names: Iterable[str]) -> Optional[Dict[str, object]]:
+    payload = getattr(handler, "request_json", {})
+    if set(payload) != set(names):
+        handler._error(400, "invalid_request")
+        return None
+    return payload
+
+
+def _configure_schema(handler: Handler, route: Route) -> None:
+    payload = settings.descriptor(handler.server.repo_root)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _configure_read(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: settings.read(
+        handler.server.repo_root, request["draft"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _configure_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "changes"))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: settings.preview(
+        handler.server.repo_root, request["draft"], request["changes"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _configure_save(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "base_revision", "idempotency_key", "changes"))
+    if request is None:
+        return
+    strings = (request["draft"], request["base_revision"], request["idempotency_key"])
+    if any(not isinstance(value, str) or not value for value in strings):
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: settings.save(
+        handler.server.repo_root, request["draft"], request["base_revision"],
+        request["idempotency_key"], request["changes"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -382,6 +454,17 @@ HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
 STOP = ResponseSchema("json-object", (("stopping", "boolean"),))
 BOOTSTRAP_CONTROL = ResponseSchema("json-object", (("token", "string"), ("form_name", "string")))
 SESSION = ResponseSchema("json-object", (("authenticated", "boolean"), ("csrf_token", "string")))
+CONFIGURE_SCHEMA = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                    ("commands", "object"), ("sections", "array")))
+CONFIGURE_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
+                                                  ("draft", "object"), ("values", "object"),
+                                                  ("warnings", "array")))
+CONFIGURE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("errors", "array"),
+                                                     ("warnings", "array"), ("changed", "array"),
+                                                     ("preview", "object"),
+                                                     ("base_revision", "string")))
+CONFIGURE_SAVE = ResponseSchema("json-object", CONFIGURE_PREVIEW.fields +
+                                (("saved", "boolean"), ("result", "object-or-null")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -399,6 +482,14 @@ ROUTES = RouteRegistry((
     Route("GET", "/api/session", "application/json", SESSION, _session_info, "transport"),
     Route("POST", "/api/session", "application/json", SESSION, _session_info, "transport",
           "application/json"),
+    Route("GET", "/api/configure/schema", "application/json", CONFIGURE_SCHEMA,
+          _configure_schema, None, cli_command=settings.CLI_COMMANDS["schema"]),
+    Route("POST", "/api/configure/read", "application/json", CONFIGURE_READ,
+          _configure_read, None, "application/json", settings.CLI_COMMANDS["read"]),
+    Route("POST", "/api/configure/preview", "application/json", CONFIGURE_PREVIEW,
+          _configure_preview, None, "application/json", settings.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/save", "application/json", CONFIGURE_SAVE,
+          _configure_save, None, "application/json", settings.CLI_COMMANDS["save"]),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),
