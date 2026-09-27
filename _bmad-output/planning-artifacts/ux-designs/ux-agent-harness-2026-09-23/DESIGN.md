@@ -1,115 +1,396 @@
 ---
-title: Model Citizen design contract
+name: Model Citizen
+description: A direct, inspectable harness with a clean, bright operational Studio.
 status: final
 created: 2026-09-23
-updated: 2026-09-25
+updated: 2026-09-27
 supersedes: ../ux-agent-harness-2026-09-19/DESIGN.md
-colors:
-  status: semantic-names-not-fixed-terminal-colors
-typography:
-  prose: system-sans
-  code: system-monospace
-rounded: none-required
-spacing: compact-readable
-components:
-  - status-line
-  - command-block
-  - evidence-callout
-  - usage-table
-  - review-card
-  - answer-card
-  - drift-line (planned)
-  - mismatch-line (planned)
-  - selection-report (planned)
 sources:
   - ../../prds/prd-agent-harness-2026-09-23/prd.md
   - ../../architecture-spines/architecture-agent-harness-2026-09-23/ARCHITECTURE-SPINE.md
-  - ../../research/competitive-configurability-and-selection-models-2026-09-23/research.md
+  - ../../research/competitive-studio-field-check-edit-eval-compare-uis-2026-09-26/research.md
+colors:
+  surface-canvas: '#F5F8F8'
+  surface-raised: '#FFFFFF'
+  ink-primary: '#182B2D'
+  ink-secondary: '#4E6265'
+  border-default: '#CBD8DA'
+  control-border: '#73888B'
+  primary: '#14635E'
+  primary-wash: '#E8F4F1'
+  success: '#176443'
+  success-wash: '#EAF6EE'
+  warning: '#805008'
+  warning-wash: '#FFF4DE'
+  danger: '#B42318'
+  danger-wash: '#FEE4E2'
+  surface-canvas-dark: '#101B1E'
+  surface-raised-dark: '#18272A'
+  ink-primary-dark: '#EDF5F5'
+  ink-secondary-dark: '#B0C2C5'
+  border-default-dark: '#3C5459'
+  control-border-dark: '#83989D'
+  primary-dark: '#7CDDD0'
+  primary-wash-dark: '#213F3D'
+  success-dark: '#94DDB0'
+  success-wash-dark: '#213A2B'
+  warning-dark: '#F1CA86'
+  warning-wash-dark: '#43351F'
+  danger-dark: '#FDA29B'
+  danger-wash-dark: '#4A1D1D'
+typography:
+  display:
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+    fontSize: 38px
+    fontWeight: '650'
+    lineHeight: '1.2'
+    letterSpacing: -0.025em
+  heading:
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+    fontSize: 20px
+    fontWeight: '650'
+    lineHeight: '1.35'
+  body:
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+    fontSize: 14px
+    fontWeight: '400'
+    lineHeight: '1.5'
+  label:
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+    fontSize: 12px
+    fontWeight: '650'
+    lineHeight: '1.4'
+  meta:
+    fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif'
+    fontSize: 12px
+    fontWeight: '400'
+    lineHeight: '1.4'
+  code:
+    fontFamily: 'ui-monospace, SFMono-Regular, Consolas, monospace'
+    fontSize: 12px
+    fontWeight: '400'
+    lineHeight: '1.5'
+rounded:
+  sm: 6px
+  md: 10px
+  lg: 12px
+  full: 9999px
+spacing:
+  '1': 4px
+  '2': 8px
+  '3': 12px
+  '4': 16px
+  '5': 20px
+  '6': 24px
+  '7': 28px
+  '8': 32px
+  page-x: 36px
+  section: 28px
+components:
+  status-line:
+    text: '{colors.ink-primary}'
+    meta: '{colors.ink-secondary}'
+  command-block:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.sm}'
+  evidence-callout:
+    background: '{colors.primary-wash}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.md}'
+  usage-table:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    divider: '{colors.border-default}'
+  review-card:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.md}'
+  answer-card:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+  drift-line:
+    foreground: '{colors.ink-primary}'
+    meta: '{colors.ink-secondary}'
+  mismatch-line:
+    foreground: '{colors.warning}'
+    background: '{colors.warning-wash}'
+  selection-report:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    divider: '{colors.border-default}'
+  studio-navigation:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-secondary}'
+    active: '{colors.primary}'
+    active-background: '{colors.primary-wash}'
+  studio-panel:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.lg}'
+  status-badge:
+    radius: '{rounded.sm}'
+    neutral-background: '{colors.surface-canvas}'
+    neutral-foreground: '{colors.ink-secondary}'
+  report-card:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.lg}'
+  ai-overview-card:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    stale-background: '{colors.warning-wash}'
+    stale-foreground: '{colors.warning}'
+    radius: '{rounded.lg}'
+  ai-settings-form:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.md}'
+  investigation-row:
+    foreground: '{colors.ink-primary}'
+    meta: '{colors.ink-secondary}'
+    divider: '{colors.border-default}'
+  notification-row:
+    foreground: '{colors.ink-primary}'
+    meta: '{colors.ink-secondary}'
+    divider: '{colors.border-default}'
+  draft-workspace:
+    background: '{colors.surface-canvas}'
+    foreground: '{colors.ink-primary}'
+  module-editor:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.md}'
+  governed-action-review:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    warning: '{colors.warning}'
+    border: '{colors.border-default}'
+    radius: '{rounded.lg}'
+  evidence-chart:
+    foreground: '{colors.ink-primary}'
+    axis: '{colors.ink-secondary}'
+    grid: '{colors.border-default}'
+    accent: '{colors.primary}'
+  run-console:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.lg}'
+  progress-indicator:
+    track: '{colors.border-default}'
+    fill: '{colors.primary}'
+    foreground: '{colors.ink-primary}'
+  comparison-report:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    inconclusive: '{colors.warning}'
+    divider: '{colors.border-default}'
+  proposal-card:
+    background: '{colors.primary-wash}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.md}'
+  activity-row:
+    foreground: '{colors.ink-primary}'
+    meta: '{colors.ink-secondary}'
+    divider: '{colors.border-default}'
+  studio-dialog:
+    background: '{colors.surface-raised}'
+    foreground: '{colors.ink-primary}'
+    border: '{colors.border-default}'
+    radius: '{rounded.lg}'
 ---
 
-# Brand and style
+# Model Citizen design contract
 
-Model Citizen is direct, inspectable and calm. It leads with what a developer can find out or do, and then
-states its limits without promotional inflation. This contract governs three surfaces:
+## Brand & Style
+
+Model Citizen is direct, inspectable and calm. It leads with what a developer can find out or do, then
+states its limits without promotional inflation. This contract governs four surfaces:
+
 - the terminal;
-- the agent's own answers and plans, which the `voice` stance and the Review Card shape;
-- the landing copy generated from `product.json`.
+- the agent's own answers and plans, which the `voice` stance and Review Card shape;
+- the landing copy generated from `product.json`;
+- the proposed Studio, a local operational surface for the same harness core.
 
-The mark is a dial pointer, meaning stances as a setting. It never counts anything, runtimes or
-providers, because a count goes stale. The name is a plain category name. A name collision is resolved
-with the full repository path, not by renaming.
+The Studio is a clean, bright operational briefing, not a wall of gauges. Its hierarchy starts with the
+meaning of recent evidence, then exposes the report, draft, run or configuration behind every claim. It
+uses the chosen **Briefing** direction and **Clear** theme: airy composition, quiet teal, cool neutrals,
+and restrained semantic color.
 
-Components marked *(planned)* describe the target for a planned PRD requirement, not current output.
+The Studio inherits UI primitives from `@mantine/core` and `@mantine/hooks` **9.6.3**. Mantine owns base
+buttons, links, navigation controls, badges, alerts, cards, paper, skeletons, form controls, tabs, tables,
+scroll areas, modals, drawers, tooltips, notifications, loaders, progress, focus trapping and visually
+hidden text. This contract owns only the semantic theme overrides and local evidence components listed
+below. The approved packages are MIT; implementation still waits for the exact dependency lockfile,
+notices, bundle inspection, accessibility checks and deterministic rebuild gate.
 
-# Colors
+The mark is a dial pointer, meaning stances as a setting. It never counts anything, runtimes or providers,
+because a count goes stale. The name is a plain category name. A name collision is resolved with the full
+repository path, not by renaming.
 
-No meaning depends on colour. Every status is a text word from a closed set, and colour, where a
-terminal supports it, only reinforces the word. The sets follow the code's vocabulary (architecture spine,
-Consistency Conventions):
-- **Catalog states:** `qualified`, `unqualified`, `planned`, `unsupported`. Documentation says "preview"
+Everything described for the Studio is proposed, not implemented or validated. Components marked
+*(planned)* elsewhere retain that same meaning. The approved
+[Briefing/Clear Hub mockup](mockups/studio-hub-briefing-clear.html) illustrates the Hub only; this
+spine wins on conflict.
+
+## Colors
+
+No meaning depends on color. Every status is a text word from a closed set, and color only reinforces the
+word. Terminal output keeps host colors rather than attempting to reproduce the Studio palette.
+
+The Studio's Clear palette uses `{colors.surface-canvas}` behind
+`{colors.surface-raised}` panels. `{colors.ink-primary}` carries decisions and measures;
+`{colors.ink-secondary}` carries provenance and supporting detail. `{colors.primary}` is for navigation,
+links, focus and primary actions, never for decoration. Matching `-dark` tokens preserve the same roles in
+dark mode. On first open the surface follows the system theme; an explicit light/dark choice persists.
+
+Semantic combinations are fixed:
+
+- success: `{colors.success}` on `{colors.success-wash}`;
+- warning, stale or inconclusive: `{colors.warning}` on `{colors.warning-wash}`;
+- destructive or failed: `{colors.danger}` on `{colors.danger-wash}`.
+
+Primary text on base and raised surfaces, semantic text on its wash, control borders, and focus indicators
+must meet WCAG 2.2 AA. Interactive boundaries use `{colors.control-border}`, which is distinct from the
+quieter `{colors.border-default}`.
+
+The source vocabularies remain literal:
+
+- **Catalog states:** `qualified`, `unqualified`, `planned`, `unsupported`. Documentation says `preview`
   for an unqualified surface.
 - **Capability modes:** `instruction`, `instruction-and-hook`, `instruction-and-setting`.
 - **Evidence results:** `passed`, `failed`, `unverified`.
-- **Measurement:** known, partial, unavailable, failed.
+- **Operations:** `proposed`, `applied`, `unchanged`, `conflicted`, `skipped`, `failed`, `refused`.
+- **Measurement:** `known`, `partial`, `unavailable`, `failed`, `unknown`.
+- **Freshness:** `current`, `stale`.
+- **Comparison verdicts:** `improved`, `flat`, `regressed`, `inconclusive`, `unverified`.
+- **Provenance classes:** `authoritative-source`, `deterministic-derived`, `imported-evidence`,
+  `generated-advisory`.
 - **Decision-provider stages:** `off`, `shadow`, `advise`, `act`.
 
-# Typography
+WCAG 2.2 AA is not claimed from token intent alone. Implementation evidence must record the measured
+contrast ratio for every light/dark semantic foreground-background pair, text size/weight, control
+boundary and focus indicator against both adjacent colors. Required floors are 4.5:1 for normal text and
+3:1 for large text, UI components and focus indicators. A failing or missing ratio blocks qualification.
 
-- Prose uses the host system's sans-serif.
-- Commands, paths, ids and figures use monospace.
-- Operational surfaces use no decorative display type.
-- Brand assets ship as rendered images. Font subsets do not ship until their licence and provenance are
-  cleared.
+## Typography
 
-# Layout and spacing
+The Studio and prose use the host system sans-serif. Commands, paths, identifiers, figures and logs use
+`{typography.code.fontFamily}`. The Studio reserves `{typography.display}` for the Hub briefing headline
+and meaningful empty-state headlines. Operational detail uses body, label and meta roles; no decorative
+display face is introduced.
 
-- **The first line is the answer:** a verdict, a count or the next command.
-- **Caveats sit next to the claim they limit.** A figure is never separated from its sample size or status.
-- **Dense evidence sits behind a path or a flag,** never above the first action.
+Brand assets ship as rendered images. Font subsets do not ship until their license and provenance are
+cleared.
+
+## Layout & Spacing
+
+- **The first line is the answer:** a verdict, count, condition or next command.
+- **Caveats sit next to the claim they limit.** A figure is never separated from its sample size, interval
+  or status.
+- **Dense evidence sits one drill-down away,** never above the first action.
 - **Chat output, plans and hook notices read on a phone.** They use no tables, and every line stays within
   80 columns.
 - **Known gap:** the CLI's fixed-column usage tables are wider than 80 columns, at 113 and 147. A narrow
   layout for them is a design goal, not current output.
 
-# Components
+Studio pages use a maximum-width canvas with `{spacing.page-x}` desktop gutters. The Hub uses a primary
+briefing column and a smaller two-by-two report-card region, followed by drafts/runs and alerts. Major
+regions separate by `{spacing.section}`. Cards use `{spacing.6}` to `{spacing.7}` internal padding; dense
+rows use `{spacing.3}` to `{spacing.4}`. At narrower widths, regions stack in reading order without
+changing the five-area navigation vocabulary.
 
-- **Status line.** The CLI prints `subject: state`, for example `codex-cli-macos: unqualified`. Where
-  evidence scope matters, it follows in parentheses.
-- **Command block.** One complete, copyable command, with no hidden prerequisite.
-- **Evidence callout.**
-  - It states the observed behaviour, the exact surface and version, and the limitation.
-  - It names whether the claim rests on generated configuration, a hook, or native evidence.
-- **Usage table (`citizen usage`).**
-  - One row per group, with fixed columns and one grouping per run.
-  - Partial data is reported in the header and in the `unpriced` footer.
-  - Dollars are list-price equivalents, and the documentation says so beside the `usd` column.
-  - `--by role` marks any role with fewer than 30 samples.
-- **Review Card.** The plan's first screen: verdict, at a glance, a text diagram, steps with exit tests,
-  decisions and risks.
-  - The plan hook enforces an 85-line cap, no tables, and the decisions heading.
-  - The 70-line target, the diagram limits (a `text` fence of at most 12 nodes and 80 columns) and the
-    rule that Mermaid appears only below the card's rule are authoring rules in the plan-authoring skill.
-- **Answer card.** The answer on the first line, then the why, the catch, the alternatives, and what is
-  needed from the reader. Status words are literal.
-- **Drift line (planned, v0.17.0, #692, FR-50).** It shows the declared value, the measured value and the
-  evidence rows. The change it proposes is only applied when the developer applies it.
-- **Mismatch line (planned, v0.14.0, FR-20).** A rule that is switched on but never fired in the window,
-  shown with its detector and the window length. Today, `--rules` is keyed by detector and marks
-  `unobserved`.
-- **Selection report (planned, v0.14.0, FR-16).**
-  - Each key's effective value, with the layer it came from.
-  - Mode keys that were applied, listed apart from user values that were kept.
-  - Each shadowed key, named.
-  - For a headless session, `headless` shown beside the mode.
+## Elevation & Depth
 
-# Dos and don'ts
+Hierarchy comes from spacing, tone and borders. `{colors.surface-raised}` panels sit on
+`{colors.surface-canvas}` with a one-pixel `{colors.border-default}` boundary. Shadows are optional,
+subtle and never the only indication that a surface is interactive. Hover may strengthen the border to
+`{colors.primary}`; focus always uses a visible ring.
 
-**Do:**
-- Keep generated configuration, implemented policy and observed native behaviour apart, every time.
-- Quote a measured figure with its status, or quote no figure.
-- Credit the projects the harness learns from. Do not frame them as competition.
+## Shapes
 
-**Don't:**
-- Use visual polish to imply qualification, savings or capability that has not been measured.
-- Use em dashes in published copy.
-- Claim universal compatibility, identical behaviour across runtimes, or being first.
+The Studio reads as a tool with quiet softness. Controls use `{rounded.sm}`, editors use `{rounded.md}`,
+and major panels use `{rounded.lg}`. `{rounded.full}` is reserved for circular progress or avatar-like
+primitives, not status pills. Terminal, chat and published-copy surfaces do not acquire a shape language.
+
+## Components
+
+Visual specifications only; behavior lives in `EXPERIENCE.md` under Component Patterns.
+
+### Mantine inheritance and local deltas
+
+- **Theme:** map the Clear semantic colors, system typography, radii and spacing from this frontmatter;
+  add no decorative font or gradient.
+- **Button, Anchor and NavLink:** primary actions and active navigation use `{colors.primary}` and
+  `{colors.primary-wash}`; links remain underlined on hover and focus.
+- **Card and Paper:** use `{colors.surface-raised}` with a one-pixel `{colors.border-default}` boundary;
+  no default elevation for hierarchy.
+- **Badge, Alert and Notification:** use literal state text and the success/warning/danger
+  foreground-wash pairs; never a color-only dot.
+- **Skeleton and Loader:** use neutral canvas/border tones and an adjacent loading label; never resemble a
+  real zero or completed value.
+- **Input family:** use `{colors.control-border}` and Mantine's error relationship; editor-specific
+  summaries and line links are local behavior.
+- **Table and ScrollArea:** keep ruled evidence rows and sticky context labels; horizontal overflow is
+  limited to genuine tabular or log content.
+- **Modal, Drawer and FocusTrap:** use `{rounded.lg}` and the standard raised surface; naming, initial focus,
+  inert background and restoration are required behavioral deltas.
+- **Progress:** use `{colors.primary}` on `{colors.border-default}` with visible text for count and state;
+  semantics are never inferred from the bar.
+
+`evidence-chart`, `run-console`, `comparison-report`, `module-editor`, `draft-workspace` and the AI
+components are local compositions. `evidence-chart` is a local accessible SVG plus equivalent data table;
+it does not add an unapproved chart package.
+
+| Component | Visual contract |
+|---|---|
+| status-line | Plain `subject: state` text. State word remains visible without color. |
+| command-block | Monospace, copyable command on a quiet bordered surface. No hidden prerequisite. |
+| evidence-callout | Tonal callout that keeps claim, evidence scope, version and limitation together. |
+| usage-table | Dense ruled rows; figures align, partial and unpriced labels stay adjacent to totals. |
+| review-card | First-screen hierarchy for verdict, bullets, text diagram, steps, decisions and risks. |
+| answer-card | First line carries the answer; following lines carry why, catch and next action. |
+| drift-line *(planned, v0.17.0, #692, FR-50)* | Declared value, measured value and evidence rows share one horizontal or stacked unit. |
+| mismatch-line *(planned, v0.14.0, FR-20)* | Warning wash and literal `unobserved` or mismatch language, never color alone. |
+| selection-report *(planned, v0.14.0, FR-16)* | Ruled list with effective value, source layer, applied mode keys, kept user values and shadowed keys. |
+| studio-navigation *(proposed, v0.18.0)* | Horizontal Hub, Configure, Experiments, Reports, Activity. Active area uses primary wash and text. |
+| studio-panel *(proposed, v0.18.0)* | Raised bordered container for one operational concern; heading and provenance remain inside it. |
+| status-badge *(proposed, v0.18.0)* | Compact text label with semantic foreground and wash; short radius, never a color-only dot. |
+| report-card *(proposed, v0.18.0)* | Label, measure, unit, observed/eligible/failed/unknown counts, window, literal status, provenance class, snapshot ID and drill-down affordance. |
+| ai-overview-card *(planned, v0.18.0, FR-85)* | Largest Hub panel. `Generated advisory`, assessment time, freshness, provider/model/tool/pricing provenance, spend coverage and claim-level evidence links stay visible. |
+| ai-settings-form *(planned, v0.18.0, FR-85)* | Mantine form controls grouped under opt-in, execution, provenance, budget and refresh; active, unsaved, stale, validating, failed and cap-reached values are visibly distinct. |
+| investigation-row *(planned, v0.18.0, FR-85)* | `Generated suggestion`, number, action-led finding, bounded evidence statement and immutable deep link; separated by hairlines and distinct from alerts. |
+| notification-row *(proposed, v0.18.0)* | Event title, occurrence count, first/last time, subject, read/dismiss affordances and immutable Activity link; alert styling is not reused. |
+| draft-workspace *(proposed, v0.18.0)* | Persistent draft identity, base, checkpoint and `Nothing applied` status frame all editing surfaces. |
+| module-editor *(proposed, v0.18.0)* | Form or monospace editor paired with lint, context budget and projection preview; error summary precedes linked field or line diagnostics, with first failure focused. |
+| governed-action-review *(proposed, v0.18.0)* | Diff, checks, exact `citizen` commands, ownership effects and rollback path precede the primary action. |
+| evidence-chart *(proposed, v0.18.0)* | Restrained line/bar/interval marks with labeled axes, no decorative fill, and a visible link to the equivalent evidence table. |
+| run-console *(proposed, v0.18.0)* | Target, suite/case, isolation, spend, semantic progress, Pause/Resume, log and cancel occupy one bounded operational panel. |
+| progress-indicator *(proposed, v0.18.0)* | Determinate bar plus visible completed/eligible count, or literal indeterminate state; color never carries completion alone. |
+| comparison-report *(proposed, v0.18.0)* | Evidence verdict, metric/no-effect value, delta, paired interval, snapshot identity, grouped cases, grader explanation and matched-rerun action. |
+| proposal-card *(proposed, v0.18.0)* | Evidence-backed stance proposal in a primary wash; `Try in draft` is visually distinct from apply. |
+| activity-row *(proposed, v0.18.0)* | Timestamp, actor/surface, literal action state and link to the decision, journal or native result. |
+| studio-dialog *(proposed, v0.18.0)* | Mantine Modal/Drawer shell with a visible title, restrained border, one primary action and an always-visible close or cancel action. |
+
+## Do's and Don'ts
+
+| Do | Don't |
+|---|---|
+| Keep generated configuration, implemented policy and observed native behavior apart | Use polish to imply qualification, savings or capability that has not been measured |
+| Put sample size, interval, window and freshness beside each reported figure | Show an unexplained score, delta or alert count |
+| Let every Hub aggregate and AI claim drill into its report and evidence | Make the Hub or AI overview a new system of record |
+| Show provenance class, immutable snapshot identity and evidence status with operational claims | Link a claim only to a mutable latest-report route |
+| Preserve source status words and use color only as reinforcement | Replace `failed`, `stale`, `unverified` or `inconclusive` with colored dots |
+| Keep configuration changes inside a visibly named draft | Make an edit control look as though it changes live state |
+| Use quiet teal for focus and restrained semantic colors for state | Fill the dashboard with saturated charts, gradients or decorative gauges |
+| Credit the projects the harness learns from | Frame the field as competition or claim universal compatibility |
+| Use no em dashes in published copy | Let incidental mock copy override this contract |

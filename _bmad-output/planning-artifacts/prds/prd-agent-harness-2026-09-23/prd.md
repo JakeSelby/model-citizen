@@ -2,7 +2,7 @@
 title: Model Citizen product requirements
 status: final
 created: 2026-09-23
-updated: 2026-09-26
+updated: 2026-09-27
 supersedes: ../prd-agent-harness-2026-09-19/prd.md
 sources:
   - ../../source-ledger.md
@@ -1424,6 +1424,11 @@ changed, within two seconds of a change on disk, and meet WCAG 2.2 AA at every w
 **Consequences (testable):**
 - The resolved selection equals `citizen selection`'s for the same inputs.
 - A change made with the CLI shows in an open Studio within two seconds.
+- WCAG 2.2 AA qualification fails unless keyboard-only and screen-reader acceptance reaches every
+  operational action and exposes its status, errors and progress.
+- Qualification fails unless recorded checks pass AA contrast, 320-CSS-pixel and 400%-browser-zoom
+  reflow, 200% text-only zoom, reduced-motion and phone-width layouts without clipped or overlapping
+  content or page-level two-dimensional scrolling outside a named evidence, source-code or log region.
 
 #### FR-78: Tune in drafts
 Every Studio edit (a mode, stance variant, switch, setting, module text, or a new or forked module) must
@@ -1441,7 +1446,9 @@ root or a contribution branch, never in place. **Status:** planned (v0.18.0, #97
 
 **Consequences (testable):**
 - An applied state equals running the CLI commands the Studio shows.
-- A rollback restores the config, the root and the projections byte for byte.
+- A rollback restores every still-owned field and file to its recorded prior semantic value, and the
+  resulting owned files are byte-identical when no later user edit intervened. If a current value no
+  longer matches what the harness applied, rollback refuses that conflict and preserves the user edit.
 
 #### FR-80: Run any suite or single test against any target
 The Studio must launch every suite in its catalog, whole or down to one test or case, against the installed
@@ -1488,6 +1495,29 @@ test and apply loop headless, and a new install must reach an applied draft thro
 **Consequences (testable):**
 - A mutating API route with no CLI equivalent fails a test.
 - An abandoned first run changes nothing live.
+
+#### FR-85: An advisory AI health overview
+Only after the developer opts in, the Studio must automatically analyze recent immutable local health and
+performance evidence through a pluggable configured development model or tool and present an advisory
+health overview and investigation queue. Every generated claim and suggested investigation must link to
+the immutable evidence that supports it. The Studio must show provider, model and tool provenance,
+generation time, evidence window, freshness or staleness, and estimated or actual cost status and
+coverage. Assessment is provider-neutral, read-only and tool-disabled, obeys a daily cap, preserves the
+last good assessment as stale, offers manual refresh, cannot mutate harness or alert state, and is never
+the system of record. **Status:** planned (v0.18.0, #955).
+
+**Consequences (testable):**
+- Opted out or disabled means no model or tool call occurs.
+- Every claim and investigation link resolves to an immutable evidence identity and the supporting field;
+  missing or partial evidence remains visible instead of becoming an unsupported claim.
+- Assessment leaves files, configuration, drafts, proposals and authoritative alert state unchanged, and
+  no mutation action is available to the model or tool.
+- Eligible evidence changes coalesce for 60 seconds into one automatic refresh; while it runs or after it
+  fails, the last good assessment remains visible as stale with the reason.
+- Reaching the daily cap starts no automatic call; manual refresh remains available and returns `refused`
+  without a call until capacity is available.
+- An unavailable configured provider, model or tool reports `unavailable`, preserves any last good
+  assessment as stale, and does not fabricate a replacement.
 
 ## 5. Cross-cutting non-functional requirements
 
@@ -1609,7 +1639,8 @@ test and apply loop headless, and a new install must reach an applied draft thro
 ## 7. Public surface, versioning and dependencies
 
 - **Public surface:**
-  - the `harness` CLI subcommands and their flags;
+  - the `citizen` CLI subcommands and their flags, including `citizen studio`, `citizen draft` and
+    `citizen runs`; `harness` remains the supported alias;
   - the configuration schema (`config.json` and its `telemetry` setting);
   - primitive file formats;
   - the stance dimension format;
@@ -1617,6 +1648,9 @@ test and apply loop headless, and a new install must reach an applied draft thro
   - integration descriptors;
   - the ledger schema, including exported attribute names;
   - `product.json`.
+- **Private implementation surface:**
+  - the Studio's loopback HTTP API is private to the bundled UI; it is not a compatibility surface and
+    may change with the committed bundle as one versioned unit.
 - **Versioning:**
   - Semantic versioning, with minor releases continuing before 1.0.
   - From 1.0, `docs/compatibility-policy.md` binds every change to the public surface, covering
@@ -1637,6 +1671,8 @@ test and apply loop headless, and a new install must reach an applied draft thro
 - **Never caps spend.** Budgets inform, and nothing is denied for cost.
   *Amended 2026-09-24:* this stays the default. An opt-in cap module may deny for cost when the user
   switches it on; see the [§1 amendment](#amendment-2026-09-24-a-layered-configurable-measurable-harness).
+  FR-85's opt-in daily cap governs only the AI overview calls the developer enabled; it does not impose a
+  global cap on agent work.
 - **Never relaxes a decision.** No decision provider relaxes a decision or denies one. Semantic
   auto-authorization is out of scope.
 - **No distillation.** The harness never trains a model on a third-party provider's output. Any local model
@@ -1765,6 +1801,7 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - the adoption cohort (#212, #213, #214).
 - **v0.18.0, Studio** (added 2026-09-26, #960):
   - `citizen studio`, a local UI over the whole harness, locked to its launcher (FR-75 to FR-77);
+  - an opt-in, evidence-linked AI health overview and investigation queue (FR-85);
   - drafts for every change, applied through the governed path and reversible (FR-78, FR-79);
   - any suite or single test against the installed version, a release or a draft, with spend shown first
     (FR-80, FR-81);

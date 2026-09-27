@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-26"
+generated: "2026-09-27"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -342,8 +342,8 @@ development_status:
   ah-s288-activity-what-the-harness-decided-and-what: backlog
   ah-s289-live-updates-a-change-from-the-cli-an-agent-or: backlog
   ah-sp017-spike-can-the-committed-ui-bundle-be-rebuilt: backlog
-  ah-t035-write-the-studio-s-ux-specification: backlog
-  ah-t036-record-the-studio-s-architecture-decisions-in: backlog
+  ah-t035-write-the-studio-s-ux-specification: ready-for-dev
+  ah-t036-record-the-studio-s-architecture-decisions-in: ready-for-dev
 
   ah-e023-tune-in-the-studio-drafts-for-every-change: backlog
   ah-s290-drafts-create-list-diff-and-discard-a-draft-from: backlog
