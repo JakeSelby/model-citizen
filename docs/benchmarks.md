@@ -72,6 +72,8 @@ python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registrati
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
+python3 scripts/cost_bench.py detect --raw <dir>                     # which rules fired in each saved stream; calls no model
+python3 scripts/cost_bench.py detect --backfill <root>               # the same beside every results.jsonl under root
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -206,6 +208,22 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   paths visible in tool inputs, not a complete filesystem-read audit: an unknown symlink, relative
   traversal or copied file may evade it. Prelaunch exclusion is the primary control. The installed
   runtime remains intact.
+- **Which rules fired is read from the saved streams, with no model call.** `detect --raw <dir>`
+  runs every detector in `policy/hooks/rule-detectors.py` over each `<task>-<arm>-<rep>.json`
+  in the directory and writes `detections.jsonl` there: one row per run per detector, with the
+  detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
+  call, counted from 1, and a tool result takes the turn of the call that asked for it. A
+  subagent's own messages are not the run's, though its return is. Every detector runs in both
+  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  with no model call, a stream that cannot be found, one found twice, and a detector that raised
+  are rows with `count` null and the reason in `error`: unknown, never zero. With `--raw`, the
+  replay does the same after each tag's set, before the next tag's runs overwrite the streams,
+  and writes `detections.jsonl` beside that set's `results.jsonl`; its history row then carries
+  `mechanisms`, which detectors fired in the harness arm per task and in how many of its runs,
+  printed in `history.md` under the task lines. `detect --backfill <root>` does it for sets
+  already on disk: it finds every `results.jsonl` under the root, looks for each row's stream in
+  the same directory, a sibling `transcripts` or `raw` directory and their subdirectories, and
+  writes `detections.jsonl` beside it. It reads `results.jsonl` and never writes it.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its
