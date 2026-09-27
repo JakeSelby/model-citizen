@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 120,
+    "bug": 121,
     "chore": 87,
     "decision": 14,
     "epic": 27,
@@ -7795,6 +7795,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C086.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B120",
+      "github_number": 1031,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1031",
+      "title": "Directed BMad prompt paths can evade spawn confinement after an em dash",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B120.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
