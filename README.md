@@ -183,16 +183,18 @@ trust if prompted. [Start with the full guide](docs/getting-started.md).
 
 ## Release status
 
-**Release status:** `0.14.0` is a release candidate, awaiting native qualification on the two
-required Claude Code CLI targets, macOS and Linux, listed below. `0.13.1` is the current stable
-release; its shared engine, adapters, configuration and hook decisions are qualified on those
-same two targets. The Codex CLI is outside the 0.13.1 contract and the 0.14.0 candidate's until
-a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
+**Release status:** `0.14.0` is the current stable release. Its shared engine, adapters,
+configuration and hook decisions are qualified from complete scripted native records on the two
+required Claude Code CLI targets, macOS and Linux. The independent hand comparisons tracked by
+#741 were explicitly deferred to v0.15.0 and remain a stated limitation. The Codex CLI is outside
+the 0.14.0 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
 qualified on the Codex CLI for macOS and Linux, so if you need a qualified Codex floor, install
 that tag.
 
 <!-- harness:compatibility:start -->
-**Unqualified:** `claude-code-cli-macos`, `claude-code-vscode-macos`, `claude-code-cli-linux`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
+**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`.
+
+**Unqualified:** `claude-code-vscode-macos`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
 
 **Planned:** `cursor`, `grok`.
 
