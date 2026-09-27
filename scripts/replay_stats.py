@@ -47,8 +47,12 @@ def attempts(rows):
         else:
             raise ValueError("row %d (%s, %s) records neither a pass nor a fail" % (index, row["task"], row["arm"]))
         cost = row["cost_usd"]
+        try:
+            cost = None if cost is None else float(cost)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("row %d has a nonnumeric cost_usd" % index) from exc
         out.append({"task": row["task"], "arm": row["arm"], "trial": row.get("rep", row.get("trial")),
-                    "passed": passed, "cost": None if cost is None else float(cost),
+                    "passed": passed, "cost": cost,
                     "long": bool(row.get("task_long"))})
     return out
 
