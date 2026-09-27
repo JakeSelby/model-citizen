@@ -291,8 +291,16 @@ class RunTests(unittest.TestCase):
 
 
 class AdmissionSeamTests(unittest.TestCase):
+    # A bare arm that holds exactly what it declares, in an exploratory run.
     RECORD = {"label": "bare", "image": "i", "image_id": "sha256:1", "declaration_sha256": "d",
-              "manifest_sha256": "m", "declaration": {}, "manifest": {}}
+              "manifest_sha256": "m",
+              "declaration": {"claude_code_version": "1.0", "harness": None,
+                              "components": [{"name": "base-image", "version": "base" + "@sha256:0"},
+                                             {"name": "@anthropic-ai/claude-code", "version": "1.0"}]},
+              "manifest": {"claude_code_version": "1.0", "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"],
+                           "harness_commit": None, "roots": {"home": "/home/agent"}, "summary": {},
+                           "entries": []},
+              "protocol": {"evidence": "exploratory"}}
 
     def test_a_complete_record_is_admitted(self):
         self.assertIsNone(ARMS.admit(self.RECORD))

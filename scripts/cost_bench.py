@@ -36,6 +36,7 @@ from harness_core import cache_prefix  # noqa: E402  the ledger's miss ratio, on
 from harness_core import catalog  # noqa: E402  the resolver the hooks load, for the profile fingerprint
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
+import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -768,7 +769,8 @@ def _scorer(opts, launch):
 
 
 def run_one(task, rep, arm, opts, launch=subprocess.run):
-    """One row. An errored run is `error: true` with `passed: null`; it is never a failure."""
+    """One row. An errored run is `error: true` with `passed: null`, so it stays countable apart;
+    `summarise` counts it as a failed attempt with its cost (intention to treat)."""
     record = opts["arms"][arm]
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
     row = dict(opts["stamp"], task=task["id"], arm=arm, tag=opts["tag"], rep=rep, passed=None, error=False,
@@ -907,7 +909,7 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
     for arm in ARMS:
-        arms.admit(opts["arms"][arm])
+        arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):
@@ -937,15 +939,17 @@ def _mean(values):
 
 
 def summarise(rows, field="cost_usd"):
-    """Per arm: cost per passed task and passes, each the mean of reps. Errors are counted apart
-    and sit in neither figure. A rep in which an arm passed nothing has no cost per passed task."""
+    """Per arm: cost per passed task and passes, each the mean of reps. By intention to treat every
+    attempt counts: an errored, crashed or timed-out run is a failed attempt whose cost is in the
+    figure, and `errors` still counts them apart. A rep in which an arm passed nothing, or holds a
+    run with no readable cost, has no cost per passed task."""
     out = {}
     for arm in ARMS:
         mine = [r for r in rows if r["arm"] == arm]
         scored = [r for r in mine if not r["error"]]
         per_rep, passes = [], []
         for rep in sorted({r["rep"] for r in mine}):
-            runs = [r for r in scored if r["rep"] == rep]
+            runs = [r for r in mine if r["rep"] == rep]
             won = sum(1 for r in runs if r["passed"])
             passes.append(won)
             costs = [r[field] for r in runs]
@@ -967,7 +971,7 @@ def per_task(rows, field="cost_usd"):
         for arm in ARMS:
             mine = [r for r in rows if (r.get("task") or "") == task and r["arm"] == arm]
             reps.update(r["rep"] for r in mine)
-            costs = [r[field] for r in mine if not r["error"] and r.get(field) is not None]
+            costs = [r[field] for r in mine if r.get(field) is not None]  # errored runs too
             cell[arm] = round(_mean(costs), 6) if costs else None
             cell[arm + "_spread"] = round(max(costs) / min(costs), 4) if len(costs) > 1 and min(costs) else None
         ratio = round(cell["harness"] / cell["bare"], 4) if cell["bare"] and cell["harness"] is not None else None
@@ -1201,6 +1205,7 @@ def cmd_replay(args):
         tasks = [t for t in tasks if t["id"] in args.task]
     if args.verify_tasks:
         return verify_command(args, tasks)
+    protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
     tags = args.tag or []
     refuse_candidate(tags)
     if not args.model:
@@ -1229,7 +1234,8 @@ def cmd_replay(args):
     common = {"tasks": tasks, "plan": plan, "bare": bare, "arms_dir": arms_dir, "out": series_out,
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
               "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
-              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]})}
+              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
+              "protocol": protocol}
     status = 0
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
@@ -1266,7 +1272,8 @@ def replay_tag(tag, args, common, harness):
                           "cli_version": common["cli_version"],
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
                           "harness_version": version, "harness_sha": commit,
-                          "os": "linux container on %s %s" % (platform.system(), platform.release())}}
+                          "os": "linux container on %s %s" % (platform.system(), platform.release()),
+                          **common["protocol"]}}
         out.mkdir(parents=True, exist_ok=True)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
@@ -1274,7 +1281,9 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
+    if rows and not experiment_protocol.writes_history(rows):
+        print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
+    elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
         home_dir.mkdir(parents=True, exist_ok=True)
         kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series))
@@ -1365,6 +1374,11 @@ def main(argv=None):
                      "its own container first; rows then say preflight: skipped")
     run.add_argument("--dry-run", action="store_true", help="print the arms and the schedule and stop; "
                      "builds nothing")
+    evidence = run.add_mutually_exclusive_group()
+    evidence.add_argument("--pre-registration", help="the committed, dated plan this run answers, "
+                          "filled from docs/pre-registration-template.md; required unless --exploratory")
+    evidence.add_argument("--exploratory", action="store_true", help="run without a pre-registration; "
+                          "every row is labelled exploratory and no history row is written")
     build = sub.add_parser("arms", help="build the replay arms, check two builds agree, or prove the "
                            "egress rule; calls no model")
     build.add_argument("action", choices=("build", "check", "probe-egress"))

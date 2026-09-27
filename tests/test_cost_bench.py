@@ -194,14 +194,27 @@ def git_repo(root):
 SECRET = "sk-ant-oat01-never-on-a-command-line"
 
 
+def arm_manifest(decl):
+    """The manifest a build of `decl` lists when it holds exactly what it declares."""
+    commit = (decl["harness"] or {}).get("commit")
+    entries = [{"path": "home:.claude/rules/harness", "kind": "link",
+                "target": "/opt/model-citizen/claude/rules"}] if commit else []
+    roots = dict({"home": "/home/agent"}, **({"harness": "/opt/model-citizen"} if commit else {}))
+    return {"claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
+            "cli_packages": ["@anthropic-ai/claude-code@" + decl["claude_code_version"]],
+            "summary": {"rules": [e["path"] for e in entries]}, "entries": entries}
+
+
 def arm_record(arm, ref="v9.9.9"):
     """An arm as `replay_arms.build_arm` returns it, without a daemon."""
     harness = {"ref": ref, "commit": "c" * 40} if arm == "harness" else None
     decl = {"schema": 1, "arm": arm, "base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.0",
-            "harness": harness, "components": []}
+            "harness": harness, "components": [{"name": "base-image", "version": "base@sha256:" + "0" * 64},
+                                               {"name": "@anthropic-ai/claude-code", "version": "1.0"}]
+            + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else [])}
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
-            "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": {},
+            "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": arm_manifest(decl),
             "manifest_sha256": ("a" if harness else "b") * 64,
             "harness_ref": ref if harness else None, "harness_commit": "c" * 40 if harness else None}
 
@@ -210,7 +223,9 @@ def options(tmp, **over):
     opts = {"repo": git_repo(Path(tmp) / "source"), "home": Path(tmp) / "home",
             "model": "claude-test", "tag": "v9.9.9", "reps": 2, "run_cap": 2.0, "spend_cap": 25.0,
             "prices": PRICES, "tmp": str(Path(tmp) / "runs"),
-            "scorer": lambda task, workdir, repo: (True, ""), "stamp": {"date": "2026-01-01"},
+            "scorer": lambda task, workdir, repo: (True, ""),
+            "stamp": {"date": "2026-01-01", "evidence": "exploratory", "pre_registration": None,
+                      "pre_registration_commit": None},
             "arms": {"bare": arm_record("bare"), "harness": arm_record("harness")},
             "network": "model-citizen-arm-egress-test", "proxy": "http://model-citizen-arm-proxy-test:3128",
             "client_env": {"PATH": "/bin", "CLAUDE_CODE_OAUTH_TOKEN": SECRET},
@@ -379,7 +394,7 @@ class ReplayRunTests(unittest.TestCase):
             self.assertEqual(len(launch.calls), 2)
             self.assertEqual([r["error"] for r in rows], [False, True])
 
-    def test_an_errored_run_is_an_error_and_never_a_failure(self):
+    def test_an_errored_run_is_countable_apart_by_its_error_field(self):
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([json.dumps(result(error=True, subtype="error_max_budget_usd")), "garbage",
                              subprocess.TimeoutExpired("claude", 1), json.dumps(result())])
@@ -699,9 +714,14 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertEqual(summary["bare"], {"runs": 4, "errors": 0, "passed": 1.5, "cost_per_passed": 1.5})
         self.assertEqual(summary["harness"]["cost_per_passed"], 0.6)
 
-    def test_errors_sit_outside_both_figures_and_are_counted(self):
+    def test_an_error_is_a_failed_attempt_with_its_cost_and_still_counted_apart(self):
+        """Intention to treat: a crash or a timeout spent money and passed nothing."""
         summary = BENCH.summarise([row("bare", 1, True, 1.0), row("bare", 1, None, 9.0, error=True)])
-        self.assertEqual(summary["bare"], {"runs": 2, "errors": 1, "passed": 1.0, "cost_per_passed": 1.0})
+        self.assertEqual(summary["bare"], {"runs": 2, "errors": 1, "passed": 1.0, "cost_per_passed": 10.0})
+
+    def test_an_error_with_no_readable_cost_leaves_the_figure_undefined(self):
+        summary = BENCH.summarise([row("bare", 1, True, 1.0), row("bare", 1, None, None, error=True)])
+        self.assertEqual(summary["bare"], {"runs": 2, "errors": 1, "passed": 1.0, "cost_per_passed": None})
 
     def test_the_threshold_needs_both_the_ratio_and_the_pass_count(self):
         def pair(harness_cost, harness_passed, bare_passed=4.0):
@@ -777,12 +797,12 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertIn("| 9.9.9 @ aaaaaaa |", text)  # the aggregate columns are untouched
         self.assertNotIn("—", text)
 
-    def test_an_errored_or_unpriced_run_is_left_out_of_its_task_cell(self):
+    def test_an_errored_run_is_priced_into_its_task_cell_and_an_unpriced_one_left_out(self):
         rows = [row("bare", 1, True, 1.0, task="alpha"), row("bare", 2, None, 9.0, True, task="alpha"),
-                row("harness", 1, True, 0.5, task="alpha")]
+                row("bare", 3, None, None, True, task="alpha"), row("harness", 1, True, 0.5, task="alpha")]
         cells = BENCH.per_task(rows)
-        self.assertEqual((cells["alpha"]["bare"], cells["alpha"]["bare_spread"]), (1.0, None))
-        self.assertEqual(cells["alpha"]["n"], 2)  # the rep happened, even though it priced nothing
+        self.assertEqual((cells["alpha"]["bare"], cells["alpha"]["bare_spread"]), (5.0, 9.0))
+        self.assertEqual(cells["alpha"]["n"], 3)  # every rep happened, even the one that priced nothing
 
 
 class ArmFingerprintTests(unittest.TestCase):

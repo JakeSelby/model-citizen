@@ -49,6 +49,9 @@ contract are in `docs/bmad-governance.md`, which every BMad workflow loads.
   current GitHub closing links; verify ownership again immediately before merging.
 - **Code changes** (`bin/harness`, `claude/hooks/*.py`, `tests/`) carry a test with every
   change. Content changes (rules, stances, skill text, docs) are gated by the lint and review.
+- **Every test of cost, efficacy or a change to the system, ad hoc evals included, follows the
+  protocol in `docs/evidence-standard.md`:** pre-registered, in fresh containers, never from a host
+  profile, live checkout or disposable home. Anything else is exploratory and never cited as evidence.
 - Nothing personal, nothing project-specific, nothing copyleft. The lint enforces the first;
   review enforces the rest.
 
