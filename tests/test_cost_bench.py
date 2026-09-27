@@ -161,12 +161,18 @@ def config_tree(root, personal="p" * 64, rules=2):
 
 
 class Launch:
-    """Stands in for the CLI: replays recorded output and records how it was called."""
-    def __init__(self, outputs):
-        self.outputs, self.calls = list(outputs), []
+    """Stands in for Docker: replays recorded output and records how it was called."""
+    def __init__(self, outputs, probe_exit=0):
+        self.outputs, self.calls, self.probes, self.probe_exit = list(outputs), [], [], probe_exit
 
     def __call__(self, command, **kwargs):
+        if BENCH.arms.WORKDIR_PROBE in command:  # the writable-snapshot probe, answered apart
+            self.probes.append(command)
+            return types.SimpleNamespace(stdout="", stderr="touch: cannot touch '/work/x': Permission denied",
+                                         returncode=self.probe_exit)
         self.calls.append((command, kwargs))
+        if command[:2] == ["docker", "rm"]:  # removing a timed-out container prints nothing to replay
+            return types.SimpleNamespace(stdout="", stderr="", returncode=0)
         out = self.outputs.pop(0)
         if isinstance(out, Exception):
             raise out
@@ -183,11 +189,31 @@ def git_repo(root):
     return root
 
 
+# Stands in for the credential's value: it may sit in the Docker client's environment and nowhere
+# else, never on a command line and never in a row.
+SECRET = "sk-ant-oat01-never-on-a-command-line"
+
+
+def arm_record(arm, ref="v9.9.9"):
+    """An arm as `replay_arms.build_arm` returns it, without a daemon."""
+    harness = {"ref": ref, "commit": "c" * 40} if arm == "harness" else None
+    decl = {"schema": 1, "arm": arm, "base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.0",
+            "harness": harness, "components": []}
+    return {"arm": arm, "label": "harness@" + ref if harness else "bare",
+            "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
+            "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": {},
+            "manifest_sha256": ("a" if harness else "b") * 64,
+            "harness_ref": ref if harness else None, "harness_commit": "c" * 40 if harness else None}
+
+
 def options(tmp, **over):
-    opts = {"repo": git_repo(Path(tmp) / "source"), "home": Path(tmp) / "home", "claude": "claude",
-            "model": "claude-test", "tag": "candidate", "reps": 2, "run_cap": 2.0, "spend_cap": 25.0,
-            "prices": PRICES, "bare_config": Path(tmp) / "bare", "tmp": str(Path(tmp) / "runs"),
+    opts = {"repo": git_repo(Path(tmp) / "source"), "home": Path(tmp) / "home",
+            "model": "claude-test", "tag": "v9.9.9", "reps": 2, "run_cap": 2.0, "spend_cap": 25.0,
+            "prices": PRICES, "tmp": str(Path(tmp) / "runs"),
             "scorer": lambda task, workdir, repo: (True, ""), "stamp": {"date": "2026-01-01"},
+            "arms": {"bare": arm_record("bare"), "harness": arm_record("harness")},
+            "network": "model-citizen-arm-egress-test", "proxy": "http://model-citizen-arm-proxy-test:3128",
+            "client_env": {"PATH": "/bin", "CLAUDE_CODE_OAUTH_TOKEN": SECRET},
             "skip_preflight": True}  # the pre-flight has its own tests; these count scored launches
     (Path(tmp) / "runs").mkdir()
     opts["repo"].parent.joinpath("home").mkdir()
@@ -195,75 +221,57 @@ def options(tmp, **over):
     return opts
 
 
-class ReplayArmTests(unittest.TestCase):
-    def test_an_arm_gets_a_scrubbed_environment_and_only_bare_gets_the_profile(self):
-        base = {"HOME": "/h", "USER": "u", "PATH": "/bin", "ANTHROPIC_BASE_URL": "x", "CLAUDE_CODE_SSE_PORT": "1"}
-        self.assertEqual(BENCH.arm_env("harness", "/bare", base=base),
-                         {"HOME": "/h", "USER": "u", "PATH": "/bin", "TERM": "dumb"})
-        self.assertEqual(BENCH.arm_env("bare", "/bare", "frugal", base=base)["CLAUDE_CONFIG_DIR"], "/bare")
-        self.assertNotIn("HARNESS_STANCE_COST", BENCH.arm_env("bare", "/bare", "frugal", base=base))
-        self.assertEqual(BENCH.arm_env("harness", "/bare", "frugal", base=base)["HARNESS_STANCE_COST"], "frugal")
+def mounts(command):
+    return [command[i + 1] for i, part in enumerate(command) if part == "-v"]
 
-    def test_a_named_harness_profile_is_the_only_thing_that_isolates_that_arm(self):
-        """Without one the harness arm inherits the live ~/.claude through HOME, so the owner's
-        personal layer joins the comparison. The profile cannot be a copy: the credential is keyed
-        on the directory's absolute path, so only a directory signed into directly is authenticated."""
-        base = {"HOME": "/h", "USER": "u", "PATH": "/bin"}
-        self.assertNotIn("CLAUDE_CONFIG_DIR", BENCH.arm_env("harness", "/bare", base=base))
-        isolated = BENCH.arm_env("harness", "/bare", base=base, harness_config="/harness")
-        self.assertEqual(isolated["CLAUDE_CONFIG_DIR"], "/harness")
-        self.assertEqual(BENCH.arm_env("bare", "/bare", base=base, harness_config="/harness")
-                         ["CLAUDE_CONFIG_DIR"], "/bare")
-        self.assertEqual(BENCH.arm_env("harness", "/bare", "frugal", base=base,
-                                       harness_config="/harness")["HARNESS_STANCE_COST"], "frugal")
+
+def env_flags(command):
+    return [command[i + 1] for i, part in enumerate(command) if part == "-e"]
+
+
+class ReplayArmTests(unittest.TestCase):
+    def test_both_arms_get_the_same_variables_bar_the_harness_arms_stance_override(self):
+        bare = BENCH.arm_env("bare", "frugal", "http://proxy:3128")
+        harness = BENCH.arm_env("harness", "frugal", "http://proxy:3128")
+        self.assertNotIn("HARNESS_STANCE_COST", bare)
+        self.assertEqual(harness.pop("HARNESS_STANCE_COST"), "frugal")
+        self.assertEqual(bare, harness)
+        for name in ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "PATH"):
+            self.assertNotIn(name, bare)  # the image's own HOME; the credential goes by name
+        self.assertEqual(bare["HTTPS_PROXY"], "http://proxy:3128")
+        self.assertEqual(bare["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1")
 
     def test_every_arm_runs_one_command_with_the_required_flags(self):
         command = BENCH.arm_command("claude", "claude-test", "prompt")
         for flag in ("--strict-mcp-config", "--no-session-persistence", "--verbose"):
             self.assertIn(flag, command)
-        for flag, value in (("--model", "claude-test"), ("--output-format", "stream-json"), ("--max-budget-usd", "2")):
+        for flag, value in (("--model", "claude-test"), ("--output-format", "stream-json"),
+                            ("--max-budget-usd", "2"), ("--permission-mode", "bypassPermissions")):
             self.assertEqual(command[command.index(flag) + 1], value)
-        fence = json.loads(command[command.index("--settings") + 1])["sandbox"]
-        self.assertTrue(fence["enabled"] and fence["network"]["strictAllowlist"])
-        self.assertFalse(fence["allowUnsandboxedCommands"])
+        self.assertEqual(json.loads(command[command.index("--settings") + 1]),
+                         {"permissions": {"deny": ["WebFetch", "WebSearch"]}})
 
-    def test_the_fence_admits_the_arms_own_profile_and_the_scratch_directory(self):
-        """An arm on a bench profile has to be able to write it: this repository's own suite writes
-        under the config directory and under /tmp, and a fence that admits neither fails the gate
-        for that arm alone."""
-        bench = json.loads(BENCH.arm_command("claude", "claude-test", "p", 2.0,
-                                             "/b/.claude-bench-harness")[-1])["sandbox"]["filesystem"]
-        for key in ("allowWrite", "allowRead"):
-            self.assertEqual(sorted(bench[key]), sorted(["/b/.claude-bench-harness"] + list(BENCH.SCRATCH_DIRS)))
-        self.assertEqual(bench["denyRead"], BENCH.DENY_READ)
-
-    def test_an_arm_with_no_profile_of_its_own_gets_the_clis_default_one(self):
-        inherited = BENCH.fence()["sandbox"]["filesystem"]
-        self.assertEqual(sorted(inherited["allowWrite"]), sorted(list(BENCH.SCRATCH_DIRS) + ["~/.claude"]))
-        self.assertEqual(inherited["allowWrite"], inherited["allowRead"])
-        self.assertEqual(BENCH.fence("")["sandbox"]["filesystem"]["allowRead"], ["~/.claude"] + list(BENCH.SCRATCH_DIRS))
-
-    def test_a_workdir_under_home_in_a_checkout_or_below_instructions_is_refused(self):
+    def test_a_run_is_a_fresh_container_with_the_snapshot_its_only_mount(self):
+        """#428: no arm reads the host's home. The run is `docker run --rm` of the arm's image on
+        the egress network, with the snapshot mounted and nothing else, and the credential named
+        but never valued on the command line."""
         with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp).resolve()
-            for name in ("home/x", "checkout/.git", "tainted/CLAUDE.md", "clean"):
-                (tmp / name).mkdir(parents=True)
-            home = tmp / "home"
-            self.assertIn("under the home", BENCH.unsafe_workdir(home / "x" / "run", home))
-            self.assertIn("inside the checkout", BENCH.unsafe_workdir(tmp / "checkout" / "run", home))
-            self.assertIn("would inherit", BENCH.unsafe_workdir(tmp / "tainted" / "run", home))
-            self.assertIsNone(BENCH.unsafe_workdir(tmp / "clean" / "run", home))
-
-    def test_the_recorded_harness_is_the_checkout_the_install_links_to_or_nothing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp).resolve()
-            for name in ("checkout/bin", "checkout/claude", "home/.claude"):
-                (tmp / name).mkdir(parents=True)
-            (tmp / "checkout" / "bin" / "harness").write_text("", encoding="utf-8")
-            (tmp / "checkout" / "claude" / "CLAUDE.md").write_text("", encoding="utf-8")
-            self.assertIsNone(BENCH.installed_harness(tmp / "home"))
-            (tmp / "home" / ".claude" / "CLAUDE.md").symlink_to(tmp / "checkout" / "claude" / "CLAUDE.md")
-            self.assertEqual(BENCH.installed_harness(tmp / "home"), tmp / "checkout")
+            launch = Launch([json.dumps(result())] * 2)
+            opts = options(tmp, reps=1)
+            BENCH.replay([TASK], opts, launch)
+            for (command, kwargs), arm in zip(launch.calls, ("bare", "harness")):
+                self.assertEqual(command[:3], ["docker", "run", "--rm"])
+                self.assertEqual(command[command.index("--network") + 1], opts["network"])
+                self.assertIn(opts["arms"][arm]["image"], command)
+                self.assertEqual(len(mounts(command)), 1)
+                self.assertTrue(mounts(command)[0].endswith(":/work"))
+                self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", env_flags(command))
+                self.assertNotIn(SECRET, " ".join(command))
+                self.assertNotIn(str(Path.home()), " ".join(command))
+                self.assertNotIn("cwd", kwargs)
+                self.assertEqual(kwargs["env"]["CLAUDE_CODE_OAUTH_TOKEN"], SECRET)  # the client's only
+                self.assertIn("HTTPS_PROXY=" + opts["proxy"], env_flags(command))
+                self.assertIn("no-new-privileges", command)
 
     def test_a_snapshot_keeps_the_history_its_gate_needs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,39 +399,41 @@ class ReplayRunTests(unittest.TestCase):
             self.assertEqual([(r["error"], r["passed"], r["error_kind"]) for r in rows],
                              [(True, None, "check: KeyError")] * 2)
 
-    def test_a_run_starts_in_a_removed_clone_with_the_arm_environment(self):
+    def test_a_run_starts_in_a_removed_clone_mounted_into_the_arms_own_image(self):
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([json.dumps(result())] * 4)
             opts = options(tmp)
             BENCH.replay([TASK], opts, launch)
             command, kwargs = launch.calls[0]
-            self.assertEqual(command[2], "do\nit")
-            self.assertEqual(kwargs["env"]["CLAUDE_CONFIG_DIR"], str(opts["bare_config"]))
-            self.assertNotIn("CLAUDE_CONFIG_DIR", launch.calls[1][1]["env"])
-            self.assertFalse(Path(kwargs["cwd"]).exists())
+            self.assertEqual(command[command.index("-p") + 1], "do\nit")
+            self.assertIn("model-citizen-arm-bare:test", command)
+            self.assertIn("model-citizen-arm-harness:test", launch.calls[1][0])
+            workdir = mounts(command)[0].rsplit(":", 1)[0]
+            self.assertFalse(Path(workdir).exists())
             self.assertEqual(list(Path(opts["tmp"]).iterdir()), [])
 
-    def test_a_row_records_which_instruction_layer_its_arm_launched_with(self):
+    def test_a_row_records_the_container_its_arm_ran_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             opts = options(tmp, reps=1, change_note="raised the effort dial")
-            config_tree(opts["bare_config"])
-            config_tree(Path(opts["home"]) / ".claude", personal="p" * 8, rules=1)
             stream = json.dumps([call(None, ["Bash", "Task"], write=1234), result()])
             rows, _ = BENCH.replay([TASK], opts, Launch([stream] * 2))
             bare = [r for r in rows if r["arm"] == "bare"][0]
             harness = [r for r in rows if r["arm"] == "harness"][0]
-            self.assertEqual(bare["arm_config_dir"], str(opts["bare_config"]))
-            self.assertEqual(harness["arm_config_dir"], "inherited")  # no CLAUDE_CONFIG_DIR: ~/.claude
-            self.assertEqual(bare["arm_fingerprint"]["rules"], 2)
-            self.assertEqual(bare["arm_fingerprint"]["personal_bytes"], 64)
-            self.assertEqual(harness["arm_fingerprint"]["rules"], 1)
-            self.assertNotEqual(bare["arm_fingerprint"]["sha"], harness["arm_fingerprint"]["sha"])
-            self.assertEqual(bare["fingerprint_source"], "launch")
+            self.assertNotIn("arm_label", harness)  # `harness@<dotted ref>` reads as an email to the lint
+            self.assertEqual(bare["arm_image_id"], opts["arms"]["bare"]["image_id"])
+            self.assertEqual(harness["arm_manifest_sha256"], "a" * 64)
+            self.assertEqual(harness["arm_declaration_sha256"], "d" * 64)
+            self.assertEqual((harness["harness_ref"], harness["harness_commit"]), ("v9.9.9", "c" * 40))
+            self.assertEqual((bare["harness_ref"], bare["harness_commit"]), (None, None))
+            self.assertEqual(bare["arm_base_image"], "base@sha256:" + "0" * 64)
+            for gone in ("arm_config_dir", "arm_fingerprint", "fingerprint_source"):
+                self.assertNotIn(gone, bare)  # host-profile fields: no arm has a host profile now
             for row in rows:
                 self.assertEqual(row["change_note"], "raised the effort dial")
                 self.assertEqual((row["first_call_cache_write"], row["spawns"]), (1234, 1))
                 self.assertEqual(row["tool_counts"], {"Bash": 1, "Task": 1})
                 self.assertIsNone(row["hook_blocks"])
+                self.assertNotIn(SECRET, json.dumps(row))
 
     def test_an_errored_row_carries_the_arm_fields_and_no_stream_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,14 +441,100 @@ class ReplayRunTests(unittest.TestCase):
             self.assertEqual([r["error"] for r in rows], [True, True])
             self.assertEqual(rows[0]["tool_counts"], {})
             self.assertIsNone(rows[0]["spawns"])
-            self.assertEqual(rows[0]["arm_fingerprint"]["rules"], 0)
+            self.assertEqual(rows[0]["arm_manifest_sha256"], "b" * 64)
 
-    def test_a_run_under_the_home_directory_is_refused_before_launching(self):
+    def test_a_run_that_times_out_has_its_container_removed_by_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([subprocess.TimeoutExpired("docker", 1), json.dumps(result())])
+            rows, _ = BENCH.replay([TASK], options(tmp, reps=1), launch)
+            run, kill = launch.calls[0][0], launch.calls[1][0]
+            name = run[run.index("--name") + 1]
+            self.assertTrue(name.startswith("model-citizen-arm-run-"))
+            self.assertEqual(kill, ["docker", "rm", "--force", name])
+            self.assertEqual(rows[0]["error_kind"], "timeout")
+
+    def test_each_arm_must_write_its_mounted_snapshot_before_anything_is_measured(self):
+        """A snapshot made by another user id can be read-only to the image's user, or refused by
+        git as dubious ownership. The replay fails closed rather than measure a broken arm."""
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([json.dumps(result())] * 2)
+            BENCH.replay([TASK], options(tmp, reps=1), launch)
+            self.assertEqual(len(launch.probes), 2)
+            for probe, arm in zip(launch.probes, ("bare", "harness")):
+                self.assertIn("model-citizen-arm-%s:test" % arm, probe)
+                self.assertEqual(probe[probe.index("--network") + 1], "none")
+                self.assertEqual(len(mounts(probe)), 1)
+                self.assertIn("--name", probe)
+            refused = Launch([], probe_exit=1)
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], options(Path(tmp) / "again", reps=1), refused)
+            self.assertIn("cannot write the mounted snapshot", str(caught.exception))
+            self.assertIn("Permission denied", str(caught.exception))
+            self.assertEqual(refused.calls, [])
+
+    def test_a_mounted_snapshot_is_writable_by_any_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            clone = BENCH.mounted_snapshot(repo, "HEAD", Path(tmp) / "clone")
+            for path in [clone] + list(clone.rglob("*")):
+                if not path.is_symlink():
+                    self.assertEqual(path.stat().st_mode & 0o006, 0o006, path)
+            self.assertTrue((clone / ".git").stat().st_mode & 0o001)
+
+    def test_a_check_that_times_out_has_its_container_removed_by_name(self):
+        calls = []
+
+        def launch(command, **kwargs):
+            calls.append(command)
+            if command[:2] == ["docker", "run"]:
+                raise subprocess.TimeoutExpired("docker", 1)
+            return types.SimpleNamespace(stdout="", stderr="", returncode=0)
+        issue = dict(TASK, kind="issue", good_sha="HEAD", tests={"copy": [], "pattern": "test_*.py"})
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                BENCH.score(issue, tmp, tmp, "model-citizen-arm-bare:test", launch)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                BENCH.repo_gate(tmp, [["python3", "bin/harness", "lint"]], "model-citizen-arm-bare:test", launch)
+        runs = [c for c in calls if c[:2] == ["docker", "run"]]
+        kills = [c for c in calls if c[:2] == ["docker", "rm"]]
+        self.assertEqual(len(runs), 2)
+        for run, kill in zip(runs, kills):
+            name = run[run.index("--name") + 1]
+            self.assertTrue(name.startswith("model-citizen-arm-run-"))
+            self.assertEqual(kill, ["docker", "rm", "--force", name])
+        self.assertNotEqual(runs[0][runs[0].index("--name") + 1], runs[1][runs[1].index("--name") + 1])
+
+    def test_an_arm_the_admission_seam_refuses_launches_nothing(self):
+        """`replay_arms.admit` is the one place an arm is refused before anything of it runs."""
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([])
-            with self.assertRaises(SystemExit):
-                BENCH.replay([TASK], options(tmp, home=Path(tmp)), launch)
+            opts = options(tmp)
+            opts["arms"]["harness"] = dict(opts["arms"]["harness"], manifest_sha256="")
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], dict(opts, skip_preflight=False), launch)
+            self.assertIn("manifest_sha256", str(caught.exception))
             self.assertEqual(launch.calls, [])
+
+    def test_by_default_the_check_runs_in_a_bare_container_with_no_network_or_credential(self):
+        """The agent's tree is unreviewed code and a check executes it, so it never runs here."""
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp, reps=1)
+            del opts["scorer"]
+            oracle = opts["repo"] / BENCH.ORACLES / "none.py"
+            oracle.parent.mkdir(parents=True)
+            oracle.write_text("def check(root):\n    return []\n", encoding="utf-8")
+            verdict = BENCH.ORACLE_MARK + "[]\n"
+            launch = Launch([json.dumps(result()), verdict, json.dumps(result()), verdict])
+            rows, _ = BENCH.replay([TASK], opts, launch)
+            self.assertEqual([r["passed"] for r in rows], [True, True])
+            for command, kwargs in (launch.calls[1], launch.calls[3]):
+                self.assertIn("model-citizen-arm-bare:test", command)
+                self.assertEqual(command[command.index("--network") + 1], "none")
+                self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env_flags(command))
+                self.assertEqual(len(mounts(command)), 1)
+                self.assertEqual(command[-2:], ["python3", "-"])
+                self.assertIn("-i", command)  # Docker drops stdin without it, and the oracle is on stdin
+                self.assertIn("def check(root)", kwargs["input"])
 
 
 def gate_reply(text, cost=0.1):
@@ -456,7 +552,7 @@ RED = "tests/test_x.py:1: home-directory path\nlint: 1 finding(s) in /repo\n"
 
 
 class ReplayPreflightTests(unittest.TestCase):
-    """The gate runs once per arm, in that arm's own profile and fence, before anything is scored."""
+    """The gate runs once per arm, in that arm's own container, before anything is scored."""
     def preflight_calls(self, launch):
         return [c for c in launch.calls if BENCH.PREFLIGHT_PROMPT in c[0]]
 
@@ -503,7 +599,7 @@ class ReplayPreflightTests(unittest.TestCase):
             self.assertEqual([c["reply"] for c in checks], ["", "timeout"])
             self.assertEqual(spent, 0.5)  # a run with no readable cost is counted at its own cap
 
-    def test_a_green_gate_stamps_every_scored_row_and_runs_each_arms_own_fence(self):
+    def test_a_green_gate_stamps_every_scored_row_and_runs_in_each_arms_own_container(self):
         with tempfile.TemporaryDirectory() as tmp:
             opts = options(tmp, reps=1, skip_preflight=False)
             launch = Launch([gate_reply(GREEN)] * 2 + [json.dumps(result())] * 2)
@@ -512,15 +608,13 @@ class ReplayPreflightTests(unittest.TestCase):
             self.assertEqual([r["preflight"] for r in rows], ["passed"] * 2)
             checks = self.preflight_calls(launch)
             self.assertEqual(len(checks), 2)
-            for command, kwargs in checks:
+            for (command, kwargs), arm in zip(checks, ("bare", "harness")):
                 self.assertEqual(command[command.index("--max-turns") + 1], "3")
                 self.assertEqual(command[command.index("--max-budget-usd") + 1], "0.25")
                 self.assertEqual(command[command.index("--model") + 1], "claude-test")
-                fence = json.loads(command[command.index("--settings") + 1])["sandbox"]["filesystem"]
-                self.assertEqual(sorted(fence["allowWrite"]),
-                                 sorted([kwargs["env"].get("CLAUDE_CONFIG_DIR", "~/.claude")] + list(BENCH.SCRATCH_DIRS)))
-            self.assertEqual(checks[0][1]["env"]["CLAUDE_CONFIG_DIR"], str(opts["bare_config"]))
-            self.assertNotIn("CLAUDE_CONFIG_DIR", checks[1][1]["env"])
+                self.assertIn(opts["arms"][arm]["image"], command)
+                self.assertEqual(len(mounts(command)), 1)
+                self.assertNotIn(SECRET, " ".join(command))
 
     def test_the_pre_flight_spends_against_the_same_cumulative_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -538,7 +632,7 @@ class ReplayPreflightTests(unittest.TestCase):
             self.assertEqual([r["preflight"] for r in rows], ["skipped"] * 2)
             self.assertEqual(self.preflight_calls(launch), [])
             scored = json.loads(launch.calls[0][0][launch.calls[0][0].index("--settings") + 1])
-            self.assertIn(str(opts["bare_config"]), scored["sandbox"]["filesystem"]["allowWrite"])
+            self.assertEqual(scored, BENCH.ARM_SETTINGS)
 
 
 def row(arm, rep, passed, cost, error=False, bucket="", predicted=None, task="demo", note=""):
@@ -549,21 +643,52 @@ def row(arm, rep, passed, cost, error=False, bucket="", predicted=None, task="de
 
 
 class FixtureGateTests(unittest.TestCase):
+    """`--verify-tasks` runs the task's gate and every check in the bare arm's container. On this
+    machine an older snapshot read the owner's live configuration through HOME and went red for
+    it, charging every task's gate with a failure that was the host's."""
+    def verify(self, tmp, gate_exit=1, verdicts=('["no"]', '["no"]')):
+        repo = git_repo(Path(tmp) / "source")
+        oracle = repo / BENCH.ORACLES / "none.py"
+        oracle.parent.mkdir(parents=True)
+        oracle.write_text("def check(root):\n    return ['no']\n\n\ndef solve(root):\n    pass\n",
+                          encoding="utf-8")
+        answers, calls = list(verdicts), []
+
+        def launch(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-2:] == ["python3", "-"]:
+                return types.SimpleNamespace(stdout=BENCH.ORACLE_MARK + answers.pop(0) + "\n", returncode=0)
+            return types.SimpleNamespace(stdout="", returncode=gate_exit)
+        task = dict(TASK, parent_sha="HEAD", tests={"oracle": "none"})
+        errors = BENCH.verify_tasks([task], repo, Path(tmp) / "work", "model-citizen-arm-bare:test",
+                                    [["python3", "bin/harness", "lint"]], launch)
+        return errors, calls
+
     def test_a_red_gate_in_a_clean_snapshot_is_reported_against_the_task_not_the_agent(self):
-        calls = []
-        real, real_oracle = BENCH.repo_gate, BENCH._oracle
-        BENCH.repo_gate = lambda workdir, commands, python=None: calls.append(1) or [("gate", 1)]
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                repo = git_repo(Path(tmp) / "source")
-                task = dict(TASK, parent_sha="HEAD", tests={"oracle": "none"})
-                BENCH._oracle = lambda r, n: types.SimpleNamespace(check=lambda root: ["no"],
-                                                                   solve=lambda root: None)
-                errors = BENCH.verify_tasks([task], repo, Path(tmp) / "work", [["gate"]])
-            self.assertTrue(calls)
-            self.assertIn("already fails in a clean snapshot", errors[0])
-        finally:
-            BENCH.repo_gate, BENCH._oracle = real, real_oracle
+        with tempfile.TemporaryDirectory() as tmp:
+            errors, _ = self.verify(tmp)
+        self.assertIn("already fails in a clean snapshot", errors[0])
+        self.assertIn("fails on the known-good tree", errors[-1])
+
+    def test_the_gate_and_every_check_run_in_the_bare_container_with_no_host_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors, calls = self.verify(tmp, gate_exit=0, verdicts=("[\"no\"]", "[]"))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(calls), 3)  # the gate, the check at the parent, the check once solved
+        home = str(Path.home())
+        for command, kwargs in calls:
+            self.assertEqual(command[:3], ["docker", "run", "--rm"])
+            self.assertIn("model-citizen-arm-bare:test", command)
+            self.assertEqual(command[command.index("--network") + 1], "none")
+            self.assertEqual(len(mounts(command)), 1)
+            self.assertTrue(mounts(command)[0].endswith(":/work"))
+            self.assertFalse([f for f in env_flags(command) if f.split("=", 1)[0] in
+                              ("HOME", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN")])
+            self.assertNotIn(home, " ".join(c for c in command if not c.endswith(":/work")))
+            self.assertNotIn("cwd", kwargs)
+        gate = calls[0][0]
+        self.assertEqual(gate[-3:], ["python3", "bin/harness", "lint"])
+        self.assertIn("PYTHONPATH=/work/lib", env_flags(gate))
 
 
 class ReplaySummaryTests(unittest.TestCase):

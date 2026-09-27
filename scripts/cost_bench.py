@@ -7,22 +7,23 @@ estimate from characters (`CHARS_PER_TOKEN`), good for a trend between versions 
 billing; dollars come from `policy/prices.json`. Codex is not counted: its instructions are
 rendered at sync time.
 
-`replay` runs pinned tasks headlessly against a bare profile and against the harness, either the
-installed one or a pinned git ref of this repository synced into a config directory of its own, one
-history row per `--tag`. It reads cost from the CLI's own JSON result and scores each run with a
-held-back check. It calls a model and spends real usage. Reading and limits: docs/benchmarks.md.
+`replay` runs pinned tasks headlessly in two fresh containers, a bare arm and the harness at a
+pinned git ref of this repository, one history row per `--tag`. Nothing from the machine running
+it reaches either arm (`replay_arms.py`). It reads cost from the CLI's own JSON result and scores
+each run with a held-back check, itself run in a fresh container. It calls a model and spends real
+usage. `arms` builds and checks the arm images without calling a model. Reading and limits:
+docs/benchmarks.md.
 """
 import argparse
-import contextlib
 import datetime
 import hashlib
 import importlib.util
+import itertools
 import json
 import os
 import platform
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 from harness_core import cache_prefix  # noqa: E402  the ledger's miss ratio, one definition
 from harness_core import catalog  # noqa: E402  the resolver the hooks load, for the profile fingerprint
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -54,39 +57,32 @@ TASKS = Path("benchmarks") / "tasks.json"
 ORACLES = Path("benchmarks") / "oracles"
 HISTORY = Path("benchmarks") / "history.jsonl"
 HISTORY_MD = Path("benchmarks") / "history.md"
-ARMS = ("bare", "harness")
+ARMS = arms.ARMS
 SNAPSHOT_BRANCH = "main"
 # This repository's own gate, as AGENTS.md names it: a snapshot must pass it before any arm runs.
+# Each command runs in a container of the bare arm, where `python3` is the image's own.
 GATE_COMMANDS = (["python3", "bin/harness", "lint"], ["python3", "-m", "unittest", "discover", "-s", "tests"])
 RUN_CAP_USD = 2.0
 SPEND_CAP_USD = 25.0
 THRESHOLD = 0.85
 RUN_TIMEOUT = 1800
 CHECK_TIMEOUT = 900
-SYNC_TIMEOUT = 900
-# The harness the user has installed, run as it stands: the one tag that syncs nothing.
-CANDIDATE = "candidate"
 KEPT_ENV = ("HOME", "USER", "PATH", "TERM")
 TOKEN_KINDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 MODEL_USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "cacheReadInputTokens")
-# Every arm is fenced the same way: no network, no credential reads. What differs is the profile
-# the fence admits, which is the arm's own; see `fence`.
-DENY_READ = ["~/.ssh", "~/.aws", "~/.config/gh"]
-# The web tools run in the CLI's own process, not under the command sandbox, so the fence's empty
-# network allowlist does not reach them; a profile's permission rules do. Both arms are denied them
-# whatever their profile allows, since a deny rule outranks any profile's allow.
+# The web tools run in the CLI's own process and would reach the web through the egress proxy's
+# refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
+# the harness arm's settings carry.
 NO_WEB = ("WebFetch", "WebSearch")
-# Where `harness trust` records the roots the stop-gate hook may run a gate in, under HOME.
-TRUST_FILE = Path(".config") / "agent-harness" / "trusted.txt"
-DEFAULT_CONFIG_DIR = "~/.claude"
-# The sandbox matches resolved paths: on macOS `/tmp` is a link to `/private/tmp`, and a rule
-# naming the link does not admit the target. Admit both spellings, deduplicated.
-SCRATCH_DIRS = tuple(dict.fromkeys(["/tmp", os.path.realpath("/tmp")]))
+ARM_SETTINGS = {"permissions": {"deny": list(NO_WEB)}}
+# The container is the fence: no host path but the snapshot, no way out but the model API. Inside
+# it the agent acts without prompts, as a headless run cannot answer one.
+PERMISSION_MODE = "bypassPermissions"
 # The gate this repository's AGENTS.md names, run inside the fence and reported as its own last line.
 # The suite's own stdout is block-buffered under a pipe and lands after unittest's stderr summary,
 # so the last line of `2>&1` is noise, not the verdict. Filter to the verdict lines and judge the
 # tool's output directly rather than whatever the model chose to relay.
-# The bar the prompts set, and no more: lint under the arm's own fence. The full suite is
+# The bar the prompts set, and no more: lint inside the arm's own container. The full suite is
 # profile-dependent at every snapshot commit (`claude_dir()` lets CLAUDE_CONFIG_DIR override the
 # tests' isolation), so demanding it here measures the profile, not the harness.
 PREFLIGHT_PROMPT = "Run exactly this and reply with its output: `python3 bin/harness lint`"
@@ -94,7 +90,7 @@ PREFLIGHT_CAP_USD = 0.25
 PREFLIGHT_TURNS = 3
 PREFLIGHT_RED = re.compile(r"PermissionError|Operation not permitted", re.M)
 INHERITED = "inherited"
-# What an arm actually loads: the always-on layer, the listed layer, and the personal file.
+# What a profile directory loads, for `backfill` of rows from before arms were containers.
 CONFIG_GLOBS = ("CLAUDE.md", "CLAUDE.personal.md", "rules/**/*.md", "skills/*/SKILL.md",
                 "agents/*.md", "output-styles/*.md")
 SPAWN_TOOLS = ("Task", "Agent")
@@ -281,23 +277,8 @@ def prompt_of(task):
     return "\n".join(task["prompt"]) if isinstance(task["prompt"], list) else task["prompt"]
 
 
-def unsafe_workdir(path, home):
-    """Why a run must not start in `path`, or None. A folder under the home directory inherits the
-    user's instruction files through the parent-folder walk, which contaminates the bare arm."""
-    path, home = Path(path).resolve(), Path(home).resolve()
-    if path == home or home in path.parents:
-        return "%s is under the home directory" % path
-    for parent in path.parents:
-        if (parent / ".git").exists():
-            return "%s is inside the checkout %s" % (path, parent)
-        for name in ("CLAUDE.md", "CLAUDE.local.md", ".claude"):
-            if (parent / name).exists():
-                return "%s would inherit %s" % (path, parent / name)
-    return None
-
-
 def scrubbed_env(extra=None, base=None):
-    """A shell inside an agent session carries that session's variables; an arm gets none of them."""
+    """A shell inside an agent session carries that session's variables; git and the checks get none of them."""
     base = os.environ if base is None else base
     env = {name: base[name] for name in KEPT_ENV if name in base}
     env.setdefault("TERM", "dumb")
@@ -305,19 +286,11 @@ def scrubbed_env(extra=None, base=None):
     return env
 
 
-def arm_env(arm, bare_config, stance_cost=None, base=None, harness_config=None):
-    """Each arm points at its own profile directory.
-
-    A profile is authenticated by its absolute path: the CLI stores the credential in the keychain
-    under `Claude Code-credentials-<sha256(config dir)[:8]>`, so a copied directory is not signed in
-    and cannot be made so by copying files. The harness profile is therefore one the owner signed
-    into once, never a copy of the bare one. With none named the harness arm inherits the live
-    `~/.claude` through HOME, which carries the owner's personal layer into the comparison."""
-    config = bare_config if arm == "bare" else harness_config
-    extra = {"CLAUDE_CONFIG_DIR": str(config)} if config else {}
-    if stance_cost and arm != "bare":
-        extra["HARNESS_STANCE_COST"] = stance_cost
-    return scrubbed_env(extra, base)
+def arm_env(arm, stance_cost=None, proxy=None):
+    """The variables one arm's container is given by value (`replay_arms.arm_env`): the same for
+    both arms, bar the harness arm's stance override. The container's HOME is the image's own,
+    and the credential goes by name alone, so neither is here."""
+    return arms.arm_env(proxy, stance_cost if arm != "bare" else None)
 
 
 def arm_profile(arm, env, opts):
@@ -325,16 +298,17 @@ def arm_profile(arm, env, opts):
 
     The bare arm loads no harness, so it has no profile to digest and says so by name rather than
     by a null a reader would take for a row from before the field. The harness arm's is resolved
-    by this checkout's resolver over the checkout the arm's profile was synced from, in the
-    arm's own environment, so a pinned tag is fingerprinted as the tag. None when it cannot be.
-    HOME is the run's `home`, which is the arm's own outside a test."""
+    by this checkout's resolver over a clone of the commit the arm's image was built from, with
+    `home` an empty directory standing in for the image's, which holds no configuration of the
+    user's either. The arm's manifest digest is the complete record; this is the per-rule view.
+    None when it cannot be resolved."""
     try:
         module = catalog.posture_module(ROOT)
         if arm == "bare":
             return module.BARE_FINGERPRINT
         home = opts.get("home")
         return module.fingerprint(dict(env, HOME=str(home)) if home else env,
-                                  root=Path(opts.get("profile_root") or opts.get("harness_source") or ROOT))
+                                  root=Path(opts.get("profile_root") or ROOT))
     except Exception:
         return None
 
@@ -349,23 +323,14 @@ def arm_attribution(arm, env, opts):
             return {"estimand": module.SOFT_ESTIMATE, "method": module.ATTRIBUTION_METHOD, "modules": {}}
         home = opts.get("home")
         return module.context_attribution(dict(env, HOME=str(home)) if home else env,
-                                          root=Path(opts.get("profile_root") or opts.get("harness_source") or ROOT))
+                                          root=Path(opts.get("profile_root") or ROOT))
     except Exception:
         return None
 
 
-def arm_admits(arm, opts):
-    """What one arm's fence admits beyond its own profile: for the harness arm on a pinned tag, the
-    checkout its profile's links lead to. The bare arm is admitted to no harness content ever."""
-    source = opts.get("harness_source")
-    return [str(source)] if source and arm != "bare" else []
-
-
 def config_label(config_dir, home=None):
-    """The config directory as a row records it: `inherited`, or the path with `$HOME` as `~`.
-
-    A profile normally sits under the home directory, and a literal home path in a row would be a
-    personal string in a file the repository's lint reads. The `~` form names the same directory."""
+    """The config directory as a backfilled row records it: `inherited`, or the path with `$HOME`
+    as `~`, so no literal home path reaches a file the repository's lint reads."""
     if not config_dir:
         return INHERITED
     text, prefix = str(config_dir), str(Path(home) if home else Path.home())
@@ -375,12 +340,12 @@ def config_label(config_dir, home=None):
 
 
 def config_fingerprint(config_dir, home=None):
-    """What an arm's instruction layer was, as sizes: `{sha, rules, skills, agents, personal_bytes}`.
+    """What an instruction layer was, as sizes: `{sha, rules, skills, agents, personal_bytes}`.
 
-    The sha is over the sorted `(relative path, byte size)` pairs of CONFIG_GLOBS under the
-    directory, so two runs with the same sha loaded the same files at the same lengths. Sizes and
-    relative paths only: no content and no home-directory path reaches a row. `INHERITED` means the
-    arm launched with no CLAUDE_CONFIG_DIR and therefore read `$HOME/.claude`."""
+    Used by `backfill` for rows written before arms were containers, which named a profile
+    directory. The sha is over the sorted `(relative path, byte size)` pairs of CONFIG_GLOBS under
+    the directory. Sizes and relative paths only: no content and no home-directory path reaches a
+    row. `INHERITED` means the run read `$HOME/.claude`."""
     root = Path(home or Path.home()) / ".claude" if config_dir in (None, "", INHERITED) \
         else Path(config_dir).expanduser()
     entries = set()
@@ -395,94 +360,66 @@ def config_fingerprint(config_dir, home=None):
             "personal_bytes": dict(listed).get("CLAUDE.personal.md", 0)}
 
 
-def fence(config_dir=None, admit=()):
-    """The settings one arm runs under: no network, no web tools, no credential reads, its own
-    profile writable.
+def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None):
+    """One command line for every arm, run inside its container: the arms differ by image and by
+    nothing else.
 
-    A fence that admits only the CLI's default `~/.claude` handicaps whichever arm was moved to a
-    bench profile, because this repository's own suite writes under the config directory and under
-    `/tmp`; the arm then fails its gate and spends turns on a block the runner imposed. Each arm
-    therefore gets its own directory, and the shared scratch directory, readable and writable.
-    `denyRead` is the same for every arm.
-
-    `admit` names anything else the profile leads to, admitted for reading only. A profile
-    `harness sync` filled is symlinks into the checkout it was synced from, so an arm on a pinned
-    tag reads nothing at all unless that checkout is admitted; and an arm that could write it could
-    rewrite its own rules, skills and hooks in the middle of the run being measured.
-
-    The web tools are denied here rather than left to each profile: see `NO_WEB`."""
-    admitted = [str(config_dir) if config_dir else DEFAULT_CONFIG_DIR] + list(SCRATCH_DIRS)
-    readable = admitted + [str(path) for path in admit if path]
-    return {"permissions": {"deny": list(NO_WEB)},
-            "sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
-                        "network": {"allowedDomains": [], "strictAllowlist": True},
-                        "filesystem": {"denyRead": list(DENY_READ), "allowWrite": list(admitted),
-                                       "allowRead": readable}}}
-
-
-def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, config_dir=None, admit=(), max_turns=None):
-    """One command line for every arm: the arms differ by environment and by their fence's
-    profile, which follows that environment, and by nothing else.
-
-    The output is `stream-json` with hook events, because hook lifecycle events are the only place
-    a Stop hook's decision appears and the CLI emits them in no other format. `max_turns` is the
-    task's own cap; without it a run is bounded only by the soft budget and the timeout."""
+    The container is the fence, so the permission mode lets the agent act without prompts, and
+    the only settings passed deny the web tools, which run in the CLI's own process (`NO_WEB`).
+    The output is `stream-json` with hook events, because hook lifecycle events are the only
+    place a Stop hook's decision appears and the CLI emits them in no other format. `max_turns`
+    is the task's own cap; without it a run is bounded only by the soft budget and the timeout."""
     turns = ["--max-turns", str(int(max_turns))] if max_turns else []
     return [claude, "-p", prompt, "--model", model, "--output-format", "stream-json",
             "--include-hook-events", "--verbose", "--strict-mcp-config", "--no-session-persistence",
-            "--max-budget-usd", "%g" % run_cap, "--permission-mode", "acceptEdits"] + turns + [
-            "--settings", json.dumps(fence(config_dir, admit))]
+            "--max-budget-usd", "%g" % run_cap, "--permission-mode", PERMISSION_MODE] + turns + [
+            "--settings", json.dumps(ARM_SETTINGS)]
 
 
-def trust_path(home):
-    return Path(home) / TRUST_FILE
+_NAMES = itertools.count(1)
 
 
-@contextlib.contextmanager
-def _trust_lock(folder):
-    """An exclusive lock on the trust file's folder, so two replays never interleave their
-    updates. The folder is locked rather than the file, because the cleanup replaces the file."""
-    import fcntl
-    fd = os.open(str(folder), os.O_RDONLY)
+def container_name(*parts):
+    """A container name unique to this process, so one that times out can be stopped by name."""
+    text = "-".join(str(p) for p in parts + (next(_NAMES),))
+    return "%srun-%d-%s" % (arms.IMAGE_PREFIX, os.getpid(), re.sub(r"[^a-zA-Z0-9_.-]", "-", text))
+
+
+def run_check(launch, image, workdir, argv, env=None, name=None, **kwargs):
+    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`).
+    On a timeout the container is removed by name before the timeout is raised on: killing the
+    Docker client alone would leave it running the code it was checking."""
+    name = name or container_name("check")
+    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs)
+    client = arms.client_env()
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(fd)
+        return launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
+                      stderr=subprocess.STDOUT, universal_newlines=True, **kwargs)
+    except subprocess.TimeoutExpired:
+        launch(arms.kill_command(name), env=client, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+               universal_newlines=True)
+        raise
 
 
-@contextlib.contextmanager
-def trusted_run(workdir, home):
-    """The snapshot listed where `harness trust` lists roots, for this run only.
+def mounted_snapshot(repo, sha, dest):
+    """`snapshot`, opened so the image's user can write it (`replay_arms.open_for_image`)."""
+    return arms.open_for_image(snapshot(repo, sha, dest))
 
-    The stop-gate hook runs a repository's gate only in a folder the user trusted, and a fresh
-    snapshot is trusted by nobody, so without this the gate never fires in a replay and the
-    harness arm is measured without one of its own behaviours. Every arm's snapshot is listed,
-    the bare one included, which has no hook to read it, so the arms still differ by profile
-    alone. Afterwards exactly the line added is removed, through an atomic write, and every
-    other root the file holds is kept as it was. Both updates hold `_trust_lock`, so replays
-    running at once cannot restore a root another removed; `harness trust` takes no lock."""
-    path, root = trust_path(home), str(Path(workdir).resolve())
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with _trust_lock(path.parent):
-        existed = path.exists()
-        unterminated = existed and path.stat().st_size and not path.read_bytes().endswith(b"\n")
-        with open(str(path), "a", encoding="utf-8") as handle:
-            handle.write(("\n" if unterminated else "") + root + "\n")
+
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run):
+    """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
+    On a timeout the container is removed before the timeout is raised on, so nothing keeps
+    running or spending after the row is written."""
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"))
+    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name)
+    client = opts.get("client_env") or arms.client_env()
     try:
-        yield root
-    finally:
-        with _trust_lock(path.parent):
-            try:
-                lines = path.read_text(encoding="utf-8").splitlines(True)
-            except OSError:
-                lines = []
-            kept = [line for line in lines if line.strip() != root]
-            if not existed and not "".join(kept).strip():
-                with contextlib.suppress(OSError):
-                    path.unlink()
-            elif len(kept) != len(lines):
-                atomic_write(path, "".join(kept).encode("utf-8"))
+        return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
+                      stderr=subprocess.PIPE, universal_newlines=True)
+    except subprocess.TimeoutExpired:
+        launch(arms.kill_command(name), env=client, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+               universal_newlines=True)
+        raise
 
 
 def _git(repo, *args):
@@ -534,413 +471,6 @@ def resolve_tag(repo, ref):
     if done.returncode or len(sha) != 40:
         raise SystemExit("cost-bench: --tag %s does not name a commit in %s" % (ref, repo))
     return sha
-
-
-def refuse_live_config(config_dir, base=None, bare=None):
-    """SystemExit when a sync target is, holds or sits inside a profile a tag must not write.
-
-    The tagged arm's whole point is a profile nobody else wrote, and `harness sync` rewrites
-    whatever `CLAUDE_CONFIG_DIR` names. Refused: the live profile in both spellings (the default
-    under HOME, and an ambient `CLAUDE_CONFIG_DIR` if this process carries one), any directory
-    inside one, any directory holding one (HOME itself, and every ancestor), and the bare arm's
-    profile, which a sync would turn into a second harness arm."""
-    base = os.environ if base is None else base
-    target = Path(config_dir).expanduser().resolve()
-    live = [Path(base.get("HOME") or Path.home()).expanduser() / ".claude"]
-    if base.get("CLAUDE_CONFIG_DIR"):
-        live.append(Path(base["CLAUDE_CONFIG_DIR"]).expanduser())
-    for path in (p.resolve() for p in live):
-        if target == path or path in target.parents:
-            raise SystemExit("cost-bench: refusing to sync a tag into %s: that is the live profile"
-                             % config_dir)
-        if target in path.parents:
-            raise SystemExit("cost-bench: refusing to sync a tag into %s: it holds the live profile %s"
-                             % (config_dir, path))
-    if bare and Path(bare).expanduser().resolve() == target:
-        raise SystemExit("cost-bench: refusing to sync a tag into %s: that is the bare profile"
-                         % config_dir)
-
-
-# Paths a harness sync leaves in a profile as regular files, beside the links it makes.
-HARNESS_FILES = ("CLAUDE.md", "CLAUDE.personal.md", "rules/harness-stances", "skills/harness-*")
-# Every top-level name `bin/harness sync` writes under the config directory: the files it
-# generates or merges, and the directories it fills with links. A link at one of these is the
-# harness's whatever it leads to; one that leads outside the profile would have the sync write
-# through it, outside anything the undo can see.
-HARNESS_NAMES = ("CLAUDE.md", "CLAUDE.personal.md", "agents", "commands", "hooks", "output-styles",
-                 "plans", "rules", "settings.json", "skills")
-# The one file a sync rewrites in place when the profile already holds it. Everything else it
-# writes is new, or is at a path `harness_residue` refuses beforehand.
-SYNC_MERGES = ("settings.json",)
-# What the CLI keeps a sign-in in. Never copied, written, or deleted here, whatever wrote it and
-# whenever it appeared: a profile that loses one is signed out.
-CREDENTIAL_NAMES = (".credentials.json", ".claude.json")
-# Where a sync records what it wrote, under the HOME it ran with. This is where the harness at
-# HEAD writes; an older tag's sync may record elsewhere, and `undo_sync` checks the profile
-# afterwards rather than trusting the record.
-SYNC_STATE = Path(".local") / "state" / "agent-harness"
-# What the CLI and the owner's other sessions write into a profile during a run, left alone by
-# the undo and not counted as the sync's when the profile is checked afterwards. `skills/synced`
-# is the CLI's own skill packs, which it writes under a harness-managed name.
-RUN_WRITES = ("projects", "todos", "plans", "history.jsonl", "skills/synced")
-
-
-def is_credential(rel):
-    name = Path(rel).name
-    return name in CREDENTIAL_NAMES or name.startswith(CREDENTIAL_NAMES) or "credential" in name.lower()
-
-
-def leads_into_harness(link):
-    """Whether a symlink resolves to somewhere under a checkout holding `bin/harness`."""
-    try:
-        target = Path(link).resolve(strict=True)
-    except (OSError, RuntimeError):
-        return False
-    return any((parent / "bin" / "harness").is_file() for parent in [target] + list(target.parents))
-
-
-def harness_residue(config_dir):
-    """What in `config_dir` a harness sync put there, as relative paths; empty for a clean profile.
-
-    A pinned tag is synced into a profile holding none of it, for two reasons. The sync runs with a
-    HOME of its own and so with an empty manifest, and a sync that finds links it did not record
-    calls them unmanaged and stops with the profile half rewritten. And a profile already carrying
-    another version's layer would mix it into the arm and label the result with the tag.
-
-    A link counts only when it leads into a harness checkout or sits at a name the harness
-    manifest manages; the CLI writes links of its own (`debug/latest`) into a profile it merely
-    signed into, and those are not residue."""
-    root = Path(config_dir).expanduser()
-    found = []
-    for rel, kind in profile_entries(root).items():
-        if kind != "link":
-            continue
-        top = rel.split("/", 1)[0]
-        if top in HARNESS_NAMES or Path(rel).name in HARNESS_NAMES or leads_into_harness(root / rel):
-            found.append(rel)
-    for pattern in HARNESS_FILES:
-        found += sorted(p.relative_to(root).as_posix() for p in root.glob(pattern))
-    settings = root / "settings.json"
-    if settings.is_file() and "hooks/harness" in settings.read_text(encoding="utf-8", errors="replace"):
-        found.append("settings.json")
-    return sorted(set(found))
-
-
-def escapes_profile(config_dir):
-    """Names in HARNESS_NAMES the sync would write through to somewhere outside the profile: any
-    that is a symlink, or whose resolved path is not under the profile's."""
-    root = Path(config_dir).expanduser()
-    try:
-        inside = root.resolve()
-    except OSError:
-        inside = root
-    out = []
-    for name in HARNESS_NAMES:
-        path = root / name
-        if path.is_symlink():
-            out.append(name)
-            continue
-        if not path.exists():
-            continue
-        try:
-            real = path.resolve()
-        except (OSError, RuntimeError):
-            out.append(name)
-            continue
-        if real != inside / name and inside not in real.parents:
-            out.append(name)
-    return out
-
-
-def check_sync_target(config_dir, bare=None, base=None):
-    """Every refusal a named sync target can meet, run before anything is launched or spent."""
-    refuse_live_config(config_dir, base, bare)
-    escaping = escapes_profile(config_dir)
-    if escaping:
-        raise SystemExit("cost-bench: refusing to sync a tag into %s: %s would take the sync's writes "
-                         "outside the profile, where nothing could undo them"
-                         % (config_dir, ", ".join(escaping)))
-    residue = harness_residue(config_dir)
-    if residue:
-        raise SystemExit("cost-bench: refusing to sync a tag into %s: it already holds harness files "
-                         "(%s); a pinned tag needs a signed-in profile with none"
-                         % (config_dir, ", ".join(residue[:5])))
-
-
-def profile_entries(root):
-    """`{relative path: "dir" | "file" | "link" | "other"}` for everything under `root`, no link
-    followed and nothing opened; a socket or a FIFO is `other`."""
-    root, out = Path(root), {}
-    for dirpath, dirnames, filenames in os.walk(str(root), followlinks=False):
-        for name in dirnames + filenames:
-            path = Path(dirpath) / name
-            try:
-                mode = os.lstat(str(path)).st_mode
-            except OSError:
-                continue
-            out[path.relative_to(root).as_posix()] = ("link" if stat.S_ISLNK(mode) else "dir"
-                                                      if stat.S_ISDIR(mode) else "file"
-                                                      if stat.S_ISREG(mode) else "other")
-    return out
-
-
-def _digest(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-
-
-def profile_listing(root):
-    """`{relative path: (kind, detail)}`: a link's target, a regular file's size and mtime, the
-    sha256 as well for the files a sync merges in place, nothing for a directory or anything
-    else. Only a SYNC_MERGES file is ever opened, so a FIFO cannot hang this, nothing else in the
-    profile is read, and an unreadable entry is listed as `(kind, None)` rather than stopping
-    the walk."""
-    root, out = Path(root), {}
-    for rel, kind in profile_entries(root).items():
-        path = root / rel
-        try:
-            if kind == "link":
-                out[rel] = (kind, os.readlink(str(path)))
-            elif kind == "file" and rel in SYNC_MERGES:
-                out[rel] = (kind, (path.stat().st_size, _digest(path)))
-            elif kind == "file":
-                info = path.stat()
-                out[rel] = (kind, (info.st_size, info.st_mtime_ns))
-            else:
-                out[rel] = (kind, None)
-        except OSError:
-            out[rel] = (kind, None)
-    return out
-
-
-def _run_write(rel):
-    """A credential, one of RUN_WRITES, anything under one, or a directory that only exists to
-    hold one (`skills` above `skills/synced`): the run's, never the sync's."""
-    roots = tuple(n + "/" for n in RUN_WRITES)
-    return (is_credential(rel) or rel in RUN_WRITES or rel.startswith(roots)
-            or any(root.startswith(rel + "/") for root in roots))
-
-
-def sync_leftovers(config, before):
-    """Relative paths in `config` the sync could have written that are not as they were before
-    it: an entry under a HARNESS_NAMES name that is new or changed, or a new link anywhere.
-    Credentials and what a run writes for itself (RUN_WRITES) are never counted."""
-    after = profile_listing(config)
-    out = []
-    for rel, entry in after.items():
-        if _run_write(rel) or before.get(rel) == entry:
-            continue
-        if rel.split("/", 1)[0] in HARNESS_NAMES or entry[0] == "link":
-            out.append(rel)
-    return sorted(out)
-
-
-def atomic_write(path, data):
-    """Write `data` to `path` through a temp file in the same directory, fsync and rename, so a
-    full disk or an interrupt leaves either the old bytes or the new ones and never a stump."""
-    path = Path(path)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix="." + path.name + ".")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        if path.exists():
-            os.chmod(tmp, path.stat().st_mode & 0o7777)
-        os.replace(tmp, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-def copy_aside(config, dest, listing):
-    """Copy the files a sync rewrites in place into `dest`; the relative paths copied.
-
-    Only those files: a credential file is never copied, so nothing here can ever write one back.
-    The copy is built under a temporary name and re-read afterwards, and it counts as a copy only
-    when every byte matches; a copy that failed halfway is not one the restore may use."""
-    config, dest = Path(config), Path(dest)
-    partial = dest.with_name(dest.name + ".partial")
-    partial.mkdir(parents=True)
-    copied = [rel for rel in SYNC_MERGES if listing.get(rel, ("",))[0] == "file"
-              and listing[rel][1] is not None and not is_credential(rel)]
-    for rel in copied:
-        (partial / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(str(config / rel), str(partial / rel))
-    for rel in copied:
-        if _digest(partial / rel) != listing[rel][1][1]:
-            raise RuntimeError("the copy of %s does not match the original" % rel)
-    partial.rename(dest)
-    return copied
-
-
-def sync_wrote(config, state):
-    """Relative paths a sync recorded as its own, read from the state it left under its HOME:
-    every link in its manifest, every file its ownership store generated or created, and the
-    files at HARNESS_FILES paths it renders without recording. Only paths inside `config`."""
-    config = Path(config)
-    try:
-        inside = config.resolve()
-    except OSError:
-        inside = config
-    out = set()
-
-    def add(path):
-        path = Path(path)
-        try:  # the parent resolved, the entry itself never followed: a link is the entry
-            rel = (path.parent.resolve() / path.name).relative_to(inside)
-        except (OSError, ValueError):
-            return
-        if not is_credential(rel):
-            out.add(rel.as_posix())
-
-    def read(name):
-        try:
-            return json.loads((Path(state) / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return {}
-    for link in read("manifest.json").get("links", []) or []:
-        if isinstance(link, dict) and link.get("path"):
-            add(link["path"])
-    for path, record in (read("ownership.json").get("files", {}) or {}).items():
-        # A merged file is the sync's too: it is never deleted (it was there before), but it
-        # counts as recorded, so a merge-only sync does not read as one that recorded nothing.
-        if isinstance(record, dict) and (record.get("kind") in ("generated", "json") or record.get("created")):
-            add(path)
-    for pattern in HARNESS_FILES:
-        for path in config.glob(pattern):
-            add(path)
-            if path.is_dir() and not path.is_symlink():
-                for child in path.rglob("*"):
-                    add(child)
-    return out
-
-
-def undo_sync(config, before, saved, copied, state):
-    """Take back exactly what a sync wrote into `config`, and nothing else.
-
-    `before` is `profile_listing` of `config` from before the sync, `saved` the directory
-    `copy_aside` built, `copied` what it holds, and `state` the sync's own state directory,
-    from which `sync_wrote` reads what it made. Only those paths are removed: what the run's own
-    sessions or anyone else's wrote into the profile meanwhile, a transcript or a credential
-    created for the first time, is not the sync's and stays. A directory the sync created goes
-    only when it is empty. `settings.json`, which the sync merged into, is put back from its copy
-    through an atomic write, and only when its bytes differ; a credential file is never written,
-    so a token the CLI refreshed during the run stays refreshed."""
-    config, saved = Path(config), Path(saved)
-    wrote = sync_wrote(config, state)
-    for rel in sorted(wrote, key=lambda r: -r.count("/")):
-        path = config / rel
-        if is_credential(rel) or rel in before and before[rel][0] != "dir":
-            continue  # a pre-existing file is restored below or left alone, never deleted
-        try:
-            if path.is_symlink() or (path.exists() and not path.is_dir()):
-                path.unlink()
-        except OSError:
-            continue
-    # Only a directory the sync's records lead through, or one of its own top-level write sites
-    # (`plans` it makes and records nowhere), and only when it was not there before and holds
-    # nothing now: a directory that merely appeared during the run is not the sync's.
-    made = {name for name in HARNESS_NAMES if (config / name).is_dir() and not (config / name).is_symlink()}
-    for rel in wrote:
-        made.update(p.as_posix() for p in [Path(rel)] + list(Path(rel).parents) if p.as_posix() != ".")
-    for rel in sorted(made - set(before), key=lambda r: -r.count("/")):
-        try:
-            (config / rel).rmdir()  # refuses anything still holding a file: never rmtree
-        except OSError:
-            pass
-    for rel in copied:
-        if rel not in before or before[rel][0] != "file" or is_credential(rel):
-            continue
-        data = (saved / rel).read_bytes()
-        target = config / rel
-        if target.is_symlink() or target.is_dir():
-            raise RuntimeError("%s is no longer a file; its copy is kept" % rel)
-        if target.is_file() and target.read_bytes() == data:
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write(target, data)
-    # The records are read from where the harness at HEAD writes them; an older tag's sync may
-    # record elsewhere, and then nothing above removed anything. The profile itself is the check:
-    # what the sync could have written must be as it was, or the run stops here, before another
-    # tag launches into a profile that would refuse it or, worse, run links into a deleted checkout.
-    leftovers = sync_leftovers(config, before)
-    if leftovers or not wrote:
-        raise SystemExit("cost-bench: the sync could not be taken back out of %s: %s; the sync's "
-                         "records %s"
-                         % (config, ", ".join(leftovers[:8]) or "nothing left, but nothing recorded",
-                            "were empty" if not wrote else "did not cover it"))
-
-
-def sync_tag(repo, ref, parent, config_dir=None, python=sys.executable):
-    """The harness as it stood at `ref`, projected into a profile of its own under `parent`.
-
-    Returns `{parent, checkout, config, home, version, sha}`. The checkout keeps real history,
-    because `harness sync` reads git state; the profile starts empty, so everything in it came
-    from that checkout and nothing from the owner's.
-
-    The sync subprocess is given a HOME of its own as well as an explicit `CLAUDE_CONFIG_DIR`.
-    HOME alone decides `~/.config/agent-harness/config.json`, and a sync that inherited it would
-    render the owner's identity and stance selection into the arm: the run would then measure a
-    personal layer that is not the tag's, and two tags measured on different days would not be
-    comparable. With no configuration to read the projection is the tag's defaults, which is the
-    same question asked of every tag."""
-    parent = Path(parent)
-    sha = resolve_tag(repo, ref)
-    config = Path(config_dir).expanduser() if config_dir else parent / "config"
-    refuse_live_config(config)
-    checkout = snapshot(repo, sha, parent / "checkout")
-    home = parent / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    config.mkdir(parents=True, exist_ok=True)
-    env = scrubbed_env({"HOME": str(home), "CLAUDE_CONFIG_DIR": str(config)})
-    done = subprocess.run([python, "bin/harness", "sync"], cwd=str(checkout), env=env,
-                          timeout=SYNC_TIMEOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          universal_newlines=True)
-    if done.returncode:
-        tail = "\n".join((done.stdout or "").strip().splitlines()[-5:])
-        raise SystemExit("cost-bench: `harness sync` failed for %s (exit %d)\n%s"
-                         % (ref, done.returncode, tail))
-    version = checkout / "VERSION"
-    return {"parent": parent, "checkout": checkout, "config": config, "home": home, "sha": sha,
-            "version": version.read_text(encoding="utf-8").strip() if version.is_file() else ref}
-
-
-@contextlib.contextmanager
-def synced_tag(repo, ref, tmp=None, config_dir=None, python=sys.executable, bare=None):
-    """`sync_tag`, undone afterwards, exception or not.
-
-    The temporary directories go. A named `config_dir` is a profile the owner keeps, so what the
-    sync wrote into it is taken back once the tag's schedule is over (`undo_sync`), and the next
-    tag, or the next invocation, finds it as this one did. If taking it back fails for any reason,
-    an interrupt included, the copy of what was rewritten is kept and its path named."""
-    parent = Path(tempfile.mkdtemp(prefix="cost-tag-", dir=tmp))
-    config = saved = before = copied = None
-    keep = False
-    try:
-        if config_dir:
-            config = Path(config_dir).expanduser()
-            check_sync_target(config, bare)
-            before = profile_listing(config)
-            copied = copy_aside(config, parent / "saved-profile", before)
-            saved = parent / "saved-profile"  # only once the copy is whole
-        yield sync_tag(repo, ref, parent, config_dir, python)
-    finally:
-        if saved is not None:
-            try:
-                undo_sync(config, before, saved, copied, parent / "home" / SYNC_STATE)
-            except BaseException:
-                keep = True
-                print("cost-bench: could not take the sync back out of %s; the copy of what it "
-                      "rewrote is kept at %s" % (config, saved), file=sys.stderr)
-                raise
-            finally:
-                if not keep:
-                    shutil.rmtree(str(parent), ignore_errors=True)
-        else:
-            shutil.rmtree(str(parent), ignore_errors=True)
 
 
 def cli_messages(stdout):
@@ -1107,62 +637,101 @@ def _oracle(repo, name):
     return module
 
 
-def score(task, workdir, repo, python=sys.executable):
-    """(passed, detail). The held-back check arrives only now, after the agent has finished."""
-    workdir = Path(workdir)
-    tests = task["tests"]
-    if task["kind"] == "synthetic":
-        errors = _oracle(repo, tests["oracle"]).check(workdir)
-        return (not errors, "; ".join(errors[:3]))
-    for name in tests["copy"]:
+# The last line a check container prints for a synthetic task: the oracle's errors as JSON.
+ORACLE_MARK = "cost-bench-oracle-errors: "
+ORACLE_DRIVER = """
+import json as _json
+from pathlib import Path as _Path
+print(%r + _json.dumps(check(_Path(%r))))
+"""
+
+
+def _copy_held_back(task, workdir, repo):
+    """Write the task's held-back test files into `workdir`, from this repository's own history."""
+    for name in task["tests"]["copy"]:
         blob = subprocess.run(["git", "-C", str(repo), "show", "%s:%s" % (task["good_sha"], name)],
                               check=True, stdout=subprocess.PIPE).stdout
         (workdir / name).parent.mkdir(parents=True, exist_ok=True)
         (workdir / name).write_bytes(blob)
+
+
+def _unittest_command(task, python):
+    tests = task["tests"]
     command = [python, "-m", "unittest", "discover", "-s", "tests", "-p", tests["pattern"]]
     for select in tests.get("select", []):
         command += ["-k", select]
-    env = scrubbed_env({"PYTHONPATH": os.pathsep.join(str(workdir / p) for p in tests.get("pythonpath", []))})
-    done = subprocess.run(command, cwd=str(workdir), env=env, timeout=CHECK_TIMEOUT,
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-    ran = re.search(r"^Ran (\d+) tests? in", done.stdout, re.M)
+    return command
+
+
+def _ran(done):
+    ran = re.search(r"^Ran (\d+) tests? in", done.stdout or "", re.M)
     count = int(ran.group(1)) if ran else 0
     # Python 3.9 exits 0 when a filter matches nothing, so no tests run is a failure here.
     return (done.returncode == 0 and count > 0, "ran %d, exit %d" % (count, done.returncode))
 
 
-def repo_gate(workdir, commands, python=sys.executable):
-    """Exit codes for the repository's own gate, run in `workdir`. A benchmark fixture whose gate is
-    already red charges both arms for failures the agent did not cause."""
+def score(task, workdir, repo, image, launch=subprocess.run, name=None):
+    """(passed, detail), with the check run in a fresh container of `image`, never on this machine.
+
+    Both kinds of check execute the tree they score: a unit test imports it, and an oracle may
+    compile or load it. An agent's tree is code nobody reviewed, and even this repository's own
+    older trees read the configuration under whatever HOME they are given, so a check on this
+    machine would score the owner's live profile along with the task. So every check runs in a
+    container of the bare image, with the tree mounted as the only path, the image's own HOME, no
+    network and no credential. The held-back test files are written into the tree from this
+    repository's history first; an oracle is sent on stdin, so nothing else is mounted."""
+    workdir = Path(workdir)
+    tests = task["tests"]
+    name = name or container_name("check", task["id"])
+    if task["kind"] == "synthetic":
+        source = (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8")
+        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR)
+        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, input=stdin)
+        marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
+        if done.returncode or not marks:
+            raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
+        errors = json.loads(marks[-1][len(ORACLE_MARK):])
+        return (not errors, "; ".join(errors[:3]))
+    _copy_held_back(task, workdir, repo)
+    env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
+    done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
+    return _ran(done)
+
+
+def repo_gate(workdir, commands, image, launch=subprocess.run):
+    """Exit codes for the repository's own gate, run in `workdir`, each command in a fresh
+    container of `image` exactly as `score` runs a check: the tree the only mount, the image's
+    own HOME, no network. A benchmark fixture whose gate is already red charges both arms for
+    failures the agent did not cause, and one run on this machine would read the owner's live
+    configuration and go red for that instead."""
     out = []
     for command in commands:
-        done = subprocess.run([python if part == "python3" else part for part in command],
-                              cwd=str(workdir), env=scrubbed_env({"PYTHONPATH": str(Path(workdir) / "lib")}),
-                              timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              universal_newlines=True)
+        done = run_check(launch, image, workdir, command, {"PYTHONPATH": arms.WORKDIR + "/lib"},
+                         container_name("gate"))
         out.append((" ".join(command), done.returncode))
     return out
 
 
-def verify_tasks(tasks, repo, parent, gate=None):
-    """Errors for every task whose fixture or check does not hold before the agent runs."""
+def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
+    """Errors for every task whose fixture or check does not hold before the agent runs. The gate
+    and every check run in containers of `image`, the bare arm, as the replay's checks do."""
     errors = []
     for task in tasks:
-        before = snapshot(repo, task["parent_sha"], Path(parent) / (task["id"] + "-parent"))
+        before = mounted_snapshot(repo, task["parent_sha"], Path(parent) / (task["id"] + "-parent"))
         if task["kind"] == "issue" and reaches(before, task["good_sha"]):
             errors.append("%s: the commit that solved it is present in the snapshot" % task["id"])
-        for command, code in repo_gate(before, gate or []):
+        for command, code in repo_gate(before, gate or [], image, launch):
             if code:
                 errors.append("%s: `%s` already fails in a clean snapshot (exit %d)"
                               % (task["id"], command, code))
-        if score(task, before, repo)[0]:
+        if score(task, before, repo, image, launch)[0]:
             errors.append("%s: the check already passes at the parent sha" % task["id"])
         if task["kind"] == "issue":
-            after = snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
+            after = mounted_snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)
-        passed, detail = score(task, after, repo)
+        passed, detail = score(task, after, repo, image, launch)
         if not passed:
             errors.append("%s: the check fails on the known-good tree (%s)" % (task["id"], detail))
     return errors
@@ -1179,35 +748,45 @@ def schedule(tasks, reps):
     return out
 
 
+def arm_stamp(record):
+    """What every row of one arm records about the container it ran in: the image and its id,
+    the digests of the arm's declaration and manifest, and the harness ref and full commit, both
+    None for the bare arm. The printed label (`harness@<ref>`) stays out of rows: with a dotted
+    ref it reads as an email address to the repository's lint, and the ref is here already."""
+    return {"arm_image": record["image"], "arm_image_id": record["image_id"],
+            "arm_declaration_sha256": record["declaration_sha256"],
+            "arm_manifest_sha256": record["manifest_sha256"],
+            "arm_base_image": record["declaration"]["base_image"],
+            "harness_ref": record["harness_ref"], "harness_commit": record["harness_commit"]}
+
+
+def _scorer(opts, launch):
+    if opts.get("scorer"):
+        return opts["scorer"]
+    image = opts["arms"]["bare"]["image"]
+    return lambda task, workdir, repo: score(task, workdir, repo, image, launch)
+
+
 def run_one(task, rep, arm, opts, launch=subprocess.run):
     """One row. An errored run is `error: true` with `passed: null`; it is never a failure."""
-    env = arm_env(arm, opts["bare_config"], opts.get("stance_cost"), harness_config=opts.get("harness_config"))
-    config, admit = env.get("CLAUDE_CONFIG_DIR"), arm_admits(arm, opts)
+    record = opts["arms"][arm]
+    env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
     row = dict(opts["stamp"], task=task["id"], arm=arm, tag=opts["tag"], rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, tool_counts={}, spawns=None, stop_hooks=None, hook_blocks=None,
                cache_miss_ratio=None,
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
-               arm_config_dir=config_label(config, opts.get("home")),
-               arm_fingerprint=config_fingerprint(config, opts.get("home")),
-               fingerprint_source="launch", profile_fingerprint=arm_profile(arm, env, opts),
+               profile_fingerprint=arm_profile(arm, env, opts),
                context_attribution=arm_attribution(arm, env, opts),
-               **{kind: None for kind in TOKEN_KINDS})
+               **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS}))
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
-    reason = unsafe_workdir(workdir, opts["home"])
-    if reason:
-        shutil.rmtree(str(workdir.parent), ignore_errors=True)
-        raise SystemExit("cost-bench: refusing to run: " + reason)
     started = time.time()
     try:
-        snapshot(opts["repo"], task["parent_sha"], workdir)
+        mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         try:
-            with trusted_run(workdir, opts["home"]):
-                done = launch(arm_command(opts["claude"], opts["model"], prompt_of(task), opts["run_cap"],
-                                          config, admit, task["max_turns"]),
-                              cwd=str(workdir), env=env,
-                              timeout=RUN_TIMEOUT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              universal_newlines=True)
+            done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
+                                                           opts["run_cap"], task["max_turns"]),
+                              opts, container_name(task["id"], arm, rep), launch)
         except subprocess.TimeoutExpired:
             return dict(row, error=True, error_kind="timeout", wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
@@ -1228,7 +807,7 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
             return dict(row, error=True, cache_miss_ratio=None,
                         error_kind=parsed["subtype"] or "exit %s" % done.returncode)
         try:
-            row["passed"] = bool(opts.get("scorer", score)(task, workdir, opts["repo"])[0])
+            row["passed"] = bool(_scorer(opts, launch)(task, workdir, opts["repo"])[0])
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
             return dict(row, error=True, error_kind="check: %s" % type(exc).__name__)
         return row
@@ -1273,27 +852,20 @@ def reply_text(stdout):
 def preflight(tasks, opts, launch=subprocess.run):
     """([{arm, passed, reply, cost_usd}], spent). One gate run per arm before anything is scored.
 
-    The fence and the profile are the arm's own, so this asks the question the scored runs depend
-    on: can an agent in this arm make the repository's own gate pass at all? An arm that cannot
+    Each runs in the arm's own container, so this asks the question the scored runs depend on:
+    can an agent in this arm make the repository's own gate pass at all? An arm that cannot
     spends its turns on that instead of on the task, and the comparison measures the runner rather
-    than the harness. The reply is the gate's last line, so an arm passes when it ends in `OK`."""
+    than the harness. The verdict is read from the gate's own output (`gate_passed`)."""
     checks, spent = [], 0.0
     for arm in ARMS:
-        env = arm_env(arm, opts["bare_config"], opts.get("stance_cost"),
-                      harness_config=opts.get("harness_config"))
-        config = env.get("CLAUDE_CONFIG_DIR")
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
-        reason = unsafe_workdir(workdir, opts["home"])
-        if reason:
-            shutil.rmtree(str(workdir.parent), ignore_errors=True)
-            raise SystemExit("cost-bench: refusing to run: " + reason)
         try:
-            snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
-            command = arm_command(opts["claude"], opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
-                                  config, arm_admits(arm, opts), PREFLIGHT_TURNS)
+            mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
+            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
+                                  PREFLIGHT_TURNS)
             try:
-                done = launch(command, cwd=str(workdir), env=env, timeout=RUN_TIMEOUT,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                done = launch_arm(opts["arms"][arm], workdir, command, opts,
+                                  container_name("preflight", arm), launch)
             except subprocess.TimeoutExpired:
                 spent += PREFLIGHT_CAP_USD
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None})
@@ -1314,19 +886,35 @@ def preflight(tasks, opts, launch=subprocess.run):
     return checks, spent
 
 
+def probe_workdirs(tasks, opts, launch=subprocess.run):
+    """Refuse the replay unless each arm's user can write a snapshot mounted as a run mounts it and
+    git will use it there (`replay_arms.probe_workdir`), before anything is spent."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-probe-", dir=opts.get("tmp")))
+    try:
+        workdir = mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], parent / "repo")
+        for arm in ARMS:
+            arms.probe_workdir(opts["arms"][arm], workdir, launch, container_name("probe", arm))
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
 def replay(tasks, opts, launch=subprocess.run, out=None):
     """(rows, stopped). Stops before a launch that could take reported spend past the cap; the
     per-run cap is soft, so a run with no readable cost is counted at the full run cap.
 
-    A red pre-flight refuses the whole replay with exit 2 before any scored run launches, since
-    spending on arms that cannot pass the gate buys a number nobody can read. Its own cost counts
-    against the same cumulative cap."""
+    Every arm passes `replay_arms.admit` first: the one place an arm is refused before anything
+    of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
+    run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
+    Its own cost counts against the same cumulative cap."""
+    for arm in ARMS:
+        arms.admit(opts["arms"][arm])
+    probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):
         checks, spent = preflight(tasks, opts, launch)
         red = [c for c in checks if not c["passed"]]
         for check in red:
-            print("cost-bench: the %s arm's gate is red under its own fence: %s"
+            print("cost-bench: the %s arm's gate is red in its own container: %s"
                   % (check["arm"], check["reply"] or "no reply"), file=sys.stderr)
         if red:
             print("cost-bench: refusing the replay; no scored run launched", file=sys.stderr)
@@ -1431,7 +1019,22 @@ def history_row(rows, series):
             "change_note": first.get("change_note", ""), "per_task": per_task(rows),
             "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
             "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
-            "threshold": THRESHOLD, "status": status}
+            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows)}
+
+
+def arm_records(rows):
+    """Per arm, the container its rows ran in, from the first row of that arm that names one:
+    `{image_id, manifest_sha256, harness_ref, harness_commit}`. An arm with no such row,
+    as in a row set from before arms were containers, is left out."""
+    out = {}
+    for arm in ARMS:
+        named = [r for r in rows if r["arm"] == arm and r.get("arm_image_id")]
+        if named:
+            first = named[0]
+            out[arm] = {"image_id": first["arm_image_id"],
+                        "manifest_sha256": first.get("arm_manifest_sha256"),
+                        "harness_ref": first.get("harness_ref"), "harness_commit": first.get("harness_commit")}
+    return out
 
 
 def upsert_history(path, row):
@@ -1481,16 +1084,6 @@ def render_history(rows):
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
     return "\n".join(lines) + "\n"
-
-
-def installed_harness(home):
-    """The checkout the user-level install links to: the harness the harness arm actually loads.
-    None when the link does not lead to one, since a guessed commit would mislabel every row."""
-    link = Path(home) / ".claude" / "CLAUDE.md"
-    for parent in link.resolve().parents if link.exists() else ():
-        if (parent / "bin" / "harness").is_file():
-            return parent
-    return None
 
 
 def raw_path(raw_dir, row):
@@ -1556,119 +1149,128 @@ def _text(command, **kwargs):
                           **kwargs).stdout.strip()
 
 
+def tag_version(repo, commit, ref):
+    """The VERSION file at `commit`, or the ref itself when that commit has none."""
+    done = _git(repo, "show", "%s:VERSION" % commit)
+    return done.stdout.strip() if not done.returncode and done.stdout.strip() else ref
+
+
+def declarations(tags, repo=None):
+    """`(bare declaration, [(tag, harness declaration)])` for a replay, each ref resolved to its
+    full commit first, so a typo costs nothing and a moved tag is a new declaration."""
+    repo, inputs = repo or ROOT, arms.qualification_inputs()
+    harness = [(tag, arms.declaration("harness", inputs, {"ref": tag, "commit": resolve_tag(repo, tag)}))
+               for tag in tags]
+    return arms.declaration("bare", inputs), harness
+
+
+def refuse_candidate(tags):
+    """The installed harness is a host profile, which no arm may read. A pre-release is named by
+    its full commit instead, which builds into an image like any tag."""
+    if not tags:
+        raise SystemExit("cost-bench: name the harness with --tag: a release tag, or a full commit "
+                         "for a pre-release candidate")
+    if "candidate" in tags:
+        raise SystemExit("cost-bench: --tag candidate ran the installed harness from the host profile, "
+                         "which no arm may read now; name the commit to measure instead")
+
+
+def verify_command(args, tasks):
+    """`--verify-tasks`: every check proved in the bare arm's container, which is built first
+    unless `--check-image` names one already built. Calls no model and needs no credential."""
+    image = args.check_image
+    if not image:
+        bare = arms.build_arm(arms.declaration("bare", arms.qualification_inputs()),
+                              Path(args.arms_dir) if args.arms_dir else Path(tempfile.mkdtemp(prefix="model-citizen-arms-")),
+                              snapshot, tmp=args.tmp)
+        image = bare["image"]
+    parent = Path(tempfile.mkdtemp(prefix="cost-replay-verify-", dir=args.tmp))
+    try:
+        errors = verify_tasks(tasks, ROOT, parent, image, GATE_COMMANDS)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+    for error in errors:
+        print("cost-bench: " + error, file=sys.stderr)
+    print("verified %d task(s) in %s, %d error(s)" % (len(tasks), image, len(errors)))
+    return 1 if errors else 0
+
+
 def cmd_replay(args):
     tasks = load_tasks(args.tasks)
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
     if args.verify_tasks:
-        parent = Path(tempfile.mkdtemp(prefix="cost-replay-verify-"))
-        try:
-            errors = verify_tasks(tasks, ROOT, parent, GATE_COMMANDS)
-        finally:
-            shutil.rmtree(str(parent), ignore_errors=True)
-        for error in errors:
-            print("cost-bench: " + error, file=sys.stderr)
-        print("verified %d task(s), %d error(s)" % (len(tasks), len(errors)))
-        return 1 if errors else 0
-    tags = args.tag or [CANDIDATE]
+        return verify_command(args, tasks)
+    tags = args.tag or []
+    refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
-    home = Path.home()
-    bare = Path(args.bare_config).expanduser()
-    if not bare.is_dir():
-        raise SystemExit("cost-bench: the bare profile %s does not exist; sign in to it once" % bare)
-    for tag in tags:  # every ref resolves before the first launch: a typo costs nothing
-        if tag != CANDIDATE:
-            resolve_tag(ROOT, tag)
-    harness_config = Path(args.harness_config).expanduser() if args.harness_config else None
-    if harness_config and not harness_config.is_dir():
-        raise SystemExit("cost-bench: the harness profile %s does not exist; sign in to it once, then "
-                         "sync the harness into it" % harness_config)
-    # Every refusal about the target itself, the refs and the install runs here, before the first
-    # launch of any tag, so no tag's schedule is spent and then stranded by one the next tag
-    # meets. The per-tag work (copy-aside, snapshot, sync) necessarily runs as each tag's turn
-    # comes, and a failure there is that tag's.
-    harness = None
-    if CANDIDATE in tags:
-        harness = Path(args.harness_repo).expanduser() if args.harness_repo else installed_harness(home)
-        if harness is None:
-            raise SystemExit("cost-bench: ~/.claude/CLAUDE.md does not lead to a harness checkout; name the "
-                             "installed one with --harness-repo")
-    if harness_config and any(tag != CANDIDATE for tag in tags):
-        check_sync_target(harness_config, bare)
-        if CANDIDATE in tags:
-            raise SystemExit("cost-bench: --harness-config %s cannot serve candidate and a pinned tag "
-                             "in one run: candidate needs the installed harness synced into it and a "
-                             "pinned tag needs it clean; run candidate on its own" % harness_config)
+    bare_decl, harness_decls = declarations(tags)  # every ref resolves before anything is built
     plan = schedule(tasks, args.reps)
     print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s, %g USD per run, "
           "stop at %g USD reported per tag"
           % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(ARMS), args.reps,
              args.model, args.run_cap, args.spend_cap))
-    if args.dry_run:  # nothing is synced and nothing is spent
-        for tag in tags:
-            print("  tag %s" % tag)
+    if args.dry_run:  # nothing is built and nothing is spent
+        print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
+        for tag, decl in harness_decls:
+            print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],
+                                                   arms.image_name(decl)))
             for task, rep, arm in plan:
                 print("    %s rep %d %s" % (task["id"], rep, arm))
         return 0
-    common = {"tasks": tasks, "plan": plan, "home": home, "bare": bare,
+    if not os.environ.get(arms.CREDENTIAL):
+        raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
+                         % arms.CREDENTIAL)
+    series_out = Path(args.out) if args.out else None
+    arms_dir = Path(args.arms_dir) if args.arms_dir else Path(tempfile.mkdtemp(prefix="model-citizen-arms-"))
+    print("cost-bench: arm declarations and manifests go in %s" % arms_dir)
+    bare = arms.build_arm(bare_decl, arms_dir, snapshot, tmp=args.tmp)
+    common = {"tasks": tasks, "plan": plan, "bare": bare, "arms_dir": arms_dir, "out": series_out,
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
-              "cli_version": _text([args.claude, "--version"], env=scrubbed_env()),
-              "harness_config": harness_config, "harness": harness, "per_tag_out": len(tags) > 1}
+              "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
+              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]})}
     status = 0
-    for tag in tags:
-        if tag == CANDIDATE:
-            status = max(status, replay_tag(tag, args, common))
-            continue
-        with synced_tag(ROOT, tag, args.tmp, args.harness_config, bare=bare) as synced:
-            status = max(status, replay_tag(tag, args, common, synced))
+    with arms.egress(bare["image"]) as net:
+        for tag, decl in harness_decls:
+            harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+            status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
+                                            harness))
     return status
 
 
-def replay_tag(tag, args, common, synced=None):
+def replay_tag(tag, args, common, harness):
     """One tag's whole schedule, its results file and its history row. 1 when it stopped early.
 
-    `synced` is `sync_tag`'s record when the tag was pinned, and None for the candidate. A pinned
-    tag is stamped from its own checkout rather than from the install, because `installed_harness`
-    describes the harness that happens to be live and would label every pinned row with it."""
-    tasks, home = common["tasks"], common["home"]
-    if synced:
-        version, sha = synced["version"], synced["sha"]
-        harness_config, source = synced["config"], synced["checkout"]
-        if not args.harness_config:
-            # A credential is keyed on the profile's absolute path, so a directory made for this
-            # run is not signed in. Said once, before the spend, rather than read off every row.
-            print("cost-bench: tag %s is synced into a temporary profile, which is not signed in; "
-                  "name a signed-in --harness-config to sync into instead" % tag, file=sys.stderr)
-    else:
-        harness = common["harness"]
-        version = (harness / "VERSION").read_text(encoding="utf-8").strip()
-        sha = _text(["git", "-C", str(harness), "rev-parse", "HEAD"])
-        harness_config, source = common["harness_config"], None
-    # The arm profile is part of what is being compared, so it rotates the series: a run whose
-    # harness arm carries the owner's personal layer is not comparable to one whose arm does not.
-    profile = b"|isolated" if harness_config else b"|inherited"
+    `harness` is the harness arm's record from `replay_arms.build_arm`. The per-rule fingerprint
+    and attribution are resolved over a clone of that commit with an empty home, as the image has
+    no configuration of the user's; see `arm_profile`."""
+    tasks, commit = common["tasks"], harness["harness_commit"]
+    version = tag_version(ROOT, commit, tag)
+    # The arms are part of what is compared, so they rotate the series: a container run is not
+    # comparable with one whose harness arm read a host profile.
     series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
-                            + profile).hexdigest()[:8]
-    out = Path(args.out) if args.out else ROOT / "benchmarks" / version
-    # A pinned tag always gets a directory of its own: it may share a VERSION with the install, and
-    # its rows would then append to the candidate's. So does every tag of a multi-tag run.
-    if synced or common["per_tag_out"]:
-        out = out / tag
-    opts = {"repo": ROOT, "home": home, "claude": args.claude, "model": args.model, "tag": tag,
-            "reps": args.reps, "run_cap": args.run_cap, "spend_cap": args.spend_cap,
-            "prices": common["prices"], "bare_config": common["bare"],
-            "harness_config": harness_config, "harness_source": source,
-            "profile_root": source or common["harness"], "stance_cost": args.stance_cost,
-            "raw": args.raw, "tmp": args.tmp, "change_note": args.change_note or "",
-            "skip_preflight": args.skip_preflight,
-            "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
-                      "cli_version": common["cli_version"],
-                      "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
-                      "harness_version": version, "harness_sha": sha,
-                      "os": "%s %s" % (platform.system(), platform.release())}}
-    out.mkdir(parents=True, exist_ok=True)
-    rows, stopped = replay(tasks, opts, out=out / RESULTS)
+                            + b"|container").hexdigest()[:8]
+    out = (common["out"] or ROOT / "benchmarks" / version) / tag
+    parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
+    try:
+        (parent / "home").mkdir()
+        profile_root = snapshot(ROOT, commit, parent / "checkout")
+        opts = {"repo": ROOT, "home": parent / "home", "profile_root": profile_root, "model": args.model,
+                "tag": tag, "reps": args.reps, "run_cap": args.run_cap, "spend_cap": args.spend_cap,
+                "prices": common["prices"], "arms": {"bare": common["bare"], "harness": harness},
+                "network": common["network"], "proxy": common["proxy"], "client_env": common["client_env"],
+                "stance_cost": args.stance_cost, "raw": args.raw, "tmp": args.tmp,
+                "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
+                "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
+                          "cli_version": common["cli_version"],
+                          "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
+                          "harness_version": version, "harness_sha": commit,
+                          "os": "linux container on %s %s" % (platform.system(), platform.release())}}
+        out.mkdir(parents=True, exist_ok=True)
+        rows, stopped = replay(tasks, opts, out=out / RESULTS)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
@@ -1683,6 +1285,42 @@ def replay_tag(tag, args, common, synced=None):
     return 1 if stopped else 0
 
 
+def cmd_arms(args):
+    """Build the arms, check that two builds of each agree, or prove the egress rule. No model call
+    and no credential: the credential is never read here."""
+    if args.action == "probe-egress":
+        if not args.image:
+            raise SystemExit("cost-bench: probe-egress needs --image, an arm image already built")
+        lines, passed = arms.egress_probe(args.image)
+        for line in lines:
+            print(line)
+        return 0 if passed else 1
+    wanted = ARMS if args.arm == "both" else (args.arm,)
+    if "harness" in wanted and not args.tag:
+        raise SystemExit("cost-bench: the harness arm needs --tag, a release tag or a full commit")
+    inputs = arms.qualification_inputs()
+    decls = [arms.declaration("bare", inputs) if arm == "bare" else
+             arms.declaration("harness", inputs, {"ref": args.tag, "commit": resolve_tag(ROOT, args.tag)})
+             for arm in wanted]
+    out = Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix="model-citizen-arms-"))
+    status = 0
+    for decl in decls:
+        if args.action == "check":
+            if not arms.two_build_check(decl, out, snapshot, dry_run=args.dry_run, tmp=args.tmp):
+                status = 1
+            continue
+        if args.dry_run:
+            print(" ".join(arms.build_command(decl, "<context>", arms.image_name(decl))))
+            continue
+        record = arms.build_arm(decl, out, snapshot, tmp=args.tmp)
+        print("%s: %s %s, declaration %s, manifest %s"
+              % (record["label"], record["image"], record["image_id"], record["declaration_sha256"],
+                 record["manifest_sha256"]))
+    if not args.dry_run:
+        print("declarations and manifests in %s" % out)
+    return status
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1691,24 +1329,19 @@ def main(argv=None):
     mode.add_argument("--write", action="store_true", help="refresh %s" % STATIC.as_posix())
     mode.add_argument("--check", action="store_true", help="print each file's delta and fail on "
                       "unexplained growth of the total")
-    run = sub.add_parser("replay", help="run the pinned tasks against bare and harness; spends usage")
+    run = sub.add_parser("replay", help="run the pinned tasks in a bare and a harness container; "
+                         "spends usage")
     run.add_argument("--tasks", default=str(ROOT / TASKS))
     run.add_argument("--task", action="append", help="run only this task id; repeatable")
-    run.add_argument("--tag", action="append", help="harness version to run; repeatable; default "
-                     "candidate, the installed harness as it stands. Any other value is a git ref "
-                     "of this repository, synced into a config directory of its own and torn down "
-                     "after that tag's schedule; each tag writes its own history row")
+    run.add_argument("--tag", action="append", help="the harness ref the harness arm is built from: a "
+                     "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
+                     "writes its own history row. Required")
     run.add_argument("--model", help="the one model id every arm runs")
     run.add_argument("--reps", type=int, default=2)
     run.add_argument("--run-cap", type=float, default=RUN_CAP_USD, help="--max-budget-usd per run; soft")
     run.add_argument("--spend-cap", type=float, default=SPEND_CAP_USD, help="stop before passing "
                      "this; it applies to each tag's schedule on its own")
     run.add_argument("--stance-cost", help="HARNESS_STANCE_COST for the harness arm")
-    run.add_argument("--bare-config", default="~/.claude-bench-bare", help="the signed-in empty profile")
-    run.add_argument("--harness-config", help="the signed-in profile the harness is synced into; "
-                     "without it the harness arm inherits ~/.claude and the owner's personal layer. "
-                     "With --tag it is the directory each tag is synced into, which is what makes a "
-                     "pinned run authenticated: a credential is keyed on a profile's absolute path")
     run.add_argument("--bucket", default="", help="the one change this run measures, e.g. A; names the "
                      "history row so several buckets can share a day and a commit")
     run.add_argument("--predicted-ratio", type=float, help="the ratio the plan predicts for this bucket; "
@@ -1717,15 +1350,30 @@ def main(argv=None):
                      "default benchmarks/")
     run.add_argument("--change-note", default="", help="what changed since the last run of this "
                      "bucket; stored on every row and on the history row")
-    run.add_argument("--claude", default="claude", help="the CLI to launch")
-    run.add_argument("--harness-repo", help="the installed harness checkout; default: follow ~/.claude")
-    run.add_argument("--out", help="results directory; default benchmarks/<harness version>")
+    run.add_argument("--out", help="results directory, one subdirectory per tag; default "
+                     "benchmarks/<harness version>")
+    run.add_argument("--arms-dir", help="where each arm's declaration and manifest are written; "
+                     "default a new temporary directory, named when the run starts")
     run.add_argument("--raw", help="keep each run's raw CLI output here; never commit it")
-    run.add_argument("--tmp", help="parent for the throwaway clones; must be outside the home directory")
-    run.add_argument("--verify-tasks", action="store_true", help="prove every check; calls no model")
-    run.add_argument("--skip-preflight", action="store_true", help="do not run each arm's gate under "
-                     "its own fence first; rows then say preflight: skipped")
-    run.add_argument("--dry-run", action="store_true", help="print the schedule and stop")
+    run.add_argument("--tmp", help="parent for the throwaway clones and build contexts; Docker must "
+                     "be able to mount it")
+    run.add_argument("--verify-tasks", action="store_true", help="prove every check in the bare arm's "
+                     "container, building it first; calls no model")
+    run.add_argument("--check-image", help="with --verify-tasks, an arm image already built to run the "
+                     "gate and the checks in, instead of building the bare arm")
+    run.add_argument("--skip-preflight", action="store_true", help="do not run each arm's gate in "
+                     "its own container first; rows then say preflight: skipped")
+    run.add_argument("--dry-run", action="store_true", help="print the arms and the schedule and stop; "
+                     "builds nothing")
+    build = sub.add_parser("arms", help="build the replay arms, check two builds agree, or prove the "
+                           "egress rule; calls no model")
+    build.add_argument("action", choices=("build", "check", "probe-egress"))
+    build.add_argument("--arm", choices=ARMS + ("both",), default="both")
+    build.add_argument("--tag", help="the harness ref for the harness arm")
+    build.add_argument("--image", help="for probe-egress: the arm image to probe from")
+    build.add_argument("--out", help="where declarations and manifests go; default a new temporary directory")
+    build.add_argument("--tmp", help="parent for the build contexts")
+    build.add_argument("--dry-run", action="store_true", help="print the commands and build nothing")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")
@@ -1738,6 +1386,8 @@ def main(argv=None):
         return cmd_replay(args)
     if args.command == "backfill":
         return cmd_backfill(args)
+    if args.command == "arms":
+        return cmd_arms(args)
     if args.check:
         now = measure(ROOT)
         for line in file_deltas(ROOT, now):
