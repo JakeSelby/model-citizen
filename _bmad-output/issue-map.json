@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 121,
-    "chore": 87,
+    "chore": 88,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7811,6 +7811,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C087",
+      "github_number": 1035,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1035",
+      "title": "Reopen qualification state after v0.14.0",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C087.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     }
   ]
