@@ -20,6 +20,8 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen usage   --conflicts [--days N]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
+    citizen draft create NAME [--base installed|TAG] [--json]
+    citizen draft list|diff|rebase|discard [NAME] [--json]
     citizen worktree create NAME [REPO] [--branch BRANCH] [--base BASE] [--no-fetch]
     citizen worktree audit [REPO]
     citizen worktree remove NAME [REPO] [--merged] [--also-clear NAME]
@@ -3307,21 +3309,51 @@ def register_bmad_merge_drivers(checkout: Path, harness_checkout: Optional[Path]
     return changed
 
 
+def create_managed_worktree(
+    repo: Path, name: str, branch: str, base: str, fetch: bool = True,
+) -> Tuple[Path, subprocess.CompletedProcess]:
+    """Create through the one managed-worktree path shared by tasks and Studio drafts."""
+    dest = worktree_destination(repo, name)
+    if dest.exists():
+        return dest, subprocess.CompletedProcess([], 1, "", f"{dest} already exists")
+    if fetch:
+        fetched = _git(repo, "fetch", "origin", capture=True)
+        if fetched.returncode != 0:
+            return dest, fetched
+    ensure_worktree_bucket(repo)
+    created = _git(repo, "worktree", "add", "-b", branch, str(dest), base, capture=True)
+    if created.returncode == 0:
+        register_bmad_merge_drivers(dest)
+    return dest, created
+
+
+def managed_worktree_removal_preflight(
+    repo: Path, dest: Path, also_clear: Sequence[str] = (),
+) -> Tuple[Optional[str], List[str]]:
+    """Return the branch and blockers without deleting anything."""
+    registered = {Path(r["worktree"]).resolve() for r in _registered_worktrees(repo)}
+    if dest not in registered:
+        return None, [f"not a registered worktree: {dest}"]
+    for name in also_clear:
+        if not WORKTREE_NAME.fullmatch(name.lstrip(".")) or name in (".", "..", ".git"):
+            return None, [f"--also-clear takes one top-level directory name, not {name!r}"]
+    status = _git(dest, "status", "--porcelain", "--ignored", "--untracked-files=all", capture=True)
+    if status.returncode != 0:
+        return None, [status.stderr.strip() or f"git status failed in {dest}"]
+    _, blocking = classify_worktree_status(status.stdout, also_clear)
+    symbolic = _git(dest, "symbolic-ref", "--quiet", "--short", "HEAD", capture=True)
+    branch = symbolic.stdout.strip() if symbolic.returncode == 0 else None
+    return branch, blocking
+
+
 def cmd_worktree(args: argparse.Namespace) -> int:
     repo = git_root(args.repo or ".")
     if args.action == "create":
-        dest = worktree_destination(repo, args.name)
-        if dest.exists():
-            raise SystemExit(f"{dest} already exists")
-        if not args.no_fetch:
-            fetched = _git(repo, "fetch", "origin")
-            if fetched.returncode != 0:
-                return fetched.returncode
-        ensure_worktree_bucket(repo)
         branch = args.branch or args.name
-        created = _git(repo, "worktree", "add", "-b", branch, str(dest), args.base, capture=True)
+        dest, created = create_managed_worktree(
+            repo, args.name, branch, args.base, fetch=not args.no_fetch,
+        )
         if created.returncode == 0:
-            register_bmad_merge_drivers(dest)
             say(str(dest))
         elif created.stderr:
             say(created.stderr.strip())
@@ -3329,29 +3361,20 @@ def cmd_worktree(args: argparse.Namespace) -> int:
 
     if args.action == "remove":
         dest = worktree_destination(repo, args.name)
-        registered = {Path(r["worktree"]).resolve() for r in _registered_worktrees(repo)}
-        if dest not in registered:
-            say(f"not a registered worktree: {dest}")
-            return 1
         also_clear = getattr(args, "also_clear", None) or []
-        for name in also_clear:
-            if not WORKTREE_NAME.fullmatch(name.lstrip(".")) or name in (".", "..", ".git"):
-                say(f"--also-clear takes one top-level directory name, not {name!r}")
-                return 1
-        status = _git(dest, "status", "--porcelain", "--ignored", "--untracked-files=all", capture=True)
-        if status.returncode != 0:
-            say(status.stderr.strip() or f"git status failed in {dest}")
-            return status.returncode
-        _, blocking = classify_worktree_status(status.stdout, also_clear)
+        branch, blocking = managed_worktree_removal_preflight(repo, dest, also_clear)
         if blocking:
+            if len(blocking) == 1 and (blocking[0].startswith("not a registered")
+                                       or blocking[0].startswith("--also-clear")
+                                       or blocking[0].startswith("git status")):
+                say(blocking[0])
+                return 1
             say(f"refusing to remove worktree with modified, untracked, or ignored files: {dest}")
             for entry in blocking[:5]:
                 say(f"  {entry}")
             if len(blocking) > 5:
                 say(f"  and {len(blocking) - 5} more")
             return 1
-        symbolic = _git(dest, "symbolic-ref", "--quiet", "--short", "HEAD", capture=True)
-        branch = symbolic.stdout.strip() if symbolic.returncode == 0 else ""
         if not branch:
             head = _git(dest, "rev-parse", "HEAD", capture=True)
             refs = _git(repo, "for-each-ref", "--contains", head.stdout.strip(), "--format=%(refname)", capture=True)
@@ -3402,6 +3425,87 @@ def cmd_worktree(args: argparse.Namespace) -> int:
         say(f"{state}\t{branch}\t{path}")
     return 1 if dirty else 0
 
+
+def _draft_create_worktree(repo: Path, name: str, branch: str, base: str) -> Path:
+    dest, created = create_managed_worktree(repo, name, branch, base, fetch=False)
+    if created.returncode:
+        raise SystemExit(created.stderr.strip() or created.stdout.strip() or "git worktree add failed")
+    return dest
+
+
+def remove_managed_worktree_exact(
+    repo: Path, dest: Path, branch: str, expected_revision: str,
+) -> Tuple[int, str]:
+    """Delete one proven draft ref without force-deleting a branch that moved."""
+    actual, blocking = managed_worktree_removal_preflight(repo, dest)
+    if blocking:
+        if len(blocking) == 1 and blocking[0].startswith("not a registered"):
+            return 1, blocking[0]
+        detail = ", ".join(blocking[:5])
+        return 1, "refusing to discard draft with modified, untracked, or ignored files: " + detail
+    if actual != branch:
+        return 1, "draft branch no longer matches its recorded branch"
+    head = _git(dest, "rev-parse", "--verify", "HEAD^{commit}", capture=True)
+    ref = f"refs/heads/{branch}"
+    tip = _git(repo, "rev-parse", "--verify", ref + "^{commit}", capture=True)
+    if (head.returncode or tip.returncode or head.stdout.strip() != expected_revision
+            or tip.stdout.strip() != expected_revision):
+        return 1, "draft checkout or branch moved from its recorded revision"
+    detached = _git(dest, "checkout", "--detach", expected_revision, capture=True)
+    if detached.returncode:
+        return detached.returncode, detached.stderr.strip() or "could not detach draft worktree"
+    deleted = _git(repo, "update-ref", "-d", ref, expected_revision, capture=True)
+    if deleted.returncode:
+        return deleted.returncode, "draft branch moved while discard was starting; nothing was force-deleted"
+    removed = _git(repo, "worktree", "remove", str(dest), capture=True)
+    if removed.returncode:
+        return removed.returncode, removed.stderr.strip() or "git worktree remove failed"
+    recreated = _git(repo, "show-ref", "--verify", "--quiet", ref, capture=True)
+    if recreated.returncode == 0:
+        return 1, "worktree removed but draft branch was recreated and was not deleted"
+    return 0, ""
+
+
+def _draft_remove_worktree(repo: Path, dest: Path, branch: str, revision: str) -> None:
+    status, detail = remove_managed_worktree_exact(repo, dest, branch, revision)
+    if status:
+        raise SystemExit(detail)
+
+
+def cmd_draft(args: argparse.Namespace) -> int:
+    """Expose the same draft domain operations used by Studio."""
+    repo = git_root(str(REPO))
+    try:
+        if args.action == "create":
+            result: Any = studio.drafts.create(
+                repo, args.name, args.base, config_path(),
+                _draft_create_worktree, _draft_remove_worktree,
+            )
+        elif args.action == "list":
+            result = {"drafts": studio.drafts.list_drafts(repo)}
+        elif args.action == "diff":
+            result = studio.drafts.diff(repo, args.name)
+        elif args.action == "rebase":
+            result = studio.drafts.rebase(repo, args.name)
+        else:
+            result = studio.drafts.discard(repo, args.name, _draft_remove_worktree)
+    except studio.drafts.DraftError as exc:
+        if args.json:
+            say(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
+        else:
+            say("draft: " + str(exc))
+        return 1
+    if args.json:
+        say(json.dumps(result, sort_keys=True))
+    elif args.action == "list":
+        for item in result["drafts"]:
+            status = f"behind {item['behind_by']}" if item["behind_installed"] else "current"
+            say(f"{item['name']}\t{status}\t{item['revision'][:12]}\t{item['path']}")
+    elif args.action == "diff":
+        sys.stdout.write(result["source_patch"] + result["config_patch"])
+    else:
+        say(result.get("path") or result.get("discarded") or result.get("name"))
+    return 0
 
 def _tool(name: str) -> Optional[str]:
     """Absolute path to an executable, or None if it cannot be found.
@@ -5786,6 +5890,26 @@ def main(argv: Optional[List[str]] = None) -> int:
     remove.add_argument("--also-clear", action="append", metavar="NAME", default=[],
                         help="one more top-level ignored directory that does not block removal; repeatable")
     remove.set_defaults(func=cmd_worktree)
+
+    p = sub.add_parser("draft", help="create and inspect isolated harness changes")
+    draft_sub = p.add_subparsers(dest="action", required=True)
+    create = draft_sub.add_parser("create", help="create a managed draft from the installed version or a release tag")
+    create.add_argument("name")
+    create.add_argument("--base", default="installed", help="installed or an exact v* release tag")
+    create.add_argument("--json", action="store_true")
+    create.set_defaults(func=cmd_draft)
+    listing = draft_sub.add_parser("list", help="list managed drafts and installed-version drift")
+    listing.add_argument("--json", action="store_true")
+    listing.set_defaults(func=cmd_draft)
+    for action, help_text in (
+        ("diff", "show source and private configuration changes"),
+        ("rebase", "rebase a clean draft onto the installed revision"),
+        ("discard", "remove a clean draft worktree and its branch"),
+    ):
+        command = draft_sub.add_parser(action, help=help_text)
+        command.add_argument("name")
+        command.add_argument("--json", action="store_true")
+        command.set_defaults(func=cmd_draft)
 
     p = sub.add_parser("remote-control", help="keep a Claude Code Remote Control server running per configured folder (macOS)")
     rc_sub = p.add_subparsers(dest="action", required=True)

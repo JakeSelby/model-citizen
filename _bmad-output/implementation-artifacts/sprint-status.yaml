@@ -345,8 +345,8 @@ development_status:
   ah-t035-write-the-studio-s-ux-specification: ready-for-dev
   ah-t036-record-the-studio-s-architecture-decisions-in: ready-for-dev
 
-  ah-e023-tune-in-the-studio-drafts-for-every-change: backlog
-  ah-s290-drafts-create-list-diff-and-discard-a-draft-from: backlog
+  ah-e023-tune-in-the-studio-drafts-for-every-change: in-progress
+  ah-s290-drafts-create-list-diff-and-discard-a-draft-from: ready-for-dev
   ah-s291-change-mode-stance-variants-and-switches-in-a: backlog
   ah-s292-edit-identity-preferences-and-integrations-in-a: backlog
   ah-s293-hand-edit-a-rule-skill-or-stance-in-a-draft-with: backlog
