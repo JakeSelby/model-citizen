@@ -39,6 +39,18 @@ REFERENCE_SOURCES = frozenset(("environment", "keychain", "profile", "secret-sto
 KNOWN_ROOT_KINDS = ("checkout", "config", "draft", "primitive", "state", "static")
 REFERENCE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9._:/-]{0,127}$")
 ENVIRONMENT_NAME = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
+STYLE_NONCE = re.compile(r"^[A-Za-z0-9_-]{32}$")
+
+
+def csp_with_style_nonce(nonce: str) -> str:
+    """Allow one Mantine style element and its component style attributes."""
+    if not STYLE_NONCE.fullmatch(nonce):
+        raise SecurityError("style nonce refused")
+    return CSP.replace(
+        "style-src 'self';",
+        "style-src 'self'; style-src-elem 'self' 'nonce-%s'; "
+        "style-src-attr 'unsafe-inline';" % nonce,
+    )
 
 
 class SecurityError(ValueError):

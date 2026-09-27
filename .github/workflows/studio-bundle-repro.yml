@@ -1,15 +1,17 @@
-name: studio-bundle-repro
+name: studio
 
 on:
   push:
-    branches: [studio-bundle-spike, feature/v0.18.0-studio]
+    branches: [main, feature/v0.18.0-studio]
+  pull_request:
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
-  reproducibility:
-    name: three Linux bundle builds
+  studio:
+    name: studio
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -23,9 +25,15 @@ jobs:
           required_npm=$(node -p "require('./studio/package.json').packageManager.split('@')[1]")
           npm install --global "npm@$required_npm"
           test "$(npm --version)" = "$required_npm"
+      - name: Install exact frontend tree
+        run: npm ci --prefix studio
+      - name: Check source
+        run: |
+          npm run lint --prefix studio
+          npm test --prefix studio
+          npm run typecheck --prefix studio
       - name: Verify dependency evidence and audit
         run: |
-          npm ci --prefix studio
           evidence_dir="$RUNNER_TEMP/studio-licensing"
           mkdir "$evidence_dir"
           python3 scripts/studio_bundle_manifest.py inventory \
@@ -36,58 +44,8 @@ jobs:
           cmp "$evidence_dir/third-party.json" studio/public/third-party.json
           cmp "$evidence_dir/THIRD_PARTY_NOTICES.txt" studio/public/THIRD_PARTY_NOTICES.txt
           npm audit --prefix studio --audit-level=low
-      - name: Build three isolated copies
-        id: experiment
+      - name: Check committed bundle
         run: |
-          if python3 scripts/studio_bundle_manifest.py experiment \
+          python3 scripts/studio_bundle_manifest.py verify \
             --source studio \
-            --evidence evidence/linux-x64 \
-            --runs 3
-          then
-            status=0
-          else
-            status=$?
-          fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Compare Linux with committed macOS evidence
-        id: cross_platform
-        if: always()
-        run: |
-          if python3 scripts/studio_bundle_manifest.py compare-groups \
-            --reference studio/reproducibility/macos-arm64/run-{1,2,3}.json \
-            --candidate evidence/linux-x64/run-{1,2,3}.json \
-            --output evidence/cross-platform-comparison.json
-          then
-            status=0
-          else
-            status=$?
-          fi
-          echo "status=$status" >> "$GITHUB_OUTPUT"
-      - name: Record source and dependency digests
-        if: always()
-        run: |
-          source_commit=$(git rev-parse HEAD)
-          lock_digest=$(sha256sum studio/package-lock.json | cut -d' ' -f1)
-          tree_digest=$(git ls-tree -r --full-tree HEAD .node-version studio scripts/studio_bundle_manifest.py | sha256sum | cut -d' ' -f1)
-          {
-            echo "## Studio bundle reproducibility"
-            echo "- Source commit: \`$source_commit\`"
-            echo "- Lockfile SHA-256: \`$lock_digest\`"
-            echo "- Source-tree SHA-256: \`$tree_digest\`"
-            echo "- Experiment exit status: \`${{ steps.experiment.outputs.status }}\`"
-            echo "- Cross-platform comparison status: \`${{ steps.cross_platform.outputs.status }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Publish manifests and comparison
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: studio-bundle-linux-${{ github.sha }}
-          path: evidence
-          if-no-files-found: error
-          retention-days: 14
-      - name: Enforce byte identity
-        if: always()
-        env:
-          EXPERIMENT_STATUS: ${{ steps.experiment.outputs.status }}
-          CROSS_PLATFORM_STATUS: ${{ steps.cross_platform.outputs.status }}
-        run: test "$EXPERIMENT_STATUS" = "0" && test "$CROSS_PLATFORM_STATUS" = "0"
+            --committed studio/dist

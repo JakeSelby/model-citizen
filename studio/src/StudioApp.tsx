@@ -1,131 +1,219 @@
-import { useEffect, useRef } from "react";
 import {
-  Alert,
-  AppShell,
+  Anchor,
   Badge,
   Button,
   Card,
+  Container,
   Group,
-  NavLink as MantineNavLink,
+  Paper,
   SimpleGrid,
   Stack,
   Text,
+  ThemeIcon,
   Title,
 } from "@mantine/core";
-import { useDisclosure, useMediaQuery } from "@mantine/hooks";
-import { useQuery } from "@tanstack/react-query";
-import { json } from "@codemirror/lang-json";
-import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
-import { NavLink, Route, Routes } from "react-router-dom";
-import {
-  CategoryScale,
-  Chart as ChartJS,
-  Filler,
-  Legend,
-  LinearScale,
-  LineElement,
-  PointElement,
-  Tooltip,
-} from "chart.js";
-import { Line } from "react-chartjs-2";
+import { type MouseEvent, useEffect } from "react";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Filler, Legend, Tooltip);
+import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
 
-const performance = {
-  labels: ["R-41", "R-42", "R-43", "R-44"],
-  datasets: [{
-    label: "Pass rate",
-    data: [82, 86, 84, 91],
-    borderColor: "#087f5b",
-    backgroundColor: "#c3fae8",
-    fill: true,
-    tension: 0.3,
-  }],
-};
+const reportCards = [
+  {
+    label: "System health",
+    measure: "Awaiting evidence",
+    detail: "Diagnostics will appear after the first local snapshot.",
+    href: "/reports#system-health",
+  },
+  {
+    label: "Hook performance",
+    measure: "No timing window",
+    detail: "Invocation counts and latency stay linked to their source window.",
+    href: "/reports#hook-performance",
+  },
+  {
+    label: "Efficacy",
+    measure: "No comparison yet",
+    detail: "Run a paired experiment before judging a draft.",
+    href: "/reports#efficacy",
+  },
+  {
+    label: "Usage",
+    measure: "No local total",
+    detail: "Estimated and unpriced usage are reported separately.",
+    href: "/reports#usage",
+  },
+] as const;
 
-function DraftEditor() {
-  const host = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!host.current) return;
-    const state = EditorState.create({
-      doc: '{\n  "draft": "studio-bundle-spike",\n  "status": "review"\n}',
-      extensions: [json(), keymap.of([]), EditorView.lineWrapping],
-    });
-    const view = new EditorView({ state, parent: host.current });
-    return () => view.destroy();
-  }, []);
-
-  return <div aria-label="Draft JSON" className="editor" ref={host} />;
+function ReportCard({ label, measure, detail, href }: (typeof reportCards)[number]) {
+  return (
+    <Card className="report-card" component={NavLink} to={href} withBorder>
+      <Text className="eyebrow">{label}</Text>
+      <Text className="report-measure" fw={650}>{measure}</Text>
+      <Text c="dimmed" size="sm">{detail}</Text>
+      <Text className="card-link" fw={600} size="sm">Open report <span aria-hidden="true">↗</span></Text>
+    </Card>
+  );
 }
 
 function Hub() {
-  const [opened, { toggle }] = useDisclosure(false);
-  const compact = useMediaQuery("(max-width: 48rem)");
-  const health = useQuery({
-    queryKey: ["health-summary"],
-    queryFn: async () => ({ passing: 91, alerts: 2, trend: "+7 points" }),
-  });
-
   return (
-    <Stack gap="lg">
-      <div>
-        <Badge color="teal" variant="light">Operational</Badge>
-        <Title order={1}>Harness briefing</Title>
-        <Text c="dimmed">A deterministic fixture that exercises the candidate Studio stack.</Text>
-      </div>
-      <Alert color="yellow" title="Two hooks need investigation">
-        Failure volume rose after the latest qualification run.
-      </Alert>
-      <SimpleGrid cols={{ base: 1, sm: 3 }}>
-        <Card withBorder><Text size="sm">Pass rate</Text><Title order={2}>{health.data?.passing ?? "—"}%</Title></Card>
-        <Card withBorder><Text size="sm">Open alerts</Text><Title order={2}>{health.data?.alerts ?? "—"}</Title></Card>
-        <Card withBorder><Text size="sm">Recent trend</Text><Title order={2}>{health.data?.trend ?? "—"}</Title></Card>
-      </SimpleGrid>
-      <Card withBorder>
-        <Group justify="space-between" mb="md">
-          <Title order={2}>Run efficacy</Title>
-          <Button variant="light" onClick={toggle}>{opened ? "Hide" : "Show"} draft</Button>
-        </Group>
-        <div className="chart" aria-label="Run efficacy trend">
-          <Line data={performance} options={{ maintainAspectRatio: false, scales: { y: { min: 0, max: 100 } } }} />
+    <Stack gap="xl">
+      <Group align="flex-end" className="page-heading" justify="space-between">
+        <div>
+          <Text className="eyebrow">Studio / Hub</Text>
+          <Title order={1}>Your harness at a glance.</Title>
+          <Text c="dimmed" mt="xs">Local evidence, current work, and the next useful action.</Text>
         </div>
-      </Card>
-      {opened && <Card withBorder><Text mb="sm">{compact ? "Compact draft" : "Draft configuration"}</Text><DraftEditor /></Card>}
+        <Button component={NavLink} to="/experiments" variant="filled">Open experiments</Button>
+      </Group>
+
+      <section aria-labelledby="overview-title" className="hub-grid">
+        <Paper className="overview-card" p="xl" withBorder>
+          <Group justify="space-between">
+            <Title id="overview-title" order={2}>AI health overview</Title>
+            <Badge color="gray" variant="light">Off</Badge>
+          </Group>
+          <Text className="overview-lead" mt="lg">Enable a read-only assessment when you want one.</Text>
+          <Text c="dimmed" mt="sm">
+            Studio makes no model calls until you opt in. The provider, model, evidence scope,
+            refresh policy, and daily cap stay visible with every assessment.
+          </Text>
+          <Group mt="xl">
+            <Button component={NavLink} to="/configure#ai-overview" variant="light">Review AI settings</Button>
+            <Anchor component={NavLink} to="/reports">Browse deterministic reports</Anchor>
+          </Group>
+        </Paper>
+        <SimpleGrid className="report-grid" cols={{ base: 1, xs: 2 }} spacing="md">
+          {reportCards.map((card) => <ReportCard key={card.label} {...card} />)}
+        </SimpleGrid>
+      </section>
+
+      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+        <Paper p="xl" withBorder>
+          <Group justify="space-between">
+            <Title order={2}>Drafts & active runs</Title>
+            <Anchor component={NavLink} to="/experiments">All experiments</Anchor>
+          </Group>
+          <div className="empty-state">
+            <ThemeIcon color="gray" size="lg" variant="light" aria-hidden="true">–</ThemeIcon>
+            <div>
+              <Text fw={650}>Evidence not loaded</Text>
+              <Text c="dimmed" size="sm">Draft and run state will appear when the core endpoint is available.</Text>
+            </div>
+          </div>
+        </Paper>
+        <Paper p="xl" withBorder>
+          <Group justify="space-between">
+            <Title order={2}>Alerts & notifications</Title>
+            <Badge color="gray" variant="light">Unavailable</Badge>
+          </Group>
+          <div className="empty-state">
+            <ThemeIcon color="gray" size="lg" variant="light" aria-hidden="true">–</ThemeIcon>
+            <div>
+              <Text fw={650}>Evidence not loaded</Text>
+              <Text c="dimmed" size="sm">No health claim is shown until authoritative alerts are available.</Text>
+            </div>
+          </div>
+        </Paper>
+      </SimpleGrid>
     </Stack>
   );
 }
 
-function Placeholder({ title }: { title: string }) {
-  return <Card withBorder><Title order={1}>{title}</Title><Text c="dimmed">Candidate route verified by the bundle spike.</Text></Card>;
+function FoundationPage({ title, description }: { title: string; description: string }) {
+  return (
+    <Stack gap="lg">
+      <div>
+        <Text className="eyebrow">Studio / {title}</Text>
+        <Title order={1}>{title}</Title>
+        <Text c="dimmed" mt="xs">{description}</Text>
+      </div>
+      <Paper className="foundation-panel" p="xl" withBorder>
+        <Badge color="gray" variant="light">Preview</Badge>
+        <Title mt="md" order={2}>The interface is available.</Title>
+        <Text c="dimmed" mt="xs">
+          This route is part of the committed Studio bundle. Operational evidence remains unavailable
+          until its versioned core endpoint is implemented.
+        </Text>
+      </Paper>
+    </Stack>
+  );
+}
+
+const pages = {
+  configure: "Inspect the effective selection and make changes inside a named draft.",
+  experiments: "Choose an allowlisted suite, a target, and a bounded run.",
+  reports: "Trace health, performance, efficacy, and usage back to immutable evidence.",
+  activity: "Review what the harness decided and changed without rewriting its history.",
+} as const;
+
+function StudioFrame() {
+  const location = useLocation();
+  const title = pageTitle(location.pathname);
+
+  function skipNavigation(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+    const main = document.getElementById("main-content");
+    main?.focus({ preventScroll: true });
+    main?.scrollIntoView({ block: "start" });
+  }
+
+  useEffect(() => {
+    document.title = documentTitle(location.pathname);
+  }, [location.pathname]);
+
+  return (
+    <div className="studio-frame">
+      <a className="skip-link" href="#main-content" onClick={skipNavigation}>Skip navigation</a>
+      <header className="studio-header">
+        <Container className="header-inner" size="xl">
+          <Anchor className="brand" component={NavLink} to="/" underline="never">
+            <span className="brand-mark" aria-hidden="true">mc</span>
+            <span>Model Citizen <small>Studio</small></span>
+          </Anchor>
+          <nav aria-label="Studio">
+            <Group className="primary-navigation" gap="xs">
+              {NAVIGATION.map((item) => (
+                <Anchor
+                  aria-label={item.label}
+                  className="nav-link"
+                  component={NavLink}
+                  end={item.path === "/"}
+                  key={item.path}
+                  to={item.path}
+                  underline="never"
+                >
+                  {item.label}
+                </Anchor>
+              ))}
+            </Group>
+          </nav>
+        </Container>
+      </header>
+      <div className="workspace-bar">
+        <Container className="workspace-inner" size="xl">
+          <Text fw={600}>Personal workspace <Text c="dimmed" component="span" fw={400}>/ local</Text></Text>
+          <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
+        </Container>
+      </div>
+      <Container component="main" id="main-content" py={{ base: "xl", sm: 40 }} size="xl" tabIndex={-1}>
+        <Text className="visually-hidden" component="span">Current page: {title}</Text>
+        <Routes>
+          <Route path="/" element={<Hub />} />
+          {Object.entries(pages).map(([path, description]) => (
+            <Route
+              element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
+              key={path}
+              path={`/${path}`}
+            />
+          ))}
+          <Route path="*" element={<Navigate replace to="/" />} />
+        </Routes>
+      </Container>
+    </div>
+  );
 }
 
 export function StudioApp() {
-  const links = ["Hub", "Configure", "Experiments", "Reports", "Activity"];
-  return (
-    <AppShell header={{ height: 68 }} padding="lg">
-      <AppShell.Header>
-        <Group h="100%" px="lg" justify="space-between">
-          <Text fw={700}>Model Citizen Studio</Text>
-          <Group gap="xs" component="nav" aria-label="Studio">
-            {links.map((label) => (
-              <MantineNavLink
-                component={NavLink}
-                key={label}
-                label={label}
-                to={label === "Hub" ? "/" : `/${label.toLowerCase()}`}
-              />
-            ))}
-          </Group>
-        </Group>
-      </AppShell.Header>
-      <AppShell.Main>
-        <Routes>
-          <Route path="/" element={<Hub />} />
-          {links.slice(1).map((label) => <Route key={label} path={`/${label.toLowerCase()}`} element={<Placeholder title={label} />} />)}
-        </Routes>
-      </AppShell.Main>
-    </AppShell>
-  );
+  return <StudioFrame />;
 }

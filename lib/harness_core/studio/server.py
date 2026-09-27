@@ -6,6 +6,7 @@ import errno
 import hmac
 import json
 import os
+import re
 import secrets
 import signal
 import threading
@@ -26,6 +27,15 @@ CONTROL_STOP = "/__studio/control/stop"
 CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
 BOOTSTRAP = "/__studio/bootstrap"
 PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health", "sse"))
+STATIC_ASSET = re.compile(
+    r"^/assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?P<extension>css|js)$"
+)
+STATIC_ASSET_ROUTES = {
+    "css": "/assets/{content-hash}.css",
+    "js": "/assets/{content-hash}.js",
+}
+MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
+STYLE_NONCE_MARKER = b"__STUDIO_STYLE_NONCE__"
 
 
 class StopRequested(BaseException):
@@ -43,6 +53,10 @@ class ResponseSchema:
         if self.kind == "html-document":
             if not isinstance(payload, bytes) or not payload.lstrip().lower().startswith(b"<!doctype html"):
                 raise ValueError("route response is not an HTML document")
+            return
+        if self.kind == "binary":
+            if not isinstance(payload, bytes):
+                raise ValueError("route response is not binary")
             return
         if self.kind == "redirect":
             if payload is not None:
@@ -90,7 +104,13 @@ class RouteRegistry:
             self._routes[key] = route
 
     def resolve(self, method: str, path: str) -> Optional[Route]:
-        return self._routes.get((method, path))
+        exact = self._routes.get((method, path))
+        if exact is not None:
+            return exact
+        asset = STATIC_ASSET.fullmatch(path)
+        if asset is None:
+            return None
+        return self._routes.get((method, STATIC_ASSET_ROUTES[asset.group("extension")]))
 
 
 class Server(ThreadingHTTPServer):
@@ -130,12 +150,16 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(supplied, expected)
 
     def _send(self, code: int, body: bytes, content_type: str,
-              extra_headers: Tuple[Tuple[str, str], ...] = ()) -> None:
+              extra_headers: Tuple[Tuple[str, str], ...] = (),
+              cache_control: str = "no-store",
+              content_security_policy: Optional[str] = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         for name, value in auth.SECURITY_HEADERS:
+            if name == "Content-Security-Policy" and content_security_policy is not None:
+                value = content_security_policy
             self.send_header(name, value)
         for name, value in extra_headers:
             self.send_header(name, value)
@@ -234,8 +258,27 @@ def _static(handler: Handler, route: Route) -> None:
     except auth.SecurityError:
         handler._send(503, b"Studio bundle is unavailable\n", "text/plain; charset=utf-8")
         return
+    if body.count(STYLE_NONCE_MARKER) != 1:
+        handler._send(503, b"Studio bundle is unavailable\n", "text/plain; charset=utf-8")
+        return
+    nonce = secrets.token_urlsafe(24)
+    body = body.replace(STYLE_NONCE_MARKER, nonce.encode("ascii"))
     route.response_schema.validate(body)
-    handler._send(200, body, route.media_type)
+    handler._send(200, body, route.media_type,
+                  content_security_policy=auth.csp_with_style_nonce(nonce))
+
+
+def _static_asset(handler: Handler, route: Route) -> None:
+    path = urllib.parse.urlsplit(handler.path).path.lstrip("/")
+    try:
+        body = handler.server.static_files.read_bytes(
+            "static", path, limit=MAX_STATIC_ASSET_BYTES)
+    except auth.SecurityError:
+        handler._error(404, "not_found")
+        return
+    route.response_schema.validate(body)
+    handler._send(200, body, route.media_type,
+                  cache_control="public, max-age=31536000, immutable")
 
 
 def _health(handler: Handler, route: Route) -> None:
@@ -325,6 +368,7 @@ def _stop(handler: Handler, route: Route) -> None:
 
 
 HTML = ResponseSchema("html-document")
+BINARY = ResponseSchema("binary")
 BOOTSTRAP_SUCCESS = b"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/">
 <title>Opening Model Citizen Studio</title></head><body>
@@ -343,6 +387,14 @@ ROUTES = RouteRegistry((
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("GET", "/index.html", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/index.html", "text/html; charset=utf-8", HTML, _static, "static"),
+    Route("GET", STATIC_ASSET_ROUTES["css"], "text/css; charset=utf-8",
+          BINARY, _static_asset, "static"),
+    Route("HEAD", STATIC_ASSET_ROUTES["css"], "text/css; charset=utf-8",
+          BINARY, _static_asset, "static"),
+    Route("GET", STATIC_ASSET_ROUTES["js"], "text/javascript; charset=utf-8",
+          BINARY, _static_asset, "static"),
+    Route("HEAD", STATIC_ASSET_ROUTES["js"], "text/javascript; charset=utf-8",
+          BINARY, _static_asset, "static"),
     Route("POST", BOOTSTRAP, "text/html; charset=utf-8", HTML, _bootstrap, "bootstrap"),
     Route("GET", "/api/session", "application/json", SESSION, _session_info, "transport"),
     Route("POST", "/api/session", "application/json", SESSION, _session_info, "transport",

@@ -1,14 +1,14 @@
 {
-  "name": "model-citizen-studio-spike",
-  "version": "0.0.0",
+  "name": "model-citizen-studio",
+  "version": "0.18.0",
   "private": true,
   "type": "module",
   "packageManager": "npm@1\u0030.9.8",
-  "engines": {
-    "node": "22.22.3"
-  },
   "scripts": {
-    "build": "tsc --noEmit && vite build"
+    "build": "npm run typecheck && vite build",
+    "lint": "node scripts/lint.mjs",
+    "test": "node --experimental-strip-types --test tests/navigation.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@codemirror/lang-json": "6.0.2",
