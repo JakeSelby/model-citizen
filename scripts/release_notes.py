@@ -29,7 +29,9 @@ def notes(root=ROOT):
     policy = "https://github.com/JakeSelby/model-citizen/blob/v%s/docs/compatibility-policy.md" % version
     lines = ["# " + product["headline"], "", product["description"], "", product["stances"], "", "## Compatibility", ""]
     lines += ["- " + row["id"] + ": " + row["status"] for row in data["clients"]]
-    lines += ["", "Native restrictions remain authoritative. See the versioned compatibility catalog for evidence and gaps.",
+    basis = compatibility.qualification_disclosure(data).rstrip(".") + "."
+    lines += ["", "Qualification basis: " + basis,
+              "", "Native restrictions remain authoritative. See the versioned compatibility catalog for evidence and gaps.",
               "", "## Compatibility policy", "",
               "Stable interfaces, preview boundaries, deprecation, migration and failed-release recovery are defined in the [versioned compatibility policy](%s)." % policy,
               "", "## Migration", "", migration["summary"], ""]

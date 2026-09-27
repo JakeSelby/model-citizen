@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 322,
+    "story": 323,
     "task": 37
   },
   "items": [
@@ -7821,6 +7821,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C087.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S322",
+      "github_number": 1036,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1036",
+      "title": "Allow documentation-only patch releases to carry qualification forward",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S322.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
