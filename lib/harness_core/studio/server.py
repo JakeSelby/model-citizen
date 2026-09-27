@@ -6,8 +6,10 @@ import errno
 import hmac
 import json
 import os
+import secrets
 import signal
 import threading
+import urllib.parse
 import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -16,10 +18,13 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import workers
 
+from . import auth
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
 CONTROL_HEALTH = "/__studio/control/health"
 CONTROL_STOP = "/__studio/control/stop"
+CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
+BOOTSTRAP = "/__studio/bootstrap"
 PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health", "sse"))
 
 
@@ -38,6 +43,10 @@ class ResponseSchema:
         if self.kind == "html-document":
             if not isinstance(payload, bytes) or not payload.lstrip().lower().startswith(b"<!doctype html"):
                 raise ValueError("route response is not an HTML document")
+            return
+        if self.kind == "redirect":
+            if payload is not None:
+                raise ValueError("redirect route emitted a body")
             return
         if self.kind != "json-object" or not isinstance(payload, dict):
             raise ValueError("route response does not match its schema kind")
@@ -59,6 +68,7 @@ class Route:
     response_schema: ResponseSchema
     handler: Callable[["Handler", "Route"], None]
     parity_exemption: str
+    request_media_type: Optional[str] = None
 
 
 class RouteRegistry:
@@ -88,10 +98,24 @@ class Server(ThreadingHTTPServer):
     block_on_close = False
     allow_reuse_address = True
 
-    def __init__(self, address: Tuple[str, int], static_root: Path, credential: str):
+    def __init__(self, address: Tuple[str, int], static_root: Path, credential: str, store: Store):
         self.static_root = Path(static_root)
         self.control_credential = credential
+        self.store = store
         super().__init__(address, Handler)
+        try:
+            self.static_files = auth.KnownRoots({"static": self.static_root})
+            self.host = "%s.localhost:%d" % (secrets.token_hex(16), self.server_address[1])
+            self.sessions = auth.Sessions(self.host)
+        except BaseException:
+            super().server_close()
+            raise
+
+    def server_close(self):
+        static_files = getattr(self, "static_files", None)
+        if static_files is not None:
+            static_files.close()
+        super().server_close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -100,16 +124,21 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, _format, *_args):
         return
 
-    def _authorized(self) -> bool:
+    def _control_authorized(self) -> bool:
         supplied = self.headers.get("Authorization", "")
         expected = "Bearer " + self.server.control_credential
         return hmac.compare_digest(supplied, expected)
 
-    def _send(self, code: int, body: bytes, content_type: str) -> None:
+    def _send(self, code: int, body: bytes, content_type: str,
+              extra_headers: Tuple[Tuple[str, str], ...] = ()) -> None:
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in auth.SECURITY_HEADERS:
+            self.send_header(name, value)
+        for name, value in extra_headers:
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -125,13 +154,68 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, body, ROUTES.error_media_type)
 
     def send_error(self, code, _message=None, _explain=None):
-        self._error(code, "method_not_allowed" if code == 501 else "request_refused")
+        if code == 501:
+            if not self._host_allowed():
+                self._error(403, "request_refused")
+                return
+            path = urllib.parse.urlsplit(self.path).path
+            if not path.startswith("/__studio/control/") and path != BOOTSTRAP and self._session() is None:
+                self._error(401, "unauthorized")
+                return
+            self._error(405, "method_not_allowed")
+            return
+        self._error(code, "request_refused")
+
+    def _session(self) -> Optional[auth.Session]:
+        return self.server.sessions.authenticate(self.headers.get("Cookie"))
+
+    def _host_allowed(self) -> bool:
+        supplied = self.headers.get("Host")
+        return bool(supplied) and hmac.compare_digest(str(supplied), self.server.host)
 
     def _dispatch(self) -> None:
-        route = ROUTES.resolve(self.command, self.path)
+        if not self._host_allowed():
+            self._error(403, "request_refused")
+            return
+        parsed = urllib.parse.urlsplit(self.path)
+        if parsed.query or parsed.fragment:
+            self._error(404, "not_found")
+            return
+        route = ROUTES.resolve(self.command, parsed.path)
+        is_control = parsed.path.startswith("/__studio/control/")
+        is_bootstrap = parsed.path == BOOTSTRAP
+        if not is_control and not is_bootstrap:
+            session = self._session()
+            if session is None:
+                self._error(401, "unauthorized")
+                return
+            if self.command not in ("GET", "HEAD"):
+                origin = self.headers.get("Origin")
+                if (not origin or not hmac.compare_digest(origin, self.server.sessions.origin)
+                        or not self.server.sessions.csrf_matches(
+                            session, self.headers.get("X-Studio-CSRF"))):
+                    self._error(403, "request_refused")
+                    return
         if route is None:
             self._error(404, "not_found")
             return
+        if route.request_media_type is not None:
+            if self.headers.get_content_type() != route.request_media_type:
+                self._error(415, "unsupported_media_type")
+                return
+            length = _content_length(self, auth.MAX_JSON_BYTES)
+            if length is None:
+                self._error(413, "request_refused")
+                return
+            try:
+                value = json.loads(self.rfile.read(length).decode("utf-8"))
+            except (UnicodeError, ValueError):
+                self._error(400, "request_refused")
+                return
+            if not isinstance(value, dict):
+                self._error(400, "request_refused")
+                return
+            self.request_json = value
         route.handler(self, route)
 
     def do_HEAD(self):
@@ -146,8 +230,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def _static(handler: Handler, route: Route) -> None:
     try:
-        body = (handler.server.static_root / "index.html").read_bytes()
-    except OSError:
+        body = handler.server.static_files.read_bytes("static", "index.html")
+    except auth.SecurityError:
         handler._send(503, b"Studio bundle is unavailable\n", "text/plain; charset=utf-8")
         return
     route.response_schema.validate(body)
@@ -155,8 +239,8 @@ def _static(handler: Handler, route: Route) -> None:
 
 
 def _health(handler: Handler, route: Route) -> None:
-    if not handler._authorized():
-        handler._json(401, {"error": "unauthorized"})
+    if not handler._control_authorized():
+        handler._error(401, "unauthorized")
         return
     payload = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
                "pid": os.getpid(), "pid_start": workers.process_start(os.getpid()),
@@ -166,9 +250,73 @@ def _health(handler: Handler, route: Route) -> None:
                   route.media_type)
 
 
+def _control_bootstrap(handler: Handler, route: Route) -> None:
+    if not handler._control_authorized():
+        handler._error(401, "unauthorized")
+        return
+    token, form_name = handler.server.sessions.issue()
+    payload = {"token": token, "form_name": form_name}
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _content_length(handler: Handler, maximum: int) -> Optional[int]:
+    raw = handler.headers.get("Content-Length")
+    try:
+        length = int(raw) if raw is not None else -1
+    except ValueError:
+        return None
+    return length if 0 <= length <= maximum else None
+
+
+def _bootstrap(handler: Handler, route: Route) -> None:
+    if handler.headers.get("Cookie") is not None:
+        handler._error(403, "request_refused")
+        return
+    if handler.headers.get("Origin") not in (None, "null"):
+        handler._error(403, "request_refused")
+        return
+    if handler.headers.get_content_type() != "application/x-www-form-urlencoded":
+        handler._error(415, "unsupported_media_type")
+        return
+    length = _content_length(handler, auth.MAX_FORM_BYTES)
+    if length is None:
+        handler._error(413, "request_refused")
+        return
+    try:
+        values = urllib.parse.parse_qs(handler.rfile.read(length).decode("ascii"),
+                                       keep_blank_values=True, strict_parsing=True,
+                                       max_num_fields=2)
+    except (UnicodeError, ValueError):
+        handler._error(400, "request_refused")
+        return
+    if set(values) != {"token"} or len(values["token"]) != 1:
+        handler._error(400, "request_refused")
+        return
+    consumed = handler.server.sessions.consume(values["token"][0])
+    if consumed is None:
+        handler._error(401, "unauthorized")
+        return
+    session, form_name = consumed
+    handler.server.store.remove_private(form_name)
+    route.response_schema.validate(BOOTSTRAP_SUCCESS)
+    cookie = "%s=%s; Path=/; HttpOnly; SameSite=Strict" % (auth.SESSION_COOKIE, session.cookie)
+    handler._send(200, BOOTSTRAP_SUCCESS, route.media_type, (("Set-Cookie", cookie),))
+
+
+def _session_info(handler: Handler, route: Route) -> None:
+    session = handler._session()
+    if session is None:
+        handler._error(401, "unauthorized")
+        return
+    payload = {"authenticated": True, "csrf_token": session.csrf}
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
-    if not handler._authorized():
-        handler._json(401, {"error": "unauthorized"})
+    if not handler._control_authorized():
+        handler._error(401, "unauthorized")
         return
     payload = {"stopping": True}
     route.response_schema.validate(payload)
@@ -177,33 +325,48 @@ def _stop(handler: Handler, route: Route) -> None:
 
 
 HTML = ResponseSchema("html-document")
+BOOTSTRAP_SUCCESS = b"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/">
+<title>Opening Model Citizen Studio</title></head><body>
+<p>Session established. <a href="/">Continue to Studio</a>.</p></body></html>
+"""
 HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
                                          ("protocol_version", "integer"),
                                          ("pid", "integer"),
                                          ("pid_start", "string"),
                                          ("port", "integer")))
 STOP = ResponseSchema("json-object", (("stopping", "boolean"),))
+BOOTSTRAP_CONTROL = ResponseSchema("json-object", (("token", "string"), ("form_name", "string")))
+SESSION = ResponseSchema("json-object", (("authenticated", "boolean"), ("csrf_token", "string")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("GET", "/index.html", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/index.html", "text/html; charset=utf-8", HTML, _static, "static"),
+    Route("POST", BOOTSTRAP, "text/html; charset=utf-8", HTML, _bootstrap, "bootstrap"),
+    Route("GET", "/api/session", "application/json", SESSION, _session_info, "transport"),
+    Route("POST", "/api/session", "application/json", SESSION, _session_info, "transport",
+          "application/json"),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
+    Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
+          _control_bootstrap, "bootstrap"),
     Route("POST", CONTROL_STOP, "application/json", STOP, _stop, "transport"),
 ))
 
 
-def bind(static_root: Path, credential: str, requested_port: int) -> Tuple[Server, bool]:
+def bind(static_root: Path, credential: str, store: Store,
+         requested_port: int) -> Tuple[Server, bool]:
     try:
-        return Server(("127.0.0.1", requested_port), static_root, credential), False
+        return Server(("127.0.0.1", requested_port), static_root, credential, store), False
     except OSError as exc:
         if not requested_port or exc.errno not in (errno.EADDRINUSE, errno.EACCES):
             raise
-    return Server(("127.0.0.1", 0), static_root, credential), True
+    return Server(("127.0.0.1", 0), static_root, credential, store), True
 
 
 def run(static_root: Path, store: Store, requested_port: int,
-        ready: Optional[Callable[[Dict[str, object]], None]] = None) -> None:
+        ready: Optional[Callable[[Dict[str, object]], None]] = None,
+        browser: bool = False) -> None:
     lock = store.acquire()
     if lock is None:
         raise RuntimeError("another Studio instance owns the instance lock")
@@ -218,19 +381,26 @@ def run(static_root: Path, store: Store, requested_port: int,
                 for signum in (signal.SIGINT, signal.SIGTERM):
                     old_handlers[signum] = signal.getsignal(signum)
                     signal.signal(signum, request_stop)
-            credential = uuid.uuid4().hex + uuid.uuid4().hex
-            server, fallback = bind(static_root, credential, requested_port)
+            credential = secrets.token_urlsafe(48)
+            server, fallback = bind(static_root, credential, store, requested_port)
             pid_start = workers.process_start(os.getpid())
             if not pid_start:
                 raise RuntimeError("this platform cannot identify the Studio process start time")
             port = int(server.server_address[1])
             record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
                       "pid": os.getpid(), "pid_start": pid_start, "port": port,
-                      "url": "http://127.0.0.1:%d/" % port,
+                      "host": server.host, "url": server.sessions.origin + "/",
                       "control_credential": credential, "instance_epoch": str(uuid.uuid4())}
             store.write(record)
             result = public_result(record, requested_port, fallback, reused=False)
+            launch_path = None
+            if browser:
+                token, form_name = server.sessions.issue()
+                launch_path = auth.write_launcher_form(
+                    store.path, form_name, server.sessions.origin + BOOTSTRAP, token)
             if ready:
+                if launch_path is not None:
+                    result["_launch_path"] = str(launch_path)
                 ready(result)
             server.serve_forever(poll_interval=0.05)
         except StopRequested:
@@ -239,6 +409,8 @@ def run(static_root: Path, store: Store, requested_port: int,
         for signum, handler in old_handlers.items():
             signal.signal(signum, handler)
         if server is not None:
+            for form_name in server.sessions.pending_forms():
+                store.remove_private(form_name)
             server.server_close()
         store.remove()
         os.close(lock)

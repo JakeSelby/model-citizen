@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import http.client
 import os
 import signal
 import socket
@@ -13,6 +14,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -51,6 +53,31 @@ class StudioFixture(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertEqual(len(done.stdout.splitlines()), 1)
         return json.loads(done.stdout)
+
+    def session_cookie(self, started):
+        record = json.loads((state_root(self.home) / "instance.json").read_text())
+        connection = http.client.HTTPConnection("127.0.0.1", started["port"], timeout=2)
+        connection.request("POST", studio_server.CONTROL_BOOTSTRAP, headers={
+            "Host": record["host"],
+            "Authorization": "Bearer " + record["control_credential"],
+        })
+        issued_response = connection.getresponse()
+        self.assertEqual(issued_response.status, 200)
+        issued = json.loads(issued_response.read())
+        connection.close()
+        body = urllib.parse.urlencode({"token": issued["token"]}).encode("ascii")
+        connection = http.client.HTTPConnection("127.0.0.1", started["port"], timeout=2)
+        connection.request("POST", studio_server.BOOTSTRAP, body=body, headers={
+            "Host": record["host"], "Origin": "null",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": str(len(body)),
+        })
+        bootstrap = connection.getresponse()
+        self.assertEqual(bootstrap.status, 200)
+        cookie = bootstrap.headers["Set-Cookie"].split(";", 1)[0]
+        bootstrap.read()
+        connection.close()
+        return cookie
 
 
 class StateTests(StudioFixture):
@@ -121,7 +148,9 @@ class StateTests(StudioFixture):
         root = state_root(self.home)
         record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
                   "pid": os.getpid(), "pid_start": "not-this-process", "port": 49152,
-                  "url": "http://127.0.0.1:49152/", "control_credential": "credential",
+                  "host": "0" * 32 + ".localhost:49152",
+                  "url": "http://" + "0" * 32 + ".localhost:49152/",
+                  "control_credential": "credential",
                   "instance_epoch": "epoch"}
         self.assertNotEqual(workers.process_start(os.getpid()), record["pid_start"])
         with Store(root) as store:
@@ -135,7 +164,9 @@ class LifecycleTests(StudioFixture):
     def test_static_control_and_health_routes_are_registered_with_owned_schemas(self):
         routes = {(route.method, route.path): route for route in studio_server.ROUTES.entries}
         for key in (("GET", "/"), ("HEAD", "/"), ("GET", "/index.html"),
+                    ("POST", studio_server.BOOTSTRAP), ("GET", "/api/session"),
                     ("GET", studio_server.CONTROL_HEALTH),
+                    ("POST", studio_server.CONTROL_BOOTSTRAP),
                     ("POST", studio_server.CONTROL_STOP)):
             self.assertIn(key, routes)
         self.assertEqual(routes[("GET", "/")].parity_exemption, "static")
@@ -163,7 +194,9 @@ class LifecycleTests(StudioFixture):
         static_route = studio_server.ROUTES.resolve("GET", "/")
         health_route = studio_server.ROUTES.resolve("GET", studio_server.CONTROL_HEALTH)
         assert static_route is not None and health_route is not None
-        with urllib.request.urlopen(started["url"], timeout=2) as response:
+        cookie = self.session_cookie(started)
+        static_request = urllib.request.Request(started["url"], headers={"Cookie": cookie})
+        with urllib.request.urlopen(static_request, timeout=2) as response:
             body = response.read()
             self.assertEqual(response.headers.get_content_type(), "text/html")
             self.assertEqual(response.headers["Content-Type"], static_route.media_type)
@@ -179,21 +212,26 @@ class LifecycleTests(StudioFixture):
 
     def test_unknown_routes_remain_refused(self):
         started = self.start()
+        cookie = self.session_cookie(started)
+        request = urllib.request.Request(started["url"] + "not-registered",
+                                         headers={"Cookie": cookie})
         with self.assertRaises(urllib.error.HTTPError) as caught:
-            urllib.request.urlopen(started["url"] + "not-registered", timeout=2)
+            urllib.request.urlopen(request, timeout=2)
         self.assertEqual(caught.exception.code, 404)
         self.assertEqual(json.loads(caught.exception.read()), {"error": "not_found"})
         caught.exception.close()
 
     def test_unsupported_methods_use_the_registry_error_contract(self):
         started = self.start()
-        request = urllib.request.Request(started["url"], method="PATCH")
+        cookie = self.session_cookie(started)
+        request = urllib.request.Request(started["url"], method="PATCH",
+                                         headers={"Cookie": cookie})
         with self.assertRaises(urllib.error.HTTPError) as caught:
             urllib.request.urlopen(request, timeout=2)
         response = caught.exception
         body = response.read()
         payload = json.loads(body)
-        self.assertEqual(response.code, 501)
+        self.assertEqual(response.code, 405)
         self.assertEqual(response.headers["Content-Type"], studio_server.ROUTES.error_media_type)
         studio_server.ROUTES.error_schema.validate(payload)
         self.assertEqual(payload, {"error": "method_not_allowed"})
@@ -203,14 +241,17 @@ class LifecycleTests(StudioFixture):
 
     def test_detach_reuse_status_static_page_and_stop(self):
         started = self.start()
-        self.assertEqual(started["url"], "http://127.0.0.1:%d/" % started["port"])
+        self.assertRegex(started["url"], r"^http://[0-9a-f]{32}\.localhost:\d+/$")
         self.assertFalse(started["reused"])
         self.assertFalse(started["port_fallback"])
         self.assertNotIn("control_credential", started)
-        with urllib.request.urlopen(started["url"], timeout=2) as response:
+        cookie = self.session_cookie(started)
+        request = urllib.request.Request(started["url"], headers={"Cookie": cookie})
+        with urllib.request.urlopen(request, timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertIn("Model Citizen Studio", response.read().decode())
-        request = urllib.request.Request(started["url"], method="HEAD")
+        request = urllib.request.Request(started["url"], method="HEAD",
+                                         headers={"Cookie": cookie})
         with urllib.request.urlopen(request, timeout=2) as response:
             self.assertEqual(response.status, 200)
             self.assertEqual(response.read(), b"")
@@ -269,7 +310,7 @@ class LifecycleTests(StudioFixture):
         reused = next(row for row in rows if row["reused"])
         self.assertFalse(reused["port_fallback"])
         self.assertNotIn("requested_port", reused)
-        self.assertEqual(reused["url"], "http://127.0.0.1:%d/" % reused["port"])
+        self.assertRegex(reused["url"], r"^http://[0-9a-f]{32}\.localhost:\d+/$")
 
     def test_detached_loser_attributes_no_fallback_to_a_different_port_winner(self):
         winner = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
@@ -300,7 +341,8 @@ class LifecycleTests(StudioFixture):
         deadline = time.monotonic() + 2
         while not report.exists() and time.monotonic() < deadline:
             time.sleep(0.02)
-        self.assertEqual(report.read_text(), opened_row["url"])
+        self.assertTrue(report.read_text().startswith("file://"))
+        self.assertNotEqual(report.read_text(), opened_row["url"])
 
         failed_browser = self.home / "failed-browser"
         failed_browser.write_text("#!/bin/sh\nexit 1\n")
@@ -329,14 +371,14 @@ class LifecycleTests(StudioFixture):
         self.assertTrue(started["port_fallback"])
         self.assertEqual(started["requested_port"], requested)
         self.assertNotEqual(started["port"], requested)
-        self.assertTrue(started["url"].startswith("http://127.0.0.1:"))
+        self.assertRegex(started["url"], r"^http://[0-9a-f]{32}\.localhost:\d+/$")
 
     def test_no_flag_can_select_a_non_loopback_bind(self):
         help_text = self.cli("--help")
         self.assertEqual(help_text.returncode, 0)
         self.assertNotIn("--host", help_text.stdout)
         self.assertNotIn("--bind", help_text.stdout)
-        self.assertTrue(self.start()["url"].startswith("http://127.0.0.1:"))
+        self.assertRegex(self.start()["url"], r"^http://[0-9a-f]{32}\.localhost:\d+/$")
 
     def test_bad_ports_are_refused(self):
         for port in ("-1", "65536"):

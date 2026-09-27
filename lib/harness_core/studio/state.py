@@ -15,8 +15,8 @@ try:
 except ImportError:  # pragma: no cover - Studio currently targets POSIX hosts
     fcntl = None
 
-SCHEMA_VERSION = 1
-PROTOCOL_VERSION = 1
+SCHEMA_VERSION = 2
+PROTOCOL_VERSION = 2
 STATE_NAME = "instance.json"
 LOCK_NAME = "instance.lock"
 
@@ -169,6 +169,36 @@ class Store:
         except FileNotFoundError:
             pass
 
+    def write_private(self, name: str, data: bytes) -> None:
+        """Create one private launcher artifact relative to the retained state descriptor."""
+        assert self.fd is not None
+        if not name.startswith(".bootstrap-") or not name.endswith(".html") or "/" in name:
+            raise StateError("Studio private state name is invalid")
+        handle = -1
+        try:
+            handle = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=self.fd)
+            os.fchmod(handle, 0o600)
+            with os.fdopen(handle, "wb") as stream:
+                handle = -1
+                stream.write(data)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(self.fd)
+        finally:
+            if handle >= 0:
+                os.close(handle)
+
+    def remove_private(self, name: str) -> None:
+        assert self.fd is not None
+        if not name.startswith(".bootstrap-") or not name.endswith(".html") or "/" in name:
+            raise StateError("Studio private state name is invalid")
+        try:
+            os.unlink(name, dir_fd=self.fd)
+            os.fsync(self.fd)
+        except FileNotFoundError:
+            pass
+
 
 def validate(record: Any) -> Dict[str, Any]:
     if not isinstance(record, dict):
@@ -183,11 +213,16 @@ def validate(record: Any) -> Dict[str, Any]:
             raise StateError("Studio state has an invalid " + name)
     if record["port"] > 65535:
         raise StateError("Studio state has an invalid port")
-    for name in ("pid_start", "control_credential", "instance_epoch", "url"):
+    for name in ("pid_start", "control_credential", "host", "instance_epoch", "url"):
         value = record.get(name)
         if not isinstance(value, str) or not value:
             raise StateError("Studio state has an invalid " + name)
-    expected = "http://127.0.0.1:%d/" % record["port"]
+    host = record["host"]
+    suffix = ".localhost:%d" % record["port"]
+    nonce = host[:-len(suffix)] if host.endswith(suffix) else ""
+    if len(nonce) != 32 or any(character not in "0123456789abcdef" for character in nonce):
+        raise StateError("Studio state has an invalid host")
+    expected = "http://%s/" % host
     if record["url"] != expected:
         raise StateError("Studio state URL does not match its loopback port")
     return record

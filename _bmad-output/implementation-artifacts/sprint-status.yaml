@@ -333,7 +333,7 @@ development_status:
   ah-c082-file-the-studio-epics-and-stories: ready-for-dev
   ah-c083-record-the-studio-field-check-as-a-research: ready-for-dev
   ah-s281-citizen-studio-start-open-detach-check-and-stop: ready-for-dev
-  ah-s282-lock-the-studio-to-its-launcher-token-host-and: backlog
+  ah-s282-lock-the-studio-to-its-launcher-token-host-and: ready-for-dev
   ah-s283-the-studio-s-front-end-workspace-committed: backlog
   ah-s284-studio-shell-design-tokens-and-component-kit: backlog
   ah-s285-overview-the-installed-version-updates-doctor: backlog
