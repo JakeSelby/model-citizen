@@ -46,6 +46,7 @@ development_status:
   ah-s088-qualify-codex-vs-code-and-desktop-for-0-9-0: done
 
   ah-e002-complete-the-harness-stance-and-settings: in-progress
+  ah-b118-citizen-config-cannot-unset-workspaces-dir-so: ready-for-dev
   ah-c045-say-once-that-subagents-never-message-each-other: done
   ah-c046-reserve-bmad-ids-for-the-orchestration-conflict: done
   ah-d002-decide-how-project-and-session-stance-selections: ready-for-dev

@@ -7723,6 +7723,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B118",
+      "github_number": 1014,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1014",
+      "title": "citizen config cannot unset workspaces_dir, so workspaces cannot be switched off from the CLI",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B118.md",
+      "parent_bmad_id": "AH-E002",
+      "parent_github_number": 116,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C085",
       "github_number": 1017,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1017",
