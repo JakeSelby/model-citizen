@@ -2,7 +2,7 @@
 
 The architecture is model-provider agnostic: your rules, skills, roles, workflows and personal
 stances have one source. That does not mean every runtime implements every capability.
-`compatibility/catalog.json` is the versioned authority; `citizen compatibility --json` emits it.
+`compatibility/catalog.json` is the versioned authority; `bin/citizen compatibility --json` emits it.
 A separate [compatibility and release policy](compatibility-policy.md) defines the stable v1
 interfaces, preview boundary, versioning, deprecation and migration rules.
 A **qualified** entry requires native evidence for its exact runtime, client and platform.
@@ -17,7 +17,7 @@ scripted qualification round agrees with a hand-driven one, so the v0.11.1 stabl
 the last one qualifying the Codex CLI on macOS and Linux. The Claude Code and Codex VS Code surfaces, Codex Desktop on macOS and the Claude Code
 plugin-marketplace install remain unqualified previews. A marketplace install carries the
 skills, roles, commands and output style only; the ownership journal, stance selection, the
-Codex projection and the hooks come from `bin/harness install`, and
+Codex projection and the hooks come from `bin/citizen install`, and
 [runtime installation](runtime-installation.md) states the difference. Do not read successful source generation or deterministic tests as native
 client qualification.
 
@@ -30,16 +30,16 @@ rule reconciling them; a maintainer decision may replace it, in this section:
 > qualified for a client only when that client is qualified AND a native acceptance case
 > exercising that capability exists and passed; otherwise the capability is `unqualified` and
 > inherits nothing from the client. The catalog is the single authority: per-capability state is
-> derived from the adapters' capability files at `citizen compatibility` time and rendered beside
+> derived from the adapters' capability files at `bin/citizen compatibility` time and rendered beside
 > the client row, never hand-edited in two places.
 
 An adapter names the cases that exercise a capability with an optional `acceptance_cases` list on
 a stance entry or on `role_execution` in `adapters/<runtime>/capabilities.json`; every name in it
 must be one of the catalog's `required_cases`. Listing cases under a capability that is not
 `qualified`, or claiming `qualified` without them, is a contradiction between the two files:
-`citizen compatibility --release-check` blocks the release and the test suite fails. Today no
+`bin/citizen compatibility --release-check` blocks the release and the test suite fails. Today no
 adapter names a case, so every capability cell below reads `unqualified` even though two client
-rows are qualified. `citizen compatibility --json` emits both levels,
+rows are qualified. `bin/citizen compatibility --json` emits both levels,
 each client row carrying its derived `capabilities`. The capability-by-client layout follows the
 generated matrix in [wshobson/agents' `docs/harnesses.md`](https://github.com/wshobson/agents/blob/main/docs/harnesses.md).
 
@@ -123,7 +123,7 @@ acceptance runner's invocation, its disposable homes and the credentials it pass
 Start with an isolated test user/configuration home and a disposable repository. Record exact
 runtime and client versions, operating system, source commit, date, configuration, commands,
 and observed results. Never commit credentials, full private transcripts or personal settings.
-On macOS, run `citizen keychain <home>` on any home you build by hand before a client is launched
+On macOS, run `bin/citizen keychain <home>` on any home you build by hand before a client is launched
 under it; a home without a default keychain raises a system dialog, and a home whose keychain
 cannot be created does not launch a client. Never repoint your own default keychain or search list.
 For every target listed in the catalog, verify every `required_cases` entry natively:
@@ -165,7 +165,7 @@ For every target listed in the catalog, verify every `required_cases` entry nati
    spawn a subagent that names no role, and confirm from the subagent's own transcript that it
    ran as the variant's default band worker at that row's model and effort, that its brief ends
    with the budget sentence, that the usage feed reported its spend against that budget, and that
-   `citizen usage --rescan --by role` records the routed row. Confirm that a session started
+   `bin/citizen usage --rescan --by role` records the routed row. Confirm that a session started
    before the workers were installed keeps them out of its session record and that its spawn
    still succeeds. A headless client runs each turn as its own process, so such a session is
    continued by resuming it, and the resumed process loads the workers from disk and announces
@@ -177,7 +177,7 @@ For every target listed in the catalog, verify every `required_cases` entry nati
 9. Run a review layer of a framework named by a descriptor in `policy/integrations/` as a native
    subagent that names no role, with the brief carrying the framework's own spawn text as its
    workflow hands it to the client, and confirm the spawn is refused and the refusal names the
-   framework, the layer and `citizen role run <role>`. Then ask in plain words for the same layer's
+   framework, the layer and `bin/citizen role run <role>`. Then ask in plain words for the same layer's
    review, naming the layer's prompt file and no role, so the client writes the brief itself, and
    confirm that brief is refused the same way: a brief directing the subagent to follow or apply a
    declared prompt file is the layer's work in any wording. A model that makes no call, or whose
@@ -205,7 +205,7 @@ preserving the historical evidence file. Unknown cases and result values are rej
 The runner appends each finished case to a durable log as the case completes, so a killed round
 costs the case it was running rather than the round; rebuild the surviving cases into a record
 with `--from-progress`, and link that partial record as the partial record it is.
-The CLI verifies these records and `citizen compatibility --release-check` fails until all
+The CLI verifies these records and `bin/citizen compatibility --release-check` fails until all
 required clients are qualified. A reviewer must assess the observations; a JSON label alone is
 not empirical evidence.
 
@@ -258,12 +258,12 @@ source — `VERSION`, `bin`, `lib`, `adapters`, `primitives`, `policy`, `templat
 `config.example.json` — minus every *other* runtime's adapter directory, as the catalog's
 `evidence_invalidation` block maps them, **except for the files inside such a directory that
 shared code reads whatever runtime is running**. Those are carved back into the shared set and
-invalidate every target. The block names them: today `bindings.json` (`citizen tiers` checks both
+invalidate every target. The block names them: today `bindings.json` (`bin/citizen tiers` checks both
 adapters' class tables in one command), `capabilities.json` (stance coverage and catalog
-reconciliation read every runtime's) and `worker.py` (`citizen role run --runtime` chooses the
+reconciliation read every runtime's) and `worker.py` (`bin/citizen role run --runtime` chooses the
 adapter by flag, so either runtime's worker is reachable from either session). Only `hook.py` and
 the observation entry point `observe.py` are private to their runtime: a client executes its own
-runtime's hooks, and `citizen sync` writes the other runtime's `hook.py` path into a config file
+runtime's hooks, and `bin/citizen sync` writes the other runtime's `hook.py` path into a config file
 without reading it.
 
 So a fix confined to `adapters/codex/hook.py` leaves the Claude Code targets of a round standing,
@@ -317,7 +317,7 @@ changed files inside the target's path set decide what survives:
 
 A stale result neither passes nor blocks. It describes source that no longer exists, so the claim
 needs that case rerun, and a record carrying only the rerun cases, linked beside the older one,
-completes it. `citizen compatibility` names a stale case that nothing answers, with the files that
+completes it. `bin/citizen compatibility` names a stale case that nothing answers, with the files that
 made it stale.
 
 Each new evidence record carries `case_map`, the map's `version` and the SHA-256 of its cases, as
@@ -332,7 +332,7 @@ alters what a case observes through a path the map does not assign to it passes 
 case. An entry is added only with its argument here, and the argument names the call sites. Today
 there is one:
 
-- **`adapters/<runtime>/worker.py`** is loaded only by `citizen role run`, through
+- **`adapters/<runtime>/worker.py`** is loaded only by `bin/citizen role run`, through
   `harness_core.workers`, and no hook or session start loads it. The runner drives `role run` in
   `role-confinement` and `spawn-confinement`; `cost-posture` verifies a runtime that does not
   route native spawns through a role worker, and `framework-spawn-routing` runs the cost-posture
@@ -344,9 +344,9 @@ path exists. See [#582](https://github.com/JakeSelby/model-citizen/issues/582).
 
 A released catalog pins the exact source commit its evidence qualifies. Later development does
 not rewrite or invalidate that historical release record, but any change under the runtime-source
-paths makes `citizen compatibility --release-check` fail until the new source has its own candidate
+paths makes `bin/citizen compatibility --release-check` fail until the new source has its own candidate
 catalog and native evidence.
 
 [Runtime controls](runtime-controls.md) records current enforcement gaps. Adapter coverage in
-`citizen stances --json` distinguishes instruction policy, hooks and settings, including custom
+`bin/citizen stances --json` distinguishes instruction policy, hooks and settings, including custom
 stances which are advisory by default. No preference overrides a native restriction.

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 """`citizen` is the command, and `harness` stays a supported alias for it.
 
-`bin/citizen` is a relative symlink to `bin/harness`, which stays the real file because hooks and
-the installer find the checkout through it. Usage names whichever command was typed.
+`bin/citizen` is a regular wrapper around `bin/harness`, which stays the real file because hooks
+and the installer find the checkout through it. Usage names whichever command was typed.
 Run: python3 -m unittest discover tests
 """
 import importlib.machinery
@@ -26,13 +26,13 @@ def run(command, *args, cwd=None):
                           cwd=cwd, env=env, timeout=60)
 
 
-class LinkTests(unittest.TestCase):
-    def test_citizen_is_a_relative_link_to_the_real_harness_file(self):
-        link = REPO / "bin" / "citizen"
-        self.assertTrue(link.is_symlink())
-        self.assertEqual(os.readlink(str(link)), "harness")
+class EntrypointTests(unittest.TestCase):
+    def test_citizen_is_a_regular_executable_wrapper(self):
+        entrypoint = REPO / "bin" / "citizen"
+        self.assertTrue(entrypoint.is_file())
+        self.assertFalse(entrypoint.is_symlink())
         self.assertFalse((REPO / "bin" / "harness").is_symlink())
-        self.assertTrue(os.access(str(link), os.X_OK))
+        self.assertTrue(os.access(str(entrypoint), os.X_OK))
 
 
 class ProgramNameTests(unittest.TestCase):

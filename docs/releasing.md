@@ -157,10 +157,10 @@ untouched; do not move or replace either tag.
 
 Cut `release/v<version>` at the commit the round qualifies and record it in
 `compatibility/freeze.json` as `state: frozen` with that branch and full commit, then run every
-target on that branch so `main` keeps merging without invalidating evidence. `citizen freeze`
+target on that branch so `main` keeps merging without invalidating evidence. `bin/citizen freeze`
 prints the drift between the frozen commit and `origin/main` under the runtime source paths —
 `VERSION`, `bin`, `lib`, `adapters`, `primitives`, `policy`, `templates`, `config.example.json` —
-and `citizen freeze --merge-check <ref>` refuses a merge into the frozen branch that changes any of
+and `bin/citizen freeze --merge-check <ref>` refuses a merge into the frozen branch that changes any of
 them, because such a change costs part of the round again. How much of it is scoped per target: a
 change under one runtime's adapter directory invalidates only that runtime's targets, unless it
 touches a file shared code reads for every runtime, and a change to shared source invalidates them
@@ -218,7 +218,7 @@ The `--check` side of it runs inside `scripts/release_preflight.py`, which warns
 when `gh` is unauthenticated.
 
 `scripts/sync_about.py --apply` writes whatever `product.json` the *current checkout* holds. Run it
-only from a worktree fast-forwarded to `origin/main` (`bin/harness worktree create main-sync <repo>`,
+only from a worktree fast-forwarded to `origin/main` (`bin/citizen worktree create main-sync <repo>`,
 then `git merge --ff-only origin/main`); a stale checkout once reverted the About panel.
 
 ## Rollback

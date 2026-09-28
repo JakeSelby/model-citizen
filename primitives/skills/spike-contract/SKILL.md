@@ -1,6 +1,6 @@
 ---
 name: spike-contract
-description: Frame a spike so its result is a decision: the question, the cheapest experiment, a numeric exit criterion, the measured result, the machine it ran on. Use when asked to "spike", "prototype to find out", "de-risk", or "check whether X is feasible", and when writing the spikes section of a plan or README.
+description: Frame a spike so its result is a decision, with the question, the cheapest experiment, a numeric exit criterion, the measured result and the machine it ran on. Use when asked to "spike", "prototype to find out", "de-risk", or "check whether X is feasible", and when writing the spikes section of a plan or README.
 ---
 
 # The spike contract
