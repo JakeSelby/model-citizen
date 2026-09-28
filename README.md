@@ -99,7 +99,7 @@ Planned, not promised.
 
 - **Measured against bare:** Proof set 1 runs the harness against bare Claude Code, and harness evidence verify re-derives every published figure from its rows, whatever they show.
 - **The superpowers mode:** One switch hands planning and testing to Superpowers while every hook stays on, and doctor names the mode when it finds the plugin.
-- **A local Studio for the whole harness:** One launcher-authenticated, loopback-only dashboard brings a shared light and dark frame to health, configuration, experiments, reports and activity. Its Hub reads the CLI's installed version, stable update, doctor, drift, active mode and recent-run sources, while copyable repair commands and guarded spending keep every change explicit.
+- **A local Studio for the whole harness:** One launcher-authenticated, loopback-only dashboard brings health, configuration, experiments, reports and activity into a shared light and dark frame. Its Hub reads the CLI's health and recent-run sources, while Configure traces effective selections through every source layer and shows lint budget meters beside copyable CLI commands.
 
 ## The delivery loop
 

@@ -21,7 +21,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import auth, settings
+from . import auth, selection, settings
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -421,6 +421,23 @@ def _overview(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _selection_read(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("repository", "project_file"))
+    if request is None:
+        return
+    if any(not isinstance(request[name], str) for name in ("repository", "project_file")):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = selection.report(handler.server.repo_root, request["repository"],
+                                   request["project_file"])
+    except selection.SelectionError:
+        handler._error(400, "invalid_selection")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _ui_preferences_read(handler: Handler, route: Route) -> None:
     payload = handler.server.store.read_ui_preferences()
     route.response_schema.validate(payload)
@@ -521,6 +538,12 @@ OVERVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
                                              ("commands", "object")))
 CONFIGURE_SCHEMA = ResponseSchema("json-object", (("schema_version", "integer"),
                                                     ("commands", "object"), ("sections", "array")))
+SELECTION_REPORT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                    ("repository", "string"),
+                                                    ("project_file", "string"),
+                                                    ("selection", "object"), ("mode", "object"),
+                                                    ("groups", "array"), ("budgets", "array"),
+                                                    ("commands", "object")))
 CONFIGURE_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
                                                   ("draft", "object"), ("values", "object"),
                                                   ("warnings", "array")))
@@ -555,6 +578,8 @@ ROUTES = RouteRegistry((
           _overview, None, cli_command=("citizen", "doctor")),
     Route("GET", "/api/configure/schema", "application/json", CONFIGURE_SCHEMA,
           _configure_schema, None, cli_command=settings.CLI_COMMANDS["schema"]),
+    Route("POST", "/api/selection", "application/json", SELECTION_REPORT,
+          _selection_read, None, "application/json", selection.CLI_COMMANDS["selection"]),
     Route("POST", "/api/configure/read", "application/json", CONFIGURE_READ,
           _configure_read, None, "application/json", settings.CLI_COMMANDS["read"]),
     Route("POST", "/api/configure/preview", "application/json", CONFIGURE_PREVIEW,

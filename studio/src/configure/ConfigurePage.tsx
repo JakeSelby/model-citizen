@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
 import { CommandChip } from "../components/StudioKit";
+import { SelectionPanel } from "../selection/SelectionPanel";
 import {
   AUTOSAVE_DELAY_MS, errorMap, fieldEnabled, hydrateValues, parseJsonObject,
   remainingChanges, commandFor, type ConfigureSchema, type FieldDescriptor, type ReferenceValue,
@@ -253,11 +254,13 @@ export function ConfigurePage() {
       <Group align="flex-end" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / Configure</Text>
-          <Title order={1}>Configure inside a draft.</Title>
-          <Text c="dimmed" mt="xs">Preview and validate every setting before a checkpoint is written.</Text>
+          <Title order={1}>See what is in force. Change it in a draft.</Title>
+          <Text c="dimmed" mt="xs">Trace every selected value to its layer, then preview and validate changes before a checkpoint is written.</Text>
         </div>
         <Badge color={status === "ready" ? "teal" : status === "error" ? "red" : "gray"} variant="light">{status}</Badge>
       </Group>
+
+      <SelectionPanel />
 
       <Paper className="draft-loader" p="lg" withBorder>
         <Group align="flex-end">
