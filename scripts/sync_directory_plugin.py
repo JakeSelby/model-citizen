@@ -11,20 +11,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE_RELATIVE = Path("directory/model-citizen")
+SOURCE_LIST = Path("directory/model-citizen.sources")
 MAX_DIRECTORY_FILES = 512
-
-COPY_DIRECTORIES = (
-    Path("primitives/skills"),
-    Path("claude/agents"),
-    Path("claude/commands"),
-    Path("primitives/presentation"),
-)
-COPY_FILES = (
-    Path(".claude-plugin/icon.svg"),
-    Path(".claude-plugin/plugin.json"),
-    Path("docs/privacy.md"),
-    Path("LICENSE"),
-)
 
 DIRECTORY_README = """# Model Citizen for Claude Code
 
@@ -70,16 +58,19 @@ Read the [documentation](https://model-citizen.dev/) or report a problem in
 
 def _source_files(root):
     """Return the canonical source-to-bundle path mapping."""
+    source_list = root / SOURCE_LIST
+    entries = [Path(line) for line in source_list.read_text(encoding="utf-8").splitlines()
+               if line.strip()]
+    if entries != sorted(set(entries), key=str):
+        raise ValueError("directory plugin source list must be sorted and unique")
     files = {}
-    for relative in COPY_FILES:
-        files[relative] = root / relative
-    for relative in COPY_DIRECTORIES:
+    for relative in entries:
         source = root / relative
-        for path in sorted(source.rglob("*")):
-            if path.is_symlink():
-                raise ValueError("canonical plugin source is a symlink: %s" % path)
-            if path.is_file():
-                files[path.relative_to(root)] = path
+        if source.is_symlink():
+            raise ValueError("canonical plugin source is a symlink: %s" % source)
+        if not source.is_file():
+            raise ValueError("canonical plugin source is not a regular file: %s" % source)
+        files[relative] = source
     return files
 
 
@@ -99,10 +90,27 @@ def desired_files(root=ROOT):
     return expected
 
 
+def _paths(value):
+    return value if isinstance(value, list) else [value]
+
+
 def _manifest_targets(manifest):
-    targets = [manifest["skills"], manifest["commands"], manifest["outputStyles"]]
-    targets.extend(manifest["agents"])
+    targets = []
+    for component in ("skills", "commands", "outputStyles"):
+        targets.extend((component, target) for target in _paths(manifest[component]))
+    targets.extend(("agents", target) for target in _paths(manifest["agents"]))
     return targets
+
+
+def _target_type_error(component, resolved):
+    if component == "agents":
+        return None if resolved.is_file() and resolved.suffix == ".md" else "must be a .md file"
+    if component == "skills":
+        return None if resolved.is_dir() else "must be a directory"
+    if component == "commands":
+        return None if resolved.is_dir() or (resolved.is_file() and resolved.suffix == ".md") \
+            else "must be a directory or .md file"
+    return None if resolved.is_dir() or resolved.is_file() else "must be a file or directory"
 
 
 def bundle_errors(root=ROOT):
@@ -137,7 +145,7 @@ def bundle_errors(root=ROOT):
             if manifest.get("version") != version:
                 errors.append("bundle manifest version does not match VERSION")
             bundle_root = bundle.resolve()
-            for target in _manifest_targets(manifest):
+            for component, target in _manifest_targets(manifest):
                 resolved = (bundle / target).resolve()
                 try:
                     resolved.relative_to(bundle_root)
@@ -146,6 +154,11 @@ def bundle_errors(root=ROOT):
                     continue
                 if not resolved.exists():
                     errors.append("manifest path does not exist in the bundle: %s" % target)
+                    continue
+                type_error = _target_type_error(component, resolved)
+                if type_error:
+                    errors.append("manifest %s path %s %s" %
+                                  (component, target, type_error))
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             errors.append("bundle manifest is invalid: %s" % exc)
     return errors

@@ -64,13 +64,11 @@ docker run --rm -it --network none \
   <image-with-a-local-model-and-agent-cli> agent-cli -p "<the loop prompt>"
 ```
 
-`podman` substitutes unchanged. What breaks, in order: `--network none` cuts the model API too, so
-the image must contain its model and agent runtime. For a loop that must reach a hosted API, allow
-that one host and nothing else and pass authentication through the runtime's documented secret
-mechanism rather than mounting a home configuration directory. Web search and fetch, every MCP
-server reached over the network, and every package install remain unavailable. Losing all of it is
-the point when the task parses input you did not write: a path the loop lacks cannot be talked into
-opening.
+`podman` substitutes unchanged. `--network none` cuts every hosted API too, so this example requires
+the image to contain its model and agent runtime. A hosted-model loop needs a separately reviewed
+egress policy and is outside this recipe. Web search and fetch, every remote MCP server and every
+package install remain unavailable. Losing all of it is the point when the task parses input you
+did not write: a path the loop lacks cannot be talked into opening.
 
 ## Which one
 

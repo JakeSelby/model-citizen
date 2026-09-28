@@ -35,6 +35,24 @@ class DirectoryPluginTests(unittest.TestCase):
         self.assertEqual(len(list((bundle / "claude" / "commands").glob("*.md"))), 7)
         self.assertTrue((bundle / "primitives" / "presentation" / "scannable.md").is_file())
 
+    def test_source_list_is_file_level_and_excludes_unlisted_files(self):
+        listed = DIRECTORY_PLUGIN._source_files(REPO)
+        self.assertEqual(len(listed), 47)
+        self.assertNotIn(Path("primitives/skills/not-submitted/SKILL.md"), listed)
+
+    def test_manifest_target_types_are_checked(self):
+        bundle = REPO / DIRECTORY_PLUGIN.BUNDLE_RELATIVE
+        manifest = json.loads(
+            (bundle / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        manifest["agents"][0] = "./claude/agents/"
+        errors = []
+        for component, target in DIRECTORY_PLUGIN._manifest_targets(manifest):
+            resolved = (bundle / target).resolve()
+            type_error = DIRECTORY_PLUGIN._target_type_error(component, resolved)
+            if type_error:
+                errors.append((component, target, type_error))
+        self.assertIn(("agents", "./claude/agents/", "must be a .md file"), errors)
+
     def test_bundle_readme_discloses_external_services(self):
         readme = (REPO / DIRECTORY_PLUGIN.BUNDLE_RELATIVE / "README.md").read_text()
         for disclosure in ("repository content and metadata", "WebFetch and WebSearch",
@@ -58,17 +76,13 @@ class DirectoryPluginTests(unittest.TestCase):
                 path = root / DIRECTORY_PLUGIN.BUNDLE_RELATIVE / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(data)
-            for relative in DIRECTORY_PLUGIN.COPY_FILES:
-                source = REPO / relative
+            source_list = root / DIRECTORY_PLUGIN.SOURCE_LIST
+            source_list.parent.mkdir(parents=True, exist_ok=True)
+            source_list.write_text((REPO / DIRECTORY_PLUGIN.SOURCE_LIST).read_text())
+            for relative, source in DIRECTORY_PLUGIN._source_files(REPO).items():
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 destination.write_bytes(source.read_bytes())
-            for relative in DIRECTORY_PLUGIN.COPY_DIRECTORIES:
-                for source in (REPO / relative).rglob("*"):
-                    if source.is_file():
-                        destination = root / source.relative_to(REPO)
-                        destination.parent.mkdir(parents=True, exist_ok=True)
-                        destination.write_bytes(source.read_bytes())
             (root / "VERSION").write_text((REPO / "VERSION").read_text())
             readme = root / DIRECTORY_PLUGIN.BUNDLE_RELATIVE / "README.md"
             readme.write_text("stale\n")
