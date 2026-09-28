@@ -15,6 +15,7 @@ import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CommandChip, EvidenceState, StatusBadge } from "../components/StudioKit";
+import { useLiveUpdates } from "../live/LiveUpdates";
 import { loadOverview } from "./api";
 import { releaseSummary, systemSummary, type DoctorCheck, type Overview } from "./model";
 import "./overview.css";
@@ -130,6 +131,7 @@ export function DeterministicOverview({ overview, children }: { overview: Overvi
 
 export function OverviewPage() {
   const overview = useQuery({ queryKey: ["overview"], queryFn: loadOverview });
+  useLiveUpdates(["overview", "runs"], () => { void overview.refetch(); });
   return <Stack gap="xl">
     <Group align="flex-end" className="page-heading" justify="space-between">
       <div><Text className="eyebrow">Studio / Hub</Text><Title order={1}>Your harness at a glance.</Title><Text c="dimmed" mt="xs">Installed state, local evidence, and the next useful action.</Text></div>

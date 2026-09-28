@@ -15,6 +15,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import { CommandChip, EvidenceState } from "../components/StudioKit";
+import { useLiveUpdates } from "../live/LiveUpdates";
 import { loadSelection } from "./api";
 import {
   budgetPercent,
@@ -110,6 +111,7 @@ export function SelectionPanel() {
   }
 
   useEffect(() => { void refresh("", ""); }, []);
+  useLiveUpdates(["selection"], () => { void refresh(); });
 
   return (
     <Stack gap="lg">

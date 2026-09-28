@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import time
 import unittest
 from pathlib import Path
@@ -109,6 +110,27 @@ class SelectionBrowserTests(unittest.TestCase):
         self.assertIn(str(self.config.resolve()), body)
         self.assertIn("required", body)
         self.assertIn("off", body)
+
+    def test_cli_stance_change_updates_rendered_selection_without_reload(self):
+        self._open_configure()
+        self._wait(
+            "[...document.querySelectorAll('button')].some(b => b.textContent === 'Pause')",
+            "the live connection did not become current",
+        )
+        marker = "live-selection-page"
+        self.devtools.evaluate("window.__liveSelectionMarker = %s" % json.dumps(marker))
+        began = time.monotonic()
+        changed = subprocess.run(
+            [str(browser_support.CLI), "config", "set", "stances.voice", "answer-card"],
+            env=self.env, capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        self._wait("""[...document.querySelectorAll('.selection-row')].some(row =>
+            row.querySelector('.selection-key')?.textContent === 'stances.voice' &&
+            row.querySelector('code')?.textContent.includes('answer-card'))""",
+            "the changed stance did not render through the live connection", attempts=40)
+        self.assertLess(time.monotonic() - began, 2.0)
+        self.assertEqual(self.devtools.evaluate("window.__liveSelectionMarker"), marker)
 
 if __name__ == "__main__":
     unittest.main()

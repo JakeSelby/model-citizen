@@ -10,12 +10,14 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { EvidenceState, StatusBadge } from "../components/StudioKit";
+import { useLiveUpdates } from "../live/LiveUpdates";
+import { updateTouchesPaths } from "../live/model";
 import { loadLibrary } from "./api";
-import { filterLibrary, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
+import { filterLibrary, LibraryRequestGate, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
 import "./library.css";
 
 const EMPTY_FILTERS: LibraryFilters = { query: "", kind: "", root: "", state: "", cost: "" };
@@ -107,13 +109,31 @@ export function LibraryPage() {
   const [payload, setPayload] = useState<LibraryPayload | null>(null);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState<LibraryFilters>(EMPTY_FILTERS);
+  const requestGate = useRef(new LibraryRequestGate());
+  const filtered = useMemo(
+    () => filterLibrary(payload?.modules ?? [], filters),
+    [payload, filters],
+  );
+  const visiblePaths = useMemo(() => new Set(filtered.map((module) => module.source.path)), [filtered]);
+  const reload = useCallback(async () => {
+    const generation = requestGate.current.next();
+    try {
+      const value = await loadLibrary();
+      if (!requestGate.current.accepts(generation)) return;
+      setPayload(value);
+      setError("");
+    } catch (reason) {
+      if (!requestGate.current.accepts(generation)) return;
+      setError(reason instanceof Error ? reason.message : "Library unavailable.");
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
-    void loadLibrary().then((value) => { if (active) setPayload(value); })
-      .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Library unavailable."); });
-    return () => { active = false; };
-  }, []);
+    void reload();
+    return () => { requestGate.current.invalidate(); };
+  }, [reload]);
+  useLiveUpdates(["library", "library-index"], () => { void reload(); },
+    (event) => event.topics.includes("library-index") || updateTouchesPaths(event, visiblePaths));
 
   useEffect(() => {
     if (!focusedPath) return;
@@ -129,10 +149,6 @@ export function LibraryPage() {
     line?.scrollIntoView({ block: "center" });
   }, [payload, focusedPath, focusedLine]);
 
-  const filtered = useMemo(
-    () => filterLibrary(payload?.modules ?? [], filters),
-    [payload, filters],
-  );
   const kinds = [...new Set(payload?.modules.map((module) => module.kind) ?? [])].sort();
   const roots = [...new Map(payload?.modules.map((module) => [module.root.id, module.root]) ?? []).values()];
   const update = (key: keyof LibraryFilters) => (value: string | null) => {

@@ -23,8 +23,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (auth, free_suites, module_library, native_acceptance, replay, runs, selection,
-               settings, targets)
+from . import (auth, free_suites, live_updates, module_library, native_acceptance, replay, runs,
+               selection, settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -79,11 +79,13 @@ class ResponseSchema:
             if not isinstance(payload, bytes) or not payload.lstrip().lower().startswith(b"<!doctype html"):
                 raise ValueError("route response is not an HTML document")
             return
-        if self.kind in ("binary", "sse-stream"):
+        if self.kind in ("binary", "sse-stream", "live-sse-stream"):
             if not isinstance(payload, bytes):
                 raise ValueError("route response is not binary")
             if self.kind == "sse-stream" and payload and not payload.startswith(b"event: run\n"):
                 raise ValueError("route response is not an SSE run event")
+            if self.kind == "live-sse-stream" and payload and b"\nevent: " not in payload:
+                raise ValueError("route response is not an SSE live event")
             return
         if self.kind == "redirect":
             if payload is not None:
@@ -183,6 +185,7 @@ class Server(ThreadingHTTPServer):
         self.repo_root = self.static_root.parent.parent
         self.control_credential = credential
         self.store = store
+        self.instance_epoch = str(uuid.uuid4())
         super().__init__(address, Handler)
         try:
             self.static_files = auth.KnownRoots({"static": self.static_root})
@@ -194,7 +197,14 @@ class Server(ThreadingHTTPServer):
                 self.store.path, runs.default_catalog_path(self.repo_root),
                 target_service=self.target_service))
             self.run_progress = OrderedDict()
+            self.live_broker = live_updates.EventBroker(self.instance_epoch)
+            self.live_watcher = live_updates.LiveWatcher(
+                live_updates.WatchScanner(self.repo_root, self.store.path), self.live_broker)
+            self.live_watcher.start()
         except BaseException:
+            watcher = getattr(self, "live_watcher", None)
+            if watcher is not None:
+                watcher.close()
             mutations = getattr(self, "mutations", None)
             if mutations is not None:
                 mutations.close()
@@ -202,6 +212,10 @@ class Server(ThreadingHTTPServer):
             raise
 
     def server_close(self):
+        live_watcher = getattr(self, "live_watcher", None)
+        if live_watcher is not None:
+            live_watcher.close()
+            self.live_watcher = None
         run_supervisor = getattr(self, "run_supervisor", None)
         if run_supervisor is not None:
             self.mutations.call(run_supervisor.close)
@@ -898,6 +912,37 @@ def _run_stream(handler: Handler, route: Route) -> None:
     handler._send(200, body, route.media_type)
 
 
+def _live_stream(handler: Handler, route: Route) -> None:
+    cursor = handler.headers.get("Last-Event-ID")
+    if cursor is not None and len(cursor) > 256:
+        handler._error(400, "invalid_cursor")
+        return
+    handler.send_response(200)
+    handler.send_header("Content-Type", route.media_type)
+    handler.send_header("Cache-Control", "no-store")
+    handler.send_header("Connection", "keep-alive")
+    for name, value in auth.SECURITY_HEADERS:
+        handler.send_header(name, value)
+    handler.end_headers()
+    try:
+        while not handler.server.live_broker.closed:
+            events = handler.server.live_broker.wait(cursor, live_updates.HEARTBEAT_SECONDS)
+            if not events:
+                handler.wfile.write(b": heartbeat\n\n")
+                handler.wfile.flush()
+                continue
+            for event in events:
+                body = live_updates.encode(event)
+                route.response_schema.validate(body)
+                handler.wfile.write(body)
+                handler.wfile.flush()
+                cursor = live_updates.event_id(event)
+    except (BrokenPipeError, ConnectionError, OSError):
+        return
+    finally:
+        handler.close_connection = True
+
+
 def _ui_preferences_read(handler: Handler, route: Route) -> None:
     payload = handler.server.store.read_ui_preferences()
     route.response_schema.validate(payload)
@@ -1022,6 +1067,7 @@ RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("commands", "object")))
 RUN_RECORD = ResponseSchema("run-record")
 RUN_STREAM = ResponseSchema("sse-stream")
+LIVE_STREAM = ResponseSchema("live-sse-stream")
 NATIVE_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                                   ("clients", "array"), ("cases", "array"),
                                                   ("default_model", "string"),
@@ -1120,6 +1166,8 @@ ROUTES = RouteRegistry((
           _run_cancel, None, "application/json", ("citizen", "runs", "cancel")),
     Route("POST", "/api/runs/stream", "text/event-stream; charset=utf-8", RUN_STREAM,
           _run_stream, "sse", "application/json"),
+    Route("GET", "/api/live", "text/event-stream; charset=utf-8", LIVE_STREAM,
+          _live_stream, "sse"),
     Route("GET", "/api/experiments/native-acceptance/catalog", "application/json",
           NATIVE_CATALOG, _native_catalog, None,
           cli_command=("python3", "scripts/native_acceptance.py", "--help")),
@@ -1194,7 +1242,7 @@ def run(static_root: Path, store: Store, requested_port: int,
             record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
                       "pid": os.getpid(), "pid_start": pid_start, "port": port,
                       "host": server.host, "url": server.sessions.origin + "/",
-                      "control_credential": credential, "instance_epoch": str(uuid.uuid4())}
+                      "control_credential": credential, "instance_epoch": server.instance_epoch}
             store.write(record)
             _startup_trace("state-published")
             result = public_result(record, requested_port, fallback, reused=False)

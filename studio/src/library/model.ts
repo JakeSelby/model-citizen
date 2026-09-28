@@ -21,6 +21,23 @@ export type LibraryPayload = {
   summary: { modules: number; collisions: number; roots: number; generated_ms: number };
 };
 
+export class LibraryRequestGate {
+  private generation = 0;
+
+  next(): number {
+    this.generation += 1;
+    return this.generation;
+  }
+
+  accepts(generation: number): boolean {
+    return generation === this.generation;
+  }
+
+  invalidate(): void {
+    this.generation += 1;
+  }
+}
+
 export function repositoryRelativePath(repository: string, sourcePath: string): string {
   if (!repository) return sourcePath;
   const prefix = repository.endsWith("/") ? repository : `${repository}/`;

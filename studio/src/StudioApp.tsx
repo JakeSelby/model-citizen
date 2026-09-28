@@ -16,12 +16,13 @@ import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom"
 
 import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
-import { StatusBadge, ToastProvider } from "./components/StudioKit";
+import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { ExperimentsPage } from "./experiments/ExperimentsPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
+import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
 
 function FoundationPage({ title, description }: { title: string; description: string }) {
   return (
@@ -114,7 +115,7 @@ function StudioFrame() {
           <Text fw={600}>Personal workspace <Text c="dimmed" component="span" fw={400}>/ local</Text></Text>
           <div className="workspace-tools">
             <Text className="version-label" size="xs">Studio {version}</Text>
-            <StatusBadge>Health unavailable</StatusBadge>
+            <LiveUpdateControls />
             <NativeSelect aria-label="Color theme" className="theme-picker" disabled={!themeReady} value={colorScheme} onChange={changeTheme} data={[{ value: "auto", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
             <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
           </div>
@@ -143,5 +144,5 @@ function StudioFrame() {
 }
 
 export function StudioApp() {
-  return <ToastProvider><StudioFrame /></ToastProvider>;
+  return <LiveUpdatesProvider><ToastProvider><StudioFrame /></ToastProvider></LiveUpdatesProvider>;
 }

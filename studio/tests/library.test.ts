@@ -5,7 +5,7 @@ import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
-import { filterLibrary, repositoryRelativePath, type LibraryModule } from "../src/library/model.ts";
+import { filterLibrary, LibraryRequestGate, repositoryRelativePath, type LibraryModule } from "../src/library/model.ts";
 import { LibraryGroups, sourceLineId } from "../src/library/LibraryPage.tsx";
 
 function moduleAt(index: number): LibraryModule {
@@ -75,4 +75,14 @@ test("file-line links filter by source path, expand the module, and mark the exa
   assert.match(html, /<details class="library-module"[^>]* open=""/);
   assert.match(html, new RegExp(`id="${sourceLineId(module.key, 2)}"[^>]*tabindex="-1"`));
   assert.match(html, /library-source-line focused/);
+});
+
+test("request generations prevent a stale library response from replacing newer inventory", () => {
+  const gate = new LibraryRequestGate();
+  const slower = gate.next();
+  const newer = gate.next();
+  assert.equal(gate.accepts(newer), true);
+  assert.equal(gate.accepts(slower), false);
+  gate.invalidate();
+  assert.equal(gate.accepts(newer), false);
 });
