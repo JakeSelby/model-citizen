@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "harness_version": "0.14.1",
-  "summary": "Upgrade from v0.14.0 to complete the Model Citizen rename across public documentation and distribution metadata, accept every bundled skill manifest in standard YAML registries, publish plugin metadata at v0.14.1, and keep reworded framework review-layer briefs inside their declared constrained role. The patch changes no configuration schema or defaults.",
+  "summary": "Upgrade from v0.14.0 to complete the Model Citizen rename across public documentation and distribution metadata, accept every bundled skill manifest in standard YAML registries, publish plugin metadata at v0.14.1, and keep reworded framework review-layer briefs inside their declared constrained role. The patch changes no configuration schema or defaults, and the architecture-viewer preview is inert until an external adapter is registered and selected.",
   "actions": [
     "Run `citizen upgrade --dry-run`, inspect the recorded plugin and checkout changes, then run `citizen upgrade`. The plugin marketplace and plugin manifests now report v0.14.1.",
     "Run `citizen sync --dry-run`, resolve any unmanaged-file conflict it names, then run `citizen sync`. Existing configuration and stance selections remain unchanged.",
