@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.0",
-  "release_state": "released",
+  "harness_version": "0.14.1",
+  "release_state": "candidate",
   "required_cases": [
     "installation",
     "stance-switch",
@@ -68,14 +68,9 @@
       "provider": "anthropic",
       "client": "cli",
       "platform": "macos",
-      "status": "qualified",
+      "status": "unqualified",
       "required_for_release": true,
-      "evidence": [
-        {
-          "path": "compatibility/evidence/claude-code-cli-macos-0.14.0.json",
-          "sha256": "0e80df17500ca14667029009d2ac17a7545d2e7c6b8f501c08d0a44400295f4c"
-        }
-      ],
+      "evidence": [],
       "runtime_version": "2.1.283",
       "client_version": "2.1.283"
     },
@@ -95,16 +90,11 @@
       "provider": "anthropic",
       "client": "cli",
       "platform": "linux",
-      "status": "qualified",
+      "status": "unqualified",
       "required_for_release": true,
-      "evidence": [
-        {
-          "path": "compatibility/evidence/claude-code-cli-linux-0.14.0.json",
-          "sha256": "50027f629342da8ba0bcca94334ee9674e4114d073b292a5cb9b90dd235b88f1"
-        }
-      ],
-      "runtime_version": "2.1.280",
-      "client_version": "2.1.280"
+      "evidence": [],
+      "runtime_version": "2.1.283",
+      "client_version": "2.1.283"
     },
     {
       "id": "claude-code-plugin-marketplace",
@@ -200,6 +190,5 @@
     "In the 0.13.0 and 0.13.1 qualifications a band worker's effort was read from the installed worker definition, not from the subagent's transcript; its model, the budget sentence in its brief, the usage feed and the usage row were observed from the run.",
     "With a token-only login (`CLAUDE_CODE_OAUTH_TOKEN`, as in CI and containers, including the Linux target image), an isolated role worker that a Claude Code session launches cannot authenticate: the client strips the token from its tool subprocesses, and the worker reports that it is not logged in. A client whose confined layers cannot run may then do their work in its own context, unconfined, as the 0.13.0 BMad integration suite observed. Qualification rounds launch their workers from the runner rather than from a client session, so they do not exercise this path. Tracked in #759.",
     "In the 0.13.0 and 0.13.1 qualifications cost-posture compared each role the cost variant does not change by its content, byte for byte, rather than by its link, so a role replaced by an identical copy would also pass; step 8 asks that every other role keeps its link. Tracked in #742."
-  ],
-  "qualification_source_commit": "1d7fdbd37eb5c5251259fc16a2fe7f2bfe105bc3"
+  ]
 }
