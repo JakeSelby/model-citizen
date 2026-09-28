@@ -3961,7 +3961,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     mark_init_defaults(cfg, entered)
     write_json_atomic(path, cfg)
     print(f"\nwrote {path}")
-    print("next: bin/harness sync")
+    print("next: bin/citizen sync")
     return 0
 
 

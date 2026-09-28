@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 323,
+    "story": 324,
     "task": 37
   },
   "items": [
@@ -7847,6 +7847,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B121.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S323",
+      "github_number": 1040,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1040",
+      "title": "Finish the Model Citizen rename and prepare v0.14.1",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S323.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

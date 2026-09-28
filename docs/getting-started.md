@@ -1,7 +1,5 @@
 # Start with your way of working
 
-Formerly Agent Harness.
-
 Model Citizen is a harness of shared custom primitives for the two runtimes it supports today,
 Claude Code and Codex. Your personal stances are switches for behavior: communication, delegation,
 testing, autonomy and decision-making. The same selection resolves in both runtimes, and three of
@@ -27,10 +25,10 @@ Read the preview it prints, then select which runtimes to manage and install:
 
 ```sh
 cd ~/repos/agent-harness
-bin/harness config set claude.manage true
-bin/harness config set codex.manage true
-bin/harness install --dry-run
-bin/harness install
+bin/citizen config set claude.manage true
+bin/citizen config set codex.manage true
+bin/citizen install --dry-run
+bin/citizen install
 ```
 
 To clone by hand instead, or to see what each step of the script does, read
@@ -41,16 +39,16 @@ adds the selected missing runtime tools and synchronizes their configuration. On
 also install Homebrew packages and VS Code; review `install --help` to skip those operations.
 When the tools are already installed, use `sync --dry-run` then `sync` instead.
 
-Complete each selected client's own sign-in. `citizen doctor` reports files and configuration,
+Complete each selected client's own sign-in. `bin/citizen doctor` reports files and configuration,
 not proof that a login or native hook is active. Start a new session and accept native hook trust
-where the client requires it. Use `citizen trust <repo>` separately for the repository gate.
+where the client requires it. Use `bin/citizen trust <repo>` separately for the repository gate.
 
 ## Make your first switch
 
 ```sh
-bin/harness config set stances.voice answer-card
-bin/harness stances --json
-bin/harness sync
+bin/citizen config set stances.voice answer-card
+bin/citizen stances --json
+bin/citizen sync
 ```
 
 The same selected policy reaches both adapters. Restart the client to load changed global
@@ -64,8 +62,8 @@ Shared workflows compose roles and skills. Claude exposes command projections; C
 `harness-<workflow>` skill projections. Both use the same source. The handoff workflow writes
 shared task data; [task continuation](task-continuation.md) explains revision checks and verification.
 
-Run `citizen diff` for drift, `citizen usage` for recorded measurements, and
-`citizen compatibility` for qualification. [Installation ownership](runtime-installation.md)
+Run `bin/citizen diff` for drift, `bin/citizen usage` for recorded measurements, and
+`bin/citizen compatibility` for qualification. [Installation ownership](runtime-installation.md)
 covers custom configuration homes, adoption, uninstall and conflicts. Never replace an unmanaged
 file just to make sync quiet.
 
@@ -87,7 +85,7 @@ opening a pull request also needs a remote and a signed-in GitHub account.
 Then close the loop and ask which of your rules actually fired:
 
 ```sh
-citizen usage --rules
+bin/citizen usage --rules
 ```
 
 It prints one line per detector over the last 30 days — hits, the sessions that saw them and the
@@ -102,5 +100,5 @@ Model access is billed by your provider or covered by your subscription; rate-li
 context usage still matter. The harness supplies policy, not an AI model or paid access.
 [Usage](usage.md) shows observed measurements without inventing missing values. The
 [preferences guide](preferences.md) explains the cost stance. [How it works](how-it-works.md)
-and [sandboxing](sandboxing.md) explain the controls. `citizen uninstall` restores owned settings
+and [sandboxing](sandboxing.md) explain the controls. `bin/citizen uninstall` restores owned settings
 where possible and reports conflicts rather than overwriting your edits.
