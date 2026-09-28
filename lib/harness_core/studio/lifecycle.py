@@ -23,10 +23,16 @@ from .state import PROTOCOL_VERSION, SCHEMA_VERSION, StateError, Store
 START_TIMEOUT = 30.0
 STOP_TIMEOUT = 2.0
 CHILD_SESSION_ENV = "HARNESS_STUDIO_CHILD_SESSION"
+STARTUP_TRACE_ENV = "HARNESS_STUDIO_STARTUP_TRACE"
 
 
 class InstanceError(RuntimeError):
     """A recorded Studio instance cannot be controlled safely."""
+
+
+def _startup_trace(stage: str) -> None:
+    if os.environ.get(STARTUP_TRACE_ENV) == "1":
+        print("studio-startup: " + stage, file=sys.stderr, flush=True)
 
 
 def state_root(home: Path) -> Path:
@@ -164,10 +170,14 @@ def current(root: Path) -> Optional[Dict[str, object]]:
 def serve(static_root: Path, root: Path, requested_port: int, ready=None,
           browser: bool = False) -> None:
     try:
+        _startup_trace("child-entered")
         if os.environ.pop(CHILD_SESSION_ENV, None) == "1":
             os.setsid()
+            _startup_trace("session-created")
             _close_inherited_fds()
+            _startup_trace("descriptors-closed")
         with Store(root) as store:
+            _startup_trace("state-opened")
             server.run(static_root, store, requested_port, ready, browser=browser)
     except (OSError, StateError, RuntimeError) as exc:
         raise InstanceError(str(exc)) from exc

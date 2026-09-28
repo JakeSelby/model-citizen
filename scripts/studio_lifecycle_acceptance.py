@@ -183,7 +183,7 @@ def lifecycle(root=ROOT, python=sys.executable):
         home = Path(os.path.realpath(temporary)) / "home"
         home.mkdir()
         env = dict(os.environ, HOME=str(home), HARNESS_HOME=str(home),
-                   PYTHONDONTWRITEBYTECODE="1")
+                   PYTHONDONTWRITEBYTECODE="1", HARNESS_STUDIO_STARTUP_TRACE="1")
         started = command(python, str(root / "bin" / "harness"), "studio", "--detach",
                           "--no-open", "--json", env=env, timeout=45)
         state_path = home / ".local/state/agent-harness/studio/instance.json"

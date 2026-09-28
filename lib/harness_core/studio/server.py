@@ -24,6 +24,7 @@ from . import auth, settings
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
+STARTUP_TRACE_ENV = "HARNESS_STUDIO_STARTUP_TRACE"
 CONTROL_HEALTH = "/__studio/control/health"
 CONTROL_STOP = "/__studio/control/stop"
 CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
@@ -45,6 +46,11 @@ def _process_identity() -> Optional[str]:
     if sys.platform == "darwin":
         return secrets.token_hex(24)
     return workers.process_start(os.getpid())
+
+
+def _startup_trace(stage: str) -> None:
+    if os.environ.get(STARTUP_TRACE_ENV) == "1":
+        print("studio-startup: " + stage, file=sys.stderr, flush=True)
 
 
 MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
@@ -549,6 +555,7 @@ def run(static_root: Path, store: Store, requested_port: int,
     lock = store.acquire()
     if lock is None:
         raise RuntimeError("another Studio instance owns the instance lock")
+    _startup_trace("instance-locked")
     server = None
     old_handlers = {}
     try:
@@ -561,7 +568,9 @@ def run(static_root: Path, store: Store, requested_port: int,
                     old_handlers[signum] = signal.getsignal(signum)
                     signal.signal(signum, request_stop)
             credential = secrets.token_urlsafe(48)
+            _startup_trace("binding")
             server, fallback = bind(static_root, credential, store, requested_port)
+            _startup_trace("bound")
             pid_start = _process_identity()
             if not pid_start:
                 raise RuntimeError("this platform cannot identify the Studio process start time")
@@ -572,6 +581,7 @@ def run(static_root: Path, store: Store, requested_port: int,
                       "host": server.host, "url": server.sessions.origin + "/",
                       "control_credential": credential, "instance_epoch": str(uuid.uuid4())}
             store.write(record)
+            _startup_trace("state-published")
             result = public_result(record, requested_port, fallback, reused=False)
             launch_path = None
             if browser:

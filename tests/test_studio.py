@@ -2,7 +2,9 @@
 """Studio server state, lifecycle and public CLI acceptance tests."""
 from __future__ import annotations
 
+import contextlib
 import errno
+import io
 import json
 import http.client
 import os
@@ -174,6 +176,20 @@ class StateTests(StudioFixture):
 
 
 class LifecycleTests(StudioFixture):
+    def test_startup_breadcrumbs_are_opt_in_and_credential_free(self):
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {}, clear=True), contextlib.redirect_stderr(output):
+            studio_lifecycle._startup_trace("disabled")
+        self.assertEqual(output.getvalue(), "")
+
+        output = io.StringIO()
+        with mock.patch.dict(os.environ, {studio_lifecycle.STARTUP_TRACE_ENV: "1"}), \
+                contextlib.redirect_stderr(output):
+            studio_lifecycle._startup_trace("child-entered")
+            studio_server._startup_trace("state-published")
+        self.assertEqual(output.getvalue(),
+                         "studio-startup: child-entered\nstudio-startup: state-published\n")
+
     def test_static_page_without_the_nonce_marker_fails_closed(self):
         handler = mock.Mock()
         handler.server.static_files.read_bytes.return_value = b"<!doctype html><title>Studio</title>"
@@ -433,6 +449,30 @@ class LifecycleTests(StudioFixture):
         self.assertFalse(popen.call_args.kwargs["close_fds"])
         self.assertEqual(
             popen.call_args.kwargs["env"][studio_lifecycle.CHILD_SESSION_ENV], "1")
+
+    def test_failed_macos_launch_reports_opt_in_child_breadcrumbs(self):
+        child = mock.Mock(pid=111)
+        child.poll.return_value = 1
+        captured = {}
+
+        def spawn(_argv, **kwargs):
+            captured["env"] = kwargs["env"]
+            kwargs["stderr"].write("studio-startup: child-entered\n")
+            kwargs["stderr"].flush()
+            return child
+
+        with mock.patch.dict(os.environ, {studio_lifecycle.STARTUP_TRACE_ENV: "1"}), \
+                mock.patch.object(studio_lifecycle.sys, "platform", "darwin"), \
+                mock.patch.object(studio_lifecycle.subprocess, "Popen", side_effect=spawn), \
+                mock.patch.object(studio_lifecycle, "START_TIMEOUT", 0.001), \
+                mock.patch.object(studio_lifecycle, "_launch_ready", return_value=None), \
+                mock.patch.object(studio_lifecycle, "_cleanup_failed_launch"):
+            with self.assertRaises(studio_lifecycle.InstanceError) as raised:
+                studio_lifecycle.launch_detached(["citizen"], state_root(self.home), 0)
+        message = str(raised.exception)
+        self.assertIn("child: studio-startup: child-entered", message)
+        self.assertNotIn("credential", message)
+        self.assertEqual(captured["env"][studio_lifecycle.STARTUP_TRACE_ENV], "1")
 
     def test_detached_child_creates_its_session_before_serving(self):
         events = []
