@@ -42,6 +42,47 @@ class RunError(ValueError):
     """A catalog or run request is invalid and no process should start."""
 
 
+def read_only_list(state_root: Path) -> List[Dict[str, Any]]:
+    """Read public run sidecars without recovery, indexing, writes, or process admission."""
+    root_fd = runs_fd = None
+    try:
+        root_fd = os.open(str(Path(state_root)), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            runs_fd = _open_readonly_directory(root_fd, "runs")
+        except FileNotFoundError:
+            return []
+        records = []
+        for run_id in sorted(os.listdir(runs_fd)):
+            descriptor = _open_readonly_directory(runs_fd, run_id)
+            try:
+                record = RunSupervisor._validate_record(_load_json(descriptor, "run.json"), run_id)
+            finally:
+                os.close(descriptor)
+            records.append(record)
+        records.sort(key=lambda item: (item.get("queue_sequence", 0), item["run_id"]))
+        return [RunSupervisor._public(record) for record in records]
+    except FileNotFoundError:
+        return []
+    finally:
+        if runs_fd is not None:
+            os.close(runs_fd)
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _open_readonly_directory(parent_fd: int, name: str) -> int:
+    if not name or name in (".", "..") or os.sep in name:
+        raise RunError("run state has an unsafe directory name")
+    descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    info = os.fstat(descriptor)
+    if (not stat.S_ISDIR(info.st_mode)
+            or hasattr(os, "getuid") and info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        os.close(descriptor)
+        raise RunError("run state directory is missing or unsafe")
+    return descriptor
+
+
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 

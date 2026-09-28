@@ -247,6 +247,46 @@ textarea:focus-visible {
 
 .report-grid { align-content: stretch; }
 
+.system-summary { border-left: var(--studio-space-1) solid var(--studio-primary); }
+
+.release-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--studio-space-6);
+  margin-top: var(--studio-space-6);
+  padding-top: var(--studio-space-5);
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+}
+
+.doctor-list,
+.run-list {
+  margin: var(--studio-space-5) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doctor-row,
+.run-list > li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(12rem, 0.8fr);
+  gap: var(--studio-space-5);
+  padding-block: var(--studio-space-4);
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+}
+
+.doctor-row:first-child,
+.run-list > li:first-child { border-top: 0; }
+
+.doctor-row .command-chip { align-self: start; }
+
+.run-list > li {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.drift-list { overflow-wrap: anywhere; }
+
 .report-card {
   display: flex;
   min-height: var(--studio-card-min-height);
@@ -426,10 +466,13 @@ textarea:focus-visible {
   .primary-navigation { gap: var(--studio-space-1); }
 
   .draft-loader .mantine-Group-root,
-  .save-bar {
+  .save-bar,
+  .release-line {
     align-items: stretch;
     flex-direction: column;
   }
+
+  .doctor-row { grid-template-columns: 1fr; }
 
   .nav-link {
     padding: 0 var(--studio-space-3);

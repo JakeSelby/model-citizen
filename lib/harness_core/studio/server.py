@@ -19,7 +19,7 @@ from pathlib import Path
 from socketserver import TCPServer
 from typing import Callable, Dict, Iterable, Optional, Tuple
 
-from harness_core import workers
+from harness_core import overview, workers
 
 from . import auth, settings
 from .mutations import MutationExecutor
@@ -412,6 +412,15 @@ def _configure_schema(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _overview(handler: Handler, route: Route) -> None:
+    try:
+        payload = overview.current()
+    except Exception:
+        payload = overview.unavailable("Overview sources are unavailable.")
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _ui_preferences_read(handler: Handler, route: Route) -> None:
     payload = handler.server.store.read_ui_preferences()
     route.response_schema.validate(payload)
@@ -501,6 +510,15 @@ STOP = ResponseSchema("json-object", (("stopping", "boolean"),))
 BOOTSTRAP_CONTROL = ResponseSchema("json-object", (("token", "string"), ("form_name", "string")))
 SESSION = ResponseSchema("json-object", (("authenticated", "boolean"), ("csrf_token", "string")))
 UI_PREFERENCES = ResponseSchema("json-object", (("color_scheme", "string"),))
+OVERVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
+                                             ("generated_at", "string"),
+                                             ("installed", "object"),
+                                             ("release", "object"),
+                                             ("mode", "object"),
+                                             ("doctor", "object"),
+                                             ("drift", "object"),
+                                             ("runs", "object"),
+                                             ("commands", "object")))
 CONFIGURE_SCHEMA = ResponseSchema("json-object", (("schema_version", "integer"),
                                                     ("commands", "object"), ("sections", "array")))
 CONFIGURE_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
@@ -533,6 +551,8 @@ ROUTES = RouteRegistry((
           _ui_preferences_read, "ui-preferences"),
     Route("POST", "/api/ui/preferences", "application/json", UI_PREFERENCES,
           _ui_preferences_write, "ui-preferences", "application/json"),
+    Route("GET", "/api/overview", "application/json", OVERVIEW,
+          _overview, None, cli_command=("citizen", "doctor")),
     Route("GET", "/api/configure/schema", "application/json", CONFIGURE_SCHEMA,
           _configure_schema, None, cli_command=settings.CLI_COMMANDS["schema"]),
     Route("POST", "/api/configure/read", "application/json", CONFIGURE_READ,

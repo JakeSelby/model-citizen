@@ -2,11 +2,9 @@ import {
   Anchor,
   Badge,
   Button,
-  Card,
   Container,
   Group,
   Paper,
-  SimpleGrid,
   Stack,
   Text,
   Title,
@@ -18,100 +16,10 @@ import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom"
 
 import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
-import { EvidenceState, StatusBadge, ToastProvider } from "./components/StudioKit";
+import { StatusBadge, ToastProvider } from "./components/StudioKit";
+import { OverviewPage } from "./overview/OverviewPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
-
-const reportCards = [
-  {
-    label: "System health",
-    measure: "Awaiting evidence",
-    detail: "Diagnostics will appear after the first local snapshot.",
-    href: "/reports#system-health",
-  },
-  {
-    label: "Hook performance",
-    measure: "No timing window",
-    detail: "Invocation counts and latency stay linked to their source window.",
-    href: "/reports#hook-performance",
-  },
-  {
-    label: "Efficacy",
-    measure: "No comparison yet",
-    detail: "Run a paired experiment before judging a draft.",
-    href: "/reports#efficacy",
-  },
-  {
-    label: "Usage",
-    measure: "No local total",
-    detail: "Estimated and unpriced usage are reported separately.",
-    href: "/reports#usage",
-  },
-] as const;
-
-function ReportCard({ label, measure, detail, href }: (typeof reportCards)[number]) {
-  return (
-    <Card className="report-card" component={NavLink} to={href} withBorder>
-      <Text className="eyebrow">{label}</Text>
-      <Text className="report-measure" fw={650}>{measure}</Text>
-      <Text c="dimmed" size="sm">{detail}</Text>
-      <Text className="card-link" fw={600} size="sm">Open report <span aria-hidden="true">↗</span></Text>
-    </Card>
-  );
-}
-
-function Hub() {
-  return (
-    <Stack gap="xl">
-      <Group align="flex-end" className="page-heading" justify="space-between">
-        <div>
-          <Text className="eyebrow">Studio / Hub</Text>
-          <Title order={1}>Your harness at a glance.</Title>
-          <Text c="dimmed" mt="xs">Local evidence, current work, and the next useful action.</Text>
-        </div>
-        <Button component={NavLink} to="/experiments" variant="filled">Open experiments</Button>
-      </Group>
-
-      <section aria-labelledby="overview-title" className="hub-grid">
-        <Paper className="overview-card" px={{ base: "var(--studio-space-5)", xs: "xl" }} py="xl" withBorder>
-          <Group justify="space-between">
-            <Title id="overview-title" order={2}>AI health overview</Title>
-            <StatusBadge>Off</StatusBadge>
-          </Group>
-          <Text className="overview-lead" mt="lg">Enable a read-only assessment when you want one.</Text>
-          <Text c="dimmed" mt="sm">
-            Studio makes no model calls until you opt in. The provider, model, evidence scope,
-            refresh policy, and daily cap stay visible with every assessment.
-          </Text>
-          <Group mt="xl">
-            <Button component={NavLink} to="/configure#ai-overview" variant="light">Review AI settings</Button>
-            <Anchor component={NavLink} to="/reports">Browse deterministic reports</Anchor>
-          </Group>
-        </Paper>
-        <SimpleGrid className="report-grid" cols={{ base: 1, xs: 2 }} spacing="md">
-          {reportCards.map((card) => <ReportCard key={card.label} {...card} />)}
-        </SimpleGrid>
-      </section>
-
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-        <Paper p="xl" withBorder>
-          <Group justify="space-between">
-            <Title order={2}>Drafts & active runs</Title>
-            <Anchor component={NavLink} to="/experiments">All experiments</Anchor>
-          </Group>
-          <EvidenceState kind="empty" title="Evidence not loaded">Draft and run state will appear when the core endpoint is available.</EvidenceState>
-        </Paper>
-        <Paper p="xl" withBorder>
-          <Group justify="space-between">
-            <Title order={2}>Alerts & notifications</Title>
-            <StatusBadge>Unavailable</StatusBadge>
-          </Group>
-          <EvidenceState kind="empty" title="Evidence not loaded">No health claim is shown until authoritative alerts are available.</EvidenceState>
-        </Paper>
-      </SimpleGrid>
-    </Stack>
-  );
-}
 
 function FoundationPage({ title, description }: { title: string; description: string }) {
   return (
@@ -214,7 +122,7 @@ function StudioFrame() {
       <Container component="main" id="main-content" className="main-content" size="xl" tabIndex={-1}>
         <Text className="visually-hidden" component="span">Current page: {title}</Text>
         <Routes>
-          <Route path="/" element={<Hub />} />
+          <Route path="/" element={<OverviewPage />} />
           <Route path="/configure" element={<ConfigurePage />} />
           {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route

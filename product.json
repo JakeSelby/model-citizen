@@ -241,7 +241,7 @@
     },
     {
       "title": "A local Studio for the whole harness",
-      "line": "One launcher-authenticated, loopback-only dashboard brings a shared light and dark frame to health, configuration, experiments, reports and activity, with copyable CLI commands and guarded usage-spending runs that show estimates and caps before one-time confirmation.",
+      "line": "One launcher-authenticated, loopback-only dashboard brings a shared light and dark frame to health, configuration, experiments, reports and activity. Its Hub reads the CLI's installed version, stable update, doctor, drift, active mode and recent-run sources, while copyable repair commands and guarded spending keep every change explicit.",
       "issue": 955
     }
   ],

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { MantineProvider } from "@mantine/core";
+import { createElement as h } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import { loadDraft, previewDraft } from "../src/configure/api.ts";
+import { GovernedSyncReview } from "../src/configure/ConfigurePage.tsx";
 import {
   AUTOSAVE_DELAY_MS, commandFor, errorMap, fieldEnabled, fieldsOf, hydrateValues,
   parseJsonObject, remainingChanges, type ConfigureSchema,
@@ -34,6 +38,14 @@ const schema: ConfigureSchema = {
     }],
   }],
 };
+
+test("governed sync starts with dry-run review and withholds the apply command", () => {
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(GovernedSyncReview)));
+  assert.match(html, /id="governed-sync"/);
+  assert.match(html, /citizen sync --dry-run/);
+  assert.match(html, /I reviewed the dry-run output/);
+  assert.doesNotMatch(html, /Apply reviewed sync/);
+});
 
 test("schema fields drive the form model without route-specific code", () => {
   assert.deepEqual(fieldsOf(schema).map((field) => field.path), ["identity.name"]);

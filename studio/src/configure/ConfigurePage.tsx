@@ -19,6 +19,32 @@ type FieldProps = {
   onChange: (value: unknown) => void;
 };
 
+export function GovernedSyncReview() {
+  const [reviewed, setReviewed] = useState(false);
+  return (
+    <Paper aria-labelledby="governed-sync-title" id="governed-sync" className="settings-section" p="xl" withBorder>
+      <Title id="governed-sync-title" order={2}>Review projection sync</Title>
+      <Text c="dimmed" mt="xs" size="sm">
+        Preview every projection change first. Studio will not run either command or write to the installed harness.
+      </Text>
+      <Stack gap="lg" mt="lg">
+        <CommandChip command="citizen sync --dry-run" label="Preview sync" />
+        <Checkbox
+          checked={reviewed}
+          label="I reviewed the dry-run output and want the explicit apply command."
+          onChange={(event) => setReviewed(event.currentTarget.checked)}
+        />
+        {reviewed && (
+          <Alert color="yellow" title="Applying changes is explicit">
+            <Text mb="sm" size="sm">Copying does not run sync. Run the command in your terminal when you are ready.</Text>
+            <CommandChip command="citizen sync" label="Apply reviewed sync" />
+          </Alert>
+        )}
+      </Stack>
+    </Paper>
+  );
+}
+
 function Field({ field, value, error, disabled, onChange }: FieldProps) {
   const common = { description: field.help, disabled, error, label: field.label, required: field.required };
   if (field.kind === "boolean") {
@@ -253,6 +279,8 @@ export function ConfigurePage() {
           <ul className="message-list">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </Alert>
       )}
+
+      <GovernedSyncReview />
 
       {preview && preview.errors.length > 0 && (
         <Alert color="red" title="Nothing was saved">

@@ -43,7 +43,9 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -70,6 +72,7 @@ from harness_core import codex_client, keychain, collisions, importer, cache_pre
 from harness_core import intents
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
+from harness_core import overview as overview_core
 from harness_core import studio
 from harness_core.studio import settings as studio_settings
 from harness_core import decision as decisions_provider
@@ -4582,6 +4585,25 @@ def _studio_report(result: Dict[str, Any], as_json: bool) -> None:
     say(str(result["url"]))
 
 
+def _studio_doctor_lines() -> List[str]:
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        if cmd_doctor(argparse.Namespace()) != 0:
+            raise ValueError("doctor query failed")
+    return output.getvalue().splitlines()
+
+
+def _studio_overview() -> Dict[str, Any]:
+    return overview_core.snapshot(
+        REPO,
+        catalog=lambda: primitive_catalog.catalog(REPO),
+        doctor=_studio_doctor_lines,
+        drift=_diff_lines,
+        selection=load_selection,
+        runs=lambda: studio.runs.read_only_list(state_dir() / "studio"),
+    )
+
+
 def cmd_studio(args: argparse.Namespace) -> int:
     if args.port < 0 or args.port > 65535:
         raise SystemExit("--port must be between 0 and 65535")
@@ -4589,6 +4611,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
         raise SystemExit("studio status and stop accept only --json")
     root = studio.state_root(home())
     static_root = REPO / "studio" / "dist"
+    overview_core.install(_studio_overview)
     try:
         if args._serve:
             studio.serve(static_root, root, args.port)
