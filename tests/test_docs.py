@@ -90,6 +90,10 @@ class GuideTests(unittest.TestCase):
         for command in ("citizen doctor", "citizen diff", "citizen uninstall"):
             self.assertIn(command, GUIDE, msg=command)
 
+    def test_commands_after_entering_a_project_use_the_checkout_launcher(self):
+        self.assertIn("~/repos/agent-harness/bin/citizen usage --rules", GUIDE)
+        self.assertIn("~/repos/agent-harness/bin/citizen uninstall", GUIDE)
+
     def test_the_links_it_offers_resolve(self):
         for name in ("usage.md", "preferences.md", "how-it-works.md", "sandboxing.md"):
             self.assertIn(f"]({name})", GUIDE, msg=name)

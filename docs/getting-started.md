@@ -85,7 +85,7 @@ opening a pull request also needs a remote and a signed-in GitHub account.
 Then close the loop and ask which of your rules actually fired:
 
 ```sh
-bin/citizen usage --rules
+~/repos/agent-harness/bin/citizen usage --rules
 ```
 
 It prints one line per detector over the last 30 days — hits, the sessions that saw them and the
@@ -100,5 +100,5 @@ Model access is billed by your provider or covered by your subscription; rate-li
 context usage still matter. The harness supplies policy, not an AI model or paid access.
 [Usage](usage.md) shows observed measurements without inventing missing values. The
 [preferences guide](preferences.md) explains the cost stance. [How it works](how-it-works.md)
-and [sandboxing](sandboxing.md) explain the controls. `bin/citizen uninstall` restores owned settings
+and [sandboxing](sandboxing.md) explain the controls. `~/repos/agent-harness/bin/citizen uninstall` restores owned settings
 where possible and reports conflicts rather than overwriting your edits.
