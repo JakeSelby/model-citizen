@@ -275,7 +275,7 @@ DIRECTIVE = re.compile(
     r"|abid(?:e|ing) by|carry(?:ing)? out|according to|as (?:instructed|directed|specified|"
     r"described|set out|laid out) (?:in|by)|per (?:the|those|these|its|that|this|their)\b"
     r"|your (?:\w+ ){0,2}(?:instructions|methodology|guidelines|checklist|rubric|procedure))\b")
-LEAD_GAP = 6
+LEAD_GAP = 8
 CLAUSE_BREAK = re.compile(r"[,:()]|\b(?:and|then|but|or|while|after|before)\b")
 # The directive after the file, later in its sentence or in the next one, which counts only when
 # it points back at the file: "read <path> and follow it", not "read <path> and use it as a

@@ -49,6 +49,10 @@ DIRECTED = {
         "read the review instructions at " + PROMPT + " to understand how to conduct it. Then, "
         "read calc.py and apply those edge-case-hunter review instructions to it."
     ),
+    "qualified directive before prefixed path": (
+        "Review calc.py following the edge-case-hunter review layer instructions in _bmad/"
+        "review-prompts/edge-case-hunter.md."
+    ),
     "em dash explanation": (
         "Before doing anything else, read the file `" + PROMPT + "` in the current working "
         "directory — it contains this layer's actual review instructions (what to look for, "
