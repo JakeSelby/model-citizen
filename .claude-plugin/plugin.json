@@ -8,6 +8,7 @@
   "homepage": "https://model-citizen.dev",
   "documentationUrl": "https://model-citizen.dev/",
   "supportUrl": "https://github.com/JakeSelby/model-citizen/issues",
+  "privacyPolicyUrl": "https://github.com/JakeSelby/model-citizen/blob/main/docs/privacy.md",
   "repository": "https://github.com/JakeSelby/model-citizen.git",
   "keywords": ["claude-code", "codex", "agent-skills", "subagents", "context-engineering"],
   "skills": "./primitives/skills/",
