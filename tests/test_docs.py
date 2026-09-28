@@ -91,8 +91,9 @@ class GuideTests(unittest.TestCase):
             self.assertIn(command, GUIDE, msg=command)
 
     def test_commands_after_entering_a_project_use_the_checkout_launcher(self):
-        self.assertIn("~/repos/agent-harness/bin/citizen usage --rules", GUIDE)
-        self.assertIn("~/repos/agent-harness/bin/citizen uninstall", GUIDE)
+        launcher = '"${HARNESS_CHECKOUT:-$HOME/repos/agent-harness}"/bin/citizen'
+        self.assertIn(f"{launcher} usage --rules", GUIDE)
+        self.assertIn(f"{launcher} uninstall", GUIDE)
 
     def test_the_links_it_offers_resolve(self):
         for name in ("usage.md", "preferences.md", "how-it-works.md", "sandboxing.md"):
