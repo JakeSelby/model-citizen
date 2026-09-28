@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 122,
-    "chore": 91,
+    "chore": 92,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7899,6 +7899,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C090.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C091",
+      "github_number": 1052,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1052",
+      "title": "Add an explicit privacy policy for directory submissions",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C091.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

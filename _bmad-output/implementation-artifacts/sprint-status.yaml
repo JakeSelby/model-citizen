@@ -525,6 +525,7 @@ development_status:
   ah-c088-publish-v0-14-1-from-the-qualified-model-citizen: ready-for-dev
   ah-c089-restore-v0-14-1-qualification-ancestry-before: ready-for-dev
   ah-c090-reopen-qualification-state-after-v0-14-1: ready-for-dev
+  ah-c091-add-an-explicit-privacy-policy-for-directory: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done

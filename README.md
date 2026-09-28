@@ -8,6 +8,8 @@
 [![Reference](https://img.shields.io/badge/reference-model--citizen.dev-d97706.svg)](https://model-citizen.dev)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/JakeSelby/model-citizen?utm_source=oss&utm_medium=github&utm_campaign=JakeSelby%2Fmodel-citizen&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
+[Privacy](docs/privacy.md)
+
 ## The control plane for your coding agents, however you run them.
 
 ![Terminal output of `bin/citizen sync --dry-run` on a fresh home: the resolved personal stances, then every link, rendered file and setting the sync would create for Claude Code and Codex, ending in "sync complete". Nothing is written.](docs/assets/sync-dry-run.svg)
