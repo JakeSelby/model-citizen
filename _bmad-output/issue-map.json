@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 324,
+    "story": 329,
     "task": 37
   },
   "items": [
@@ -4398,7 +4398,7 @@
       "bmad_id": "AH-S203",
       "github_number": 560,
       "github_url": "https://github.com/JakeSelby/agent-harness/issues/560",
-      "title": "The first four-arm live set",
+      "title": "Record the powered two-arm proof set for Measured",
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S203.md",
@@ -4443,7 +4443,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C049.md",
       "parent_bmad_id": "AH-E011",
       "parent_github_number": 552,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -5665,7 +5665,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B085.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "completed",
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
@@ -7466,7 +7466,7 @@
       "bmad_id": "AH-S306",
       "github_number": 989,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/989",
-      "title": "Run the four-arm bench, layer swaps and factorial screens from the Studio",
+      "title": "Run the four-arm bench and layer swaps from Studio",
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S306.md",
@@ -7823,7 +7823,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C087.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7836,7 +7836,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S322.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7849,7 +7849,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B121.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7862,7 +7862,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S323.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7875,7 +7875,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C088.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7888,7 +7888,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C089.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7901,7 +7901,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C090.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7914,7 +7914,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C091.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7927,7 +7927,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C092.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7940,7 +7940,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B122.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7953,6 +7953,84 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C093.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C094",
+      "github_number": 1061,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1061",
+      "title": "Rescope the delivery roadmap around Measured and Studio",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C094.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S324",
+      "github_number": 1062,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1062",
+      "title": "Adapt Studio to the landed Measured evaluation contracts",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S324.md",
+      "parent_bmad_id": "AH-E024",
+      "parent_github_number": 957,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S325",
+      "github_number": 1063,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1063",
+      "title": "Configure composition slots and Superpowers in Studio",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S325.md",
+      "parent_bmad_id": "AH-E023",
+      "parent_github_number": 956,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S326",
+      "github_number": 1064,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1064",
+      "title": "Show calibrated compliance judge evidence in Studio",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S326.md",
+      "parent_bmad_id": "AH-E025",
+      "parent_github_number": 958,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S327",
+      "github_number": 1065,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1065",
+      "title": "Run factorial switch screens from Studio",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S327.md",
+      "parent_bmad_id": "AH-E024",
+      "parent_github_number": 957,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S328",
+      "github_number": 1066,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1066",
+      "title": "Report field and Codex evaluation evidence in Studio",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S328.md",
+      "parent_bmad_id": "AH-E025",
+      "parent_github_number": 958,
       "lifecycle": "active",
       "provenance": "authored"
     },
