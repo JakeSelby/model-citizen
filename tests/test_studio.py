@@ -45,7 +45,7 @@ class StudioFixture(unittest.TestCase):
                        env=self.env, capture_output=True, text=True, timeout=5)
         self.tmp.cleanup()
 
-    def cli(self, *args, timeout=8):
+    def cli(self, *args, timeout=20):
         return subprocess.run([sys.executable, str(CLI), "studio"] + list(args), env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
@@ -321,8 +321,8 @@ class LifecycleTests(StudioFixture):
                                  stderr=subprocess.PIPE, text=True)
         second = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True)
-        first_out, first_err = first.communicate(timeout=8)
-        second_out, second_err = second.communicate(timeout=8)
+        first_out, first_err = first.communicate(timeout=20)
+        second_out, second_err = second.communicate(timeout=20)
         self.assertEqual(first.returncode, 0, first_err)
         self.assertEqual(second.returncode, 0, second_err)
         rows = [json.loads(first_out), json.loads(second_out)]
@@ -342,7 +342,7 @@ class LifecycleTests(StudioFixture):
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json",
              "--port", str(port)], env=self.env, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True) for port in requested]
-        completed = [process.communicate(timeout=8) for process in processes]
+        completed = [process.communicate(timeout=20) for process in processes]
         for process, (_stdout, stderr) in zip(processes, completed):
             self.assertEqual(process.returncode, 0, stderr)
         rows = [json.loads(stdout) for stdout, _stderr in completed]
@@ -374,7 +374,7 @@ class LifecycleTests(StudioFixture):
         browser.chmod(0o700)
         opened_env = dict(self.env, BROWSER=str(browser), STUDIO_BROWSER_REPORT=str(report))
         opened = subprocess.run([sys.executable, str(CLI), "studio", "--detach", "--json"],
-                                env=opened_env, capture_output=True, text=True, timeout=8)
+                                env=opened_env, capture_output=True, text=True, timeout=20)
         self.assertEqual(opened.returncode, 0, opened.stderr)
         self.assertEqual(len(opened.stdout.splitlines()), 1)
         opened_row = json.loads(opened.stdout)

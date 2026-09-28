@@ -19,6 +19,9 @@ CLI = browser_support.CLI
 class ConfigureBrowserTests(unittest.TestCase):
     _bootstrap = browser_support.StudioBrowserTests._bootstrap
     _wait_for_shell = browser_support.StudioBrowserTests._wait_for_shell
+    _close_devtools = browser_support.StudioBrowserTests._close_devtools
+    _stop_browser = browser_support.StudioBrowserTests._stop_browser
+    _stop_studio = browser_support.StudioBrowserTests._stop_studio
 
     def setUp(self):
         browser_support.StudioBrowserTests.setUp(self)
@@ -32,14 +35,13 @@ class ConfigureBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        self.addCleanup(self._discard_draft)
 
-    def tearDown(self):
-        if hasattr(self, "draft"):
-            subprocess.run(
-                [sys.executable, str(CLI), "draft", "discard", self.draft, "--json"],
-                env=self.env, capture_output=True, text=True, timeout=10,
-            )
-        browser_support.StudioBrowserTests.tearDown(self)
+    def _discard_draft(self):
+        subprocess.run(
+            [sys.executable, str(CLI), "draft", "discard", self.draft, "--json"],
+            env=self.env, capture_output=True, text=True, timeout=10,
+        )
 
     def _wait(self, expression: str, message: str, attempts: int = 400):
         for _ in range(attempts):

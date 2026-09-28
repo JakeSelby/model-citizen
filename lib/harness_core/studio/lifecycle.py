@@ -16,7 +16,8 @@ from . import auth
 from . import server
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, StateError, Store
 
-START_TIMEOUT = 5.0
+# Hosted macOS runners can take several seconds to schedule the detached interpreter.
+START_TIMEOUT = 15.0
 STOP_TIMEOUT = 2.0
 
 

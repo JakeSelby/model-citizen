@@ -11,7 +11,10 @@ import test_studio_configure_browser as configure_support
 
 class StudioKitBrowserTests(unittest.TestCase):
     setUp = configure_support.ConfigureBrowserTests.setUp
-    tearDown = configure_support.ConfigureBrowserTests.tearDown
+    _discard_draft = configure_support.ConfigureBrowserTests._discard_draft
+    _close_devtools = browser_support.StudioBrowserTests._close_devtools
+    _stop_browser = browser_support.StudioBrowserTests._stop_browser
+    _stop_studio = browser_support.StudioBrowserTests._stop_studio
     _bootstrap = browser_support.StudioBrowserTests._bootstrap
     _wait_for_shell = browser_support.StudioBrowserTests._wait_for_shell
     _wait = configure_support.ConfigureBrowserTests._wait
@@ -95,7 +98,7 @@ class StudioKitBrowserTests(unittest.TestCase):
         self.assertEqual(stopped.returncode, 0, stopped.stderr)
         launched = subprocess.run(
             [browser_support.sys.executable, str(browser_support.CLI), "studio", "--detach",
-             "--no-open", "--json"], env=self.env, capture_output=True, text=True, timeout=8)
+             "--no-open", "--json"], env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(launched.returncode, 0, launched.stderr)
         self.started = json.loads(launched.stdout)
         record = json.loads((browser_support.state_root(self.home) / "instance.json").read_text())

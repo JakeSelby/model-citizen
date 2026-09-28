@@ -185,7 +185,7 @@ def lifecycle(root=ROOT, python=sys.executable):
         env = dict(os.environ, HOME=str(home), HARNESS_HOME=str(home),
                    PYTHONDONTWRITEBYTECODE="1")
         started = command(python, str(root / "bin" / "harness"), "studio", "--detach",
-                          "--no-open", "--json", env=env, timeout=10)
+                          "--no-open", "--json", env=env, timeout=20)
         state_path = home / ".local/state/agent-harness/studio/instance.json"
         cases = []
         try:

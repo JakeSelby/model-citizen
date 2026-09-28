@@ -17,6 +17,7 @@ import tempfile
 import time
 import unittest
 import urllib.parse
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -141,13 +142,15 @@ class StudioBrowserTests(unittest.TestCase):
         if chrome is None:
             self.skipTest("Chrome or Chromium is required for rendered Studio checks")
         self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
         self.home = Path(os.path.realpath(self.temporary.name)) / "home"
         self.home.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), HARNESS_HOME=str(self.home),
                         PYTHONDONTWRITEBYTECODE="1")
+        self.addCleanup(self._stop_studio)
         launched = subprocess.run(
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json"],
-            env=self.env, capture_output=True, text=True, timeout=8)
+            env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(launched.returncode, 0, launched.stderr)
         self.started = json.loads(launched.stdout)
         record = json.loads((state_root(self.home) / "instance.json").read_text())
@@ -157,6 +160,7 @@ class StudioBrowserTests(unittest.TestCase):
             [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
              "--remote-debugging-port=0", "--user-data-dir=" + str(self.profile), "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.addCleanup(self._stop_browser)
         active = self.profile / "DevToolsActivePort"
         for _ in range(100):
             if active.is_file():
@@ -166,21 +170,40 @@ class StudioBrowserTests(unittest.TestCase):
         port = int(active.read_text().splitlines()[0])
         request = urllib.request.Request(
             "http://127.0.0.1:%d/json/new?about:blank" % port, method="PUT")
-        with urllib.request.urlopen(request, timeout=2) as response:
-            target = json.load(response)
+        target = None
+        for _ in range(20):
+            try:
+                with urllib.request.urlopen(request, timeout=0.5) as response:
+                    target = json.load(response)
+                break
+            except (OSError, urllib.error.URLError, ValueError):
+                time.sleep(0.1)
+        self.assertIsNotNone(target, "Chrome did not accept a DevTools target")
+        assert target is not None
         self.devtools = DevTools(target["webSocketDebuggerUrl"])
+        self.addCleanup(self._close_devtools)
 
-    def tearDown(self):
+    def _close_devtools(self):
         if hasattr(self, "devtools"):
-            self.devtools.close()
+            try:
+                self.devtools.close()
+            except OSError:
+                pass
+
+    def _stop_browser(self):
         if hasattr(self, "browser"):
-            self.browser.terminate()
-            self.browser.wait(timeout=5)
+            if self.browser.poll() is None:
+                self.browser.terminate()
+                try:
+                    self.browser.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.browser.kill()
+                    self.browser.wait()
+
+    def _stop_studio(self):
         if hasattr(self, "env"):
             subprocess.run([sys.executable, str(CLI), "studio", "stop", "--json"],
                            env=self.env, capture_output=True, text=True, timeout=5)
-        if hasattr(self, "temporary"):
-            self.temporary.cleanup()
 
     def _bootstrap(self, record: dict) -> str:
         connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=2)
