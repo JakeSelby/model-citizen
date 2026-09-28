@@ -23,8 +23,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (auth, free_suites, live_updates, module_library, native_acceptance, replay, runs,
-               selection, settings, targets)
+from . import (activity, auth, free_suites, live_updates, module_library, native_acceptance, replay,
+               runs, selection, settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -492,6 +492,17 @@ def _selection_read(handler: Handler, route: Route) -> None:
 def _library(handler: Handler, route: Route) -> None:
     payload = module_library.inventory(handler.server.repo_root)
     payload["repository"] = str(handler.server.repo_root.resolve())
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _activity(handler: Handler, route: Route) -> None:
+    request = getattr(handler, "request_json", {})
+    try:
+        payload = activity.query(handler.server.store.path.parent, request)
+    except activity.ActivityError:
+        handler._error(400, "invalid_activity_query")
+        return
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -1061,6 +1072,13 @@ CONFIGURE_SAVE = ResponseSchema("json-object", CONFIGURE_PREVIEW.fields +
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
+ACTIVITY = ResponseSchema("json-object", (("schema_version", "integer"),
+                                           ("entries", "array"),
+                                           ("next_cursor", "string"),
+                                           ("next_command", "string"),
+                                           ("sources", "array"),
+                                           ("filters", "object"),
+                                           ("command", "string")))
 RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("target", "object"), ("suites", "array"),
                                               ("unit_tests", "object"),
@@ -1156,6 +1174,8 @@ ROUTES = RouteRegistry((
           _configure_save, None, "application/json", settings.CLI_COMMANDS["save"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
+    Route("POST", "/api/activity", "application/json", ACTIVITY,
+          _activity, None, "application/json", ("citizen", "activity", "--json")),
     Route("GET", "/api/runs/catalog", "application/json", RUN_CATALOG,
           _runs_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
     Route("POST", "/api/runs/start", "application/json", RUN_RECORD,

@@ -36,6 +36,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen bmad    check|apply [REPO] [--force]   (alias for `integration ... bmad`)
     citizen remote-control install [--dry-run] | status | uninstall
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
+    citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
 `harness` is a supported alias for `citizen`: the same program under its earlier name.
@@ -74,6 +75,7 @@ from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
 from harness_core import overview as overview_core
 from harness_core import studio
+from harness_core.studio import activity as studio_activity
 from harness_core.studio import settings as studio_settings
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
@@ -4666,6 +4668,30 @@ def cmd_studio(args: argparse.Namespace) -> int:
         raise SystemExit("studio: " + str(exc))
 
 
+def cmd_activity(args: argparse.Namespace) -> int:
+    request = {"limit": args.limit, "cursor": args.cursor,
+               "session": args.session, "repository": args.repository,
+               "hook": args.hook, "outcome": args.outcome}
+    try:
+        result = studio_activity.query(state_dir(), request)
+    except studio_activity.ActivityError as exc:
+        print("activity: " + str(exc), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    for entry in result["entries"]:
+        say("%s  %-21s  %s" % (
+            entry["timestamp"] or "(time unknown)", entry["outcome"], entry["title"]))
+        if entry["session"]:
+            say("  session: " + entry["session"])
+        if entry["reason"]:
+            say("  " + entry["reason"])
+    if result["next_cursor"]:
+        say("more: " + result["next_command"])
+    return 0
+
+
 def reconnect_lost_sessions(folders: List[Path], projects_root: Path, state: Dict[str, Any],
                             dry: bool) -> bool:
     """Re-queue each active but disconnected session on an environment this Mac holds.
@@ -6146,6 +6172,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true", help="print one machine-readable result object")
     p.add_argument("--_serve", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_studio)
+
+    p = sub.add_parser("activity", help="page through decisions and governed changes")
+    p.add_argument("--session", default="", help="match a session id")
+    p.add_argument("--repository", default="", help="match a repository or counterparty")
+    p.add_argument("--hook", default="", help="match a hook module")
+    p.add_argument("--outcome", default="", help="match an activity outcome")
+    p.add_argument("--limit", type=int, default=studio_activity.DEFAULT_LIMIT,
+                   help="entries per page (1-%d)" % studio_activity.MAX_LIMIT)
+    p.add_argument("--cursor", default="", help="opaque cursor from the prior page")
+    p.add_argument("--json", action="store_true", help="print one machine-readable result object")
+    p.set_defaults(func=cmd_activity)
 
     p = sub.add_parser("init", help="write the config file by answering questions")
     p.add_argument("--force", action="store_true", help="replace an existing config file")
