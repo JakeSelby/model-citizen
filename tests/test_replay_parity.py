@@ -3,13 +3,9 @@ the stop gate in a snapshot, web access, the retired task and the stream capture
 is a fake that replays recorded CLI output; no test calls a model."""
 import json
 import re
-import subprocess
 import tempfile
-import threading
-import types
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from test_cost_bench import BENCH, TASK, Launch, call, options, result
 from test_harness import REPO
@@ -84,75 +80,19 @@ class TurnCapTests(unittest.TestCase):
 
 
 class StopGateTrustTests(unittest.TestCase):
-    def trust_seen(self, tmp, opts, outputs):
-        """A launcher that records what the trust file held while each arm ran."""
-        seen = []
-        path = BENCH.trust_path(opts["home"])
+    def test_the_harness_image_trusts_the_one_path_every_snapshot_is_mounted_at(self):
+        """The stop-gate hook runs a gate only in a trusted root. Every run mounts its snapshot at
+        the same path, so the harness image trusts that path when it is built, and no run writes
+        a trust file anywhere, on this machine or in the container."""
+        dockerfile = (REPO / "scripts" / "replay-arm.Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("bin/harness trust " + BENCH.arms.WORKDIR, dockerfile)
+        self.assertFalse(hasattr(BENCH, "trusted_run"))
 
-        def launch(command, **kwargs):
-            listed = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
-            seen.append((str(Path(kwargs["cwd"]).resolve()), listed))
-            out = outputs.pop(0)
-            if isinstance(out, Exception):
-                raise out
-            return types.SimpleNamespace(stdout=out, stderr="", returncode=0)
-        rows, _ = BENCH.replay([TASK], opts, launch)
-        return rows, seen, path
-
-    def test_each_snapshot_is_trusted_for_its_own_run_and_only_then(self):
+    def test_a_replay_writes_nothing_under_the_home_it_is_given(self):
         with tempfile.TemporaryDirectory() as tmp:
             opts = options(tmp, reps=1)
-            rows, seen, path = self.trust_seen(tmp, opts, [json.dumps(result())] * 2)
-            self.assertEqual(len(seen), 2)
-            for workdir, listed in seen:
-                self.assertEqual(listed, [workdir])  # both arms, one root each, nothing left over
-            self.assertFalse(path.exists())  # a file the run created goes with it
-
-    def test_roots_the_user_trusted_survive_the_run_byte_for_byte(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            opts = options(tmp, reps=1)
-            path = BENCH.trust_path(opts["home"])
-            path.parent.mkdir(parents=True)
-            before = "# mine\n/work/one\n/work/two"  # no final newline: the append must not join it
-            path.write_text(before, encoding="utf-8")
-            _, seen, _ = self.trust_seen(tmp, opts, [json.dumps(result())] * 2)
-            for workdir, listed in seen:
-                self.assertEqual(listed, ["# mine", "/work/one", "/work/two", workdir])
-            self.assertEqual(path.read_text(encoding="utf-8").splitlines(), before.splitlines())
-
-    def test_a_run_that_times_out_is_still_untrusted_afterwards(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            opts = options(tmp, reps=1)
-            rows, _, path = self.trust_seen(tmp, opts, [subprocess.TimeoutExpired("claude", 1),
-                                                        json.dumps(result())])
-            self.assertEqual(rows[0]["error_kind"], "timeout")
-            self.assertFalse(path.exists())
-
-    def test_overlapping_cleanups_neither_restore_a_root_nor_drop_one(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            first, second = Path(tmp, "a"), Path(tmp, "b")
-            first.mkdir(), second.mkdir()
-            path = BENCH.trust_path(tmp)
-            path.parent.mkdir(parents=True)
-            path.write_text("/kept\n", encoding="utf-8")
-            runs = [BENCH.trusted_run(first, tmp), BENCH.trusted_run(second, tmp)]
-            for run in runs:
-                run.__enter__()
-            real, waited = BENCH.atomic_write, []
-
-            def slow_write(target, data):
-                # The second cleanup starts while the first is between its read and its write.
-                if not waited:
-                    other = threading.Thread(target=runs[1].__exit__, args=(None, None, None))
-                    other.start()
-                    other.join(0.5)
-                    waited.append(other)
-                    self.assertTrue(other.is_alive())  # it waits for the lock, it does not read
-                real(target, data)
-            with mock.patch.object(BENCH, "atomic_write", slow_write):
-                runs[0].__exit__(None, None, None)
-                waited[0].join(5)
-            self.assertEqual(path.read_text(encoding="utf-8"), "/kept\n")
+            BENCH.replay([TASK], opts, Launch([json.dumps(result())] * 2))
+            self.assertEqual(list(Path(opts["home"]).iterdir()), [])
 
     def test_a_run_ending_on_a_red_gate_records_the_stop_hooks_feedback(self):
         red = stream(call(None, ["Bash"]), hook(stdout=BLOCK), call(None, ["Bash"]),
@@ -171,21 +111,20 @@ class StopGateTrustTests(unittest.TestCase):
 
 
 class WebAccessTests(unittest.TestCase):
-    def test_both_arms_launch_with_the_web_tools_denied(self):
+    def test_both_arms_launch_with_the_web_tools_denied_on_the_same_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([json.dumps(result())] * 2)
-            opts = options(tmp, reps=1, harness_config=Path(tmp) / "harness", harness_source="/pinned")
+            opts = options(tmp, reps=1)
             BENCH.replay([TASK], opts, launch)
             settings = [json.loads(command[-1]) for command, _ in launch.calls]
-        denied = [s["permissions"] for s in settings]
-        self.assertEqual(denied[0], denied[1])
-        self.assertEqual(sorted(denied[0]["deny"]), ["WebFetch", "WebSearch"])
-        network = [s["sandbox"]["network"] for s in settings]
-        self.assertEqual(network[0], network[1])
+            networks = [command[command.index("--network") + 1] for command, _ in launch.calls]
+        self.assertEqual(settings[0], settings[1])
+        self.assertEqual(sorted(settings[0]["permissions"]["deny"]), ["WebFetch", "WebSearch"])
+        self.assertEqual(networks, [opts["network"]] * 2)
 
-    def test_the_deny_does_not_depend_on_the_profile_or_what_the_fence_admits(self):
-        for fence in (BENCH.fence(), BENCH.fence("/bare"), BENCH.fence("/harness", ["/pinned"])):
-            self.assertEqual(fence["permissions"], {"deny": list(BENCH.NO_WEB)})
+    def test_the_deny_is_the_same_whatever_the_arm(self):
+        self.assertEqual(BENCH.ARM_SETTINGS, {"permissions": {"deny": list(BENCH.NO_WEB)}})
+        self.assertEqual(BENCH.arm_command("claude", "m", "p")[-1], json.dumps(BENCH.ARM_SETTINGS))
 
 
 class RetiredTaskTests(unittest.TestCase):

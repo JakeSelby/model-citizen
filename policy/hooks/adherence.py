@@ -28,17 +28,25 @@ before the window of `window` further prompts has passed. Not followed: the sess
 `turn + window + 1` arrives first. Unknown: neither can be read yet. An emission is answered
 `unknown` for good only once it is `UNKNOWN_AFTER` old, with `reason` saying why:
 `unobserved` when the ledger holds no row for its turn, which is every emission until the
-observation entry point is registered in live sessions, and `window_open` otherwise.
+observation entry point is registered in live sessions, and `window_open` otherwise. The
+lifecycle's session start calls `settle`, so a live session writes each answer once it is due.
 
 This module sits beside the hooks rather than in `lib/harness_core` for the reason `decisions.py`
 gives: a hook is reached through `~/.claude/hooks/harness` and nothing above that resolves.
 """
+import contextlib
 import datetime
 import importlib.util
 import json
 import os
+import time
 import uuid
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - a platform with no advisory locking
+    fcntl = None
 
 SCHEMA_KEY = "schema_version"
 SCHEMA_VERSION = 1
@@ -50,6 +58,10 @@ PROMPT = "UserPromptSubmit"
 # An emission that neither outcome has reached in a day is not going to be read: a session idle
 # that long was left, and the ledger that would say so is either not written or not complete.
 UNKNOWN_AFTER = 86400
+# How long `settle` polls for the ledger lock before leaving the answers to a later start, and
+# how often. Settling is one read and a few appends, so ordinary contention is far shorter.
+LOCK_BUDGET = 1.0
+LOCK_POLL = 0.01
 
 # Every recommendation a hook emits, the `hooks/<id>` that emits it, the prompts after the
 # emitting one within which acting on it counts, and the observation events that count as
@@ -227,12 +239,56 @@ def responses(rows):
     return out
 
 
+@contextlib.contextmanager
+def ledger_lock(target):
+    """Yield True while holding an exclusive lock on the ledger at `target`, else False.
+
+    The lock is taken on the ledger itself, so settling creates no file, and a missing ledger
+    yields False because there is nothing to answer. It is polled without blocking for at most
+    `LOCK_BUDGET` seconds, so a holder that never lets go cannot stall session start; running out
+    of budget, or any error, yields False, and the answers wait for a later start rather than
+    risk a second row. A platform with no advisory locking yields False too: every supported one
+    has it, and an answer never written beats one written twice.
+    """
+    if fcntl is None:
+        yield False
+        return
+    stream = None
+    try:
+        stream = open(str(target), "rb")
+        deadline = time.monotonic() + LOCK_BUDGET
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(LOCK_POLL)
+    except OSError:
+        if stream is not None:
+            stream.close()
+        stream = None
+    try:
+        yield stream is not None
+    finally:
+        if stream is not None:
+            stream.close()
+
+
 def settle(env=None, now=None):
     """Append a response for every emission a reading can now answer, and return those rows.
 
     A followed or not-followed reading is final when it is made. An unknown one is only written
-    once the emission is `UNKNOWN_AFTER` old; before that it is left for a later reading.
+    once the emission is `UNKNOWN_AFTER` old; before that it is left for a later reading. The
+    read, the check for an existing answer and the appends run under `ledger_lock`, so two
+    sessions starting together still write one response per emission.
     """
+    with ledger_lock(path(env)) as held:
+        return _settle(env, now) if held else []
+
+
+def _settle(env, now):
     now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else now
     rows = read_rows(path(env))
     answered = responses(rows)

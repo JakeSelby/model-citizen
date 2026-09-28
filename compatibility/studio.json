@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "supported": [
+    {
+      "platform": "macos",
+      "browser": "chrome",
+      "version_policy": "stable-channel",
+      "stable_major": 153,
+      "lifecycle_generator": "scripts/studio_lifecycle_acceptance.py",
+      "flow_evidence": "tests/test_studio_browser.py",
+      "security_evidence": "tests/test_studio_security.py",
+      "release_evidence": "compatibility/evidence/studio-{platform}-{version}.json"
+    },
+    {
+      "platform": "linux",
+      "browser": "chrome",
+      "version_policy": "stable-channel",
+      "stable_major": 153,
+      "lifecycle_generator": "scripts/studio_lifecycle_acceptance.py",
+      "flow_evidence": "tests/test_studio_browser.py",
+      "security_evidence": "tests/test_studio_security.py",
+      "release_evidence": "compatibility/evidence/studio-{platform}-{version}.json"
+    }
+  ],
+  "unsupported": [
+    {
+      "platform": "windows",
+      "reason": "The harness does not support native Windows."
+    }
+  ],
+  "unqualified": [
+    {
+      "browser": "safari",
+      "platforms": ["macos", "ios"],
+      "reason": "No release lifecycle and flow record exists for Safari yet."
+    },
+    {
+      "browser": "firefox",
+      "platforms": ["macos", "linux"],
+      "reason": "No release lifecycle and flow record exists for Firefox yet."
+    }
+  ]
+}

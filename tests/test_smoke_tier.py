@@ -49,8 +49,13 @@ class PlanTests(unittest.TestCase):
                 self.assertEqual(MODULE.main(["--list"]), 0)
         printed = buffer.getvalue()
         for name in ("credentials", "projection-drift", "documentation-links",
-                     "runner-self-tests", "disposable-home-lifecycle"):
+                     "runner-self-tests", "studio-lifecycle", "disposable-home-lifecycle"):
             self.assertIn(name, printed)
+
+    def test_studio_lifecycle_is_a_clean_tree_blocking_step(self):
+        item = next(item for item in PLAN if item["name"] == "studio-lifecycle")
+        self.assertTrue(item["clean_tree"])
+        self.assertIn("studio_lifecycle_acceptance.py", " ".join(map(str, item["argv"])))
 
     def test_the_plan_says_a_green_run_is_not_qualification(self):
         self.assertIn("not native client qualification", MODULE.NOT_QUALIFICATION)

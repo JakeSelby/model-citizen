@@ -4,8 +4,8 @@
 Every check here already exists in this repository; the tier is the single command that runs
 them before a qualification round is paid for — the acceptance runner's self-tests against
 recorded transcripts, the documentation-link check, the credential and host precondition probe
-for each target the round will run, and the disposable-home sync, projection-drift and lifecycle
-checks.
+for each target the round will run, the Studio lifecycle and browser flow, and the disposable-home
+sync, projection-drift and lifecycle checks.
 
 A green tier is never native client qualification. It observes no client behaviour, writes
 nothing under `compatibility/evidence/` and appears in no catalog record; the run fails if
@@ -68,6 +68,11 @@ def steps(work, targets=None):
         {"name": "runner-self-tests",
          "how": "read recorded transcripts with the acceptance runner's own readers",
          "argv": unittest_argv("test_native_acceptance*.py"), "timeout": 600},
+        {"name": "studio-lifecycle",
+         "how": "start, authenticate, load and stop Studio in Chrome on this host",
+         "argv": [sys.executable, str(ROOT / "scripts" / "studio_lifecycle_acceptance.py"),
+                  "--output", str(work / "studio-lifecycle.json")],
+         "timeout": 600, "clean_tree": True},
         {"name": "disposable-home-lifecycle",
          "how": "install, sync, upgrade, roll back and uninstall in disposable homes",
          "argv": [sys.executable, str(ROOT / "scripts" / "lifecycle_acceptance.py"),

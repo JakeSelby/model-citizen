@@ -35,8 +35,16 @@ stored: every command reads them again, so editing a file in VS Code is the whol
 workspace's name is its file stem, and its members are its `folders[].path` entries in order,
 resolved against the file's own folder. Comments and trailing commas are accepted, as VS Code
 accepts them; a `uri`-only folder is skipped, and a folder that no longer exists is reported and
-left out. With the key absent the feature is off everywhere; remove it from
-`~/.config/agent-harness/config.json` to turn it off again.
+left out. With the key absent the feature is off everywhere. To turn it off again, unset the key
+and sync:
+
+```sh
+citizen config unset workspaces_dir
+citizen sync
+```
+
+`config unset` removes only keys whose absence is a documented state, `workspaces_dir` among them;
+a switch, an acknowledgement or a governance key is refused, so change one with `config set`.
 
 A session belongs to the member folder that contains its working directory, the longest match
 winning, and a linked git worktree counts as its main checkout. When that folder is in more than

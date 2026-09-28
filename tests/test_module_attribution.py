@@ -242,15 +242,15 @@ class DecisionRowTests(Home):
 class ReplayTests(Home):
     def test_the_bare_arm_attributes_nothing_and_the_harness_arm_its_profile(self):
         opts = {"home": self.home, "profile_root": self.root}
-        bare = bench.arm_attribution("bare", bench.arm_env("bare", self.home), opts)
+        bare = bench.arm_attribution("bare", bench.arm_env("bare"), opts)
         self.assertEqual(bare, {"estimand": "soft estimate", "method": posture.ATTRIBUTION_METHOD, "modules": {}})
-        env = bench.arm_env("harness", None)
+        env = bench.arm_env("harness")
         self.assertEqual(bench.arm_attribution("harness", env, opts),
                          posture.context_attribution(dict(env, HOME=str(self.home)), root=self.root))
 
     def test_the_same_task_replayed_with_one_module_off_changes_only_that_entry(self):
         opts = {"home": self.home, "profile_root": self.root}
-        env = bench.arm_env("harness", None)
+        env = bench.arm_env("harness")
         before = bench.arm_attribution("harness", env, opts)["modules"]
         profile = bench.arm_profile("harness", env, opts)
         off = dict(env, HARNESS_SESSION_CONFIG=str(self.session))

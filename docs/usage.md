@@ -425,7 +425,8 @@ says: a ledger it cannot write is skipped in silence.
 The response is read from the observation ledger (`observation.jsonl`). A session that ends
 within three prompts of the line followed it; one that carries on past them did not. Until the
 observation entry point is registered in live sessions, that ledger holds no rows, so every
-emission is answered `unknown` with reason `unobserved` once it is a day old.
+emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
+writes the answers that are due, one per emission, and says nothing about them.
 
 ## The decision log
 

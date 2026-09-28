@@ -161,6 +161,11 @@ class PreflightGithubChecksTests(unittest.TestCase):
                             (self.module.catalog, "projection_drift")):
             patcher = patch.object(owner, name, return_value=[] if name == "release_errors" else False)
             patcher.start(); self.addCleanup(patcher.stop)
+        patcher = patch.object(self.module, "studio_bundle_errors", return_value=[])
+        patcher.start(); self.addCleanup(patcher.stop)
+        patcher = patch.object(self.module.studio_lifecycle_acceptance, "evidence_errors",
+                               return_value=[])
+        patcher.start(); self.addCleanup(patcher.stop)
 
     def check(self, runner):
         warnings = []
@@ -213,3 +218,8 @@ class ReleaseDocumentationTests(unittest.TestCase):
         self.assertIn("A release has five surfaces", self.AGENTS)
         for text in (self.AGENTS, self.RELEASING):
             self.assertNotIn("--reference-repo", text)
+
+    def test_evidence_reuse_is_documented_as_fail_closed_and_not_new_qualification(self):
+        for needle in ("qualification_reuse", "refs/tags/v<prior>^{commit}", "fails closed",
+                       "never rewritten", "not call v0.14.1 byte-identical or newly qualified"):
+            self.assertIn(needle, self.RELEASING, msg=needle)

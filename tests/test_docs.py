@@ -41,11 +41,12 @@ class ReadmeTests(unittest.TestCase):
     def test_status_and_native_evidence_limits_are_visible(self):
         prose = " ".join(README.split())
         self.assertIn("**Release status:**", prose)
-        self.assertIn("`0.13.1` is the current stable release", prose)
+        self.assertIn("`0.14.0` is the current stable release", prose)
         self.assertIn("two required Claude Code CLI targets", prose)
+        self.assertIn("#741 were explicitly deferred to v0.15.0", prose)
         # The page must name the last qualified release rather than leave a reader to infer one.
         self.assertIn("`0.11.1` remains the last release qualified", prose)
-        self.assertIn("**Qualified:**", prose)
+        self.assertIn("**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`", prose)
         self.assertIn("**Unqualified:**", prose)
         self.assertIn("Projection generation and unit tests are not proof", prose)
 

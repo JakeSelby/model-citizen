@@ -316,6 +316,15 @@ def _governs(pattern, before):
 # talking about it: "Read <path>. These instructions define the layer. Follow them precisely."
 FOLLOW_REACH = 3
 ANAPHOR = re.compile(r"\b(?:(?:these|those|its|the) instructions|(?:that|this|the) file)\b")
+# An explanatory clause can start with a bare pronoun after an em dash: "read <path> — it
+# contains the review instructions". `it` alone is too weak to carry the file forward, so require
+# the pronoun to govern instruction-like guidance in the same clause.
+PRONOUN_FILE = re.compile(
+    r"\bit\s+(?:contains?|holds?|carries?|defines?|provides?|has|is|serves? as)\b")
+GUIDANCE = re.compile(
+    r"\b(?:instructions|methodology|guidelines|checklist|rubric|procedure|directions|rules|criteria"
+    r"|requirements|prompt)\b")
+GUIDANCE_NEGATION = re.compile(r"\b(?:no|not|never|without)\b")
 # A trailing "the instructions" followed by where they live names its own file, not this one.
 OWN_TARGET = re.compile(r"\s+(?:in|at|from|of|under|inside)\b")
 # The declared path ends where a longer file name would go on: `<path>.bak` is another file.
@@ -325,6 +334,16 @@ PATH_END = r"(?![\w/-]|\.\w)"
 def _points_back(after):
     """Whether `after` holds an unnegated directive aimed back at the file before it."""
     return any(not _names_its_own(found, after) for found in _unnegated(DIRECTIVE_BACK, after))
+
+
+def _pronoun_guidance(text):
+    """Whether a bare `it` still describes the named file as guidance in this clause."""
+    for subject in PRONOUN_FILE.finditer(text):
+        for guidance in GUIDANCE.finditer(text, subject.end()):
+            gap = text[subject.end():guidance.start()]
+            if not CLAUSE_BREAK.search(gap) and not GUIDANCE_NEGATION.search(gap):
+                return True
+    return False
 
 
 def _names_its_own(found, after):
@@ -350,7 +369,7 @@ def _directed(value, text):
         for following in sentences[index + 1:index + 1 + FOLLOW_REACH]:
             if _points_back(following) and not _unnegated(EDIT_BACK, following):
                 return True
-            if not ANAPHOR.search(following):
+            if not (ANAPHOR.search(following) or _pronoun_guidance(following)):
                 break
     return False
 

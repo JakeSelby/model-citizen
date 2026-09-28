@@ -59,83 +59,107 @@ has no arm. Read the rows in order; none of them is a live measurement.
 
 ## Live replay
 
-`scripts/cost_bench.py replay` runs the pinned tasks in `benchmarks/tasks.json` headlessly, once
-against a signed-in, otherwise empty Claude Code profile and once against the installed harness, and
-scores each run with a check the agent never sees. It calls a model and spends real usage, so it is
-run by hand on a release candidate and never in CI.
+`scripts/cost_bench.py replay` runs the pinned tasks in `benchmarks/tasks.json` headlessly in two
+fresh containers, one with Claude Code and nothing else and one with the harness at a pinned ref,
+and scores each run with a check the agent never sees. It calls a model and spends real usage, so
+it is run by hand on a release candidate and never in CI. It needs Docker, and
+`CLAUDE_CODE_OAUTH_TOKEN` set as for the Linux qualification target.
 
 ```sh
-python3 scripts/cost_bench.py replay --verify-tasks              # prove every check; calls no model
-python3 scripts/cost_bench.py replay --model <id> --dry-run      # print the schedule
-python3 scripts/cost_bench.py replay --model <id>                # 7 tasks x 2 arms x 2 reps
-python3 scripts/cost_bench.py replay --model <id> \
-    --tag v0.12.0 --tag v0.13.0 --harness-config ~/.claude-bench-harness   # two versions, one run
+python3 scripts/cost_bench.py replay --verify-tasks                  # prove every check in a container; calls no model
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --dry-run   # the arms and the schedule
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
+    --pre-registration <plan>                                           # two versions, one run
+python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
+python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
+python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
 ```
 
-- **`--tag` is what the harness arm runs, and it is repeatable.** `candidate`, the default, is the
-  harness installed at `~/.claude` as it stands. Any other value is a git ref of this repository:
-  it is checked out with its history intact, projected by its own `bin/harness sync` into a config
-  directory of its own, run as a whole schedule, and torn down before the next tag. Each tag
-  writes its own results file and its own history row, stamped with the version and commit of the
-  ref that ran. Every ref is resolved before the first launch, so a typo costs nothing, and
-  `--spend-cap` applies to each tag's schedule on its own.
-- **A tagged sync touches nothing of yours.** It runs with a temporary HOME as well as an explicit
-  `CLAUDE_CONFIG_DIR`, so it neither reads nor writes the profile you run under, and it renders no
-  identity or stance selection out of your `~/.config/agent-harness/config.json`: a tagged arm
-  loads that tag's defaults, which is the same question asked of every tag. A sync target that
-  resolves to your live profile, sits inside it, holds it (HOME or any ancestor) or is the bare
-  profile is refused. Because a profile's credential is keyed on its absolute path, a directory
-  made for the run is not signed in; name a signed-in `--harness-config` as the directory each
-  tag is synced into when the run is meant to spend. That profile must hold no harness files
-  already (a link counts only when it leads into a harness checkout or sits at a name the harness
-  manages; the CLI's own `debug/latest` does not), and it cannot serve `candidate` in the same
-  run, and none of the names the sync writes (`rules`, `skills`, `commands`, `agents`, `hooks`,
-  `output-styles`, `plans`, `CLAUDE.md`, `settings.json` and the rest) may be a link leading out
-  of it. After each tag's schedule, exception or interrupt included, the sync is taken back out
-  of it rather than the profile rolled back: exactly the links and files the sync's own manifest
-  and ownership records name are removed, a directory it made goes only once empty, and the one
-  file it rewrites in place, `settings.json`, is put back from a copy taken beforehand through an
-  atomic write. Nothing else is touched: a transcript another session wrote during the run stays,
-  and credential files are never copied, rewritten or deleted, whether they existed before or
-  the CLI created them mid-run, so a refreshed token stays refreshed and a fresh sign-in stays
-  signed in. Nothing in the profile is read but `settings.json`; a FIFO or an unreadable file
-  is listed by its stat and never opened. The records are read from where the harness at HEAD
-  writes them, so the profile itself is checked afterwards: if anything the sync could have
-  written is still there, or the records were empty, the run stops at that tag with the leftover
-  paths named, before another tag launches into a profile that would refuse it. If taking the
-  sync back fails, the copy is kept and its path printed. The refusals above are all decided
-  before the first launch of any tag; the copy-aside, checkout and sync run as each tag's turn
-  comes. The pinned checkout is admitted to the harness arm's fence for reading only, and a
-  pinned tag's results go in a folder named for it.
-
-- **The arms differ by environment only.** Both get one command line: the same `--model`,
-  `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as `--max-turns`, and the
-  same sandbox settings, with command network access off. The bare arm adds `CLAUDE_CONFIG_DIR`,
-  pointing at the empty profile. The fence admits each arm's own config directory and `/tmp` for
-  reading and writing, because the repository's suite writes to both and a fence that admitted only
-  the CLI's default would fail the gate for whichever arm was moved to a bench profile.
-- **Neither arm has the web.** `WebFetch` and `WebSearch` run in the CLI's own process, outside the
-  command sandbox, so the fence's empty network list does not reach them; a profile's permission
-  rules do, and the harness profile allows both on documentation domains. The settings every arm
-  launches with therefore deny both tools, and a deny outranks any profile's allow.
-- **The stop gate can fire.** The stop-gate hook runs a gate only in a folder the user trusted, and
-  no one trusts a fresh snapshot. For the length of each scored run, its snapshot is listed in
-  `~/.config/agent-harness/trusted.txt`, where `citizen trust` lists roots, and exactly that line
-  is removed afterwards. Every arm's snapshot is listed; the bare arm has no hook to read it.
+- **A run is pre-registered or exploratory.** `--pre-registration` names a committed, dated plan
+  filled from the [pre-registration template](pre-registration-template.md); without one the run
+  needs `--exploratory`, labels every row exploratory and writes no history row. The protocol is in
+  the [evidence standard](evidence-standard.md).
+- **Each arm is a fresh image from pinned inputs, and nothing from your machine reaches it.**
+  Both are built by `scripts/replay-arm.Dockerfile` from the Linux qualification image's pinned
+  base digest and `CLAUDE_CODE_VERSION`, read out of `scripts/linux-target.Dockerfile` so the two
+  cannot drift. `bare` is that base plus Claude Code, less the Codex client the base template
+  ships, so no other agent client is on the path. `harness@<ref>` adds this repository at the
+  ref's full commit, cloned into the build context and synced for the image's own user with no
+  configuration, so the arm loads the ref's defaults. Your home directory, profile, personal layer,
+  environment, hooks and settings are never mounted, copied or read, and there is no fallback to
+  them. The installed harness is no longer an arm: name a release tag, or a full commit for a
+  pre-release candidate.
+- **`--tag` is repeatable.** Each tag is its own image, schedule, results folder and history row,
+  stamped with the version and commit of the ref that ran; the bare image is built once. Every ref
+  resolves before anything is built, so a typo costs nothing, and `--spend-cap` applies to each
+  tag's schedule on its own.
+- **Each build writes a declaration and a manifest beside the image.** The declaration is the
+  inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
+  Dockerfile and the lister. The manifest is every file, link and directory under the image user's
+  home, Claude Code's managed settings and the harness checkout, each file by mode, size and
+  sha256 and each link by its target, with a summary of settings, hooks, rules, skills, agents and
+  plugins, and every global npm package by name and version, where agent clients live. It is listed by `scripts/arm_manifest.py` in a fresh container with no network and no
+  mount. Left out, and named in the manifest: npm's cache and logs, tool caches, and the
+  checkout's `.git`, whose pack layout differs between clones. The harness sync's `synced_at` is
+  normalised before hashing. The build writes no Python bytecode, which would carry its build time.
+- **Two builds must agree.** `arms check` builds each arm twice with no cache, lists both, compares
+  them entry by entry, prints every difference and removes both images; it exits 1 on any
+  difference, and `--dry-run` prints every command without building. `replay --dry-run` prints the
+  image each arm will be.
+- **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
+  refuses an arm whose manifest holds a Claude Code version, agent client or harness commit other
+  than its declaration names; whose settings, hooks, rules, skills, agents, plugins or instruction
+  files are not the declared harness's (a link into its checkout, or the settings files its sync
+  writes; the bare arm has none); whose recorded inputs name your home directory, this checkout or
+  an ambient `CLAUDE_CONFIG_DIR`; or whose run is neither pre-registered nor exploratory. Every
+  `docker run` is refused the same way when a mount or a variable names one of those paths.
+- **Every row records the container it ran in**: `arm_image`, `arm_image_id`,
+  `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
+  `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
+  manifest digest, ref and commit.
+- **A run is `docker run --rm` with one mount.** The task's snapshot is mounted at `/work`, which
+  has no instruction file above it; nothing else from your machine is mounted. Every snapshot is
+  made writable for any user, since the image's user id may differ from yours, and the images
+  trust `/work` for git. Before anything is measured, each arm's container must write a mounted
+  snapshot and have git read it, or the replay is refused with the reason. Every run, check and
+  gate container is named, and one that times out is removed by name. The credential is
+  passed by name, so its value is on no command line and in no row. The container runs with
+  `no-new-privileges` and no capabilities, and one command line serves both arms: the same
+  `--model`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
+  `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
+  headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
+- **The one way out is the model API.** Both arms sit on an internal Docker network with no route
+  out. The only other container on it is `scripts/egress_proxy.py`, a standard-library CONNECT
+  proxy run from the bare image. It listens only on its own address on that network, and is
+  joined to the default bridge only once it has reported that address; it opens a tunnel to
+  `api.anthropic.com:443` and answers everything else `403`. The arms get `HTTPS_PROXY` pointing at
+  it and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. `arms probe-egress` proves the rule from an
+  arm container: the model API answers through the proxy, `example.com` is refused, and the model
+  API without the proxy does not resolve.
+- **No check runs on your machine.** The held-back test files are written into the snapshot from
+  this repository's history, then the check runs in a fresh container of the bare image with the
+  snapshot as its only mount, the image's own HOME, no network and no credential; an oracle is
+  sent on stdin. `--verify-tasks` runs each task's gate and both of its checks the same way,
+  building the bare arm first unless `--check-image` names one: on your machine an older
+  snapshot's code reads your live configuration through HOME and goes red for that.
+- **The stop gate can fire.** The stop-gate hook runs a gate only in a trusted root, so the harness
+  image trusts `/work`, where every snapshot is mounted, when it is built. No run writes a trust
+  file anywhere.
 - **Every run is captured as `stream-json` with hook events**, the one format that carries the
   Stop hook's decisions, so each row records `stop_hooks`, how often the hook ran, and
   `hook_blocks`, how often it refused the stop. A raw file kept in the older single-document form
   still reads, with both fields `null`.
-- **Each arm's fence is proved before anything is scored.** One capped `-p` run per arm runs
-  `bin/harness lint` under that arm's own fence and profile; an arm whose lint is not clean, or
-  whose run has a read refused, refuses the whole replay with exit 2 before any scored run
-  launches, and its cost counts against `--spend-cap`. The bar is lint rather than the full suite
-  because the suite is profile-dependent at older snapshot commits. Every scored row records
-  `preflight`. `--skip-preflight` bypasses the check and stamps the rows `skipped`.
-- **Every run starts in a throwaway snapshot outside the home directory**, launched with a scrubbed
-  environment. A folder under the home directory inherits the user's instruction files through the
-  parent-folder walk, which would put the harness into the bare arm. The snapshot holds one commit,
-  so the change that solved a task is not reachable from it, and it is removed after scoring.
+- **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
+  `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
+  a read refused, refuses the whole replay with exit 2 before any scored run launches, and its
+  cost counts against `--spend-cap`. The bar is lint rather than the full suite because the suite
+  is profile-dependent at older snapshot commits. Every scored row records `preflight`.
+  `--skip-preflight` bypasses the check and stamps the rows `skipped`.
+- **Every run starts in a throwaway snapshot.** The snapshot holds one commit and its ancestors, so
+  the change that solved a task is not reachable from it, and it is removed after scoring. The
+  harness arm's image does hold the harness checkout at its ref, which may postdate a task; that
+  was as true of the profile arms this replaced, and it is recorded rather than hidden.
 - **Cost is the CLI's own `total_cost_usd`**, a list-price equivalent and not money charged under a
   plan sign-in. Run order changes it, because a later run finds its prefix already cached, so each
   row also carries a cache-normalised cost that reprices every thread's first-turn cache reads as
@@ -152,8 +176,11 @@ python3 scripts/cost_bench.py replay --model <id> \
   turns report neither reads nor writes, is `null` and is left out of the arm's mean; so is an
   errored run, whose turns are not the spend it would have had. Never zero: zero is a run that
   served its whole prefix.
-- **An errored run is an error, never a failure.** It sits outside both cost per passed task and
-  the pass count, and is counted beside them. The per-run cap is soft, so the runner also stops
+- **Every attempt counts.** An errored, crashed or timed-out run is a failed attempt whose cost is
+  in the arm's cost per passed task, as the evidence standard's intention to treat requires; its
+  `error` field keeps it countable apart. A timed-out run with no readable cost is charged at the
+  per-run cap; another error with no readable cost leaves the figure undefined rather than cheaper.
+  The per-run cap is soft, so the runner also stops
   before any launch that could take reported spend past `--spend-cap`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
@@ -161,7 +188,7 @@ python3 scripts/cost_bench.py replay --model <id> \
   85% of bare per passed task while passing no fewer than bare minus one, mean of reps.
 - **What is faked:** single-shot prompts stand in for interactive sessions, 2 of the 7 tasks are
   synthetic, and a tagged run measures the tag's default configuration rather than a configured
-  one.
+  one. The arms run on Linux; a macOS arm is not built.
 - **A task that cannot be passed honestly leaves the set** and moves to the manifest's `retired`
   list with its reason and date. `usage-prices` left on 2026-09-25: its held-back tests pin live
   prices and helper names its prompt never gives, and no arm can reach the web to confirm a price.
@@ -171,7 +198,8 @@ the 0.85 threshold, so no cost claim is published. Two earlier figures in either
 artifacts of the runner's sandbox and of a test-suite defect, both since fixed. A review on
 2026-09-24 found six more ways the arms were unequal or a task unfair: the task count above, the
 turn cap, the stop gate, web access, `usage-prices` and hook capture. Each is fixed as described
-above, and no result has been taken since. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
+above, and no result has been taken since. The arms have since moved from host profiles to
+containers, which starts a new series. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
 figure to rely on today.
 
 ## Limits
