@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 122,
-    "chore": 88,
+    "chore": 89,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7860,6 +7860,19 @@
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S323.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C088",
+      "github_number": 1044,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1044",
+      "title": "Publish v0.14.1 from the qualified Model Citizen candidate",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C088.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
