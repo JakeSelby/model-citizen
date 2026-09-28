@@ -17,7 +17,7 @@ from . import server
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, StateError, Store
 
 # Hosted macOS runners can take several seconds to schedule the detached interpreter.
-START_TIMEOUT = 15.0
+START_TIMEOUT = 30.0
 STOP_TIMEOUT = 2.0
 
 
@@ -52,6 +52,46 @@ def _request(record: Dict[str, object], path: str, method: str = "GET") -> Dict[
 def _matches(record: Dict[str, object], health: Dict[str, object]) -> bool:
     fields = ("schema_version", "protocol_version", "pid", "pid_start", "port")
     return all(health.get(name) == record.get(name) for name in fields)
+
+
+def _launch_ready(root: Path) -> Optional[Dict[str, object]]:
+    """Read a newly published instance through its authenticated handshake."""
+    try:
+        with Store(root) as store:
+            record = store.read()
+        if record is None:
+            return None
+        health = _request(record, server.CONTROL_HEALTH)
+        if not _matches(record, health):
+            raise InstanceError("Studio control handshake does not match its recorded process")
+        return record
+    except (OSError, StateError) as exc:
+        raise InstanceError(str(exc)) from exc
+
+
+def _cleanup_failed_launch(process: subprocess.Popen, root: Path) -> None:
+    if process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        except OSError:
+            pass
+    try:
+        with Store(root) as store:
+            record = store.read()
+            if record is None or record.get("pid") != process.pid:
+                return
+            lock = store.acquire()
+            if lock is not None:
+                try:
+                    store.remove()
+                finally:
+                    os.close(lock)
+    except (OSError, StateError):
+        pass
 
 
 def current(root: Path) -> Optional[Dict[str, object]]:
@@ -105,7 +145,9 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
     last_error = None
     while time.monotonic() < deadline:
         try:
-            record = current(root)
+            # The server already records and returns its process-start token. Avoid a second
+            # platform liveness probe while the just-spawned process is publishing readiness.
+            record = _launch_ready(root)
             if record is not None:
                 won = record["pid"] == process.pid
                 if not won and process.poll() is None:
@@ -128,10 +170,7 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
             time.sleep(0.05)
             continue
         time.sleep(0.05)
-    try:
-        process.terminate()
-    except OSError:
-        pass
+    _cleanup_failed_launch(process, root)
     raise InstanceError("detached Studio did not become ready" +
                         ((": " + str(last_error)) if last_error else ""))
 

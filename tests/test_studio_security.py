@@ -35,7 +35,7 @@ class StudioSecurityFixture(unittest.TestCase):
                         PYTHONDONTWRITEBYTECODE="1")
         done = subprocess.run(
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json"],
-            env=self.env, capture_output=True, text=True, timeout=20)
+            env=self.env, capture_output=True, text=True, timeout=45)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.started = json.loads(done.stdout)
         self.record = json.loads((state_root(self.home) / "instance.json").read_text())

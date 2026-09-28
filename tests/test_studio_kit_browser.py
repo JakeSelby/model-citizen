@@ -98,7 +98,7 @@ class StudioKitBrowserTests(unittest.TestCase):
         self.assertEqual(stopped.returncode, 0, stopped.stderr)
         launched = subprocess.run(
             [browser_support.sys.executable, str(browser_support.CLI), "studio", "--detach",
-             "--no-open", "--json"], env=self.env, capture_output=True, text=True, timeout=20)
+             "--no-open", "--json"], env=self.env, capture_output=True, text=True, timeout=45)
         self.assertEqual(launched.returncode, 0, launched.stderr)
         self.started = json.loads(launched.stdout)
         record = json.loads((browser_support.state_root(self.home) / "instance.json").read_text())

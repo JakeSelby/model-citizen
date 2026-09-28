@@ -45,7 +45,7 @@ class StudioFixture(unittest.TestCase):
                        env=self.env, capture_output=True, text=True, timeout=5)
         self.tmp.cleanup()
 
-    def cli(self, *args, timeout=20):
+    def cli(self, *args, timeout=45):
         return subprocess.run([sys.executable, str(CLI), "studio"] + list(args), env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
@@ -321,8 +321,8 @@ class LifecycleTests(StudioFixture):
                                  stderr=subprocess.PIPE, text=True)
         second = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, text=True)
-        first_out, first_err = first.communicate(timeout=20)
-        second_out, second_err = second.communicate(timeout=20)
+        first_out, first_err = first.communicate(timeout=45)
+        second_out, second_err = second.communicate(timeout=45)
         self.assertEqual(first.returncode, 0, first_err)
         self.assertEqual(second.returncode, 0, second_err)
         rows = [json.loads(first_out), json.loads(second_out)]
@@ -342,7 +342,7 @@ class LifecycleTests(StudioFixture):
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json",
              "--port", str(port)], env=self.env, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True) for port in requested]
-        completed = [process.communicate(timeout=20) for process in processes]
+        completed = [process.communicate(timeout=45) for process in processes]
         for process, (_stdout, stderr) in zip(processes, completed):
             self.assertEqual(process.returncode, 0, stderr)
         rows = [json.loads(stdout) for stdout, _stderr in completed]
@@ -360,12 +360,33 @@ class LifecycleTests(StudioFixture):
         child = mock.Mock(pid=111)
         child.poll.return_value = 1
         with mock.patch.object(studio_lifecycle.subprocess, "Popen", return_value=child), \
-                mock.patch.object(studio_lifecycle, "current", return_value=winner):
+                mock.patch.object(studio_lifecycle, "_launch_ready", return_value=winner), \
+                mock.patch.object(workers, "running",
+                                  side_effect=AssertionError("launch must not probe liveness")):
             result = studio_lifecycle.launch_detached(["citizen"], state_root(self.home), 49152)
         self.assertTrue(result["reused"])
         self.assertFalse(result["port_fallback"])
         self.assertNotIn("requested_port", result)
         self.assertEqual(result["port"], winner["port"])
+
+    def test_failed_launch_stops_the_child_and_removes_only_its_record(self):
+        root = state_root(self.home)
+        child = mock.Mock(pid=111)
+        child.poll.return_value = None
+        record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
+                  "pid": child.pid, "pid_start": "child", "port": 49152,
+                  "host": "0" * 32 + ".localhost:49152",
+                  "url": "http://" + "0" * 32 + ".localhost:49152/",
+                  "control_credential": "credential", "instance_epoch": "epoch"}
+        with Store(root) as store:
+            store.write(record)
+
+        studio_lifecycle._cleanup_failed_launch(child, root)
+
+        child.terminate.assert_called_once_with()
+        child.wait.assert_called_once_with(timeout=0.5)
+        with Store(root) as store:
+            self.assertIsNone(store.read())
 
     def test_browser_open_success_failure_and_json_output(self):
         report = self.home / "browser-url"
@@ -374,7 +395,7 @@ class LifecycleTests(StudioFixture):
         browser.chmod(0o700)
         opened_env = dict(self.env, BROWSER=str(browser), STUDIO_BROWSER_REPORT=str(report))
         opened = subprocess.run([sys.executable, str(CLI), "studio", "--detach", "--json"],
-                                env=opened_env, capture_output=True, text=True, timeout=20)
+                                env=opened_env, capture_output=True, text=True, timeout=45)
         self.assertEqual(opened.returncode, 0, opened.stderr)
         self.assertEqual(len(opened.stdout.splitlines()), 1)
         opened_row = json.loads(opened.stdout)

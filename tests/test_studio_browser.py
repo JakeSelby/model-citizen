@@ -25,6 +25,7 @@ from typing import Optional
 
 REPO = Path(__file__).resolve().parent.parent
 CLI = REPO / "bin" / "harness"
+GIT_EMAIL = "studio-qualification" + "@" + "example.invalid"
 sys.path.insert(0, str(REPO / "lib"))
 
 from harness_core.studio import auth, state_root  # noqa: E402
@@ -146,11 +147,15 @@ class StudioBrowserTests(unittest.TestCase):
         self.home = Path(os.path.realpath(self.temporary.name)) / "home"
         self.home.mkdir()
         self.env = dict(os.environ, HOME=str(self.home), HARNESS_HOME=str(self.home),
-                        PYTHONDONTWRITEBYTECODE="1")
+                        PYTHONDONTWRITEBYTECODE="1",
+                        GIT_AUTHOR_NAME="Studio Qualification",
+                        GIT_AUTHOR_EMAIL=GIT_EMAIL,
+                        GIT_COMMITTER_NAME="Studio Qualification",
+                        GIT_COMMITTER_EMAIL=GIT_EMAIL)
         self.addCleanup(self._stop_studio)
         launched = subprocess.run(
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json"],
-            env=self.env, capture_output=True, text=True, timeout=20)
+            env=self.env, capture_output=True, text=True, timeout=45)
         self.assertEqual(launched.returncode, 0, launched.stderr)
         self.started = json.loads(launched.stdout)
         record = json.loads((state_root(self.home) / "instance.json").read_text())
@@ -158,6 +163,8 @@ class StudioBrowserTests(unittest.TestCase):
         self.profile = Path(self.temporary.name) / "chrome"
         self.browser = subprocess.Popen(
             [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+             "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
+             "--disable-backgrounding-occluded-windows",
              "--remote-debugging-port=0", "--user-data-dir=" + str(self.profile), "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self._stop_browser)

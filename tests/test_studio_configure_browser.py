@@ -73,6 +73,7 @@ class ConfigureBrowserTests(unittest.TestCase):
             };
         """ + instrumentation})
         self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
+        self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
         self._wait("document.querySelector('input') !== null", "Configure did not render")
 
