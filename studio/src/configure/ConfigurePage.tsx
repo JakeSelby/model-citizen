@@ -157,8 +157,10 @@ export function ConfigurePage() {
           setMessage("Nothing was saved. Retry when the draft is available.");
           return;
         }
+        saving.current = false;
         setBaseRevision(saved.result?.revision ?? baseRevision);
         setChanges((current) => remainingChanges(current, snapshot));
+        setRetryNonce((current) => current + 1);
         setStatus("ready");
         setMessage("Draft checkpoint saved. Nothing was applied to the installed harness.");
       } catch (error) {

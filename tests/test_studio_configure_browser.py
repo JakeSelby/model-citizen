@@ -142,6 +142,16 @@ class ConfigureBrowserTests(unittest.TestCase):
         self.assertEqual(saves[0]["body"]["changes"], {"identity.name": "First edit"})
         self.assertEqual(previews[1]["body"]["changes"], {"identity.role": "Queued during save"})
         self.assertEqual(saves[1]["body"]["changes"], {"identity.role": "Queued during save"})
+        self._wait(
+            "document.body.textContent.includes('0 unsaved fields')",
+            "queued save did not clear pending changes",
+        )
+        time.sleep(0.9)
+        self.assertEqual(
+            self.devtools.evaluate("__settingsCalls.filter(call => call.kind === 'save').length"),
+            2,
+            "queued save scheduled a duplicate checkpoint",
+        )
 
     def test_failed_save_keeps_loaded_identity_and_allows_explicit_retry(self):
         self._open_configure("""
