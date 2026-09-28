@@ -135,6 +135,17 @@ class StateTests(StudioFixture):
             with self.assertRaisesRegex(StateError, "mode-0600"):
                 store.read()
 
+    def test_ui_preferences_persist_safely_across_store_reopens(self):
+        root = state_root(self.home)
+        with Store(root) as store:
+            self.assertEqual(store.read_ui_preferences(), {"color_scheme": "auto"})
+            store.write_ui_preferences({"color_scheme": "dark"})
+        self.assertEqual(stat.S_IMODE((root / "ui-preferences.json").stat().st_mode), 0o600)
+        with Store(root) as store:
+            self.assertEqual(store.read_ui_preferences(), {"color_scheme": "dark"})
+            with self.assertRaisesRegex(StateError, "preferences are invalid"):
+                store.write_ui_preferences({"color_scheme": "sepia"})
+
     def test_incompatible_state_is_refused_without_signalling_pid(self):
         root = state_root(self.home)
         with Store(root) as store:

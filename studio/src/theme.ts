@@ -21,7 +21,10 @@ const clear: MantineColorsTuple = [
 const clearVariantColors: VariantColorsResolver = (input) => {
   const colors = defaultVariantColorsResolver(input);
   if (input.variant === "filled" && input.color === "clear") {
-    return { ...colors, color: "var(--studio-primary-foreground)" };
+    return { ...colors, background: "var(--studio-primary)", hover: "var(--studio-primary)", color: "var(--studio-primary-foreground)" };
+  }
+  if (input.color === "clear" && ["light", "subtle", "outline"].includes(input.variant)) {
+    return { ...colors, color: "var(--studio-primary)", background: input.variant === "light" ? "var(--studio-primary-wash)" : "transparent", hover: "var(--studio-primary-wash)" };
   }
   return colors;
 };

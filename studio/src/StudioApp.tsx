@@ -9,14 +9,18 @@ import {
   SimpleGrid,
   Stack,
   Text,
-  ThemeIcon,
   Title,
+  NativeSelect,
+  useMantineColorScheme,
 } from "@mantine/core";
-import { type MouseEvent, useEffect } from "react";
+import { type ChangeEvent, type MouseEvent, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
+import { EvidenceState, StatusBadge, ToastProvider } from "./components/StudioKit";
+import { version } from "../package.json";
+import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 
 const reportCards = [
   {
@@ -69,10 +73,10 @@ function Hub() {
       </Group>
 
       <section aria-labelledby="overview-title" className="hub-grid">
-        <Paper className="overview-card" p="xl" withBorder>
+        <Paper className="overview-card" px={{ base: "var(--studio-space-5)", xs: "xl" }} py="xl" withBorder>
           <Group justify="space-between">
             <Title id="overview-title" order={2}>AI health overview</Title>
-            <Badge color="gray" variant="light">Off</Badge>
+            <StatusBadge>Off</StatusBadge>
           </Group>
           <Text className="overview-lead" mt="lg">Enable a read-only assessment when you want one.</Text>
           <Text c="dimmed" mt="sm">
@@ -95,26 +99,14 @@ function Hub() {
             <Title order={2}>Drafts & active runs</Title>
             <Anchor component={NavLink} to="/experiments">All experiments</Anchor>
           </Group>
-          <div className="empty-state">
-            <ThemeIcon color="gray" size="lg" variant="light" aria-hidden="true">–</ThemeIcon>
-            <div>
-              <Text fw={650}>Evidence not loaded</Text>
-              <Text c="dimmed" size="sm">Draft and run state will appear when the core endpoint is available.</Text>
-            </div>
-          </div>
+          <EvidenceState kind="empty" title="Evidence not loaded">Draft and run state will appear when the core endpoint is available.</EvidenceState>
         </Paper>
         <Paper p="xl" withBorder>
           <Group justify="space-between">
             <Title order={2}>Alerts & notifications</Title>
-            <Badge color="gray" variant="light">Unavailable</Badge>
+            <StatusBadge>Unavailable</StatusBadge>
           </Group>
-          <div className="empty-state">
-            <ThemeIcon color="gray" size="lg" variant="light" aria-hidden="true">–</ThemeIcon>
-            <div>
-              <Text fw={650}>Evidence not loaded</Text>
-              <Text c="dimmed" size="sm">No health claim is shown until authoritative alerts are available.</Text>
-            </div>
-          </div>
+          <EvidenceState kind="empty" title="Evidence not loaded">No health claim is shown until authoritative alerts are available.</EvidenceState>
         </Paper>
       </SimpleGrid>
     </Stack>
@@ -129,7 +121,7 @@ function FoundationPage({ title, description }: { title: string; description: st
         <Title order={1}>{title}</Title>
         <Text c="dimmed" mt="xs">{description}</Text>
       </div>
-      <Paper className="foundation-panel" p="xl" withBorder>
+      <Paper className="foundation-panel" px={{ base: "var(--studio-space-5)", xs: "xl" }} py="xl" withBorder>
         <Badge color="gray" variant="light">Preview</Badge>
         <Title mt="md" order={2}>The interface is available.</Title>
         <Text c="dimmed" mt="xs">
@@ -151,6 +143,8 @@ const pages = {
 function StudioFrame() {
   const location = useLocation();
   const title = pageTitle(location.pathname);
+  const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const [themeReady, setThemeReady] = useState(false);
 
   function skipNavigation(event: MouseEvent<HTMLAnchorElement>) {
     event.preventDefault();
@@ -162,6 +156,21 @@ function StudioFrame() {
   useEffect(() => {
     document.title = documentTitle(location.pathname);
   }, [location.pathname]);
+
+  useEffect(() => {
+    let active = true;
+    void loadColorScheme()
+      .then((saved) => { if (active) setColorScheme(saved); })
+      .catch(() => undefined)
+      .finally(() => { if (active) setThemeReady(true); });
+    return () => { active = false; };
+  }, [setColorScheme]);
+
+  function changeTheme(event: ChangeEvent<HTMLSelectElement>) {
+    const selected = event.currentTarget.value as ColorScheme;
+    setColorScheme(selected);
+    void saveColorScheme(selected).catch(() => undefined);
+  }
 
   return (
     <div className="studio-frame">
@@ -194,10 +203,15 @@ function StudioFrame() {
       <div className="workspace-bar">
         <Container className="workspace-inner" size="xl">
           <Text fw={600}>Personal workspace <Text c="dimmed" component="span" fw={400}>/ local</Text></Text>
-          <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
+          <div className="workspace-tools">
+            <Text className="version-label" size="xs">Studio {version}</Text>
+            <StatusBadge>Health unavailable</StatusBadge>
+            <NativeSelect aria-label="Color theme" className="theme-picker" disabled={!themeReady} value={colorScheme} onChange={changeTheme} data={[{ value: "auto", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
+            <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
+          </div>
         </Container>
       </div>
-      <Container component="main" id="main-content" py={{ base: "xl", sm: 40 }} size="xl" tabIndex={-1}>
+      <Container component="main" id="main-content" className="main-content" size="xl" tabIndex={-1}>
         <Text className="visually-hidden" component="span">Current page: {title}</Text>
         <Routes>
           <Route path="/" element={<Hub />} />
@@ -212,10 +226,11 @@ function StudioFrame() {
           <Route path="*" element={<Navigate replace to="/" />} />
         </Routes>
       </Container>
+      <Container component="footer" className="studio-footer" size="xl"><Text size="xs">Local workspace · Evidence stays linked to its source</Text><Text size="xs">Model Citizen Studio {version}</Text></Container>
     </div>
   );
 }
 
 export function StudioApp() {
-  return <StudioFrame />;
+  return <ToastProvider><StudioFrame /></ToastProvider>;
 }
