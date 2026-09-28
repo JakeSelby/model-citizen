@@ -54,6 +54,9 @@ test("operational cards show exact fixes, governed sync, updates, and empty runs
   assert.match(html, /\/plugin install model-citizen@market/);
   assert.match(html, /Review sync before applying/);
   assert.match(html, /No runs yet/);
+  assert.match(html, /<details class="doctor-repair"><summary>Show 2 repair commands/);
+  assert.ok(html.indexOf("diagnostic-secondary") < html.indexOf("Projection drift"));
+  assert.ok(html.indexOf("Projection drift") < html.indexOf("Recent runs"));
   assert.doesNotMatch(html, /Update now|Run sync/);
 });
 
@@ -70,6 +73,15 @@ test("overview loads from the authenticated same-origin route", async () => {
     globalThis.fetch = original;
   }
   assert.deepEqual(calls, [{ input: "/api/overview", init: { credentials: "same-origin" } }]);
+});
+
+test("attention checks precede collapsed informational diagnostics", () => {
+  const overview = { ...fixture, doctor: { ...fixture.doctor, checks: [...fixture.doctor.checks].reverse() } };
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
+    h(DeterministicOverview, { overview }))));
+  assert.ok(html.indexOf("plugin missing") < html.indexOf("identity: set"));
+  assert.match(html, /<details class="doctor-information"><summary>1 informational check<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]*open/);
 });
 
 test("overview route errors are explicit", async () => {

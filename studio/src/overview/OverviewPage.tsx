@@ -11,11 +11,13 @@ import {
   Title,
 } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CommandChip, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { loadOverview } from "./api";
 import { releaseSummary, systemSummary, type DoctorCheck, type Overview } from "./model";
+import "./overview.css";
 
 const reportCards = [
   { label: "System health", measure: "Doctor evidence", detail: "Every check keeps the CLI message and repair command.", href: "/reports#system-health" },
@@ -41,14 +43,19 @@ function DoctorRow({ check }: { check: DoctorCheck }) {
       </StatusBadge>
       <Text mt="xs" size="sm">{check.message}</Text>
     </div>
-    {!!check.fixes.length && <Stack gap="xs">{check.fixes.map((fix) =>
-      <CommandChip command={fix} key={fix} label="Doctor fix" />)}</Stack>}
+    {!!check.fixes.length && <details className="doctor-repair">
+      <summary>Show {check.fixes.length === 1 ? "repair command" : `${check.fixes.length} repair commands`}</summary>
+      <Stack gap="xs">{check.fixes.map((fix) =>
+        <CommandChip command={fix} key={fix} label="Doctor fix" />)}</Stack>
+    </details>}
   </li>;
 }
 
-export function DeterministicOverview({ overview }: { overview: Overview }) {
+export function DeterministicOverview({ overview, children }: { overview: Overview; children?: ReactNode }) {
   const summary = systemSummary(overview);
   const installed = overview.installed.version ? `v${overview.installed.version}` : "Unavailable";
+  const attention = overview.doctor.checks.filter((check) => check.status === "attention");
+  const informational = overview.doctor.checks.filter((check) => check.status !== "attention");
   return <Stack gap="lg">
     <Paper className="system-summary" p="xl" withBorder>
       <Group align="flex-start" justify="space-between">
@@ -72,16 +79,25 @@ export function DeterministicOverview({ overview }: { overview: Overview }) {
       </div>
     </Paper>
 
-    <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
+    {children}
+
+    <SimpleGrid className="diagnostic-grid" cols={{ base: 1, md: 2 }} spacing="lg">
       <Paper p="xl" withBorder>
         <Group justify="space-between"><Title order={2}>Doctor checks</Title><StatusBadge>{overview.doctor.checks.length} checks</StatusBadge></Group>
         {overview.doctor.status === "failed"
           ? <EvidenceState kind="error" title="Doctor unavailable">{overview.doctor.message}</EvidenceState>
           : overview.doctor.checks.length
-            ? <ul className="doctor-list">{overview.doctor.checks.map((check) => <DoctorRow check={check} key={check.id} />)}</ul>
+            ? <>
+              {!!attention.length && <ul className="doctor-list">{attention.map((check) => <DoctorRow check={check} key={check.id} />)}</ul>}
+              {!!informational.length && <details className="doctor-information">
+                <summary>{informational.length} informational {informational.length === 1 ? "check" : "checks"}</summary>
+                <ul className="doctor-list">{informational.map((check) => <DoctorRow check={check} key={check.id} />)}</ul>
+              </details>}
+            </>
             : <EvidenceState kind="empty" title="No doctor output">The CLI returned no checks.</EvidenceState>}
       </Paper>
 
+      <Stack className="diagnostic-secondary" gap="lg">
       <Paper p="xl" withBorder>
         <Group justify="space-between">
           <Title order={2}>Projection drift</Title>
@@ -97,7 +113,6 @@ export function DeterministicOverview({ overview }: { overview: Overview }) {
           <Button component={NavLink} to="/configure#governed-sync" variant="light">Review sync before applying</Button>
         </Stack>}
       </Paper>
-    </SimpleGrid>
 
     <Paper p="xl" withBorder>
       <Group justify="space-between"><Title order={2}>Recent runs</Title><Anchor component={NavLink} to="/experiments">All experiments</Anchor></Group>
@@ -108,6 +123,8 @@ export function DeterministicOverview({ overview }: { overview: Overview }) {
         <StatusBadge tone={run.status === "succeeded" ? "success" : run.status === "failed" ? "danger" : "info"}>{run.status}</StatusBadge>
       </li>)}</ul>}
     </Paper>
+      </Stack>
+    </SimpleGrid>
   </Stack>;
 }
 
@@ -121,9 +138,12 @@ export function OverviewPage() {
 
     {overview.isPending && <Paper p="xl" withBorder><EvidenceState kind="loading" title="Loading operational evidence">Reading the same local sources as citizen doctor, diff, and catalog.</EvidenceState></Paper>}
     {overview.isError && <Paper p="xl" withBorder><EvidenceState action={<Button onClick={() => { void overview.refetch(); }} variant="light">Try again</Button>} kind="error" title="Overview unavailable">The last screen remains read-only. No command was run.</EvidenceState></Paper>}
-    {overview.data && <DeterministicOverview overview={overview.data} />}
+    {overview.data ? <DeterministicOverview overview={overview.data}><OverviewInsights /></DeterministicOverview> : <OverviewInsights />}
+  </Stack>;
+}
 
-    <section aria-labelledby="ai-overview-title" className="hub-grid">
+function OverviewInsights() {
+  return <section aria-labelledby="ai-overview-title" className="hub-grid">
       <Paper className="overview-card" px={{ base: "var(--studio-space-5)", xs: "xl" }} py="xl" withBorder>
         <Group justify="space-between"><Title id="ai-overview-title" order={2}>AI health overview</Title><StatusBadge>Off</StatusBadge></Group>
         <Text className="overview-lead" mt="lg">Enable a read-only assessment when you want one.</Text>
@@ -131,6 +151,5 @@ export function OverviewPage() {
         <Group mt="xl"><Button component={NavLink} to="/configure#ai-overview" variant="light">Review AI settings</Button><Anchor component={NavLink} to="/reports">Browse deterministic reports</Anchor></Group>
       </Paper>
       <SimpleGrid className="report-grid" cols={{ base: 1, xs: 2 }} spacing="md">{reportCards.map((card) => <ReportCard key={card.label} {...card} />)}</SimpleGrid>
-    </section>
-  </Stack>;
+    </section>;
 }

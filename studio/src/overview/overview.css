@@ -1,0 +1,21 @@
+.diagnostic-grid { align-items: start; }
+.diagnostic-secondary { min-width: 0; }
+.diagnostic-grid .doctor-row { grid-template-columns: minmax(0, 1fr); gap: var(--studio-space-1); }
+.doctor-repair summary {
+  min-height: var(--studio-control-height);
+  align-content: center;
+  color: var(--studio-primary);
+  font-size: var(--studio-text-sm);
+  font-weight: 650;
+  cursor: pointer;
+}
+.doctor-repair[open] > summary { margin-bottom: var(--studio-space-2); }
+.doctor-information { margin-top: var(--studio-space-4); }
+.doctor-information summary {
+  min-height: var(--studio-control-height);
+  align-content: center;
+  color: var(--studio-primary);
+  font-size: var(--studio-text-sm);
+  font-weight: 650;
+  cursor: pointer;
+}

@@ -15,30 +15,28 @@ import { useEffect, useMemo, useState } from "react";
 import { EvidenceState, StatusBadge } from "../components/StudioKit";
 import { loadLibrary } from "./api";
 import { filterLibrary, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
+import "./library.css";
 
 const EMPTY_FILTERS: LibraryFilters = { query: "", kind: "", root: "", state: "", cost: "" };
 
-function ModuleDetail({ module }: { module: LibraryModule }) {
+function ModuleDetail({ module, sharedRoot }: { module: LibraryModule; sharedRoot: string }) {
   return (
-    <Paper className="library-module" p="lg" withBorder>
-      <Group align="flex-start" justify="space-between" wrap="nowrap">
-        <div>
-          <Group gap="xs">
-            <Title order={3}>{module.name}</Title>
-            {module.collision ? <Badge color="orange">Collision</Badge> : null}
-          </Group>
-          <Text c="dimmed" size="sm">{module.kind} · {module.root.label}</Text>
-        </div>
-        <StatusBadge>{module.state.value}</StatusBadge>
-      </Group>
-      <Group gap="xs" mt="md">
+    <details className="library-module">
+      <summary className="library-module-summary">
+        <span className="library-module-name">{module.name}</span>
+        {module.root.id !== sharedRoot && <span className="library-module-root">{module.root.label}</span>}
+        <span className="library-module-state">
+          {module.collision ? <Badge color="orange">Collision</Badge> : null}
+          <StatusBadge>{module.state.value}</StatusBadge>
+        </span>
+      </summary>
+      <Stack className="library-module-body" gap="md">
+      <Text c="dimmed" size="sm">Ownership: {module.root.label}</Text>
+      <Group gap="xs">
         <Badge variant="light">{module.context_cost.tokens.toLocaleString()} tokens</Badge>
         <Text c="dimmed" size="xs">{module.context_cost.estimate} · {module.context_cost.method}</Text>
       </Group>
-      <Text mt="md" size="sm"><strong>State provenance:</strong> {module.state.layer} · {module.state.switchable ? "Selectable" : "Informational"}</Text>
-      <details className="library-detail">
-        <summary>Manifest, projections, and source</summary>
-        <Stack gap="md" mt="md">
+      <Text size="sm"><strong>State provenance:</strong> {module.state.layer} · {module.state.switchable ? "Selectable" : "Informational"}</Text>
           <div>
             <Text fw={650} size="sm">Manifest</Text>
             <Code block>{JSON.stringify(module.manifest, null, 2)}</Code>
@@ -59,10 +57,28 @@ function ModuleDetail({ module }: { module: LibraryModule }) {
             <Text fw={650} size="sm">Rendered view</Text>
             <Code block className="library-code">{module.rendered.text}</Code>
           </div>
-        </Stack>
-      </details>
-    </Paper>
+      </Stack>
+    </details>
   );
+}
+
+export function LibraryGroups({ modules }: { modules: LibraryModule[] }) {
+  const kinds = [...new Set(modules.map((module) => module.kind))].sort();
+  return <Stack gap="lg">{kinds.map((kind) => {
+    const items = modules.filter((module) => module.kind === kind);
+    const roots = new Map<string, { label: string; count: number }>();
+    for (const item of items) {
+      roots.set(item.root.id, { label: item.root.label, count: (roots.get(item.root.id)?.count ?? 0) + 1 });
+    }
+    const [sharedRoot, ownership] = [...roots.entries()].sort((a, b) => b[1].count - a[1].count)[0];
+    return <Paper className="library-group" component="section" key={kind} withBorder aria-label={`${kind} modules`}>
+      <Group className="library-group-heading" justify="space-between">
+        <Group gap="xs"><Title order={2}>{kind}</Title><Text c="dimmed" size="sm">{ownership.label}{roots.size > 1 ? " + others" : ""}</Text></Group>
+        <Badge variant="light">{items.length}</Badge>
+      </Group>
+      {items.map((module) => <ModuleDetail key={module.key} module={module} sharedRoot={sharedRoot} />)}
+    </Paper>;
+  })}</Stack>;
 }
 
 export function LibraryPage() {
@@ -113,7 +129,7 @@ export function LibraryPage() {
       {payload && !filtered.length ? <EvidenceState kind="empty" title="No modules match">Clear a filter to widen the result.</EvidenceState> : null}
       <Stack gap="md" aria-live="polite">
         {payload ? <Text c="dimmed" size="sm">Showing {filtered.length} of {payload.summary.modules} modules</Text> : null}
-        {filtered.map((module) => <ModuleDetail key={module.key} module={module} />)}
+        <LibraryGroups modules={filtered} />
       </Stack>
     </Stack>
   );

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
+import { createElement as h } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MantineProvider } from "@mantine/core";
 
 import { filterLibrary, type LibraryModule } from "../src/library/model.ts";
+import { LibraryGroups } from "../src/library/LibraryPage.tsx";
 
 function moduleAt(index: number): LibraryModule {
   return {
@@ -35,4 +39,26 @@ test("search and every library filter compose over 500 modules within 100 ms", (
   assert.ok(result.length > 0);
   assert.ok(result.every((item) => item.root.id === "root-4"
     && item.state.value === "on" && item.context_cost.tokens >= 1000));
+});
+
+test("modules are grouped by kind with details collapsed and all evidence retained", () => {
+  const modules = [moduleAt(1), { ...moduleAt(2), kind: "hooks" }, moduleAt(3)];
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(LibraryGroups, { modules })));
+  assert.equal((html.match(/class="library-module"/g) ?? []).length, 3);
+  assert.equal((html.match(/aria-label="rules modules"/g) ?? []).length, 1);
+  assert.equal((html.match(/aria-label="hooks modules"/g) ?? []).length, 1);
+  assert.doesNotMatch(html, /<details[^>]*open/);
+  assert.match(html, /State provenance/);
+  assert.match(html, /Runtime projections/);
+  assert.match(html, /Rendered view/);
+  assert.ok(html.indexOf('aria-label="hooks modules"') < html.indexOf('aria-label="rules modules"'));
+});
+
+test("shared ownership appears in the group and only exceptions appear on collapsed rows", () => {
+  const first = moduleAt(1);
+  const modules = [first, { ...moduleAt(2), root: first.root }, moduleAt(3)];
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(LibraryGroups, { modules })));
+  assert.equal((html.match(/class="library-module-root"/g) ?? []).length, 1);
+  assert.match(html, /Root 1 \+ others/);
+  assert.match(html, /class="library-module-root">Root 3/);
 });

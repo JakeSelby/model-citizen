@@ -5,8 +5,12 @@
 .selection-origin { min-width: 0; margin-top: var(--studio-space-2); }
 .selection-source { display: block; width: fit-content; max-width: 100%; margin-top: var(--studio-space-1); overflow-wrap: anywhere; white-space: normal; color: var(--studio-ink-secondary); background: transparent; }
 .budget-meter { min-width: 0; padding: var(--studio-space-4); border: var(--studio-border-width) solid var(--studio-border-default); border-radius: var(--studio-radius-md); }
-.selection-group-heading { padding-bottom: var(--studio-space-2); border-bottom: var(--studio-border-width) solid var(--studio-border-default); }
-.selection-group-heading h3 { margin: 0; font-size: var(--studio-text-md); text-transform: capitalize; }
+.selection-group-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--studio-space-2); padding: var(--studio-space-3) 0; min-height: var(--studio-control-height); border-bottom: var(--studio-border-width) solid var(--studio-border-default); cursor: pointer; list-style: none; }
+.selection-group-heading::-webkit-details-marker { display: none; }
+.selection-group-heading::before { content: "+"; color: var(--studio-primary); font-weight: 650; }
+.selection-category[open] > summary::before { content: "−"; }
+.selection-category-name { font-weight: 650; font-size: var(--studio-text-md); text-transform: capitalize; }
+.selection-category-summary { margin-left: auto; color: var(--studio-ink-secondary); font-size: var(--studio-text-sm); }
 .selection-row { border-bottom: var(--studio-border-width) solid var(--studio-border-default); }
 .selection-row summary { display: grid; grid-template-columns: minmax(12rem, 1fr) auto auto; align-items: center; gap: var(--studio-space-3); min-height: var(--studio-control-height); padding: var(--studio-space-2) 0; cursor: pointer; }
 .selection-row summary::marker { color: var(--studio-primary); }
@@ -14,7 +18,9 @@
 .selection-provenance { margin-bottom: var(--studio-space-3); padding: var(--studio-space-4); border-radius: var(--studio-radius-sm); background: var(--studio-surface-canvas); }
 
 @media (max-width: 48rem) {
-  .selection-controls .mantine-Group-root { align-items: stretch; flex-direction: column; }
+  .selection-fields { align-items: stretch; flex-direction: column; }
+  .selection-fields > * { width: 100%; max-width: none; flex: none; }
+  .selection-category-summary { flex-basis: 100%; margin-left: var(--studio-space-4); }
   .selection-row summary { grid-template-columns: minmax(0, 1fr) auto; }
   .selection-row summary .mantine-Badge-root { grid-column: 1 / -1; }
 }

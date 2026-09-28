@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement as h } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { MantineProvider } from "@mantine/core";
+import { SelectionCategory } from "../src/selection/SelectionPanel.tsx";
 
 import { budgetPercent, SelectionRequestGate, selectedCount, sourceLabel, type SelectionReport } from "../src/selection/model.ts";
 
@@ -35,4 +39,15 @@ test("a late selection response cannot replace a newer request", () => {
   const repository = gate.next();
   assert.equal(gate.accepts(repository), true);
   assert.equal(gate.accepts(launcher), false);
+});
+
+test("default categories start collapsed while overrides reveal their source summary", () => {
+  const row = { unit: "testing", value: "required", source: "default", source_file: "", saved: true, overridden: [] };
+  const render = (source: string) => renderToStaticMarkup(h(MantineProvider, {}, h(SelectionCategory, {
+    group: { kind: "stances", rows: [{ ...row, source }] },
+  })));
+  assert.match(render("default"), /All defaults/);
+  assert.doesNotMatch(render("default"), /<details[^>]*open/);
+  assert.match(render("project"), /1 override · project/);
+  assert.match(render("project"), /<details class="selection-category" open=""/);
 });

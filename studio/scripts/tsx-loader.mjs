@@ -15,6 +15,9 @@ export async function resolve(specifier, context, next) {
 }
 
 export async function load(url, context, next) {
+  if (url.endsWith(".css")) {
+    return { format: "module", shortCircuit: true, source: "export default {};" };
+  }
   if (!url.endsWith(".tsx")) return next(url, context);
   const source = await readFile(new URL(url), "utf8");
   const transformed = await transformWithEsbuild(source, new URL(url).pathname, { loader: "tsx", jsx: "automatic" });

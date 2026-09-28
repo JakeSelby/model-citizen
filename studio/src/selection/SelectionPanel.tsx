@@ -24,6 +24,7 @@ import {
   type Provenance,
   type SelectionReport,
   type SelectionRow,
+  type SelectionGroup,
 } from "./model";
 import "./selection.css";
 
@@ -64,6 +65,23 @@ function SelectionValue({ kind, row }: { kind: string; row: SelectionRow }) {
   );
 }
 
+export function SelectionCategory({ group }: { group: SelectionGroup }) {
+  const overrides = group.rows.filter((row) => row.source !== "default");
+  const layers = [...new Set(overrides.map(sourceLabel))];
+  return <details className="selection-category" open={overrides.length > 0}>
+    <summary className="selection-group-heading">
+      <span className="selection-category-name">{group.kind}</span>
+      <Badge color="gray" variant="light">{group.rows.length}</Badge>
+      <span className="selection-category-summary">{overrides.length
+        ? `${overrides.length} override${overrides.length === 1 ? "" : "s"} · ${layers.join(", ")}`
+        : "All defaults"}</span>
+    </summary>
+    <div className="selection-rows">{group.rows.map((row) => (
+      <SelectionValue kind={group.kind} key={row.unit} row={row} />
+    ))}</div>
+  </details>;
+}
+
 export function SelectionPanel() {
   const [repository, setRepository] = useState("");
   const [projectFile, setProjectFile] = useState("");
@@ -96,7 +114,7 @@ export function SelectionPanel() {
   return (
     <Stack gap="lg">
       <Paper className="selection-controls" p="lg" withBorder>
-        <Group align="flex-end" grow>
+        <Group className="selection-fields" align="flex-end" grow>
           <TextInput
             label="Repository"
             description="Used to identify the project whose selection you are inspecting."
@@ -163,18 +181,10 @@ export function SelectionPanel() {
 
           <Paper className="selection-report" p="xl" withBorder>
             <Title order={2}>Resolved values and source layers</Title>
-            <Text c="dimmed" mt="xs" size="sm">Open any row to see its source and every lower-precedence value it replaced.</Text>
-            <Stack gap="lg" mt="lg">
+            <Text c="dimmed" mt="xs" size="sm">Categories with overrides are expanded. Open a value to inspect its source layers.</Text>
+            <Stack gap="xs" mt="lg">
               {report.groups.map((group) => (
-                <section aria-labelledby={`selection-${group.kind}`} key={group.kind}>
-                  <Group className="selection-group-heading" justify="space-between">
-                    <Title id={`selection-${group.kind}`} order={3}>{group.kind}</Title>
-                    <Badge color="gray" variant="light">{group.rows.length}</Badge>
-                  </Group>
-                  <div className="selection-rows">{group.rows.map((row) => (
-                    <SelectionValue kind={group.kind} key={row.unit} row={row} />
-                  ))}</div>
-                </section>
+                <SelectionCategory group={group} key={`${group.kind}:${report.repository}:${report.project_file}`} />
               ))}
             </Stack>
           </Paper>

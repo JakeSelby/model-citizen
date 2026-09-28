@@ -54,6 +54,16 @@ class StudioOverviewBrowserTests(unittest.TestCase):
         self.assertEqual(response["commands"]["doctor"], "citizen doctor")
         self.assertEqual(response["commands"]["diff"], "citizen diff")
         self.assertEqual(response["commands"]["catalog"], "citizen catalog")
+        self.assertFalse(self.devtools.evaluate("[...document.querySelectorAll('.doctor-repair')].some(item => item.open)"))
+        disclosure = self.devtools.evaluate("document.querySelector('.doctor-repair, .doctor-information') !== null")
+        if disclosure:
+            self.devtools.evaluate("document.querySelector('.doctor-repair, .doctor-information').querySelector('summary').focus()")
+            self.devtools.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"})
+            self.devtools.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+            self._wait("document.querySelector('.doctor-repair, .doctor-information').open", "Doctor details did not expand from keyboard")
+            self.assertNotEqual(self.devtools.evaluate("getComputedStyle(document.activeElement).outlineWidth"), "0px")
+        self.assertIn("Recent runs", self.devtools.evaluate("document.querySelector('.diagnostic-secondary').textContent"))
+        self.assertEqual(self.devtools.evaluate("getComputedStyle(document.querySelector('.diagnostic-grid')).alignItems"), "start")
 
         self.devtools.call("Emulation.setDeviceMetricsOverride", {
             "width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True,

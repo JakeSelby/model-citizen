@@ -61,6 +61,27 @@ class SelectionBrowserTests(unittest.TestCase):
 
     def test_project_override_discloses_both_files_and_runtime_budgets(self):
         self._open_configure()
+        self.devtools.call("Emulation.setDeviceMetricsOverride", {
+            "width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True,
+        })
+        widths = self.devtools.evaluate("""(() => {
+            const group = document.querySelector('.selection-fields');
+            return [...group.children].map(child => ({
+                available: group.getBoundingClientRect().width,
+                actual: child.getBoundingClientRect().width
+            }));
+        })()""")
+        for item in widths:
+            self.assertAlmostEqual(item["actual"], item["available"], delta=1)
+        self.assertTrue(self.devtools.evaluate("document.documentElement.scrollWidth <= innerWidth"))
+        self.assertTrue(self.devtools.evaluate("""[...document.querySelectorAll('.selection-category')]
+            .filter(item => item.querySelector('summary').textContent.includes('All defaults'))
+            .every(item => !item.open)"""))
+        self.devtools.evaluate("document.querySelector('.selection-category:not([open]) > summary').focus()")
+        self.devtools.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"})
+        self.devtools.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+        self.assertTrue(self.devtools.evaluate("document.activeElement.parentElement.open"))
+        self.assertNotEqual(self.devtools.evaluate("getComputedStyle(document.activeElement).outlineWidth"), "0px")
         body = self.devtools.evaluate("document.body.textContent")
         self.assertIn("Claude Code", body)
         self.assertIn("Codex", body)
