@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import http.client
+import errno
 import os
 import subprocess
 import sys
@@ -67,6 +68,23 @@ def _process_running(record: Dict[str, object]):
         return False
     except (OSError, TypeError, ValueError):
         return None
+
+
+def _close_inherited_fds() -> None:
+    """Close the descriptors that survived exec without scanning the process limit."""
+    for name in os.listdir("/dev/fd"):
+        try:
+            descriptor = int(name)
+        except ValueError:
+            continue
+        if descriptor <= 2:
+            continue
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            # The directory enumeration can briefly expose its own already-closed handle.
+            if exc.errno != errno.EBADF:
+                raise
 
 
 def _launch_ready(root: Path) -> Optional[Dict[str, object]]:
@@ -148,8 +166,7 @@ def serve(static_root: Path, root: Path, requested_port: int, ready=None,
     try:
         if os.environ.pop(CHILD_SESSION_ENV, None) == "1":
             os.setsid()
-            maximum = os.sysconf("SC_OPEN_MAX")
-            os.closerange(3, maximum if isinstance(maximum, int) and maximum > 3 else 256)
+            _close_inherited_fds()
         with Store(root) as store:
             server.run(static_root, store, requested_port, ready, browser=browser)
     except (OSError, StateError, RuntimeError) as exc:

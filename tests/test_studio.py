@@ -2,6 +2,7 @@
 """Studio server state, lifecycle and public CLI acceptance tests."""
 from __future__ import annotations
 
+import errno
 import json
 import http.client
 import os
@@ -441,16 +442,34 @@ class LifecycleTests(StudioFixture):
         with mock.patch.dict(os.environ, {studio_lifecycle.CHILD_SESSION_ENV: "1"}), \
                 mock.patch.object(studio_lifecycle.os, "setsid",
                                   side_effect=lambda: events.append("setsid")) as setsid, \
-                mock.patch.object(studio_lifecycle.os, "sysconf", return_value=1024), \
-                mock.patch.object(studio_lifecycle.os, "closerange",
-                                  side_effect=lambda *_: events.append("close-fds")) as close_fds, \
+                mock.patch.object(studio_lifecycle, "_close_inherited_fds",
+                                  side_effect=lambda: events.append("close-fds")) as close_fds, \
                 mock.patch.object(studio_lifecycle.server, "run",
                                   side_effect=serve_after_isolation) as run:
             studio_lifecycle.serve(Path("/static"), state_root(self.home), 0)
         setsid.assert_called_once_with()
-        close_fds.assert_called_once_with(3, 1024)
+        close_fds.assert_called_once_with()
         run.assert_called_once()
         self.assertNotIn(studio_lifecycle.CHILD_SESSION_ENV, os.environ)
+
+    def test_detached_child_closes_only_descriptors_present_in_dev_fd(self):
+        with mock.patch.object(studio_lifecycle.os, "listdir",
+                               return_value=["0", "1", "2", "7", "900000", "not-a-fd"]), \
+                mock.patch.object(studio_lifecycle.os, "close") as close_fd:
+            studio_lifecycle._close_inherited_fds()
+        self.assertEqual([call.args[0] for call in close_fd.call_args_list], [7, 900000])
+
+    def test_detached_child_ignores_only_an_already_closed_dev_fd_entry(self):
+        with mock.patch.object(studio_lifecycle.os, "listdir", return_value=["7"]), \
+                mock.patch.object(studio_lifecycle.os, "close",
+                                  side_effect=OSError(errno.EBADF, "already closed")):
+            studio_lifecycle._close_inherited_fds()
+
+        with mock.patch.object(studio_lifecycle.os, "listdir", return_value=["7"]), \
+                mock.patch.object(studio_lifecycle.os, "close",
+                                  side_effect=OSError(errno.EPERM, "refused")):
+            with self.assertRaisesRegex(OSError, "refused"):
+                studio_lifecycle._close_inherited_fds()
 
     def test_failed_launch_stops_the_child_and_removes_only_its_record(self):
         root = state_root(self.home)
