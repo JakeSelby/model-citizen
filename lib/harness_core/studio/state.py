@@ -19,6 +19,8 @@ SCHEMA_VERSION = 2
 PROTOCOL_VERSION = 2
 STATE_NAME = "instance.json"
 LOCK_NAME = "instance.lock"
+UI_PREFERENCES_NAME = "ui-preferences.json"
+UI_COLOR_SCHEMES = frozenset(("auto", "light", "dark"))
 
 
 class StateError(ValueError):
@@ -198,6 +200,61 @@ class Store:
             os.fsync(self.fd)
         except FileNotFoundError:
             pass
+
+    def read_ui_preferences(self) -> Dict[str, str]:
+        """Read the small origin-independent Studio chrome preference record."""
+        assert self.fd is not None
+        try:
+            handle = os.open(UI_PREFERENCES_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=self.fd)
+        except FileNotFoundError:
+            return {"color_scheme": "auto"}
+        try:
+            info = os.fstat(handle)
+            if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                    or info.st_size > 1024):
+                raise StateError("Studio UI preferences must be a bounded mode-0600 regular file")
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                raise StateError("Studio UI preferences are owned by another user")
+            with os.fdopen(handle, encoding="utf-8") as stream:
+                handle = -1
+                try:
+                    value = json.load(stream)
+                except (UnicodeError, ValueError) as exc:
+                    raise StateError("Studio UI preferences are not valid JSON") from exc
+        finally:
+            if handle >= 0:
+                os.close(handle)
+        if (not isinstance(value, dict) or set(value) != {"color_scheme"}
+                or value["color_scheme"] not in UI_COLOR_SCHEMES):
+            raise StateError("Studio UI preferences are invalid")
+        return value
+
+    def write_ui_preferences(self, value: Dict[str, str]) -> None:
+        """Atomically persist Studio chrome preferences across random-host restarts."""
+        assert self.fd is not None
+        if (not isinstance(value, dict) or set(value) != {"color_scheme"}
+                or value["color_scheme"] not in UI_COLOR_SCHEMES):
+            raise StateError("Studio UI preferences are invalid")
+        temporary = ".ui-preferences-" + secrets.token_hex(12)
+        handle = -1
+        try:
+            handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=self.fd)
+            with os.fdopen(handle, "w", encoding="utf-8") as stream:
+                handle = -1
+                json.dump(value, stream, sort_keys=True, separators=(",", ":"))
+                stream.write("\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, UI_PREFERENCES_NAME, src_dir_fd=self.fd, dst_dir_fd=self.fd)
+            os.fsync(self.fd)
+        finally:
+            if handle >= 0:
+                os.close(handle)
+            try:
+                os.unlink(temporary, dir_fd=self.fd)
+            except FileNotFoundError:
+                pass
 
 
 def validate(record: Any) -> Dict[str, Any]:

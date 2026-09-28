@@ -5,6 +5,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
+import { CommandChip } from "../components/StudioKit";
 import {
   AUTOSAVE_DELAY_MS, errorMap, fieldEnabled, hydrateValues, parseJsonObject,
   remainingChanges, commandFor, type ConfigureSchema, type FieldDescriptor, type ReferenceValue,
@@ -262,7 +263,7 @@ export function ConfigurePage() {
       {schema && baseRevision && schema.sections.map((section) => (
         <Paper className="settings-section" key={section.id} p="xl" withBorder>
           <Title order={2}>{section.label}</Title>
-          <Text c="dimmed" mt={6} size="sm">{section.description}</Text>
+          <Text c="dimmed" mt="xs" size="sm">{section.description}</Text>
           {section.id === "telemetry" && (
             <Alert color="yellow" mt="lg" title="Read before enabling export">
               Native export can include runtime identifiers that the local ledger does not. Header inputs store references only; Studio never reads or displays credential values.
@@ -288,14 +289,13 @@ export function ConfigurePage() {
       {schema && baseRevision && (
         <Paper aria-labelledby="configure-cli-title" className="settings-section" p="xl" withBorder>
           <Title id="configure-cli-title" order={2}>Exact CLI equivalents</Title>
-          <Text c="dimmed" mt={6} size="sm">
+          <Text c="dimmed" mt="xs" size="sm">
             Studio calls the same settings core as these headless commands. Put path-keyed changes in changes.json.
           </Text>
           <Stack className="cli-equivalents" gap="xs" mt="lg">
             {Object.entries(schema.commands).map(([operation, command]) => (
               <div key={operation}>
-                <Text fw={650} size="sm">{operation}</Text>
-                <Code block>{commandFor(command, loadedDraft, baseRevision)}</Code>
+                <CommandChip command={commandFor(command, loadedDraft, baseRevision)} label={operation} />
               </div>
             ))}
           </Stack>

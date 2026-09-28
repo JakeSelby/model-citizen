@@ -27,7 +27,8 @@ CONTROL_HEALTH = "/__studio/control/health"
 CONTROL_STOP = "/__studio/control/stop"
 CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
 BOOTSTRAP = "/__studio/bootstrap"
-PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health", "sse"))
+PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health",
+                               "sse", "ui-preferences"))
 STATIC_ASSET = re.compile(
     r"^/assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?P<extension>css|js)$"
 )
@@ -385,6 +386,25 @@ def _configure_schema(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _ui_preferences_read(handler: Handler, route: Route) -> None:
+    payload = handler.server.store.read_ui_preferences()
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _ui_preferences_write(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("color_scheme",))
+    if request is None:
+        return
+    if request["color_scheme"] not in ("auto", "light", "dark"):
+        handler._error(400, "invalid_request")
+        return
+    payload = {"color_scheme": request["color_scheme"]}
+    handler.server.mutations.call(lambda: handler.server.store.write_ui_preferences(payload))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _configure_read(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("draft",))
     if request is None:
@@ -454,6 +474,7 @@ HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
 STOP = ResponseSchema("json-object", (("stopping", "boolean"),))
 BOOTSTRAP_CONTROL = ResponseSchema("json-object", (("token", "string"), ("form_name", "string")))
 SESSION = ResponseSchema("json-object", (("authenticated", "boolean"), ("csrf_token", "string")))
+UI_PREFERENCES = ResponseSchema("json-object", (("color_scheme", "string"),))
 CONFIGURE_SCHEMA = ResponseSchema("json-object", (("schema_version", "integer"),
                                                     ("commands", "object"), ("sections", "array")))
 CONFIGURE_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
@@ -482,6 +503,10 @@ ROUTES = RouteRegistry((
     Route("GET", "/api/session", "application/json", SESSION, _session_info, "transport"),
     Route("POST", "/api/session", "application/json", SESSION, _session_info, "transport",
           "application/json"),
+    Route("GET", "/api/ui/preferences", "application/json", UI_PREFERENCES,
+          _ui_preferences_read, "ui-preferences"),
+    Route("POST", "/api/ui/preferences", "application/json", UI_PREFERENCES,
+          _ui_preferences_write, "ui-preferences", "application/json"),
     Route("GET", "/api/configure/schema", "application/json", CONFIGURE_SCHEMA,
           _configure_schema, None, cli_command=settings.CLI_COMMANDS["schema"]),
     Route("POST", "/api/configure/read", "application/json", CONFIGURE_READ,

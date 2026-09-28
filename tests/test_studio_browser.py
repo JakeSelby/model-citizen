@@ -272,7 +272,7 @@ class StudioBrowserTests(unittest.TestCase):
             _contrast_ratio(rendered["buttonForeground"], rendered["buttonBackground"]), 4.5)
         self.assertEqual(rendered["direction"], "column")
         self.assertEqual(rendered["stylePadding"], "32px")
-        self.assertIn("padding:", rendered["styleAttribute"])
+        self.assertIn("padding-block:", rendered["styleAttribute"])
         self.assertEqual(rendered["nonce"], rendered["declaredNonce"])
         self.assertEqual(rendered["violations"], [])
 
