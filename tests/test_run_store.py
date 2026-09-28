@@ -157,7 +157,7 @@ class RunStoreTests(unittest.TestCase):
             "source_path": str(self.state / "targets" / run_id / "source"),
             "profile_path": str(self.state / "targets" / run_id / "profile"),
         })
-        self.assertIsNone(record["case_identities"])
+        self.assertEqual(record["case_identities"], ["fixture"])
         self.assertIsNone(record["spend_estimate"])
         self.assertIsNone(record["spend_cap"])
         self.assertIsNone(record["pricing_identity"])
@@ -231,6 +231,9 @@ class RunStoreTests(unittest.TestCase):
             "by_arm_usd_per_pass": {"bare": .5, "harness": .25},
             "ratio": .5, "cache_normalized_ratio": .4,
         })
+        native = next(row for row in records if row["source"]["kind"] == "native-acceptance")
+        self.assertEqual(supervisor.history.detail(native["run_id"])["cases"][0]["outcome"],
+                         "passed")
         self.assertEqual(second["total_runs"], 4)
 
     def test_unknown_source_schema_is_reported_and_never_guessed(self):
@@ -648,7 +651,7 @@ class RunStoreTests(unittest.TestCase):
         store = run_store.RunStore(self.state)
         self.addCleanup(store.close)
         self.assertEqual(store.get("legacy"), record)
-        self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], 2)
+        self.assertEqual(store.connection.execute("PRAGMA user_version").fetchone()[0], 3)
 
     def test_store_refuses_symlinked_database_and_bounds_queries(self):
         self.state.mkdir(mode=0o700)

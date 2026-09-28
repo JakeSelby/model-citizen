@@ -20,6 +20,7 @@ import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { ExperimentsPage } from "./experiments/ExperimentsPage";
+import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
@@ -128,6 +129,7 @@ function StudioFrame() {
           <Route path="/configure" element={<ConfigurePage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />
+          <Route path="/experiments/runs/:runId" element={<RunDetailPage />} />
           <Route path="/activity" element={<ActivityPage />} />
           {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route

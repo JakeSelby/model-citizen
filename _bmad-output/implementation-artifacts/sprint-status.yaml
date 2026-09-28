@@ -362,7 +362,7 @@ development_status:
   ah-s297-suite-catalog-and-run-supervisor-with-citizen: ready-for-dev
   ah-s298-run-store-every-run-recorded-with-benchmark-and: ready-for-dev
   ah-s299-launch-watch-and-stop-the-free-local-suites-from: ready-for-dev
-  ah-s300-run-history-and-run-detail-with-flaky-test-marks: backlog
+  ah-s300-run-history-and-run-detail-with-flaky-test-marks: ready-for-dev
   ah-s301-targets-run-against-the-installed-version-a: ready-for-dev
   ah-s302-spend-guard-estimate-confirm-and-cap-a-run-that: ready-for-dev
   ah-s303-run-native-acceptance-from-the-studio-case-by: ready-for-dev

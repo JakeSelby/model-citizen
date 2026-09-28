@@ -449,7 +449,14 @@ textarea:focus-visible {
 }
 
 .experiment-launch,
-.run-console { background: var(--studio-surface-raised); }
+.run-console,
+.run-history { background: var(--studio-surface-raised); min-width: 0; }
+
+.run-history-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--studio-space-3);
+}
 
 .experiment-launch .mantine-Code-root,
 .run-console .mantine-Code-root {

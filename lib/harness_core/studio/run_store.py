@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import base64
 import datetime as dt
 import fcntl
 import hashlib
@@ -20,7 +21,7 @@ SIDECAR_SCHEMA_VERSION = 2
 SIDECAR_META_SCHEMA_VERSION = 1
 AUTHORITY_SCHEMA_VERSION = 1
 APPEND_INTENT_SCHEMA_VERSION = 1
-STORE_SCHEMA_VERSION = 2
+STORE_SCHEMA_VERSION = 3
 SIDECAR_NAME = "record.jsonl"
 SIDECAR_META_NAME = "record.meta.json"
 AUTHORITY_NAME = "run-authority.jsonl"
@@ -32,6 +33,7 @@ MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 4 * 1024 * 1024
 MAX_RESULTS_FILES = 4096
 COST_BASIS = "list_price_equivalent"
+HISTORY_LIMIT = 200
 TERMINAL_STATUSES = frozenset(("succeeded", "failed", "cancelled", "timed_out", "orphaned",
                                "capped", "limited"))
 IMMUTABLE_FIELDS = (
@@ -39,6 +41,7 @@ IMMUTABLE_FIELDS = (
     "cost_class", "expected_duration_seconds", "timeout_seconds", "queue_sequence", "created_at",
     "case_identities", "spend_estimate", "spend_cap", "pricing_identity",
 )
+OPTIONAL_IMMUTABLE_FIELDS = ("rerun_of",)
 LEGAL_TRANSITIONS = {
     "queued": frozenset(("admitted", "cancelled")),
     "admitted": frozenset(("starting", "failed", "cancelled", "orphaned")),
@@ -66,7 +69,47 @@ def _digest(value: Mapping[str, Any]) -> str:
 
 
 def _timestamp() -> str:
-    return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    return _fixed_utc(dt.datetime.now(dt.timezone.utc))
+
+
+def _fixed_utc(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z")
+
+
+def _indexed_timestamp(value: Any) -> Optional[str]:
+    """Normalize source timestamps so SQLite text ordering is chronological."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise RunStoreError("run timestamp is invalid")
+    try:
+        if len(value) == 10:
+            parsed = dt.datetime.combine(dt.date.fromisoformat(value), dt.time(), dt.timezone.utc)
+        else:
+            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError("timestamp has no timezone")
+    except ValueError as exc:
+        raise RunStoreError("run timestamp is invalid") from exc
+    return _fixed_utc(parsed)
+
+
+def _filter_timestamp(value: str, upper: bool) -> str:
+    if len(value) == 10:
+        try:
+            date = dt.date.fromisoformat(value)
+        except ValueError as exc:
+            raise RunStoreError("run history filter is invalid") from exc
+        time = dt.time.max if upper else dt.time()
+        return _fixed_utc(dt.datetime.combine(date, time, dt.timezone.utc))
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise ValueError("timestamp has no timezone")
+    except ValueError as exc:
+        raise RunStoreError("run history filter is invalid") from exc
+    return _fixed_utc(parsed)
 
 
 def _reject_constant(value: str) -> None:
@@ -153,6 +196,7 @@ def _canonical_run_digest(record: Mapping[str, Any]) -> str:
     if any(name not in record for name in IMMUTABLE_FIELDS):
         raise RunStoreError("run creation record is missing immutable fields")
     identity = {name: record[name] for name in IMMUTABLE_FIELDS}
+    identity.update({name: record[name] for name in OPTIONAL_IMMUTABLE_FIELDS if name in record})
     return _digest(identity)
 
 
@@ -162,7 +206,9 @@ def _immutable_digest(record: Mapping[str, Any]) -> str:
     canonical_run_digest = _canonical_run_digest(record)
     if record["canonical_run_digest"] != canonical_run_digest:
         raise RunStoreError("run canonical digest is invalid")
-    return _digest({name: record[name] for name in IMMUTABLE_FIELDS + ("canonical_run_digest",)})
+    identity = {name: record[name] for name in IMMUTABLE_FIELDS + ("canonical_run_digest",)}
+    identity.update({name: record[name] for name in OPTIONAL_IMMUTABLE_FIELDS if name in record})
+    return _digest(identity)
 
 
 def _terminal_digest(sequence: int, previous_hash: str, creation_digest: str,
@@ -815,6 +861,7 @@ def studio_record(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Dic
             "ledger_state": record.get("usage_ledger_state"),
         },
         "canonical_run_digest": record.get("canonical_run_digest"),
+        "rerun_of": record.get("rerun_of"),
         "status": record.get("status"),
         "times": {name: record.get(name) for name in ("created_at", "started_at", "completed_at")},
         "tokens": record.get("tokens") or {},
@@ -826,6 +873,71 @@ def studio_record(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Dic
         "raw": raw,
     }
     return _seal_index_record(normalized, str(metadata["creation_digest"]), metadata)
+
+
+def _iso_millis(start: Any, end: Any) -> Optional[int]:
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        first_value = _indexed_timestamp(start)
+        last_value = _indexed_timestamp(end)
+        if first_value is None or last_value is None:
+            return None
+        first = dt.datetime.fromisoformat(first_value.replace("Z", "+00:00"))
+        last = dt.datetime.fromisoformat(last_value.replace("Z", "+00:00"))
+    except RunStoreError:
+        return None
+    value = int((last - first).total_seconds() * 1000)
+    return value if value >= 0 else None
+
+
+def _case_rows(record: Mapping[str, Any]) -> List[Tuple[str, str]]:
+    """Normalize only explicit case outcomes; absent or aggregate values remain unknown."""
+    cases = record.get("cases")
+    rows: List[Tuple[str, str]] = []
+    if isinstance(cases, dict):
+        items = cases.items()
+    elif isinstance(cases, list):
+        items = ((item.get("id"), item) for item in cases if isinstance(item, dict))
+    else:
+        items = ()
+    for identity, value in items:
+        if not isinstance(identity, str) or not identity:
+            continue
+        outcome = value if isinstance(value, str) else value.get("status") if isinstance(value, dict) else None
+        if isinstance(value, dict) and isinstance(value.get("passed"), bool):
+            outcome = "passed" if value["passed"] else "failed"
+        if outcome in ("passed", "failed", "skipped"):
+            rows.append((identity, str(outcome)))
+        elif outcome in ("completed", "not_run"):
+            rows.append((identity, "unknown"))
+    return rows
+
+
+def _cursor_encode(created_at: Optional[str], run_id: str) -> str:
+    raw = json.dumps([created_at or "", run_id], separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _cursor_decode(value: str) -> Tuple[str, str]:
+    if not isinstance(value, str) or not value or len(value) > 4096:
+        raise RunStoreError("run history cursor is invalid")
+    try:
+        raw = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        parsed = _loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunStoreError("run history cursor is invalid") from exc
+    if (not isinstance(parsed, list) or len(parsed) != 2
+            or any(not isinstance(item, str) for item in parsed)):
+        raise RunStoreError("run history cursor is invalid")
+    if parsed[0]:
+        try:
+            normalized = _indexed_timestamp(parsed[0])
+        except RunStoreError as exc:
+            raise RunStoreError("run history cursor is invalid") from exc
+        if normalized != parsed[0]:
+            raise RunStoreError("run history cursor is invalid")
+    return parsed[0], parsed[1]
 
 
 def _nonnegative_int(value: Any) -> bool:
@@ -1166,6 +1278,57 @@ class RunStore:
                     self.connection.execute("ALTER TABLE runs ADD COLUMN indexed_at TEXT")
                     self.connection.execute("CREATE INDEX IF NOT EXISTS runs_source ON runs(source_kind, source_path)")
                     self.connection.execute("PRAGMA user_version=2")
+                    version = 2
+                if version == 2:
+                    for column, kind in (
+                            ("created_at", "TEXT"), ("completed_at", "TEXT"),
+                            ("target_kind", "TEXT"), ("target_ref", "TEXT"),
+                            ("target_commit", "TEXT"), ("cost_usd", "REAL"),
+                            ("duration_ms", "INTEGER"), ("rerun_of", "TEXT")):
+                        self.connection.execute("ALTER TABLE runs ADD COLUMN %s %s" % (column, kind))
+                    self.connection.execute(
+                        "CREATE TABLE run_cases (run_id TEXT NOT NULL REFERENCES runs(run_id) "
+                        "ON DELETE CASCADE, case_id TEXT NOT NULL, outcome TEXT NOT NULL, "
+                        "target_commit TEXT, PRIMARY KEY(run_id, case_id))")
+                    self.connection.execute(
+                        "CREATE INDEX runs_history ON runs(created_at DESC, run_id DESC)")
+                    self.connection.execute(
+                        "CREATE INDEX runs_filters ON runs(suite_id,status,target_kind,created_at DESC,run_id DESC)")
+                    self.connection.execute(
+                        "CREATE INDEX run_cases_flaky ON run_cases(case_id,target_commit,outcome,run_id)")
+                    existing = self.connection.execute("SELECT record_json FROM runs").fetchall()
+                    for row in existing:
+                        try:
+                            record = _loads(row[0])
+                        except (ValueError, RecursionError) as exc:
+                            raise RunStoreError(
+                                "run index migration found a corrupt record") from exc
+                        if not isinstance(record, dict):
+                            raise RunStoreError("run index migration found a corrupt record")
+                        run_id = record.get("run_id")
+                        if not isinstance(run_id, str):
+                            raise RunStoreError("run index migration found a corrupt record")
+                        times = record.get("times") if isinstance(record.get("times"), dict) else {}
+                        target = record.get("target") if isinstance(record.get("target"), dict) else {}
+                        cost = record.get("cost") if isinstance(record.get("cost"), dict) else {}
+                        created_at = _indexed_timestamp(times.get("created_at"))
+                        completed_at = _indexed_timestamp(times.get("completed_at"))
+                        amount = cost.get("amount_usd")
+                        if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                            amount = None
+                        self.connection.execute(
+                            "UPDATE runs SET created_at=?,completed_at=?,target_kind=?,target_ref=?,"
+                            "target_commit=?,cost_usd=?,duration_ms=?,rerun_of=? WHERE run_id=?",
+                            (created_at, completed_at, target.get("kind"), target.get("ref"),
+                             target.get("commit"), amount,
+                             _iso_millis(times.get("started_at") or created_at, completed_at),
+                             record.get("rerun_of"), run_id))
+                        self.connection.executemany(
+                            "INSERT INTO run_cases(run_id,case_id,outcome,target_commit) "
+                            "VALUES(?,?,?,?)",
+                            ((run_id, identity, outcome, target.get("commit"))
+                             for identity, outcome in _case_rows(record)))
+                    self.connection.execute("PRAGMA user_version=3")
         except sqlite3.Error as exc:
             raise RunStoreError("run index migration failed") from exc
 
@@ -1181,6 +1344,15 @@ class RunStore:
         source = sealed.get("source") or {}
         body = _json_bytes(sealed)
         suite = sealed.get("suite") or {}
+        target = sealed.get("target") or {}
+        times = sealed.get("times") or {}
+        cost = sealed.get("cost") or {}
+        created_at = _indexed_timestamp(times.get("created_at"))
+        completed_at = _indexed_timestamp(times.get("completed_at"))
+        duration_ms = _iso_millis(times.get("started_at") or created_at, completed_at)
+        cost_usd = cost.get("amount_usd") if isinstance(cost, dict) else None
+        if not isinstance(cost_usd, (int, float)) or isinstance(cost_usd, bool):
+            cost_usd = None
         if (sealed.get("schema_version") != 1 or not isinstance(sealed.get("run_id"), str)
                 or not isinstance(source.get("kind"), str) or not isinstance(source.get("path"), str)
                 or not isinstance(suite.get("id"), str) or not isinstance(sealed.get("status"), str)
@@ -1194,16 +1366,26 @@ class RunStore:
             self._assert_compatible(existing, sealed)
             self.connection.execute(
                 "UPDATE runs SET source_kind=?,source_path=?,suite_id=?,status=?,record_json=?,"
-                "source_digest=?,indexed_at=? WHERE run_id=?",
+                "source_digest=?,indexed_at=?,created_at=?,completed_at=?,target_kind=?,"
+                "target_ref=?,target_commit=?,cost_usd=?,duration_ms=?,rerun_of=? WHERE run_id=?",
                 (source["kind"], source["path"], suite["id"], sealed["status"], body,
-                 hashlib.sha256(body.encode("utf-8")).hexdigest(), _timestamp(), sealed["run_id"]))
+                 hashlib.sha256(body.encode("utf-8")).hexdigest(), _timestamp(), created_at,
+                 completed_at, target.get("kind"), target.get("ref"), target.get("commit"),
+                 cost_usd, duration_ms, sealed.get("rerun_of"), sealed["run_id"]))
         else:
             self.connection.execute(
                 "INSERT INTO runs(run_id,source_kind,source_path,suite_id,status,record_json,"
-                "source_digest,indexed_at) VALUES(?,?,?,?,?,?,?,?)",
+                "source_digest,indexed_at,created_at,completed_at,target_kind,target_ref,"
+                "target_commit,cost_usd,duration_ms,rerun_of) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (sealed["run_id"], source["kind"], source["path"], suite["id"],
                  sealed["status"], body, hashlib.sha256(body.encode("utf-8")).hexdigest(),
-                 _timestamp()))
+                 _timestamp(), created_at, completed_at, target.get("kind"), target.get("ref"),
+                 target.get("commit"), cost_usd, duration_ms, sealed.get("rerun_of")))
+        self.connection.execute("DELETE FROM run_cases WHERE run_id=?", (sealed["run_id"],))
+        self.connection.executemany(
+            "INSERT INTO run_cases(run_id,case_id,outcome,target_commit) VALUES(?,?,?,?)",
+            ((sealed["run_id"], identity, outcome, target.get("commit"))
+             for identity, outcome in _case_rows(sealed)))
 
     @staticmethod
     def _assert_compatible(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> None:
@@ -1268,6 +1450,174 @@ class RunStore:
                 raise RunStoreError("indexed run record is corrupt")
             values.append(value)
         return values
+
+    @staticmethod
+    def _history_bounds(limit: int, cursor: Optional[str]) -> Tuple[int, Optional[Tuple[str, str]]]:
+        if (not isinstance(limit, int) or isinstance(limit, bool)
+                or not 1 <= limit <= HISTORY_LIMIT):
+            raise RunStoreError("run history bounds are invalid")
+        return limit, _cursor_decode(cursor) if cursor is not None else None
+
+    def _case_dtos(self, run_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+        if not run_ids:
+            return {}
+        placeholders = ",".join("?" for _ in run_ids)
+        query = (
+            "SELECT c.run_id,c.case_id,c.outcome,c.target_commit,EXISTS("
+            "SELECT 1 FROM run_cases other WHERE other.case_id=c.case_id "
+            "AND other.target_commit=c.target_commit AND other.outcome<>c.outcome "
+            "AND other.outcome IN ('passed','failed') AND c.outcome IN ('passed','failed')) "
+            "FROM run_cases c WHERE c.run_id IN (" + placeholders + ") ORDER BY c.case_id")
+        rows = self.connection.execute(query, tuple(run_ids)).fetchall()
+        result: Dict[str, List[Dict[str, Any]]] = {run_id: [] for run_id in run_ids}
+        for run_id, case_id, outcome, commit, flaky in rows:
+            result[run_id].append({"id": case_id, "outcome": outcome,
+                                   "commit": commit, "flaky": bool(flaky)})
+        return result
+
+    @staticmethod
+    def _summary(row: Sequence[Any], cases: Sequence[Mapping[str, Any]]) -> Dict[str, Any]:
+        (run_id, suite_id, status, created_at, completed_at, target_kind, target_ref,
+         target_commit, cost_usd, duration_ms, rerun_of) = row
+        return {
+            "run_id": run_id, "suite_id": suite_id, "status": status,
+            "created_at": created_at, "completed_at": completed_at,
+            "target": {"kind": target_kind,
+                       "ref": target_ref if target_kind in ("release", "branch", "draft") else None,
+                       "commit": target_commit},
+            "cost_usd": cost_usd, "duration_ms": duration_ms, "rerun_of": rerun_of,
+            "case_count": len(cases),
+            "flaky_count": sum(1 for case in cases if case.get("flaky") is True),
+        }
+
+    def history(self, *, limit: int = 50, cursor: Optional[str] = None,
+                suite_id: Optional[str] = None, target: Optional[str] = None,
+                status: Optional[str] = None, created_from: Optional[str] = None,
+                created_to: Optional[str] = None, min_cost_usd: Optional[float] = None,
+                max_cost_usd: Optional[float] = None,
+                min_duration_ms: Optional[int] = None,
+                max_duration_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Return a stable keyset page without deserializing records outside the page."""
+        limit, key = self._history_bounds(limit, cursor)
+        where: List[str] = []
+        values: List[Any] = []
+        for column, value in (("suite_id", suite_id), ("status", status)):
+            if value is not None:
+                if not isinstance(value, str) or not value:
+                    raise RunStoreError("run history filter is invalid")
+                where.append(column + "=?")
+                values.append(value)
+        if target is not None:
+            if not isinstance(target, str) or not target:
+                raise RunStoreError("run history filter is invalid")
+            where.append("(target_kind=? OR target_ref=? OR target_commit=?)")
+            values.extend((target, target, target))
+        for column, value, operator in (("created_at", created_from, ">="),
+                                        ("created_at", created_to, "<=")):
+            if value is not None:
+                if not isinstance(value, str) or not value or len(value) > 64:
+                    raise RunStoreError("run history filter is invalid")
+                normalized = _filter_timestamp(value, operator == "<=")
+                where.append(column + operator + "?")
+                values.append(normalized)
+        for column, value, operator in (("cost_usd", min_cost_usd, ">="),
+                                        ("cost_usd", max_cost_usd, "<=")):
+            if value is not None:
+                if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                        or not math.isfinite(value) or value < 0):
+                    raise RunStoreError("run history filter is invalid")
+                where.append(column + operator + "?")
+                values.append(value)
+        for column, value, operator in (("duration_ms", min_duration_ms, ">="),
+                                        ("duration_ms", max_duration_ms, "<=")):
+            if value is not None:
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise RunStoreError("run history filter is invalid")
+                where.append(column + operator + "?")
+                values.append(value)
+        if key is not None:
+            where.append("(COALESCE(created_at,'')<? OR (COALESCE(created_at,'')=? AND run_id<?))")
+            values.extend((key[0], key[0], key[1]))
+        clause = " WHERE " + " AND ".join(where) if where else ""
+        columns = ("run_id,suite_id,status,created_at,completed_at,target_kind,target_ref,"
+                   "target_commit,cost_usd,duration_ms,rerun_of")
+        try:
+            rows = self.connection.execute(
+                "SELECT " + columns + " FROM runs" + clause
+                + " ORDER BY COALESCE(created_at,'') DESC,run_id DESC LIMIT ?",
+                tuple(values + [limit + 1])).fetchall()
+            page = rows[:limit]
+            cases = self._case_dtos([row[0] for row in page])
+        except sqlite3.Error as exc:
+            raise RunStoreError("run history read failed") from exc
+        items = [self._summary(row, cases.get(row[0], ())) for row in page]
+        next_cursor = None
+        if len(rows) > limit and page:
+            next_cursor = _cursor_encode(page[-1][3], page[-1][0])
+        return {"items": items, "next_cursor": next_cursor}
+
+    def detail(self, run_id: str, *, lineage_limit: int = 50,
+               lineage_cursor: Optional[str] = None) -> Dict[str, Any]:
+        lineage_limit, lineage_key = self._history_bounds(lineage_limit, lineage_cursor)
+        try:
+            row = self.connection.execute(
+                "SELECT run_id,suite_id,status,created_at,completed_at,target_kind,target_ref,"
+                "target_commit,cost_usd,duration_ms,rerun_of FROM runs WHERE run_id=?",
+                (run_id,)).fetchone()
+            if row is None:
+                raise RunStoreError("unknown run: " + run_id)
+            cases = self._case_dtos([run_id]).get(run_id, [])
+            lineage_values: List[Any] = [run_id]
+            lineage_sql = ""
+            if lineage_key is not None:
+                lineage_sql = (" AND (COALESCE(created_at,'')<? OR "
+                               "(COALESCE(created_at,'')=? AND run_id<?))")
+                lineage_values.extend((lineage_key[0], lineage_key[0], lineage_key[1]))
+            lineage_rows = self.connection.execute(
+                "SELECT run_id,created_at FROM runs WHERE rerun_of=?" + lineage_sql
+                + " ORDER BY COALESCE(created_at,'') DESC,run_id DESC LIMIT ?",
+                tuple(lineage_values + [lineage_limit + 1])).fetchall()
+        except sqlite3.Error as exc:
+            raise RunStoreError("run detail read failed") from exc
+        detail = self._summary(row, cases)
+        lineage_page = lineage_rows[:lineage_limit]
+        lineage_next = (_cursor_encode(lineage_page[-1][1], lineage_page[-1][0])
+                        if len(lineage_rows) > lineage_limit and lineage_page else None)
+        detail.update({"cases": cases, "reruns": {
+            "items": [item[0] for item in lineage_page], "next_cursor": lineage_next}})
+        return detail
+
+    def case_history(self, case_id: str, *, limit: int = 50,
+                     cursor: Optional[str] = None) -> Dict[str, Any]:
+        if not isinstance(case_id, str) or not case_id or len(case_id) > 4096:
+            raise RunStoreError("case identity is invalid")
+        limit, key = self._history_bounds(limit, cursor)
+        values: List[Any] = [case_id]
+        cursor_sql = ""
+        if key is not None:
+            cursor_sql = (" AND (COALESCE(r.created_at,'')<? OR "
+                          "(COALESCE(r.created_at,'')=? AND r.run_id<?))")
+            values.extend((key[0], key[0], key[1]))
+        try:
+            rows = self.connection.execute(
+                "SELECT r.run_id,r.suite_id,r.status,r.created_at,r.completed_at,r.target_kind,"
+                "r.target_ref,r.target_commit,r.cost_usd,r.duration_ms,r.rerun_of "
+                "FROM runs r JOIN run_cases c ON c.run_id=r.run_id WHERE c.case_id=?"
+                + cursor_sql + " ORDER BY COALESCE(r.created_at,'') DESC,r.run_id DESC LIMIT ?",
+                tuple(values + [limit + 1])).fetchall()
+            page = rows[:limit]
+            cases = self._case_dtos([row[0] for row in page])
+        except sqlite3.Error as exc:
+            raise RunStoreError("case history read failed") from exc
+        items = []
+        for row in page:
+            matching = [case for case in cases.get(row[0], ()) if case["id"] == case_id]
+            summary = self._summary(row, matching)
+            summary["case"] = matching[0] if matching else None
+            items.append(summary)
+        next_cursor = (_cursor_encode(page[-1][3], page[-1][0])
+                       if len(rows) > limit and page else None)
+        return {"case_id": case_id, "items": items, "next_cursor": next_cursor}
 
     def _records_by_id(self) -> Dict[str, Dict[str, Any]]:
         try:

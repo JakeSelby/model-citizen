@@ -103,6 +103,7 @@ class ResponseSchema:
                 "runner_pid", "runner_identity", "command_pid", "command_identity",
                 "started_at", "completed_at", "reason", "returncode", "capacity_reserved",
                 "spend_actual", "spend_stop_reason", "case_results", "usage_ledger_state",
+                "rerun_of",
             }
             if (not isinstance(payload, dict) or required - set(payload)
                     or set(payload) - required - optional):
@@ -118,6 +119,21 @@ class ResponseSchema:
             if type_name == "object-or-null":
                 if payload[name] is not None and not isinstance(payload[name], dict):
                     raise ValueError("route response field %s is not object-or-null" % name)
+                continue
+            if type_name == "string-or-null":
+                if payload[name] is not None and not isinstance(payload[name], str):
+                    raise ValueError("route response field %s is not string-or-null" % name)
+                continue
+            if type_name == "number-or-null":
+                if (payload[name] is not None
+                        and (not isinstance(payload[name], (int, float))
+                             or isinstance(payload[name], bool))):
+                    raise ValueError("route response field %s is not number-or-null" % name)
+                continue
+            if type_name == "integer-or-null":
+                if (payload[name] is not None
+                        and (not isinstance(payload[name], int) or isinstance(payload[name], bool))):
+                    raise ValueError("route response field %s is not integer-or-null" % name)
                 continue
             expected = types[type_name]
             value = payload[name]
@@ -846,6 +862,83 @@ def _run_show(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _run_history(handler: Handler, route: Route) -> None:
+    names = ("limit", "cursor", "suite_id", "target", "status", "created_from",
+             "created_to", "min_cost_usd", "max_cost_usd", "min_duration_ms",
+             "max_duration_ms")
+    request = _required_request(handler, names)
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.history_page(**request))
+    except (runs.RunError, TypeError):
+        handler._error(400, "invalid_history_query")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_detail(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id", "lineage_limit", "lineage_cursor"))
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.run_detail(
+                request["run_id"], lineage_limit=request["lineage_limit"],
+                lineage_cursor=request["lineage_cursor"]))
+    except (runs.RunError, TypeError):
+        handler._error(404, "run_not_found")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_case_history(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("case_id", "limit", "cursor"))
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.case_history(
+                request["case_id"], limit=request["limit"], cursor=request["cursor"]))
+    except (runs.RunError, TypeError):
+        handler._error(400, "invalid_case_history_query")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_evidence(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id", "artifact"))
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.evidence(
+                request["run_id"], request["artifact"]))
+    except (runs.RunError, TypeError):
+        handler._error(404, "evidence_unavailable")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_rerun(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id",))
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.rerun(request["run_id"]))
+    except (runs.RunError, TypeError):
+        handler._error(409, "rerun_unavailable")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _run_cancel(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("run_id",))
     if request is None:
@@ -1145,6 +1238,22 @@ RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("unit_tests", "object"),
                                               ("commands", "object")))
 RUN_RECORD = ResponseSchema("run-record")
+RUN_HISTORY = ResponseSchema("json-object", (("items", "array"),
+                                                ("next_cursor", "string-or-null")))
+RUN_DETAIL = ResponseSchema("json-object", (
+    ("run_id", "string"), ("suite_id", "string"), ("status", "string"),
+    ("created_at", "string-or-null"), ("completed_at", "string-or-null"),
+    ("target", "object"), ("cost_usd", "number-or-null"),
+    ("duration_ms", "integer-or-null"), ("rerun_of", "string-or-null"),
+    ("case_count", "integer"), ("flaky_count", "integer"), ("cases", "array"),
+    ("reruns", "object"), ("exact_command", "string-or-null"), ("rerun", "object"),
+    ("artifacts", "array")))
+CASE_HISTORY = ResponseSchema("json-object", (("case_id", "string"),
+                                                 ("items", "array"),
+                                                 ("next_cursor", "string-or-null")))
+RUN_EVIDENCE = ResponseSchema("json-object", (("run_id", "string"),
+                                                 ("artifact", "string"),
+                                                 ("content", "string")))
 RUN_STREAM = ResponseSchema("sse-stream")
 LIVE_STREAM = ResponseSchema("live-sse-stream")
 NATIVE_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
@@ -1249,6 +1358,16 @@ ROUTES = RouteRegistry((
           _run_start, None, "application/json", ("citizen", "runs", "start")),
     Route("POST", "/api/runs/show", "application/json", RUN_RECORD,
           _run_show, None, "application/json", ("citizen", "runs", "show")),
+    Route("POST", "/api/runs/history", "application/json", RUN_HISTORY,
+          _run_history, None, "application/json", ("citizen", "runs", "history", "--json")),
+    Route("POST", "/api/runs/detail", "application/json", RUN_DETAIL,
+          _run_detail, None, "application/json", ("citizen", "runs", "detail")),
+    Route("POST", "/api/runs/case-history", "application/json", CASE_HISTORY,
+          _run_case_history, None, "application/json", ("citizen", "runs", "case-history")),
+    Route("POST", "/api/runs/evidence", "application/json", RUN_EVIDENCE,
+          _run_evidence, None, "application/json", ("citizen", "runs", "evidence")),
+    Route("POST", "/api/runs/rerun", "application/json", RUN_RECORD,
+          _run_rerun, None, "application/json", ("citizen", "runs", "rerun")),
     Route("POST", "/api/runs/cancel", "application/json", RUN_RECORD,
           _run_cancel, None, "application/json", ("citizen", "runs", "cancel")),
     Route("POST", "/api/runs/stream", "text/event-stream; charset=utf-8", RUN_STREAM,

@@ -507,6 +507,39 @@ class StudioRunTests(unittest.TestCase):
                                "--target-ref", "current"], expected=2)
         self.assertIn("unknown suite", error["error"])
 
+    def test_history_cli_commands_parse_and_dispatch_in_json_and_text_modes(self):
+        fake = mock.Mock()
+        summary = {"run_id": "run-1", "status": "succeeded", "suite_id": "fixture",
+                   "case": {"outcome": "passed"}}
+        fake.history_page.return_value = {"items": [summary], "next_cursor": None}
+        fake.run_detail.return_value = dict(summary, reruns={"items": [], "next_cursor": None})
+        fake.case_history.return_value = {"case_id": "case-a", "items": [summary],
+                                          "next_cursor": None}
+        fake.evidence.return_value = {"run_id": "run-1", "artifact": "imported-0",
+                                      "content": "evidence body"}
+        fake.rerun.return_value = summary
+        commands = (
+            (["runs", "history", "--limit", "7", "--status", "failed"], "history_page"),
+            (["runs", "detail", "run-1", "--lineage-limit", "3"], "run_detail"),
+            (["runs", "case-history", "case-a", "--limit", "4"], "case_history"),
+            (["runs", "evidence", "run-1", "imported-0"], "evidence"),
+            (["runs", "rerun", "run-1"], "rerun"),
+        )
+        with mock.patch.object(runs, "RunSupervisor", return_value=fake), \
+             mock.patch.dict(os.environ, {"HARNESS_QUIET": ""}):
+            for arguments, method in commands:
+                with self.subTest(arguments=arguments, mode="json"):
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(harness.main(arguments + ["--json"]), 0)
+                    json.loads(output.getvalue())
+                    self.assertTrue(getattr(fake, method).called)
+                with self.subTest(arguments=arguments, mode="text"):
+                    output = io.StringIO()
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(harness.main(arguments), 0)
+                    self.assertTrue(output.getvalue().strip())
+
     def test_cli_reports_supervisor_construction_errors_as_json(self):
         self.write_catalog([])
         target = self.root / "unsafe-target"

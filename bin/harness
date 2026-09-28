@@ -5887,6 +5887,23 @@ def cmd_runs(args: argparse.Namespace) -> int:
             result = supervisor.list()
         elif args.runs_action == "show":
             result = supervisor.show(args.run_id)
+        elif args.runs_action == "history":
+            result = supervisor.history_page(
+                limit=args.limit, cursor=args.cursor, suite_id=args.suite,
+                target=args.target, status=args.status, created_from=args.created_from,
+                created_to=args.created_to, min_cost_usd=args.min_cost,
+                max_cost_usd=args.max_cost, min_duration_ms=args.min_duration,
+                max_duration_ms=args.max_duration)
+        elif args.runs_action == "detail":
+            result = supervisor.run_detail(args.run_id, lineage_limit=args.lineage_limit,
+                                           lineage_cursor=args.lineage_cursor)
+        elif args.runs_action == "case-history":
+            result = supervisor.case_history(args.case_id, limit=args.limit,
+                                             cursor=args.cursor)
+        elif args.runs_action == "evidence":
+            result = supervisor.evidence(args.run_id, args.artifact)
+        elif args.runs_action == "rerun":
+            result = supervisor.rerun(args.run_id)
         elif args.runs_action == "reindex":
             result = supervisor.reindex(REPO)
         else:
@@ -5906,6 +5923,14 @@ def cmd_runs(args: argparse.Namespace) -> int:
     elif isinstance(result, list):
         for record in result:
             say(record["run_id"] + "  " + record["status"] + "  " + record["suite_id"])
+    elif args.runs_action == "history":
+        for record in result["items"]:
+            say(record["run_id"] + "  " + record["status"] + "  " + record["suite_id"])
+    elif args.runs_action == "case-history":
+        for record in result["items"]:
+            say(record["run_id"] + "  " + str((record.get("case") or {}).get("outcome")))
+    elif args.runs_action == "evidence":
+        say(result["content"])
     elif confirmation_pending:
         estimate = result["estimate"]
         amount = ("no history" if estimate["amount_usd"] is None
@@ -6045,6 +6070,41 @@ def main(argv: Optional[List[str]] = None) -> int:
     show.add_argument("run_id")
     show.add_argument("--json", action="store_true")
     show.set_defaults(func=cmd_runs)
+    history = runs_sub.add_parser("history", help="filter keyset-paged run history")
+    history.add_argument("--limit", type=int, default=50)
+    history.add_argument("--cursor")
+    history.add_argument("--suite")
+    history.add_argument("--target")
+    history.add_argument("--status")
+    history.add_argument("--created-from")
+    history.add_argument("--created-to")
+    history.add_argument("--min-cost", type=float)
+    history.add_argument("--max-cost", type=float)
+    history.add_argument("--min-duration", type=int)
+    history.add_argument("--max-duration", type=int)
+    history.add_argument("--json", action="store_true")
+    history.set_defaults(func=cmd_runs)
+    detail = runs_sub.add_parser("detail", help="show indexed run detail and lineage")
+    detail.add_argument("run_id")
+    detail.add_argument("--lineage-limit", type=int, default=50)
+    detail.add_argument("--lineage-cursor")
+    detail.add_argument("--json", action="store_true")
+    detail.set_defaults(func=cmd_runs)
+    case_history = runs_sub.add_parser("case-history", help="show one case across runs")
+    case_history.add_argument("case_id")
+    case_history.add_argument("--limit", type=int, default=50)
+    case_history.add_argument("--cursor")
+    case_history.add_argument("--json", action="store_true")
+    case_history.set_defaults(func=cmd_runs)
+    evidence = runs_sub.add_parser("evidence", help="read one bounded run log")
+    evidence.add_argument("run_id")
+    evidence.add_argument("artifact")
+    evidence.add_argument("--json", action="store_true")
+    evidence.set_defaults(func=cmd_runs)
+    rerun = runs_sub.add_parser("rerun", help="repeat a terminal run without target drift")
+    rerun.add_argument("run_id")
+    rerun.add_argument("--json", action="store_true")
+    rerun.set_defaults(func=cmd_runs)
     cancel = runs_sub.add_parser("cancel", help="cancel one queued or running run")
     cancel.add_argument("run_id")
     cancel.add_argument("--json", action="store_true")

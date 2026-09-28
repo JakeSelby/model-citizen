@@ -416,6 +416,9 @@ class RunSupervisor:
             raise RunError("repository and target_service are mutually exclusive")
         self.target_service = (targets.TargetService(Path(repository))
                                if repository is not None else target_service)
+        repository_root = (repository if repository is not None
+                           else getattr(target_service, "repository", None))
+        self.repository = Path(repository_root).resolve() if repository_root is not None else None
         if (not isinstance(max_running, int) or isinstance(max_running, bool)
                 or not 1 <= max_running <= MAX_RUNNING):
             raise RunError("max_running must be between one and three")
@@ -524,7 +527,9 @@ class RunSupervisor:
                     "canonical_run_digest"}
         optional = {"admission_token", "runner_pid", "runner_identity", "command_pid", "command_identity",
                     "started_at", "completed_at", "reason", "returncode", "capacity_reserved",
-                    "spend_actual", "spend_stop_reason", "case_results", "usage_ledger_state"}
+                    "spend_actual", "spend_stop_reason", "case_results", "usage_ledger_state",
+                    "rerun_of"}
+        lifecycle_optional = optional - {"rerun_of"}
         if set(record) - required - optional or required - set(record):
             raise RunError("run state record has unsupported or missing fields")
         if record.get("schema_version") != SCHEMA_VERSION or record.get("run_id") != run_id:
@@ -533,6 +538,13 @@ class RunSupervisor:
             uuid.UUID(run_id)
         except (TypeError, ValueError) as exc:
             raise RunError("run state record has an invalid run id") from exc
+        if "rerun_of" in record:
+            try:
+                uuid.UUID(record["rerun_of"])
+            except (TypeError, ValueError) as exc:
+                raise RunError("run state record has an invalid rerun source") from exc
+            if record["rerun_of"] == run_id:
+                raise RunError("run state record cannot rerun itself")
         if (not isinstance(record.get("suite_id"), str)
                 or not IDENTIFIER.fullmatch(record["suite_id"])):
             raise RunError("run state record has an invalid suite id")
@@ -662,16 +674,25 @@ class RunSupervisor:
             raise RunError("run state record has invalid spend stop reason")
         if "case_results" in record:
             results = record["case_results"]
-            if (not isinstance(results, list) or len(results) != len(case_identities or [])
-                    or [item.get("id") for item in results if isinstance(item, dict)]
-                    != list(case_identities or [])
-                    or any(not isinstance(item, dict)
-                           or set(item) != {"id", "status", "spend_usd"}
-                           or item.get("status") not in ("completed", "not_run")
-                           or not isinstance(item.get("spend_usd"), (int, float))
-                           or isinstance(item.get("spend_usd"), bool)
-                           or not math.isfinite(item["spend_usd"])
-                           or item["spend_usd"] < 0 for item in results)):
+            paid_shape = (paid and all(isinstance(item, dict)
+                          and set(item) == {"id", "status", "spend_usd"}
+                          and item.get("status") in ("completed", "not_run")
+                          and isinstance(item.get("spend_usd"), (int, float))
+                          and not isinstance(item.get("spend_usd"), bool)
+                          and math.isfinite(item["spend_usd"])
+                          and item["spend_usd"] >= 0 for item in results)) if isinstance(results, list) else False
+            free_shape = (not paid and all(isinstance(item, dict)
+                          and set(item) == {"id", "status", "detail"}
+                          and item.get("status") in ("passed", "failed", "skipped")
+                          and isinstance(item.get("detail"), str) for item in results)) if isinstance(results, list) else False
+            identities = [item.get("id") for item in results if isinstance(item, dict)] \
+                if isinstance(results, list) else []
+            invalid_paid = (paid and (not paid_shape or identities != (case_identities or [])))
+            invalid_free = (not paid and (not free_shape
+                            or len(results) > len(case_identities or [])
+                            or any(identity not in (case_identities or []) for identity in identities)
+                            or len(set(identities)) != len(identities)))
+            if not isinstance(results, list) or invalid_paid or invalid_free:
                 raise RunError("run state record has invalid case results")
         if ("usage_ledger_state" in record
                 and record["usage_ledger_state"] not in ("pending", "recorded")):
@@ -700,7 +721,7 @@ class RunSupervisor:
             raise RunError("run state record is missing its command identity")
         if record["status"] in TERMINAL and "completed_at" not in record:
             raise RunError("terminal run state has no completion time")
-        if record["status"] == "queued" and set(record) & optional:
+        if record["status"] == "queued" and set(record) & lifecycle_optional:
             raise RunError("queued run state contains lifecycle fields")
         if record["status"] == "starting" and ("command_pid" in record
                                                 or "completed_at" in record):
@@ -1150,7 +1171,11 @@ class RunSupervisor:
               target_ref: str, *, confirmed: Optional[str] = None,
               max_budget_usd: Any = None, spend_cap_usd: Any = None,
               pricing_source: Optional[str] = None,
-              case_identities: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+              case_identities: Optional[Sequence[str]] = None,
+              rerun_of: Optional[str] = None,
+              expected_target: Optional[Mapping[str, Any]] = None,
+              expected_argv: Optional[Sequence[str]] = None,
+              expected_cases: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         catalog = SuiteCatalog.load(self.catalog_path)
         suite = catalog.get(suite_id)
         argv = suite.render(parameters, target_kind, target_ref)
@@ -1160,6 +1185,10 @@ class RunSupervisor:
         except free_suites.FreeSuiteError as exc:
             raise RunError(str(exc)) from exc
         cases = list(discovered or suite.cases or (suite.suite_id,))
+        if expected_argv is not None and argv != list(expected_argv):
+            raise RunError("rerun command changed since the original run")
+        if expected_cases is not None and cases != list(expected_cases):
+            raise RunError("rerun cases changed since the original run")
         if case_identities is not None:
             if (suite.cost_class != "spends_usage" or not case_identities
                     or len(set(case_identities)) != len(case_identities)
@@ -1228,6 +1257,11 @@ class RunSupervisor:
                     target["version"] = prepared["version"]
                     target["source_path"] = prepared["source_path"]
                     target["profile_path"] = prepared["profile_path"]
+                if expected_target is not None:
+                    identity_fields = ("kind", "ref", "revision", "draft", "config_digest")
+                    if any(target.get(name) != expected_target.get(name)
+                           for name in identity_fields):
+                        raise RunError("rerun target changed since the original run")
                 record: Dict[str, Any] = {
                     "schema_version": SCHEMA_VERSION,
                     "run_id": run_id,
@@ -1239,8 +1273,7 @@ class RunSupervisor:
                     "cost_class": suite.cost_class,
                     "expected_duration_seconds": suite.expected_duration_seconds,
                     "timeout_seconds": suite.timeout_seconds,
-                    "case_identities": (cases if spend_plan
-                                        or suite.suite_id in free_suites.FREE_SUITE_IDS else None),
+                    "case_identities": cases,
                     "spend_estimate": spend_plan["estimate"] if spend_plan else None,
                     "spend_cap": spend_plan["caps"] if spend_plan else None,
                     "pricing_identity": spend_plan["pricing"] if spend_plan else None,
@@ -1248,6 +1281,8 @@ class RunSupervisor:
                     "queue_sequence": reservation["queue_sequence"],
                     "created_at": reservation["created_at"],
                 }
+                if rerun_of is not None:
+                    record["rerun_of"] = rerun_of
                 record["canonical_run_digest"] = run_store._canonical_run_digest(record)
                 self._write(record)
                 persisted = True
@@ -1312,6 +1347,170 @@ class RunSupervisor:
         self.reconcile_and_drain()
         with self.lock():
             return self._public(self._read(run_id))
+
+    def history_page(self, **filters: Any) -> Dict[str, Any]:
+        try:
+            return self.history.history(**filters)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+
+    def _rerun_request(self, record: Mapping[str, Any]) -> Tuple[Optional[Dict[str, Any]], str]:
+        if record.get("status") not in TERMINAL:
+            return None, "Only terminal runs can be rerun."
+        if record.get("cost_class") == "spends_usage":
+            return None, "Usage-spending runs require a new estimate and confirmation."
+        try:
+            suite = SuiteCatalog.load(self.catalog_path).get(str(record.get("suite_id")))
+            if suite.version != record.get("suite_version"):
+                return None, "The suite changed since the original run."
+            target = record.get("target") if isinstance(record.get("target"), dict) else {}
+            parameters = record.get("parameters") if isinstance(record.get("parameters"), dict) else {}
+            argv = suite.render(parameters, str(target.get("kind")), str(target.get("ref")))
+            discovered = free_suites.resolve_case_identities(
+                suite.suite_id, parameters, str(target.get("kind")), str(target.get("ref")))
+            cases = list(discovered or suite.cases or (suite.suite_id,))
+        except (RunError, free_suites.FreeSuiteError):
+            return None, "The canonical request can no longer be reproduced."
+        if argv != record.get("argv") or cases != record.get("case_identities"):
+            return None, "The command or discovered cases changed since the original run."
+        return ({"suite_id": suite.suite_id, "parameters": dict(parameters),
+                 "target_kind": target["kind"], "target_ref": target["ref"],
+                 "expected_target": dict(target), "expected_argv": list(argv),
+                 "expected_cases": list(cases)}, "")
+
+    def _declared_artifact(self, indexed: Mapping[str, Any], artifact: str) -> bytes:
+        declared = indexed.get("artifacts")
+        if (self.repository is None or not isinstance(declared, list)
+                or not artifact.startswith("imported-")):
+            raise RunError("run evidence is unavailable")
+        try:
+            position = int(artifact.removeprefix("imported-"))
+            relative = declared[position]
+        except (ValueError, IndexError, TypeError):
+            raise RunError("run evidence is unavailable") from None
+        if not isinstance(relative, str):
+            raise RunError("run evidence is unavailable")
+        parsed = Path(relative)
+        if parsed.is_absolute() or ".." in parsed.parts or "\0" in relative:
+            raise RunError("run evidence is unavailable")
+        path = (self.repository / parsed).resolve()
+        try:
+            candidate_info = (self.repository / parsed).lstat()
+            if not stat.S_ISREG(candidate_info.st_mode):
+                raise RunError("run evidence is unavailable")
+            path.relative_to(self.repository)
+            descriptor = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                info = os.fstat(descriptor)
+                if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OUTPUT_CHUNK
+                        or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+                    raise RunError("run evidence is unavailable")
+                body = os.pread(descriptor, info.st_size, 0)
+            finally:
+                os.close(descriptor)
+            body.decode("utf-8")
+            return body
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            if isinstance(exc, RunError):
+                raise
+            raise RunError("run evidence is unavailable") from exc
+
+    def run_detail(self, run_id: str, **lineage: Any) -> Dict[str, Any]:
+        try:
+            with self.lock():
+                detail = self.history.detail(run_id, **lineage)
+                indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        source_kind = (indexed.get("source") or {}).get("kind")
+        raw = indexed.get("raw") if isinstance(indexed.get("raw"), dict) else {}
+        detail["exact_command"] = None
+        detail["rerun"] = {"available": False, "reason": "Imported runs have no canonical request."}
+        if source_kind == "studio":
+            target = raw.get("target") if isinstance(raw.get("target"), dict) else {}
+            if raw.get("suite_id") in free_suites.FREE_SUITE_IDS:
+                detail["exact_command"] = free_suites.start_command(
+                    str(raw["suite_id"]), raw.get("parameters") or {},
+                    str(target.get("kind")), str(target.get("ref")))
+            elif isinstance(raw.get("argv"), list) and raw["argv"]:
+                detail["exact_command"] = free_suites.command_text(raw["argv"])
+            request, reason = self._rerun_request(raw)
+            detail["rerun"] = {"available": request is not None,
+                               "reason": None if request is not None else reason}
+            detail["artifacts"] = [
+                {"id": name, "label": name.capitalize() + " log", "available": True}
+                for name in ("stdout", "stderr", "worker")]
+        else:
+            declared = indexed.get("artifacts") if isinstance(indexed.get("artifacts"), list) else []
+            detail["artifacts"] = []
+            for position, _ in enumerate(declared):
+                artifact_id = "imported-" + str(position)
+                try:
+                    self._declared_artifact(indexed, artifact_id)
+                    available = True
+                except RunError:
+                    available = False
+                detail["artifacts"].append({"id": artifact_id,
+                                            "label": "Declared artifact " + str(position + 1),
+                                            "available": available})
+        return detail
+
+    def case_history(self, case_id: str, **bounds: Any) -> Dict[str, Any]:
+        try:
+            return self.history.case_history(case_id, **bounds)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+
+    def evidence(self, run_id: str, artifact: str) -> Dict[str, Any]:
+        try:
+            indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        if (indexed.get("source") or {}).get("kind") != "studio":
+            content = self._declared_artifact(indexed, artifact).decode("utf-8")
+            return {"run_id": run_id, "artifact": artifact, "content": content}
+        if artifact not in ("stdout", "stderr", "worker"):
+            raise RunError("run evidence is unavailable")
+        if artifact in ("stdout", "stderr"):
+            payload = self.read_output(run_id, artifact, 0, MAX_OUTPUT_CHUNK)
+            if not payload["eof"] or payload["next_cursor"] > MAX_OUTPUT_CHUNK:
+                raise RunError("run evidence is unavailable")
+            content = payload["chunk"]
+        else:
+            with self.lock():
+                record = self._read(run_id)
+                directory = self._run_directory(run_id)
+                descriptor = -1
+                try:
+                    descriptor = os.open("worker.log", os.O_RDONLY | os.O_NOFOLLOW,
+                                         dir_fd=directory)
+                    info = os.fstat(descriptor)
+                    if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OUTPUT_CHUNK
+                            or stat.S_IMODE(info.st_mode) != 0o600
+                            or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+                            or record.get("status") not in TERMINAL):
+                        raise RunError("run evidence is unavailable")
+                    content = os.pread(descriptor, info.st_size, 0).decode("utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise RunError("run evidence is unavailable") from exc
+                finally:
+                    if descriptor >= 0:
+                        os.close(descriptor)
+                    os.close(directory)
+        return {"run_id": run_id, "artifact": artifact, "content": content}
+
+    def rerun(self, run_id: str) -> Dict[str, Any]:
+        with self.lock():
+            original = self._read(run_id)
+            request, reason = self._rerun_request(original)
+            if request is None:
+                raise RunError(reason)
+        return self.start(request["suite_id"], request["parameters"],
+                          request["target_kind"], request["target_ref"],
+                          case_identities=None, rerun_of=run_id,
+                          expected_target=request["expected_target"],
+                          expected_argv=request["expected_argv"],
+                          expected_cases=request["expected_cases"])
 
     def cancel(self, run_id: str) -> Dict[str, Any]:
         pid = None

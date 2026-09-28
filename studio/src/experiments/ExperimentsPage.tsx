@@ -15,6 +15,7 @@ import type {
 } from "./native-acceptance/model";
 import { stateAfterStart } from "./native-acceptance/model";
 import { ReplayPanel } from "./replay/ReplayPanel";
+import { RunHistoryPanel } from "./history/RunHistoryPanel";
 import { loadReplayCatalog, loadReplayResult } from "./replay/api";
 import type { ReplayCatalog, ReplayRunResult } from "./replay/model";
 import {
@@ -262,6 +263,7 @@ export function ExperimentsPage() {
           <div><Text fw={600} size="sm">Live log</Text><ScrollArea className="run-log" h={260}><Code block>{stdout}{stderr}</Code></ScrollArea></div>
         </Stack>
       </Paper>}
+      <RunHistoryPanel />
     </Stack>
   );
 }

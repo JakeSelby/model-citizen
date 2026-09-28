@@ -3,15 +3,62 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
+import stat
 import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
 
-from . import spend_guard
+from . import free_suites, run_store, spend_guard
 from .runs import (RunError, RunSupervisor, SuiteCatalog, TERMINAL, process_identity,
                    terminate_owned_group, utc_now)
+
+MAX_FREE_RESULT_BYTES = 4 * 1024 * 1024
+
+
+def _free_case_results(supervisor, run_id, record, returncode):
+    if record.get("suite_id") != "unit-tests":
+        identities = record.get("case_identities")
+        if (returncode not in (0, 1) or not isinstance(identities, list)
+                or len(identities) != 1 or not isinstance(identities[0], str)
+                or not identities[0]):
+            return None
+        return [{"id": identities[0],
+                 "status": "passed" if returncode == 0 else "failed", "detail": ""}]
+    directory = supervisor._run_directory(run_id)
+    descriptor = -1
+    try:
+        descriptor = os.open("stderr.log", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FREE_RESULT_BYTES
+                or stat.S_IMODE(info.st_mode) != 0o600
+                or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+            return None
+        output = os.pread(descriptor, info.st_size, 0).decode("utf-8")
+        parsed = free_suites.parse_unit_output(output)
+        allowed = record.get("case_identities") or []
+        by_id = {}
+        for item in parsed:
+            if (not isinstance(item, dict) or set(item) != {"id", "status", "detail"}
+                    or item.get("id") not in allowed or item["id"] in by_id
+                    or item.get("status") not in ("passed", "failed", "skipped")
+                    or not isinstance(item.get("detail"), str)):
+                continue
+            by_id[item["id"]] = item
+        results = [by_id[identity] for identity in allowed if identity in by_id]
+        candidate = dict(record, case_results=results)
+        encoded = json.dumps(candidate, sort_keys=True, ensure_ascii=False, allow_nan=False,
+                             separators=(",", ":")).encode("utf-8")
+        return results if len(encoded) <= min(MAX_FREE_RESULT_BYTES,
+                                              run_store.MAX_RECORD_BYTES) else None
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory)
 
 
 def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int:
@@ -150,6 +197,10 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
             paid_error = str(exc)
         finally:
             os.close(descriptor)
+    free_results = None
+    if (record["cost_class"] == "free"
+            and record.get("suite_id") in free_suites.FREE_SUITE_IDS):
+        free_results = _free_case_results(supervisor, run_id, record, returncode)
     with supervisor.lock():
         record = supervisor._read(run_id)
         if record["status"] not in TERMINAL:
@@ -187,6 +238,8 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
                 record["status"] = "succeeded" if returncode == 0 else "failed"
             record["returncode"] = returncode
             record["completed_at"] = utc_now()
+            if free_results is not None:
+                record["case_results"] = free_results
             if paid_result is not None:
                 record["usage_ledger_state"] = "pending"
             supervisor._write(record)

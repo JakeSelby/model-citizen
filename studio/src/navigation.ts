@@ -8,7 +8,8 @@ export const NAVIGATION = [
 ] as const;
 
 export function pageTitle(pathname: string): string {
-  return NAVIGATION.find((item) => item.path === pathname)?.label ?? "Hub";
+  return NAVIGATION.find((item) => item.path === pathname
+    || (item.path !== "/" && pathname.startsWith(`${item.path}/`)))?.label ?? "Hub";
 }
 
 export function documentTitle(pathname: string): string {
