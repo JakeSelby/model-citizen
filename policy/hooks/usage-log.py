@@ -194,9 +194,9 @@ def usage_path():
 # change to what a row carries, and add a rename to FIELD_FOLDS as `old name: new name`, never
 # by rewriting old rows. See docs/usage.md, "Ledger schema".
 SCHEMA_KEY = "schema_version"
-# Version 1 is first released in v0.14.0 and carries every field that release adds,
-# `profile_fingerprint` among them.
-SCHEMA_VERSION = 1
+# Version 1 is first released in v0.14.0 and carries `profile_fingerprint`; version 2 adds
+# Studio run spend rows whose stable identity is their run UUID.
+SCHEMA_VERSION = 2
 FIELD_FOLDS = {}
 FINGERPRINT_KEY = "profile_fingerprint"
 _POSTURE = []
@@ -1530,6 +1530,8 @@ def scan_codex(transcript, session_id="", cwd="", prior=None, rescan=False):
 
 def row_key(row):
     """What identifies a row. A row written before `kind` existed is a session, as it was."""
+    if row.get("kind") == "studio_run":
+        return (row.get("run_id"), "studio", "studio_run", "")
     return (row.get("session_id"), row.get("runtime", "claude-code"),
             row.get("kind") or "session", row.get("agent_id") or "")
 

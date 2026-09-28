@@ -6,8 +6,10 @@ import contextlib
 import os
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import Path
 
+from . import spend_guard
 from .runs import (RunError, RunSupervisor, SuiteCatalog, TERMINAL, process_identity,
                    terminate_owned_group, utc_now)
 
@@ -36,6 +38,11 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
         suite = SuiteCatalog.load(supervisor.catalog_path).get(record["suite_id"])
         rendered = suite.render(record["parameters"], record["target"]["kind"],
                                 record["target"]["ref"])
+        if record["cost_class"] == "spends_usage":
+            try:
+                rendered = spend_guard.guarded_argv(rendered, {"caps": record["spend_cap"]})
+            except spend_guard.SpendGuardError:
+                rendered = []
         if rendered != record.get("argv") or suite.version != record.get("suite_version"):
             record["status"] = "failed"
             record.pop("admission_token", None)
@@ -57,6 +64,12 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
             "XDG_STATE_HOME": str(profile / ".local" / "state"),
             "XDG_CACHE_HOME": str(profile / ".cache"),
         })
+        if record["cost_class"] == "spends_usage":
+            environment.update({
+                "CITIZEN_STUDIO_RUN_ID": run_id,
+                "CITIZEN_STUDIO_RESULT": str(run_dir / spend_guard.RESULT_NAME),
+                "CITIZEN_STUDIO_PRICING_SOURCE": record["pricing_identity"]["source"],
+            })
         stdout = supervisor.open_run_output(run_id, "stdout.log")
         stderr = supervisor.open_run_output(run_id, "stderr.log")
         try:
@@ -116,6 +129,17 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
             returncode = process.returncode
         stdout.close()
         stderr.close()
+    paid_result = None
+    paid_error = None
+    if record["cost_class"] == "spends_usage" and group_stopped and not timed_out:
+        descriptor = supervisor._run_directory(run_id)
+        try:
+            paid_result = spend_guard.read_result(descriptor, run_id,
+                                                  record["case_identities"])
+        except spend_guard.SpendGuardError as exc:
+            paid_error = str(exc)
+        finally:
+            os.close(descriptor)
     with supervisor.lock():
         record = supervisor._read(run_id)
         if record["status"] not in TERMINAL:
@@ -127,11 +151,33 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
                 record["status"] = "cancelled"
             elif timed_out:
                 record["status"] = "timed_out"
+            elif paid_error is not None:
+                record["status"] = "failed"
+                record["reason"] = paid_error
+            elif paid_result is not None:
+                record["spend_actual"] = paid_result["spend_usd"]
+                record["case_results"] = paid_result["cases"]
+                if paid_result["stop_reason"] is not None:
+                    record["spend_stop_reason"] = paid_result["stop_reason"]
+                if paid_result["stop_reason"] == "usage_limit":
+                    record["status"] = "limited"
+                    record["reason"] = "subscription or API usage limit reached"
+                elif (paid_result["stop_reason"] == "spend_cap"
+                      or Decimal(str(paid_result["spend_usd"]))
+                      >= Decimal(record["spend_cap"]["spend_cap_usd"])):
+                    record["status"] = "capped"
+                    record["spend_stop_reason"] = "spend_cap"
+                    record["reason"] = "spend cap reached"
+                else:
+                    record["status"] = "succeeded" if returncode == 0 else "failed"
             else:
                 record["status"] = "succeeded" if returncode == 0 else "failed"
             record["returncode"] = returncode
             record["completed_at"] = utc_now()
+            if paid_result is not None:
+                record["usage_ledger_state"] = "pending"
             supervisor._write(record)
+            supervisor._settle_usage_locked(record)
         supervisor._recover_locked()
         if group_stopped:
             supervisor._admit_locked()

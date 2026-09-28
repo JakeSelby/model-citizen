@@ -5272,7 +5272,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
             # asking a question, not by the session, and adding them to a day's totals would
             # charge a session for a bill it did not run up.
             continue
-        if kind != "session" and ended >= cutoff:
+        if kind not in ("session", "studio_run") and ended >= cutoff:
             delegated.append(row)
         # A Claude Code subagent's tokens are already in its session's row; a Codex subagent's
         # are in no row but its own, and a worker's are in no session's because a role-run
@@ -5284,8 +5284,14 @@ def cmd_usage(args: argparse.Namespace) -> int:
             if kind == "session":
                 kept.append(row)
             continue
-        cost = row_cost(row, table, children.get(row.get("session_id") or "")
-                        if kind == "session" and row.get("runtime") != "codex" else None)
+        if kind == "studio_run":
+            amount = row.get("spend_usd")
+            cost = (float(amount) if isinstance(amount, (int, float))
+                    and not isinstance(amount, bool) and math.isfinite(amount) and amount >= 0
+                    else None)
+        else:
+            cost = row_cost(row, table, children.get(row.get("session_id") or "")
+                            if kind == "session" and row.get("runtime") != "codex" else None)
         # The ratio is reported over exactly what TOTAL counts: a run where the runs column
         # counts one, and tokens where the token columns add them, which under `--by day` is
         # the in-window slices and not the whole row.
@@ -5353,11 +5359,13 @@ def cmd_usage(args: argparse.Namespace) -> int:
             dedup_raw += ratio * counted
             dedup_counted += counted
             dedup_runs += 1
-        else:
+        elif kind != "studio_run":
             dedup_unknown += 1
         if cost is not None:
             acc[5] += cost
         for i, name in enumerate(RATE_FIELDS):
+            if kind == "studio_run":
+                continue
             if row.get(name) is None:
                 unknown_metrics.add(name)
             try:
@@ -5795,9 +5803,21 @@ def cmd_runs(args: argparse.Namespace) -> int:
     try:
         supervisor = studio.runs.RunSupervisor(
             state_dir() / "studio", studio.runs.default_catalog_path(REPO))
+        confirmation_pending = False
         if args.runs_action == "start":
-            result = supervisor.start(args.suite, studio.runs.parse_parameters(args.param),
-                                      args.target_kind, args.target_ref)
+            parameters = studio.runs.parse_parameters(args.param)
+            preview = supervisor.spend_preview(
+                args.suite, parameters, args.target_kind, args.target_ref,
+                args.max_budget_usd, args.spend_cap, args.pricing_source)
+            if preview["confirmation_required"] and args.confirm_spend is None:
+                result = preview
+                confirmation_pending = True
+            else:
+                result = supervisor.start(
+                    args.suite, parameters,
+                    args.target_kind, args.target_ref, confirmed=args.confirm_spend,
+                    max_budget_usd=args.max_budget_usd, spend_cap_usd=args.spend_cap,
+                    pricing_source=args.pricing_source)
         elif args.runs_action == "list":
             result = supervisor.list()
         elif args.runs_action == "show":
@@ -5818,6 +5838,17 @@ def cmd_runs(args: argparse.Namespace) -> int:
     elif isinstance(result, list):
         for record in result:
             say(record["run_id"] + "  " + record["status"] + "  " + record["suite_id"])
+    elif confirmation_pending:
+        estimate = result["estimate"]
+        amount = ("no history" if estimate["amount_usd"] is None
+                  else "$%.6g" % estimate["amount_usd"])
+        say("runs: confirmation required; estimate %s from %d same-suite, same-scale run(s)"
+            % (amount, estimate["sample_count"]))
+        say("runs: --max-budget-usd %s; --spend-cap %s; %s"
+            % (result["caps"]["max_budget_usd"], result["caps"]["spend_cap_usd"],
+               result["pricing"]["basis"]))
+        say("runs: repeat with --confirm-spend %s to start"
+            % result["confirmation_token"])
     elif args.runs_action == "reindex":
         say("runs: indexed %d run(s); %d source file(s) skipped"
             % (result["total_runs"], len(result["skipped"])))
@@ -5825,7 +5856,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
             say("runs: skipped %s: %s" % (skipped["path"], skipped["reason"]))
     else:
         say(result["run_id"] + "  " + result["status"] + "  " + result["suite_id"])
-    return 0
+    return 3 if confirmation_pending else 0
 
 
 def program_name(argv0: Optional[str] = None) -> str:
@@ -5926,6 +5957,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     start.add_argument("--target-kind", required=True, choices=sorted(studio.runs.TARGET_KINDS))
     start.add_argument("--target-ref", required=True)
     start.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
+    start.add_argument("--max-budget-usd",
+                       help="per-run dollar ceiling for a suite that spends usage")
+    start.add_argument("--spend-cap",
+                       help="whole-set dollar ceiling for a suite that spends usage")
+    start.add_argument("--pricing-source", choices=sorted(studio.spend_guard.PRICING_SOURCES),
+                       help="whether usage consumes API credit or subscription limits")
+    start.add_argument("--confirm-spend", metavar="TOKEN",
+                       help="confirm the exact displayed estimate and caps, then start")
     start.add_argument("--json", action="store_true")
     start.set_defaults(func=cmd_runs)
     listing = runs_sub.add_parser("list", help="list supervised runs")
