@@ -57,8 +57,9 @@ contract are in `docs/bmad-governance.md`, which every BMad workflow loads.
 
 ## CodeRabbit review and merging
 
-CodeRabbit reviews pull requests into `main`, as `.coderabbit.yaml` configures it. On every pull
-request, work through its review with `/build` step 6 and without asking first: push fixes to the
+CodeRabbit reviews pull requests into `main`, as `.coderabbit.yaml` configures it. For pull requests
+that require normal review (not the planning-only exception below), work through its review with
+`/build` step 6 and without asking first: push fixes to the
 branch, reply in its threads and resolve them, and request each further pass with
 `@coderabbitai review`, since a push never starts one. Request the first pass the same way when
 automatic review skips the pull request, as it does drafts, `chore(release)` titles and Dependabot.
@@ -93,7 +94,7 @@ bot status do not establish eligibility.
 The exception changes only the review requirement. All other merge conditions below still apply.
 Changes to this exception or its allowlist themselves require normal CodeRabbit review. For a
 mixed PR, separately classify every excluded file: an excluded change that does not meet the
-planning-only content and file-mode conditions must receive actual review coverage. Stop until
+planning-only path, content and file-mode conditions must receive actual review coverage. Stop until
 CodeRabbit coverage is enabled for it; an older pass or a success status without that coverage
 cannot satisfy the normal-review requirement.
 
