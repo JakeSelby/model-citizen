@@ -24,11 +24,6 @@ CURRENT_COMMAND_DOCS = (
     "docs/usage.md",
 )
 SOURCE_REFERENCES = {
-    "README.md": {"python3 bin/harness lint", "bin/harness generate --check"},
-    "docs/bmad-governance.md": {
-        "python3 bin/harness lint",
-        "bin/harness generate --check",
-    },
     "docs/usage.md": {"`RULE_MIN_SESSIONS` in `bin/harness`"},
 }
 

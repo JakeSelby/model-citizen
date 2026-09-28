@@ -40,8 +40,8 @@ The repository instructions remain authoritative when they are stricter.
   then run `plan` and `apply` before implementation ownership begins.
 - Preserve issue and repository history. Add amendments rather than rewriting dated evidence, and
   do not replace original issue prose when maintaining traceability metadata.
-- Before review, run `python3 bin/harness lint`, `python3 -m unittest discover -s tests`, and
-  `bin/harness generate --check`. Never bypass hooks.
+- Before review, run `bin/citizen lint`, `python3 -m unittest discover -s tests`, and
+  `bin/citizen generate --check`. Never bypass hooks.
 - Ordinary issues and PRs use the repository's native voice without generated framework footers.
   README and planning documentation may credit BMad explicitly.
 

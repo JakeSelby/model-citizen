@@ -343,9 +343,9 @@ Installed links may point at the checkout, so contribute from a managed worktree
 gate is:
 
 ```sh
-python3 bin/harness lint
+bin/citizen lint
 python3 -m unittest discover -s tests
-bin/harness generate --check
+bin/citizen generate --check
 ```
 
 If the idea of user-owned working preferences across agents is useful, try the dry run, open an
