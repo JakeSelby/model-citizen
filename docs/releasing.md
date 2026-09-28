@@ -22,6 +22,38 @@ change. What the release must carry before it can be tagged is the next section.
 
 ## Source and qualification
 
+### Carrying native evidence through a presentation-only patch
+
+A released patch may carry the preceding release's native evidence only when
+`compatibility/catalog.json` declares `qualification_reuse`. The declaration names the prior
+version, its immutable `v<version>` tag, the actual `evidence_version`, the exact
+`qualification_source_commit`, whether the chain includes the v0.14.1 bootstrap exception, and the
+validator's exact kind-specific no-rerun limitation. The candidate keeps every prior client, case,
+evidence path and digest, support state, invalidation claim and limitation byte-for-byte, then
+appends that one disclosure. Evidence files are never rewritten to name the patch.
+
+Preflight resolves `refs/tags/v<prior>^{commit}` once, uses that pinned commit for every read and
+comparison, proves it is an ancestor of the candidate, and requires a later patch in the same
+release line. Ordinary carry-forward permits changes only to `VERSION`, `README.md`, `CHANGELOG.md`,
+`product.json`, the three release records `compatibility/catalog.json`,
+`compatibility/freeze.json` and `compatibility/migration.json`, and files under `docs/`,
+`changelog.d/` and `_bmad-output/`. It classifies the whole release delta, so an installer,
+workflow, script or other executable change fails even when qualified runtime paths are unchanged.
+Any unavailable ref, changed claim, different digest, malformed limitation, unknown catalog field
+or ineligible path fails closed. When the prior release itself carried older evidence, preflight
+validates that earlier reuse, retains the version the evidence actually observed and carries the
+bootstrap disclosure through the chain. Release notes and preflight identify the evidence as
+carried rather than newly produced. After publication, validation uses the immutable current tag;
+later runtime edits remain readable as release drift and require new evidence.
+
+The `v0.14.1-bootstrap` kind is a one-release exception approved on 2026-09-27. In addition to the
+ordinary paths above, it permits only `lib/harness_core/compatibility.py`,
+`scripts/release_preflight.py`, `scripts/release_notes.py`, and their three existing test modules.
+It reuses v0.14.0 evidence for unchanged client-facing behavior; it does not call v0.14.1
+byte-identical or newly qualified, and it is invalid for every other version. Roll back a failed
+attempt by removing the reuse declaration and disclosure and leaving the previous tag and evidence
+untouched; do not move or replace either tag.
+
 1. Complete each native acceptance case in [compatibility](compatibility.md). Keep exact runtime,
    client and platform versions, source commit, observations and evidence digests. Resolve failed
    controls or record a deliberately narrower support contract before calling a client qualified.

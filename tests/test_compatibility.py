@@ -1,6 +1,7 @@
 """Published support cannot be inferred from generated files or empty evidence."""
 import json
 import hashlib
+import re
 import subprocess
 import shutil
 import tempfile
@@ -73,6 +74,440 @@ class CompatibilityTests(unittest.TestCase):
                               return_value=subprocess.CompletedProcess([], 1)):
                 with self.assertRaisesRegex(ValueError, "source commit is unavailable"):
                     compatibility.catalog(root)
+
+
+class QualificationReuseTests(unittest.TestCase):
+    """A patch may reuse evidence only when its public qualification claims stay identical."""
+
+    def fixture(self, prior="1.2.3", current="1.2.4", kind="carry-forward"):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        subprocess.run(["git", "init", "--quiet", "-b", "main", str(root)], check=True)
+
+        def git(*args):
+            return subprocess.check_output(
+                ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t", *args],
+                text=True).strip()
+
+        (root / "lib/harness_core").mkdir(parents=True)
+        (root / "compatibility").mkdir()
+        (root / "VERSION").write_text(prior + "\n")
+        (root / "lib/harness_core/compatibility.py").write_text("# prior validator\n")
+        prior_data = {
+            "schema_version": 1,
+            "harness_version": prior,
+            "release_state": "released",
+            "required_cases": ["installation"],
+            "clients": [{"id": "fixture", "runtime": "fixture", "status": "qualified",
+                         "runtime_version": "1", "client_version": "1", "platform": "fixture",
+                         "evidence": []}],
+            "limitations": ["Existing limitation."],
+            "qualification_source_commit": "0" * 40,
+        }
+        (root / "compatibility/catalog.json").write_text(json.dumps(prior_data))
+        git("add", ".")
+        git("commit", "--quiet", "-m", "prior")
+        source = git("rev-parse", "HEAD")
+        prior_data["qualification_source_commit"] = source
+        record = {"kind": "native", "client": "fixture", "harness_version": prior,
+                  "runtime_version": "1", "client_version": "1", "platform": "fixture",
+                  "source_commit": source, "observations": ["fixture"],
+                  "cases": {"installation": "passed"}}
+        evidence = root / "compatibility/evidence.json"
+        evidence.write_text(json.dumps(record))
+        prior_data["clients"][0]["evidence"] = [
+            {"path": "compatibility/evidence.json",
+             "sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}
+        ]
+        (root / "compatibility/catalog.json").write_text(json.dumps(prior_data))
+        git("add", "compatibility")
+        git("commit", "--quiet", "-m", "pin source")
+        git("tag", "v" + prior)
+
+        includes_bootstrap = kind == "v0.14.1-bootstrap"
+        limitation = compatibility.canonical_reuse_limitation(
+            kind, current, "v" + prior, prior, includes_bootstrap)
+        current_data = json.loads(json.dumps(prior_data))
+        current_data.update(
+            harness_version=current,
+            qualification_reuse={
+                "schema_version": 1,
+                "kind": kind,
+                "prior_version": prior,
+                "prior_tag": "v" + prior,
+                "evidence_version": prior,
+                "qualification_source_commit": source,
+                "includes_bootstrap_exception": includes_bootstrap,
+                "limitation": limitation,
+            },
+            limitations=prior_data["limitations"] + [limitation],
+        )
+        (root / "VERSION").write_text(current + "\n")
+        if kind == "v0.14.1-bootstrap":
+            for name in compatibility.BOOTSTRAP_BEHAVIOR_PATHS:
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# reviewed bootstrap behavior\n")
+        (root / "compatibility/catalog.json").write_text(json.dumps(current_data))
+        git("add", ".")
+        git("commit", "--quiet", "-m", "candidate")
+        return root, current_data, git
+
+    def test_a_patch_with_only_a_version_delta_can_carry_evidence_forward(self):
+        root, data, _ = self.fixture()
+        reuse = compatibility.qualification_reuse(root, data)
+        self.assertEqual(reuse["prior_version"], "1.2.3")
+        self.assertEqual(compatibility.evidence_version(data), "1.2.3")
+
+    def test_valid_and_invalid_reuse_flow_through_real_catalog_consumers(self):
+        root, data, _ = self.fixture()
+        self.assertEqual(compatibility.catalog(root)["qualification_reuse"],
+                         data["qualification_reuse"])
+        path = root / "compatibility/catalog.json"
+        data["qualification_reuse"]["misspelled"] = True
+        path.write_text(json.dumps(data))
+        with self.assertRaisesRegex(ValueError, "unknown field: misspelled"):
+            compatibility.catalog(root)
+
+    def test_reused_evidence_accepts_only_the_version_that_was_observed(self):
+        root, data, _ = self.fixture()
+        client = data["clients"][0]
+        self.assertEqual(compatibility.evidence_errors(root, data, client), [])
+        path = root / client["evidence"][0]["path"]
+        record = json.loads(path.read_text())
+        record["harness_version"] = data["harness_version"]
+        path.write_text(json.dumps(record))
+        client["evidence"][0]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertIn("evidence version or client mismatch",
+                      compatibility.evidence_errors(root, data, client))
+
+    def test_valid_reuse_suppresses_release_drift_until_runtime_changes_after_the_tag(self):
+        root, data, git = self.fixture()
+        self.assertFalse(compatibility.source_drift(root, data))
+        self.assertEqual(compatibility.release_errors(root), [])
+        git("tag", "v1.2.4")
+        (root / "lib/later.py").write_text("changed after release\n")
+        git("add", "lib/later.py")
+        git("commit", "--quiet", "-m", "later runtime change")
+        self.assertTrue(compatibility.source_drift(root, data))
+        self.assertIn("current runtime source differs from the released qualification source",
+                      compatibility.release_errors(root))
+
+    def test_reuse_tag_not_ancestral_to_head_is_drift_even_when_runtime_files_match(self):
+        root, data, git = self.fixture()
+        git("tag", "v1.2.4")
+        git("checkout", "--quiet", "--orphan", "unrelated")
+        git("commit", "--quiet", "-m", "unrelated but identical tree")
+        self.assertTrue(compatibility.source_drift(root, data))
+        self.assertIn("current runtime source differs from the released qualification source",
+                      compatibility.release_errors(root))
+
+    def test_chained_reuse_retains_and_validates_the_version_the_evidence_observed(self):
+        root, prior, git = self.fixture()
+        git("tag", "v1.2.4")
+        limitation = compatibility.canonical_reuse_limitation(
+            "carry-forward", "1.2.5", "v1.2.4", "1.2.3", False)
+        current = json.loads(json.dumps(prior))
+        current.update(
+            harness_version="1.2.5",
+            qualification_reuse={
+                "schema_version": 1,
+                "kind": "carry-forward",
+                "prior_version": "1.2.4",
+                "prior_tag": "v1.2.4",
+                "evidence_version": "1.2.3",
+                "qualification_source_commit": prior["qualification_source_commit"],
+                "includes_bootstrap_exception": False,
+                "limitation": limitation,
+            },
+            limitations=prior["limitations"] + [limitation],
+        )
+        (root / "VERSION").write_text("1.2.5\n")
+        (root / "compatibility/catalog.json").write_text(json.dumps(current))
+        git("add", ".")
+        git("commit", "--quiet", "-m", "second carry")
+        self.assertEqual(compatibility.qualification_reuse(root, current)["evidence_version"],
+                         "1.2.3")
+        self.assertEqual(compatibility.evidence_version(current), "1.2.3")
+        self.assertIn("Native evidence for v1.2.3 was carried forward through v1.2.4",
+                      compatibility.qualification_disclosure(current))
+
+        current["qualification_reuse"]["evidence_version"] = "1.2.4"
+        current["qualification_reuse"]["limitation"] = compatibility.canonical_reuse_limitation(
+            "carry-forward", "1.2.5", "v1.2.4", "1.2.4", False)
+        with self.assertRaisesRegex(ValueError, "evidence version differs"):
+            compatibility.qualification_reuse(root, current)
+
+    def test_chained_disclosure_retains_the_bootstrap_exception(self):
+        root, prior, git = self.fixture("0.14.0", "0.14.1", "v0.14.1-bootstrap")
+        git("tag", "v0.14.1")
+        limitation = compatibility.canonical_reuse_limitation(
+            "carry-forward", "0.14.2", "v0.14.1", "0.14.0", True)
+        current = json.loads(json.dumps(prior))
+        current.update(
+            harness_version="0.14.2",
+            qualification_reuse={
+                "schema_version": 1,
+                "kind": "carry-forward",
+                "prior_version": "0.14.1",
+                "prior_tag": "v0.14.1",
+                "evidence_version": "0.14.0",
+                "qualification_source_commit": prior["qualification_source_commit"],
+                "includes_bootstrap_exception": True,
+                "limitation": limitation,
+            },
+            limitations=prior["limitations"] + [limitation],
+        )
+        (root / "VERSION").write_text("0.14.2\n")
+        (root / "compatibility/catalog.json").write_text(json.dumps(current))
+        git("add", ".")
+        git("commit", "--quiet", "-m", "carry bootstrap evidence")
+        compatibility.qualification_reuse(root, current)
+        self.assertIn("including the one-release v0.14.1 bootstrap exception",
+                      compatibility.qualification_disclosure(current))
+
+    def test_the_one_release_bootstrap_accepts_only_its_named_implementation_delta(self):
+        root, data, _ = self.fixture("0.14.0", "0.14.1", "v0.14.1-bootstrap")
+        self.assertEqual(compatibility.qualification_reuse(root, data)["kind"],
+                         "v0.14.1-bootstrap")
+
+        root, data, git = self.fixture("0.14.0", "0.14.1", "v0.14.1-bootstrap")
+        (root / "lib/harness_core/other.py").write_text("changed\n")
+        git("add", "lib/harness_core/other.py")
+        git("commit", "--quiet", "-m", "extra runtime change")
+        with self.assertRaisesRegex(ValueError, "ineligible path"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_non_patch_missing_tag_and_unavailable_ancestry_fail_closed(self):
+        root, data, git = self.fixture(current="1.3.0")
+        with self.assertRaisesRegex(ValueError, "later patch"):
+            compatibility.qualification_reuse(root, data)
+
+        root, data, git = self.fixture()
+        git("tag", "-d", data["qualification_reuse"]["prior_tag"])
+        git("branch", data["qualification_reuse"]["prior_tag"])
+        with self.assertRaisesRegex(ValueError, "release tag is unavailable"):
+            compatibility.qualification_reuse(root, data)
+
+        root, data, _ = self.fixture()
+        original_run = compatibility.subprocess.run
+
+        def unavailable_ancestry(command, **kwargs):
+            if "merge-base" in command:
+                return subprocess.CompletedProcess(command, 1)
+            return original_run(command, **kwargs)
+
+        with patch.object(compatibility.subprocess, "run", side_effect=unavailable_ancestry):
+            with self.assertRaisesRegex(ValueError, "prior release tag is not an ancestor"):
+                compatibility.qualification_reuse(root, data)
+
+    def test_major_downgrade_and_malformed_versions_are_refused(self):
+        for current, message in (("2.0.0", "later patch"), ("1.2.2", "later patch"),
+                                 ("01.2.4", "stable semantic version"),
+                                 ("not-a-version", "stable semantic version")):
+            with self.subTest(current=current):
+                root, data, _ = self.fixture(current=current)
+                with self.assertRaisesRegex(ValueError, message):
+                    compatibility.qualification_reuse(root, data)
+        root, data, _ = self.fixture()
+        data["qualification_reuse"]["prior_version"] = "bad"
+        with self.assertRaisesRegex(ValueError, "prior_version must be a stable semantic version"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_malformed_schema_kind_and_tag_are_refused(self):
+        for key, value, message in (
+            ("schema_version", 2, "schema_version 1"),
+            ("schema_version", True, "schema_version 1"),
+            ("kind", "waiver", "kind must be one of"),
+            ("prior_tag", "release-1.2.3", "prior_tag must match prior_version"),
+            ("evidence_version", "bad", "evidence_version must be a stable semantic version"),
+        ):
+            with self.subTest(key=key):
+                root, data, _ = self.fixture()
+                data["qualification_reuse"][key] = value
+                with self.assertRaisesRegex(ValueError, message):
+                    compatibility.qualification_reuse(root, data)
+
+        root, data, _ = self.fixture()
+        data["qualification_reuse"]["extra"] = "claim"
+        with self.assertRaisesRegex(ValueError, "unknown field: extra"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_semver_numeric_identifiers_may_not_have_leading_zeroes(self):
+        for key in ("prior_version", "evidence_version"):
+            with self.subTest(key=key):
+                root, data, _ = self.fixture()
+                data["qualification_reuse"][key] = "01.2.3"
+                with self.assertRaisesRegex(ValueError, key + " must be a stable semantic version"):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_limitation_is_canonical_for_its_kind_and_lists_are_well_formed(self):
+        root, data, _ = self.fixture()
+        data["qualification_reuse"]["limitation"] = "No rerun."
+        with self.assertRaisesRegex(ValueError, "canonical carry-forward disclosure"):
+            compatibility.qualification_reuse(root, data)
+        for limitations in ("not-a-list", [""], [1]):
+            with self.subTest(limitations=limitations):
+                root, data, _ = self.fixture()
+                data["limitations"] = limitations
+                with self.assertRaisesRegex(ValueError, "lists of nonempty strings"):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_prior_catalog_must_be_released_and_match_version_and_source(self):
+        for key, value, message in (
+            ("release_state", "candidate", "not the named released version"),
+            ("harness_version", "1.2.2", "not the named released version"),
+            ("qualification_source_commit", "f" * 40,
+             "qualification source differs from the prior release"),
+        ):
+            with self.subTest(key=key):
+                root, data, _ = self.fixture()
+                original = compatibility.git_output
+                prior = json.loads(original(root, "show", "v1.2.3:compatibility/catalog.json"))
+                prior[key] = value
+
+                def changed_output(repo, *args):
+                    if args[0] == "show" and args[1].endswith(":compatibility/catalog.json"):
+                        return json.dumps(prior)
+                    return original(repo, *args)
+
+                with patch.object(compatibility, "git_output", side_effect=changed_output), \
+                        self.assertRaisesRegex(ValueError, message):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_prior_tag_version_is_read_from_the_once_resolved_commit(self):
+        root, data, _ = self.fixture()
+        original = compatibility.git_output
+        seen = []
+
+        def changed_output(repo, *args):
+            seen.append(args)
+            if args[0] == "show" and args[1].endswith(":VERSION"):
+                return "1.2.2\n"
+            return original(repo, *args)
+
+        with patch.object(compatibility, "git_output", side_effect=changed_output), \
+                self.assertRaisesRegex(ValueError, "tag VERSION does not match"):
+            compatibility.qualification_reuse(root, data)
+        shown = [args[1].split(":", 1)[0] for args in seen if args[0] == "show"]
+        self.assertTrue(shown)
+        self.assertEqual(len(set(shown)), 1)
+        self.assertRegex(shown[0], r"^[0-9a-f]{40,64}$")
+
+    def test_carried_claim_equality_is_type_sensitive(self):
+        root, data, _ = self.fixture()
+        original = compatibility.git_output
+        prior = json.loads(original(root, "show", "v1.2.3:compatibility/catalog.json"))
+        prior["required_cases"] = [1]
+        data["required_cases"] = [True]
+
+        def changed_output(repo, *args):
+            if args[0] == "show" and args[1].endswith(":compatibility/catalog.json"):
+                return json.dumps(prior)
+            return original(repo, *args)
+
+        with patch.object(compatibility, "git_output", side_effect=changed_output), \
+                self.assertRaisesRegex(ValueError, "required cases differ"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_prior_catalog_must_be_a_json_object(self):
+        root, data, _ = self.fixture()
+        original = compatibility.git_output
+
+        def list_catalog(repo, *args):
+            if args[0] == "show" and args[1].endswith(":compatibility/catalog.json"):
+                return "[]"
+            return original(repo, *args)
+
+        with patch.object(compatibility, "git_output", side_effect=list_catalog), \
+                self.assertRaisesRegex(ValueError, "prior catalog must be an object"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_reuse_chain_depth_is_bounded_before_recursion(self):
+        root, data, _ = self.fixture()
+        with self.assertRaisesRegex(ValueError, "chain exceeds"):
+            compatibility.qualification_reuse(root, data, depth=compatibility.MAX_REUSE_DEPTH)
+
+    def test_bootstrap_exception_is_refused_for_every_other_version(self):
+        root, data, _ = self.fixture("0.14.1", "0.14.2", "v0.14.1-bootstrap")
+        with self.assertRaisesRegex(ValueError, "only to v0.14.1"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_every_runtime_source_category_but_version_blocks_general_reuse(self):
+        for path in ("bin/tool", "lib/other.py", "adapters/x/file", "primitives/x/file",
+                     "policy/x/file", "templates/x/file", "config.example.json"):
+            with self.subTest(path=path):
+                root, data, git = self.fixture()
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("changed\n")
+                git("add", path)
+                git("commit", "--quiet", "-m", "runtime change")
+                with self.assertRaisesRegex(ValueError, "ineligible path"):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_installer_workflow_and_other_executable_changes_are_ineligible(self):
+        for path in ("install.sh", ".github/workflows/release.yml", "scripts/unrelated.py"):
+            with self.subTest(path=path):
+                root, data, git = self.fixture()
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("changed\n")
+                git("add", path)
+                git("commit", "--quiet", "-m", "ineligible executable")
+                with self.assertRaisesRegex(ValueError, "ineligible path: " + re.escape(path)):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_changed_carried_claims_evidence_and_limitations_are_refused(self):
+        for label, mutate, message in (
+            ("client", lambda data: data["clients"][0].update(status="unqualified"),
+             "client and evidence claims differ"),
+            ("digest", lambda data: data["clients"][0]["evidence"][0].update(sha256="2" * 64),
+             "client and evidence claims differ"),
+            ("path", lambda data: data["clients"][0]["evidence"][0].update(path="different"),
+             "client and evidence claims differ"),
+            ("case", lambda data: data.update(required_cases=["different"]),
+             "required cases differ"),
+            ("limitation", lambda data: data.update(limitations=["rewritten"]),
+             "limitations differ"),
+        ):
+            with self.subTest(label=label):
+                root, data, _ = self.fixture()
+                mutate(data)
+                with self.assertRaisesRegex(ValueError, message):
+                    compatibility.qualification_reuse(root, data)
+
+    def test_unknown_and_changed_top_level_catalog_fields_are_refused(self):
+        root, data, _ = self.fixture()
+        data["future_claim"] = True
+        with self.assertRaisesRegex(ValueError, "unknown field: future_claim"):
+            compatibility.qualification_reuse(root, data)
+
+        root, data, _ = self.fixture()
+        data["schema_version"] = 2
+        with self.assertRaisesRegex(ValueError, "catalog field differs.*schema_version"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_missing_or_mismatched_reuse_metadata_is_refused(self):
+        for key in ("prior_version", "prior_tag", "evidence_version",
+                    "qualification_source_commit", "includes_bootstrap_exception", "limitation"):
+            with self.subTest(key=key):
+                root, data, _ = self.fixture()
+                data["qualification_reuse"].pop(key)
+                with self.assertRaisesRegex(ValueError, "requires " + key):
+                    compatibility.qualification_reuse(root, data)
+        root, data, _ = self.fixture()
+        data["qualification_reuse"]["qualification_source_commit"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "qualification source differs"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_an_ordinary_release_keeps_the_existing_evidence_behavior(self):
+        data = {"harness_version": "1.2.3"}
+        self.assertIsNone(compatibility.qualification_reuse(Path("."), data))
+        self.assertEqual(compatibility.evidence_version(data), "1.2.3")
+        self.assertEqual(compatibility.qualification_disclosure(data),
+                         "native evidence recorded for this release")
 
 
 class QualificationEvidenceTests(unittest.TestCase):
