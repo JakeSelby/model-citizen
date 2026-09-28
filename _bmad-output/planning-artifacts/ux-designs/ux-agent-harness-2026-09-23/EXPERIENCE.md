@@ -9,6 +9,8 @@ sources:
   - ../../prds/prd-agent-harness-2026-09-23/prd.md
 ---
 
+> Current delivery assignments: [Flow availability — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Foundation
 
 The harness has three operational surfaces:
@@ -202,3 +204,9 @@ Per-item failures are counted separately from empty results.
   (`DESIGN.md`).
 - Future graphical surfaces must keep keyboard and screen-reader access to every operational action and
   status.
+
+## Flow availability — 2026-09-28
+
+Independent Studio flows arrive in 0.16 after the Measured engines land; Superpowers/composition and judge journeys formerly marked 0.16 move to 0.17; field/Codex and stance-proposal flows formerly marked 0.17 move to 0.18. Four-arm/layer-swap Studio launch is #989 in 0.17; factorial launch is #1065 and proposals #996 in 0.18. No visual or interaction redesign occurs here. #1062 records the future reconciliation of sampling, evidence labels, comparisons and stale states with landed Measured behavior.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
