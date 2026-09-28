@@ -174,7 +174,8 @@ class StudioLifecycleAcceptanceTests(unittest.TestCase):
         def run_with(outputs, version="Google Chrome 140.0.0.0"):
             results = [subprocess.CompletedProcess([], 0, output, "") for output in outputs]
             results.append(subprocess.CompletedProcess([], 0, version + "\n", ""))
-            with patch.object(MODULE, "command", side_effect=results):
+            with patch.object(MODULE, "command", side_effect=results), \
+                    patch.object(MODULE, "supported_tuple", return_value={"stable_major": 153}):
                 return MODULE.browser_flow(REPO, os.sys.executable, "/fixture/chrome")
 
         with self.assertRaisesRegex(AssertionError, "discovered no complete suite"):
