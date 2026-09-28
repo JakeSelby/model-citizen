@@ -60,7 +60,9 @@ class MarketplaceManifestTests(unittest.TestCase):
         self.assertGreaterEqual(int(root.attrib["width"]), 128)
 
     def test_complex_command_argument_hints_are_quoted(self):
-        for command in (REPO / "claude" / "commands").glob("*.md"):
+        commands = list((REPO / "claude" / "commands").glob("*.md"))
+        commands += list((REPO / "primitives" / "workflows").glob("*.md"))
+        for command in commands:
             block = command.read_text(encoding="utf-8").split("---", 2)[1]
             hints = [line.split(":", 1)[1].strip() for line in block.splitlines()
                      if line.startswith("argument-hint:")]
