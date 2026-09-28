@@ -59,15 +59,27 @@ Read the [documentation](https://model-citizen.dev/) or report a problem in
 def _source_files(root):
     """Return the canonical source-to-bundle path mapping."""
     source_list = root / SOURCE_LIST
-    entries = [Path(line) for line in source_list.read_text(encoding="utf-8").splitlines()
-               if line.strip()]
+    lines = [line for line in source_list.read_text(encoding="utf-8").splitlines()
+             if line.strip()]
+    entries = [Path(line) for line in lines]
     if entries != sorted(set(entries), key=str):
         raise ValueError("directory plugin source list must be sorted and unique")
     files = {}
-    for relative in entries:
+    root_resolved = root.resolve()
+    for line, relative in zip(lines, entries):
+        if (relative.is_absolute() or ".." in relative.parts
+                or relative.as_posix() != line):
+            raise ValueError("directory plugin source is not a normalized relative path: %s" % line)
         source = root / relative
-        if source.is_symlink():
-            raise ValueError("canonical plugin source is a symlink: %s" % source)
+        cursor = root
+        for part in relative.parts:
+            cursor = cursor / part
+            if cursor.is_symlink():
+                raise ValueError("canonical plugin source crosses a symlink: %s" % cursor)
+        try:
+            source.resolve().relative_to(root_resolved)
+        except ValueError:
+            raise ValueError("canonical plugin source escapes repository: %s" % source)
         if not source.is_file():
             raise ValueError("canonical plugin source is not a regular file: %s" % source)
         files[relative] = source

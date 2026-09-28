@@ -40,6 +40,27 @@ class DirectoryPluginTests(unittest.TestCase):
         self.assertEqual(len(listed), 47)
         self.assertNotIn(Path("primitives/skills/not-submitted/SKILL.md"), listed)
 
+    def test_source_list_rejects_symlinked_ancestors(self):
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as outside:
+            root = Path(directory)
+            source_list = root / DIRECTORY_PLUGIN.SOURCE_LIST
+            source_list.parent.mkdir(parents=True)
+            source_list.write_text("linked/payload.md\n")
+            payload = Path(outside) / "payload.md"
+            payload.write_text("outside\n")
+            (root / "linked").symlink_to(Path(outside), target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "crosses a symlink"):
+                DIRECTORY_PLUGIN._source_files(root)
+
+    def test_source_list_rejects_traversal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_list = root / DIRECTORY_PLUGIN.SOURCE_LIST
+            source_list.parent.mkdir(parents=True)
+            source_list.write_text("../outside.md\n")
+            with self.assertRaisesRegex(ValueError, "normalized relative path"):
+                DIRECTORY_PLUGIN._source_files(root)
+
     def test_manifest_target_types_are_checked(self):
         bundle = REPO / DIRECTORY_PLUGIN.BUNDLE_RELATIVE
         manifest = json.loads(
