@@ -24,6 +24,8 @@
 .library-module-root { grid-column: 2; grid-row: 2; color: var(--studio-ink-secondary); font-size: var(--studio-text-sm); overflow-wrap: anywhere; }
 .library-module-state { grid-column: 3; grid-row: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--studio-space-2); }
 .library-module-body { padding: var(--studio-space-3) var(--studio-space-5) var(--studio-space-5); }
+.library-source-line { display: block; min-width: max-content; padding-inline: var(--studio-space-2); }
+.library-source-line.focused { background: var(--studio-warning-wash); box-shadow: inset var(--studio-focus-width) 0 var(--studio-primary); }
 @media (max-width: 48rem) {
   .library-module-summary { grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--studio-space-2); }
   .library-module-root { grid-column: 2; grid-row: 2; font-size: var(--studio-text-xs); }

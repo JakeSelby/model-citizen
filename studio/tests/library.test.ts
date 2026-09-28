@@ -5,8 +5,8 @@ import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
-import { filterLibrary, type LibraryModule } from "../src/library/model.ts";
-import { LibraryGroups } from "../src/library/LibraryPage.tsx";
+import { filterLibrary, repositoryRelativePath, type LibraryModule } from "../src/library/model.ts";
+import { LibraryGroups, sourceLineId } from "../src/library/LibraryPage.tsx";
 
 function moduleAt(index: number): LibraryModule {
   return {
@@ -61,4 +61,18 @@ test("shared ownership appears in the group and only exceptions appear on collap
   assert.equal((html.match(/class="library-module-root"/g) ?? []).length, 1);
   assert.match(html, /Root 1 \+ others/);
   assert.match(html, /class="library-module-root">Root 3/);
+});
+
+test("file-line links filter by source path, expand the module, and mark the exact line", () => {
+  const repository = "/checkout";
+  const module = { ...moduleAt(1), source: { path: `${repository}/rules/rule-1.md`, text: "first\nsecond\nthird" } };
+  const relative = "rules/rule-1.md";
+  assert.equal(repositoryRelativePath(repository, module.source.path), relative);
+  assert.deepEqual(filterLibrary([module], { ...({ query: relative, kind: "", root: "", state: "", cost: "" }) }), [module]);
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(LibraryGroups, {
+    modules: [module], focusedPath: relative, focusedLine: 2, repository,
+  })));
+  assert.match(html, /<details class="library-module"[^>]* open=""/);
+  assert.match(html, new RegExp(`id="${sourceLineId(module.key, 2)}"[^>]*tabindex="-1"`));
+  assert.match(html, /library-source-line focused/);
 });

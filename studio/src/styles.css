@@ -448,6 +448,28 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.experiment-launch,
+.run-console { background: var(--studio-surface-raised); }
+
+.experiment-launch .mantine-Code-root,
+.run-console .mantine-Code-root {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.run-log {
+  max-width: 100%;
+  border: var(--studio-border-width) solid var(--studio-border-default);
+  border-radius: var(--studio-radius-sm);
+  background: var(--studio-surface-canvas);
+}
+
+.run-log .mantine-Code-root {
+  min-height: 100%;
+  margin: 0;
+}
+
 @media (max-width: 64rem) {
   .header-inner {
     align-items: flex-start;

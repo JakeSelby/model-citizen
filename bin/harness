@@ -18,7 +18,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
-    citizen runs    start|list|show|cancel [OPTIONS] [--json]
+    citizen runs    catalog|start|list|show|cancel [OPTIONS] [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen draft create NAME [--base installed|TAG] [--json]
@@ -5827,7 +5827,9 @@ def cmd_runs(args: argparse.Namespace) -> int:
         supervisor = studio.runs.RunSupervisor(
             state_dir() / "studio", studio.runs.default_catalog_path(REPO))
         confirmation_pending = False
-        if args.runs_action == "start":
+        if args.runs_action == "catalog":
+            result = supervisor.catalog(REPO)
+        elif args.runs_action == "start":
             parameters = studio.runs.parse_parameters(args.param)
             preview = supervisor.spend_preview(
                 args.suite, parameters, args.target_kind, args.target_ref,
@@ -5858,6 +5860,9 @@ def cmd_runs(args: argparse.Namespace) -> int:
         return 2
     if args.json:
         print(json.dumps(result, sort_keys=True))
+    elif args.runs_action == "catalog" and not args.json:
+        for suite in result["suites"]:
+            say(suite["id"] + "  " + suite["label"] + "  " + suite["command"])
     elif isinstance(result, list):
         for record in result:
             say(record["run_id"] + "  " + record["status"] + "  " + record["suite_id"])
@@ -5975,6 +5980,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p = sub.add_parser("runs", help="launch and inspect suites from the allowlisted Studio catalog")
     runs_sub = p.add_subparsers(dest="runs_action", required=True)
+    catalog = runs_sub.add_parser("catalog", help="list free suites and discovered unit tests")
+    catalog.add_argument("--json", action="store_true")
+    catalog.set_defaults(func=cmd_runs)
     start = runs_sub.add_parser("start", help="start or queue one catalog suite")
     start.add_argument("suite")
     start.add_argument("--target-kind", required=True, choices=sorted(studio.runs.TARGET_KINDS))

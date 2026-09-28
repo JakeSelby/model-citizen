@@ -31,6 +31,13 @@ class StudioLibraryBrowserTests(unittest.TestCase):
         self.devtools.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"})
         self.devtools.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
         self._wait("!document.querySelector('.library-module').open", "Module did not collapse")
+        self.assertFalse(self.devtools.evaluate(
+            "document.querySelector('.library-module').dataset.sourcePath.startsWith('/')"))
+        self.devtools.evaluate("(() => { const sourcePath = document.querySelector('.library-module').dataset.sourcePath; location.hash = '#/library?path=' + encodeURIComponent(sourcePath) + '&line=1'; })()")
+        self._wait("document.querySelector('.library-source-line.focused') !== null",
+                   "Library file-line link did not focus its source")
+        self.assertTrue(self.devtools.evaluate("document.querySelector('.library-module').open"))
+        self.assertEqual(self.devtools.evaluate("document.activeElement.classList.contains('focused')"), True)
         self.devtools.call("Emulation.setDeviceMetricsOverride", {"width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True})
         self.devtools.evaluate("document.querySelector('.library-module-name').textContent = 'LongModuleName'.repeat(20)")
         self.assertTrue(self.devtools.evaluate("document.documentElement.scrollWidth <= innerWidth"))

@@ -16,9 +16,16 @@ export type LibraryModule = {
 
 export type LibraryPayload = {
   schema_version: number;
+  repository: string;
   modules: LibraryModule[];
   summary: { modules: number; collisions: number; roots: number; generated_ms: number };
 };
+
+export function repositoryRelativePath(repository: string, sourcePath: string): string {
+  if (!repository) return sourcePath;
+  const prefix = repository.endsWith("/") ? repository : `${repository}/`;
+  return sourcePath.startsWith(prefix) ? sourcePath.slice(prefix.length) : sourcePath;
+}
 
 export type LibraryFilters = {
   query: string;
@@ -31,7 +38,7 @@ export type LibraryFilters = {
 export function filterLibrary(modules: LibraryModule[], filters: LibraryFilters): LibraryModule[] {
   const query = filters.query.trim().toLocaleLowerCase();
   return modules.filter((module) => {
-    const haystack = `${module.name} ${module.kind} ${module.root.label}`.toLocaleLowerCase();
+    const haystack = `${module.name} ${module.kind} ${module.root.label} ${module.source.path}`.toLocaleLowerCase();
     const tokens = module.context_cost.tokens;
     const costMatches = filters.cost === ""
       || (filters.cost === "none" && tokens === 0)

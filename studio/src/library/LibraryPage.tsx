@@ -11,17 +11,27 @@ import {
   Title,
 } from "@mantine/core";
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { EvidenceState, StatusBadge } from "../components/StudioKit";
 import { loadLibrary } from "./api";
-import { filterLibrary, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
+import { filterLibrary, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
 import "./library.css";
 
 const EMPTY_FILTERS: LibraryFilters = { query: "", kind: "", root: "", state: "", cost: "" };
 
-function ModuleDetail({ module, sharedRoot }: { module: LibraryModule; sharedRoot: string }) {
+export function sourceLineId(moduleKey: string, line: number): string {
+  return `library-source-${encodeURIComponent(moduleKey)}-${line}`;
+}
+
+function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository }: {
+  module: LibraryModule; sharedRoot: string; focusedPath: string; focusedLine: number | null;
+  repository: string;
+}) {
+  const sourcePath = repositoryRelativePath(repository, module.source.path);
+  const focused = sourcePath === focusedPath && focusedLine !== null;
   return (
-    <details className="library-module">
+    <details className="library-module" data-source-path={sourcePath} open={focused || undefined}>
       <summary className="library-module-summary">
         <span className="library-module-name">{module.name}</span>
         {module.root.id !== sharedRoot && <span className="library-module-root">{module.root.label}</span>}
@@ -51,7 +61,12 @@ function ModuleDetail({ module, sharedRoot }: { module: LibraryModule; sharedRoo
           </div>
           <div>
             <Text fw={650} size="sm">Source · <Code>{module.source.path}</Code></Text>
-            <Code block className="library-code">{module.source.text}</Code>
+            <Code block className="library-code">{focused ? module.source.text.split("\n").map((line, index) => {
+              const lineNumber = index + 1;
+              return <span className={lineNumber === focusedLine ? "library-source-line focused" : "library-source-line"}
+                id={sourceLineId(module.key, lineNumber)} key={lineNumber}
+                tabIndex={lineNumber === focusedLine ? -1 : undefined}>{line || " "}{"\n"}</span>;
+            }) : module.source.text}</Code>
           </div>
           <div>
             <Text fw={650} size="sm">Rendered view</Text>
@@ -62,7 +77,9 @@ function ModuleDetail({ module, sharedRoot }: { module: LibraryModule; sharedRoo
   );
 }
 
-export function LibraryGroups({ modules }: { modules: LibraryModule[] }) {
+export function LibraryGroups({ modules, focusedPath = "", focusedLine = null, repository = "" }: {
+  modules: LibraryModule[]; focusedPath?: string; focusedLine?: number | null; repository?: string;
+}) {
   const kinds = [...new Set(modules.map((module) => module.kind))].sort();
   return <Stack gap="lg">{kinds.map((kind) => {
     const items = modules.filter((module) => module.kind === kind);
@@ -76,12 +93,17 @@ export function LibraryGroups({ modules }: { modules: LibraryModule[] }) {
         <Group gap="xs"><Title order={2}>{kind}</Title><Text c="dimmed" size="sm">{ownership.label}{roots.size > 1 ? " + others" : ""}</Text></Group>
         <Badge variant="light">{items.length}</Badge>
       </Group>
-      {items.map((module) => <ModuleDetail key={module.key} module={module} sharedRoot={sharedRoot} />)}
+      {items.map((module) => <ModuleDetail focusedLine={focusedLine} focusedPath={focusedPath}
+        key={module.key} module={module} repository={repository} sharedRoot={sharedRoot} />)}
     </Paper>;
   })}</Stack>;
 }
 
 export function LibraryPage() {
+  const [searchParams] = useSearchParams();
+  const focusedPath = searchParams.get("path") ?? "";
+  const requestedLine = Number(searchParams.get("line"));
+  const focusedLine = Number.isSafeInteger(requestedLine) && requestedLine > 0 ? requestedLine : null;
   const [payload, setPayload] = useState<LibraryPayload | null>(null);
   const [error, setError] = useState("");
   const [filters, setFilters] = useState<LibraryFilters>(EMPTY_FILTERS);
@@ -92,6 +114,20 @@ export function LibraryPage() {
       .catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : "Library unavailable."); });
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!focusedPath) return;
+    setFilters((current) => ({ ...current, query: focusedPath }));
+  }, [focusedPath]);
+
+  useEffect(() => {
+    if (!payload || !focusedPath || focusedLine === null) return;
+    const module = payload.modules.find((item) =>
+      repositoryRelativePath(payload.repository, item.source.path) === focusedPath);
+    const line = module ? document.getElementById(sourceLineId(module.key, focusedLine)) : null;
+    line?.focus({ preventScroll: true });
+    line?.scrollIntoView({ block: "center" });
+  }, [payload, focusedPath, focusedLine]);
 
   const filtered = useMemo(
     () => filterLibrary(payload?.modules ?? [], filters),
@@ -127,9 +163,13 @@ export function LibraryPage() {
       {error ? <EvidenceState kind="error" title="Library unavailable">{error}</EvidenceState> : null}
       {!payload && !error ? <EvidenceState kind="loading" title="Loading module library">Reading the local harness inventory.</EvidenceState> : null}
       {payload && !filtered.length ? <EvidenceState kind="empty" title="No modules match">Clear a filter to widen the result.</EvidenceState> : null}
+      {payload && focusedPath && filtered.length > 0 ? <Text aria-live="polite" size="sm">
+        Opened <Code>{focusedPath}</Code>{focusedLine === null ? "" : ` at line ${focusedLine}`}.
+      </Text> : null}
       <Stack gap="md" aria-live="polite">
         {payload ? <Text c="dimmed" size="sm">Showing {filtered.length} of {payload.summary.modules} modules</Text> : null}
-        <LibraryGroups modules={filtered} />
+        <LibraryGroups focusedLine={focusedLine} focusedPath={focusedPath} modules={filtered}
+          repository={payload?.repository ?? ""} />
       </Stack>
     </Stack>
   );

@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store
-from . import run_store, spend_guard
+from . import free_suites, run_store, spend_guard
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -430,15 +430,21 @@ class RunSupervisor:
             raise RunError(str(exc)) from exc
 
     def __del__(self):
+        self.close()
+
+    def close(self) -> None:
+        """Release the supervisor's retained descriptors and index connection."""
         history = getattr(self, "history", None)
         if history is not None:
             with contextlib.suppress(Exception):
                 history.close()
+            self.history = None
         for name in ("_confirmations_fd", "_runs_fd", "_state_fd"):
             descriptor = getattr(self, name, None)
             if descriptor is not None:
                 with contextlib.suppress(OSError):
                     os.close(descriptor)
+                setattr(self, name, None)
 
     @contextlib.contextmanager
     def lock(self):
@@ -696,6 +702,11 @@ class RunSupervisor:
         target = record.get("target", {})
         public["target"] = {"kind": target.get("kind"), "reference_set": bool(target.get("ref"))}
         public["command"] = {"argument_count": len(record.get("argv", []))}
+        if record.get("suite_id") in free_suites.FREE_SUITE_IDS:
+            public["exact_command"] = free_suites.start_command(
+                str(record["suite_id"]), record.get("parameters", {}),
+                str(record.get("target", {}).get("kind")),
+                str(record.get("target", {}).get("ref")))
         parameters = record.get("parameters", {})
         public["parameters"] = {"count": len(parameters), "names": sorted(parameters)}
         return public
@@ -993,7 +1004,12 @@ class RunSupervisor:
         catalog = SuiteCatalog.load(self.catalog_path)
         suite = catalog.get(suite_id)
         argv = suite.render(parameters, target_kind, target_ref)
-        cases = list(suite.cases or (suite.suite_id,))
+        try:
+            discovered = free_suites.resolve_case_identities(
+                suite.suite_id, parameters, target_kind, target_ref)
+        except free_suites.FreeSuiteError as exc:
+            raise RunError(str(exc)) from exc
+        cases = list(discovered or suite.cases or (suite.suite_id,))
         if (suite.cost_class != "spends_usage"
                 and (confirmed is not None or max_budget_usd is not None
                      or spend_cap_usd is not None or pricing_source is not None)):
@@ -1031,7 +1047,8 @@ class RunSupervisor:
                 "cost_class": suite.cost_class,
                 "expected_duration_seconds": suite.expected_duration_seconds,
                 "timeout_seconds": suite.timeout_seconds,
-                "case_identities": cases if spend_plan else None,
+                "case_identities": (cases if spend_plan
+                                    or suite.suite_id in free_suites.FREE_SUITE_IDS else None),
                 "spend_estimate": spend_plan["estimate"] if spend_plan else None,
                 "spend_cap": spend_plan["caps"] if spend_plan else None,
                 "pricing_identity": spend_plan["pricing"] if spend_plan else None,
@@ -1064,6 +1081,14 @@ class RunSupervisor:
             token = self._issue_confirmation_locked(spend_guard.confirmation_digest(request))
             return dict(preview, confirmation_token=token, cost_class=suite.cost_class,
                         case_identities=cases)
+
+    def catalog(self, repository: Path) -> Dict[str, Any]:
+        """Describe the free catalog from the same definitions used for launch."""
+        catalog = SuiteCatalog.load(self.catalog_path)
+        try:
+            return free_suites.catalog_payload(catalog, repository)
+        except free_suites.FreeSuiteError as exc:
+            raise RunError(str(exc)) from exc
 
     def list(self) -> List[Dict[str, Any]]:
         self.reconcile_and_drain()

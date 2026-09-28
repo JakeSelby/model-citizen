@@ -19,6 +19,7 @@ import { ConfigurePage } from "./configure/ConfigurePage";
 import { StatusBadge, ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
+import { ExperimentsPage } from "./experiments/ExperimentsPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 
@@ -44,7 +45,6 @@ function FoundationPage({ title, description }: { title: string; description: st
 
 const pages = {
   configure: "Inspect the effective selection and make changes inside a named draft.",
-  experiments: "Choose an allowlisted suite, a target, and a bounded run.",
   reports: "Trace health, performance, efficacy, and usage back to immutable evidence.",
   activity: "Review what the harness decided and changed without rewriting its history.",
 } as const;
@@ -126,6 +126,7 @@ function StudioFrame() {
           <Route path="/" element={<OverviewPage />} />
           <Route path="/configure" element={<ConfigurePage />} />
           <Route path="/library" element={<LibraryPage />} />
+          <Route path="/experiments" element={<ExperimentsPage />} />
           {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route
               element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}

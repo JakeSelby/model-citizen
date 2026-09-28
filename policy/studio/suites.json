@@ -1,4 +1,63 @@
 {
   "schema_version": 1,
-  "suites": []
+  "suites": [
+    {
+      "id": "unit-tests",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.free_suites", "unit-tests", "--root", "{param:root}", "--case", "{param:case}"],
+      "parameters": {
+        "root": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096},
+        "case": {"kind": "pattern", "pattern": "^(all|[A-Za-z0-9_.]+)$", "max_length": 512, "default": "all"}
+      },
+      "cost_class": "free",
+      "expected_duration_seconds": 300,
+      "timeout_seconds": 1800,
+      "targets": ["installed"],
+      "cases": []
+    },
+    {
+      "id": "lint",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.free_suites", "lint", "--root", "{param:root}"],
+      "parameters": {"root": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096}},
+      "cost_class": "free",
+      "expected_duration_seconds": 5,
+      "timeout_seconds": 120,
+      "targets": ["installed"],
+      "cases": ["lint"]
+    },
+    {
+      "id": "static-context",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.free_suites", "static-context", "--root", "{param:root}"],
+      "parameters": {"root": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096}},
+      "cost_class": "free",
+      "expected_duration_seconds": 5,
+      "timeout_seconds": 120,
+      "targets": ["installed"],
+      "cases": ["static-context"]
+    },
+    {
+      "id": "detector-corpus",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.free_suites", "detector-corpus", "--root", "{param:root}"],
+      "parameters": {"root": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096}},
+      "cost_class": "free",
+      "expected_duration_seconds": 15,
+      "timeout_seconds": 180,
+      "targets": ["installed"],
+      "cases": ["detector-corpus"]
+    },
+    {
+      "id": "lifecycle-acceptance",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.free_suites", "lifecycle-acceptance", "--root", "{param:root}"],
+      "parameters": {"root": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096}},
+      "cost_class": "free",
+      "expected_duration_seconds": 30,
+      "timeout_seconds": 600,
+      "targets": ["installed"],
+      "cases": ["lifecycle-acceptance"]
+    }
+  ]
 }

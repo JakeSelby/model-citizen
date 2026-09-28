@@ -11,8 +11,10 @@ import secrets
 import signal
 import sys
 import threading
+import time
 import urllib.parse
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,7 +23,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import auth, module_library, selection, settings
+from . import auth, free_suites, module_library, runs, selection, settings
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -39,6 +41,8 @@ STATIC_ASSET_ROUTES = {
     "css": "/assets/{content-hash}.css",
     "js": "/assets/{content-hash}.js",
 }
+RUN_PROGRESS_MAX_ENTRIES = 128
+RUN_PROGRESS_TERMINAL_TTL_SECONDS = 300
 
 
 def _process_identity() -> Optional[str]:
@@ -74,13 +78,32 @@ class ResponseSchema:
             if not isinstance(payload, bytes) or not payload.lstrip().lower().startswith(b"<!doctype html"):
                 raise ValueError("route response is not an HTML document")
             return
-        if self.kind == "binary":
+        if self.kind in ("binary", "sse-stream"):
             if not isinstance(payload, bytes):
                 raise ValueError("route response is not binary")
+            if self.kind == "sse-stream" and payload and not payload.startswith(b"event: run\n"):
+                raise ValueError("route response is not an SSE run event")
             return
         if self.kind == "redirect":
             if payload is not None:
                 raise ValueError("redirect route emitted a body")
+            return
+        if self.kind == "run-record":
+            required = {
+                "schema_version", "run_id", "suite_id", "suite_version", "target",
+                "cost_class", "expected_duration_seconds", "timeout_seconds", "status",
+                "queue_sequence", "created_at", "case_identities", "spend_estimate",
+                "spend_cap", "pricing_identity", "canonical_run_digest", "command",
+                "exact_command", "parameters",
+            }
+            optional = {
+                "runner_pid", "runner_identity", "command_pid", "command_identity",
+                "started_at", "completed_at", "reason", "returncode", "capacity_reserved",
+                "spend_actual", "spend_stop_reason", "case_results", "usage_ledger_state",
+            }
+            if (not isinstance(payload, dict) or required - set(payload)
+                    or set(payload) - required - optional):
+                raise ValueError("route response is not a public run record")
             return
         if self.kind != "json-object" or not isinstance(payload, dict):
             raise ValueError("route response does not match its schema kind")
@@ -165,14 +188,25 @@ class Server(ThreadingHTTPServer):
             self.host = "%s.localhost:%d" % (secrets.token_hex(16), self.server_address[1])
             self.sessions = auth.Sessions(self.host)
             self.mutations = MutationExecutor()
+            self.run_supervisor = self.mutations.call(lambda: runs.RunSupervisor(
+                self.store.path, runs.default_catalog_path(self.repo_root)))
+            self.run_progress = OrderedDict()
         except BaseException:
+            mutations = getattr(self, "mutations", None)
+            if mutations is not None:
+                mutations.close()
             super().server_close()
             raise
 
     def server_close(self):
+        run_supervisor = getattr(self, "run_supervisor", None)
+        if run_supervisor is not None:
+            self.mutations.call(run_supervisor.close)
+            self.run_supervisor = None
         mutations = getattr(self, "mutations", None)
         if mutations is not None:
             mutations.close()
+            self.mutations = None
         static_files = getattr(self, "static_files", None)
         if static_files is not None:
             static_files.close()
@@ -440,8 +474,188 @@ def _selection_read(handler: Handler, route: Route) -> None:
 
 def _library(handler: Handler, route: Route) -> None:
     payload = module_library.inventory(handler.server.repo_root)
+    payload["repository"] = str(handler.server.repo_root.resolve())
     route.response_schema.validate(payload)
     handler._json(200, payload)
+
+
+def _runs_catalog(handler: Handler, route: Route) -> None:
+    try:
+        payload = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.catalog(handler.server.repo_root))
+    except runs.RunError:
+        handler._error(503, "run_catalog_unavailable")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _free_run(supervisor: runs.RunSupervisor, run_id: str) -> Dict[str, object]:
+    record = supervisor.show(run_id)
+    if record.get("suite_id") not in free_suites.FREE_SUITE_IDS:
+        raise runs.RunError("run is not a free local suite")
+    return record
+
+
+def _library_source_paths(server: Server):
+    payload = module_library.inventory(server.repo_root)
+    return frozenset(Path(item["source"]["path"]).resolve() for item in payload["modules"])
+
+
+def _prune_run_progress(server: Server, now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else now
+    expired = [run_id for run_id, saved in server.run_progress.items()
+               if saved["terminal"]
+               and current - saved["touched"] >= RUN_PROGRESS_TERMINAL_TTL_SECONDS]
+    for run_id in expired:
+        server.run_progress.pop(run_id, None)
+    while len(server.run_progress) > RUN_PROGRESS_MAX_ENTRIES:
+        server.run_progress.popitem(last=False)
+
+
+def _save_run_progress(server: Server, run_id: str, saved: Dict[str, object],
+                       terminal: bool, now: Optional[float] = None) -> None:
+    current = time.monotonic() if now is None else now
+    saved["touched"] = current
+    saved["terminal"] = terminal
+    server.run_progress[run_id] = saved
+    server.run_progress.move_to_end(run_id)
+    _prune_run_progress(server, current)
+
+
+def _link_lint_findings(server: Server, progress: Dict[str, object]) -> None:
+    sources = _library_source_paths(server)
+    for finding in progress["lint_findings"]:
+        candidate = (server.repo_root / finding["path"]).resolve()
+        if candidate not in sources:
+            finding["library_href"] = None
+            continue
+        finding["library_href"] = "/library?path=%s&line=%d" % (
+            urllib.parse.quote(finding["path"], safe="/"), finding["line"])
+
+
+def _run_start(handler: Handler, route: Route) -> None:
+    request = _required_request(
+        handler, ("suite_id", "parameters", "target_kind", "target_ref"))
+    if request is None:
+        return
+    if (not isinstance(request["suite_id"], str)
+            or not isinstance(request["parameters"], dict)
+            or any(not isinstance(name, str) or not isinstance(value, str)
+                   for name, value in request["parameters"].items())
+            or not isinstance(request["target_kind"], str)
+            or not isinstance(request["target_ref"], str)):
+        handler._error(400, "invalid_request")
+        return
+    if (request["suite_id"] not in free_suites.FREE_SUITE_IDS
+            or request["target_kind"] != "installed"
+            or request["target_ref"] != str(handler.server.repo_root.resolve())
+            or request["parameters"].get("root") != str(handler.server.repo_root.resolve())):
+        handler._error(400, "invalid_run")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: handler.server.run_supervisor.start(
+            request["suite_id"], request["parameters"], request["target_kind"],
+            request["target_ref"]))
+    except runs.RunError:
+        handler._error(400, "invalid_run")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_show(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id",))
+    if request is None:
+        return
+    if not isinstance(request["run_id"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: _free_run(handler.server.run_supervisor, request["run_id"]))
+    except runs.RunError:
+        handler._error(404, "run_not_found")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_cancel(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id",))
+    if request is None:
+        return
+    if not isinstance(request["run_id"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        def cancel_free():
+            _free_run(handler.server.run_supervisor, request["run_id"])
+            return handler.server.run_supervisor.cancel(request["run_id"])
+        payload = handler.server.mutations.call(cancel_free)
+    except runs.RunError:
+        handler._error(404, "run_not_found")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_stream(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id", "stdout_cursor", "stderr_cursor"))
+    if request is None:
+        return
+    if (not isinstance(request["run_id"], str)
+            or any(not isinstance(request[name], int) or isinstance(request[name], bool)
+                   or request[name] < 0 for name in ("stdout_cursor", "stderr_cursor"))):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        def snapshot():
+            record = _free_run(handler.server.run_supervisor, request["run_id"])
+            stdout = handler.server.run_supervisor.read_output(
+                request["run_id"], "stdout", request["stdout_cursor"])
+            stderr = handler.server.run_supervisor.read_output(
+                request["run_id"], "stderr", request["stderr_cursor"])
+            unit_state = None
+            if record.get("suite_id") == "unit-tests":
+                saved = handler.server.run_progress.get(request["run_id"])
+                if saved is None or saved["cursor"] != request["stderr_cursor"]:
+                    parser = free_suites.UnitOutputState()
+                    replay_cursor = 0
+                    while replay_cursor < request["stderr_cursor"]:
+                        prior = handler.server.run_supervisor.read_output(
+                            request["run_id"], "stderr", replay_cursor,
+                            min(runs.MAX_OUTPUT_CHUNK,
+                                request["stderr_cursor"] - replay_cursor))
+                        if prior["next_cursor"] <= replay_cursor:
+                            raise runs.RunError("output cursor could not be replayed")
+                        parser.feed(prior["chunk"])
+                        replay_cursor = prior["next_cursor"]
+                    if replay_cursor != request["stderr_cursor"]:
+                        raise runs.RunError("output cursor could not be replayed")
+                    saved = {"cursor": replay_cursor, "parser": parser}
+                unit_state = saved["parser"]
+                saved["cursor"] = stderr["next_cursor"]
+                _save_run_progress(handler.server, request["run_id"], saved,
+                                   record.get("status") in runs.TERMINAL)
+            progress = free_suites.progress_payload(
+                record, stdout["chunk"], stderr["chunk"], unit_state, stderr["eof"])
+            if (record.get("suite_id") == "unit-tests" and stdout["eof"] and stderr["eof"]):
+                handler.server.run_progress.pop(request["run_id"], None)
+            if record.get("suite_id") == "lint" and progress["lint_findings"]:
+                _link_lint_findings(handler.server, progress)
+            return record, stdout, stderr, progress
+        record, stdout, stderr, progress = handler.server.mutations.call(snapshot)
+    except runs.RunError:
+        handler._error(404, "run_not_found")
+        return
+    stdout["cursor"] = stdout.pop("next_cursor")
+    stderr["cursor"] = stderr.pop("next_cursor")
+    payload = {"run": record, "stdout": stdout, "stderr": stderr, "progress": progress}
+    body = ("event: run\ndata: "
+            + json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n\n").encode()
+    route.response_schema.validate(body)
+    handler._send(200, body, route.media_type)
 
 
 def _ui_preferences_read(handler: Handler, route: Route) -> None:
@@ -560,7 +774,14 @@ CONFIGURE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error
 CONFIGURE_SAVE = ResponseSchema("json-object", CONFIGURE_PREVIEW.fields +
                                 (("saved", "boolean"), ("result", "object-or-null")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
+                                          ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
+RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
+                                              ("target", "object"), ("suites", "array"),
+                                              ("unit_tests", "object"),
+                                              ("commands", "object")))
+RUN_RECORD = ResponseSchema("run-record")
+RUN_STREAM = ResponseSchema("sse-stream")
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -596,6 +817,16 @@ ROUTES = RouteRegistry((
           _configure_save, None, "application/json", settings.CLI_COMMANDS["save"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
+    Route("GET", "/api/runs/catalog", "application/json", RUN_CATALOG,
+          _runs_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
+    Route("POST", "/api/runs/start", "application/json", RUN_RECORD,
+          _run_start, None, "application/json", ("citizen", "runs", "start")),
+    Route("POST", "/api/runs/show", "application/json", RUN_RECORD,
+          _run_show, None, "application/json", ("citizen", "runs", "show")),
+    Route("POST", "/api/runs/cancel", "application/json", RUN_RECORD,
+          _run_cancel, None, "application/json", ("citizen", "runs", "cancel")),
+    Route("POST", "/api/runs/stream", "text/event-stream; charset=utf-8", RUN_STREAM,
+          _run_stream, "sse", "application/json"),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

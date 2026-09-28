@@ -132,6 +132,7 @@ class ModuleLibraryTests(unittest.TestCase):
                    "summary": {"modules": 0, "collisions": 0, "roots": 1, "generated_ms": 0}}
         with mock.patch.object(module_library, "inventory", return_value=payload):
             server._library(handler, route)
+        self.assertEqual(payload["repository"], str(ROOT.resolve()))
         handler._json.assert_called_once_with(200, payload)
 
 
