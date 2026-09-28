@@ -8,6 +8,24 @@
 [![Reference](https://img.shields.io/badge/reference-model--citizen.dev-d97706.svg)](https://model-citizen.dev)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/JakeSelby/model-citizen?utm_source=oss&utm_medium=github&utm_campaign=JakeSelby%2Fmodel-citizen&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
 
+[Privacy](docs/privacy.md)
+
+### Data and external services in the Claude Directory plugin
+
+The plugin does not contact a Model Citizen-operated service. Some workflows can contact other
+services when you ask Claude Code to perform the corresponding work:
+
+- `git` and `gh` can send repository content and metadata, issue or pull-request text, and related
+  account information to GitHub or the remote you configured.
+- Web-capable roles can send URLs and search queries through Claude Code's WebFetch and WebSearch
+  tools to retrieve public web content.
+- A workflow can use another tool or service you explicitly choose for the task.
+
+These actions are user-directed, remain subject to Claude Code's native permissions, and are
+governed by the selected service's terms and privacy policy. The plugin has no background data
+transmission. See the [privacy policy](docs/privacy.md) for the boundary between this plugin and
+the separately installed harness.
+
 ## The control plane for your coding agents, however you run them.
 
 ![Terminal output of `bin/citizen sync --dry-run` on a fresh home: the resolved personal stances, then every link, rendered file and setting the sync would create for Claude Code and Codex, ending in "sync complete". Nothing is written.](docs/assets/sync-dry-run.svg)
@@ -182,11 +200,11 @@ trust if prompted. [Start with the full guide](docs/getting-started.md).
 
 ## Release status
 
-**Release status:** `0.14.0` is the current stable release. Its shared engine, adapters,
+**Release status:** `0.14.2` is the current stable release. Its shared engine, adapters,
 configuration and hook decisions are qualified from complete scripted records on the two
 required Claude Code CLI targets, macOS and Linux. The independent hand comparisons tracked by
 #741 were explicitly deferred to v0.15.0 and remain a stated limitation. The Codex CLI is outside
-the 0.14.0 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
+the 0.14.2 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
 qualified on the Codex CLI for macOS and Linux, so if you need a qualified Codex floor, install
 that tag.
 

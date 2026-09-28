@@ -6,6 +6,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-09-28
+
+### Added
+
+- Added a privacy policy for the Claude Directory plugin and linked it from the manifest and README. (#1052)
+
+### Changed
+
+- Qualified the v0.14.2 release from frozen source
+  `040462636205d8edc766775ebe2cc9571ac6b217` on Claude Code 2.1.283 for macOS and Linux.
+
+- Documented the external services that Claude Directory workflows may contact when users request them. (#1054)
+
+### Fixed
+
+- Package the Claude Directory distribution from a minimal regular-file bundle so repository history,
+  planning artifacts, installer code and symlinks no longer trigger unrelated directory review holds. (#1056)
+
+## [0.14.1] — 2026-09-28
+
+### Changed
+
+- Documentation-only patch releases can now carry unchanged native evidence from an immutable prior
+  release. The validator pins immutable tag commits, preserves evidence provenance across chained
+  patches and fails closed on unknown or changed claims, evidence, limitations, ancestry or any
+  ineligible release path, with a one-release v0.14.1 exception for the reviewed validator and
+  release-reporting files. (#1036)
+
+- Living documentation now uses Model Citizen, canonical repository links and `citizen` commands
+  while preserving compatibility identifiers and dated history. (#1040)
+
+### Fixed
+
+- Recognize model-written framework briefs that refer back to a declared prompt file with a qualified instruction phrase, so the spawn stays confined to its routed review role. (#739)
+
+- Made Model Citizen discoverable by registries that require standard YAML and readable plugin component files. (#1037)
+
 ## [0.14.0] — 2026-09-27
 
 ### Added

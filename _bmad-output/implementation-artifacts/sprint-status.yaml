@@ -472,6 +472,7 @@ development_status:
   ah-b116-git-c-with-or-a-variable-resolves-a-push-to-an: backlog
   ah-b120-directed-bmad-prompt-paths-can-evade-spawn: done
   ah-b121-fix-skills-sh-discovery-for-five-invalid-skill: ready-for-dev
+  ah-b122-package-a-minimal-claude-directory-bundle-for-v0: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -522,6 +523,12 @@ development_status:
   ah-c085-move-repository-internal-agent-instructions-into: done
   ah-c086-open-the-0-14-0-candidate: done
   ah-c087-reopen-qualification-state-after-v0-14-0: ready-for-dev
+  ah-c088-publish-v0-14-1-from-the-qualified-model-citizen: ready-for-dev
+  ah-c089-restore-v0-14-1-qualification-ancestry-before: ready-for-dev
+  ah-c090-reopen-qualification-state-after-v0-14-1: ready-for-dev
+  ah-c091-add-an-explicit-privacy-policy-for-directory: ready-for-dev
+  ah-c092-disclose-external-services-used-by-directory: ready-for-dev
+  ah-c093-publish-v0-14-2-with-the-claude-directory-bundle: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
