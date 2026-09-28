@@ -58,6 +58,27 @@
       "timeout_seconds": 600,
       "targets": ["installed"],
       "cases": ["lifecycle-acceptance"]
+    },
+    {
+      "id": "native-acceptance",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.native_runner", "--root", ".", "--source-commit", "{param:source_commit}", "--client", "{param:client}", "--cases", "{param:cases}", "--model", "{param:model}", "--progress-id", "{param:progress_id}", "--progress", "{param:progress}", "--out", "{param:out}", "--retry-source", "{param:retry_source}", "--retry-case", "{param:retry_case}"],
+      "parameters": {
+        "source_commit": {"kind": "pattern", "pattern": "^(?:[0-9a-f]{40}|resolve-at-launch)$", "max_length": 40},
+        "client": {"kind": "pattern", "pattern": "^[a-z0-9-]{1,64}$", "max_length": 64},
+        "cases": {"kind": "pattern", "pattern": "^[a-z0-9-]+(?:,[a-z0-9-]+)*$", "max_length": 4096},
+        "model": {"kind": "pattern", "pattern": "^[A-Za-z0-9._:/+-]{1,200}$", "max_length": 200},
+        "progress_id": {"kind": "pattern", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$", "max_length": 64},
+        "progress": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096},
+        "out": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096},
+        "retry_source": {"kind": "pattern", "pattern": "^(?:fresh|[a-z0-9][a-z0-9-]{0,63})$", "max_length": 64},
+        "retry_case": {"kind": "pattern", "pattern": "^(?:fresh|[a-z0-9-]{1,64})$", "max_length": 64}
+      },
+      "cost_class": "spends_usage",
+      "expected_duration_seconds": 900,
+      "timeout_seconds": 7200,
+      "targets": ["installed", "release", "branch", "worktree", "draft"],
+      "cases": ["native-acceptance"]
     }
   ]
 }

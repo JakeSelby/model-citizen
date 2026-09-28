@@ -23,7 +23,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import auth, free_suites, module_library, runs, selection, settings
+from . import auth, free_suites, module_library, native_acceptance, runs, selection, settings, targets
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -188,9 +188,10 @@ class Server(ThreadingHTTPServer):
             self.host = "%s.localhost:%d" % (secrets.token_hex(16), self.server_address[1])
             self.sessions = auth.Sessions(self.host)
             self.mutations = MutationExecutor()
+            self.target_service = targets.TargetService(self.repo_root)
             self.run_supervisor = self.mutations.call(lambda: runs.RunSupervisor(
                 self.store.path, runs.default_catalog_path(self.repo_root),
-                repository=self.repo_root))
+                target_service=self.target_service))
             self.run_progress = OrderedDict()
         except BaseException:
             mutations = getattr(self, "mutations", None)
@@ -491,6 +492,149 @@ def _runs_catalog(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _native_adapter(handler: Handler) -> native_acceptance.NativeRunAdapter:
+    return native_acceptance.NativeRunAdapter(
+        handler.server.repo_root, handler.server.store.path,
+        native_acceptance.SupervisorAdmission(
+            handler.server.run_supervisor, handler.server.target_service,
+            handler.server.store.path / "native-evidence"))
+
+
+def _native_catalog(handler: Handler, route: Route) -> None:
+    try:
+        payload = native_acceptance.catalog(handler.server.repo_root)
+        platform = "macos" if sys.platform == "darwin" else sys.platform
+        available = [item for item in payload["clients"]
+                     if item["spend_cap_supported"] and item["platform"] == platform]
+        if not available:
+            available = [item for item in payload["clients"] if item["spend_cap_supported"]]
+        if not available:
+            raise native_acceptance.NativeAcceptanceError(
+                "native acceptance has no client with an enforceable spend cap")
+        initial = native_acceptance.Selection(
+            available[0]["id"], tuple(item["id"] for item in payload["cases"][:3]),
+            payload["default_model"], "", uuid.uuid4().hex, "installed", "current")
+        payload = dict(payload,
+                       target={"kind": "installed", "ref": "current",
+                               "source_commit": None},
+                       initial=initial.public())
+    except native_acceptance.NativeAcceptanceError:
+        handler._error(503, "native_acceptance_unavailable")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _native_request(handler: Handler, names: Iterable[str]):
+    request = _required_request(handler, names)
+    if request is None:
+        return None
+    if not isinstance(request.get("selection"), dict):
+        handler._error(400, "invalid_request")
+        return None
+    return request
+
+
+def _native_progress(handler: Handler, route: Route) -> None:
+    request = _native_request(handler, ("selection",))
+    if request is None:
+        return
+    try:
+        selected = native_acceptance.Selection.parse(
+            handler.server.repo_root, request["selection"])
+        if not selected.source_commit:
+            raise native_acceptance.NativeAcceptanceError(
+                "native progress requires a resolved target commit")
+        identity = handler.server.mutations.call(
+            lambda: _native_adapter(handler).admission.progress(selected.progress_id))
+        if (identity["source_commit"] != selected.source_commit
+                or identity["kind"] != selected.target_kind
+                or identity["ref"] != selected.target_ref):
+            raise native_acceptance.NativeAcceptanceError("native target identity changed")
+        selected = native_acceptance.Selection.parse(
+            Path(identity["root"]), request["selection"])
+        run_status = identity["status"]
+        path = native_acceptance.progress_path(
+            handler.server.store.path / "native-evidence", selected.progress_id)
+        payload = native_acceptance.progress_snapshot(
+            Path(identity["root"]), path, selected)
+        interrupted = (run_status in ("cancelled", "timed_out", "orphaned")
+                       and any(item["status"] == "pending" for item in payload["cases"]))
+        if interrupted:
+            payload["interrupted"] = True
+        payload["run_status"] = run_status
+    except (native_acceptance.NativeAcceptanceError, runs.RunError):
+        handler._error(400, "invalid_native_acceptance")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _native_preview(handler: Handler, route: Route) -> None:
+    request = _native_request(handler, ("selection", "spend"))
+    if request is None:
+        return
+    if not isinstance(request.get("spend"), dict):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: _native_adapter(handler).preview(
+            request["selection"], request["spend"]))
+    except (native_acceptance.NativeAcceptanceError, runs.RunError):
+        handler._error(400, "native_acceptance_refused")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _native_start(handler: Handler, route: Route) -> None:
+    request = _native_request(handler, ("selection", "spend", "confirmation_token"))
+    if request is None:
+        return
+    if (not isinstance(request.get("spend"), dict)
+            or not isinstance(request.get("confirmation_token"), str)):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: _native_adapter(handler).start(
+            request["selection"], request["spend"], request["confirmation_token"]))
+    except (native_acceptance.NativeAcceptanceError, runs.RunError):
+        handler._error(400, "native_acceptance_refused")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _native_retry(handler: Handler, route: Route) -> None:
+    request = _native_request(handler, ("selection", "case"))
+    if request is None:
+        return
+    if not isinstance(request.get("case"), str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        selected = native_acceptance.Selection.parse(
+            handler.server.repo_root, request["selection"])
+        identity = handler.server.mutations.call(
+            lambda: _native_adapter(handler).admission.progress(selected.progress_id))
+        if (identity["source_commit"] != selected.source_commit
+                or identity["kind"] != selected.target_kind
+                or identity["ref"] != selected.target_ref):
+            raise native_acceptance.NativeAcceptanceError("native target identity changed")
+        selected = native_acceptance.Selection.parse(
+            Path(identity["root"]), request["selection"])
+        path = native_acceptance.progress_path(
+            handler.server.store.path / "native-evidence", selected.progress_id)
+        snapshot = native_acceptance.progress_snapshot(Path(identity["root"]), path, selected)
+        payload = native_acceptance.failed_retry(
+            selected, snapshot, request["case"]).public()
+    except (native_acceptance.NativeAcceptanceError, runs.RunError):
+        handler._error(400, "invalid_native_acceptance_retry")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _free_run(supervisor: runs.RunSupervisor, run_id: str) -> Dict[str, object]:
     record = supervisor.show(run_id)
     if record.get("suite_id") not in free_suites.FREE_SUITE_IDS:
@@ -783,6 +927,36 @@ RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("commands", "object")))
 RUN_RECORD = ResponseSchema("run-record")
 RUN_STREAM = ResponseSchema("sse-stream")
+NATIVE_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                  ("clients", "array"), ("cases", "array"),
+                                                  ("default_model", "string"),
+                                                  ("commands", "object"), ("target", "object"),
+                                                  ("initial", "object")))
+NATIVE_SNAPSHOT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("selection", "object"), ("cases", "array"),
+                                                   ("settled_count", "integer"),
+                                                   ("eligible_count", "integer"),
+                                                   ("interrupted", "boolean"),
+                                                   ("warnings", "array"),
+                                                   ("resume_cases", "array"),
+                                                   ("command", "string"),
+                                                   ("run_status", "string")))
+NATIVE_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
+                                                  ("caps", "object"), ("pricing", "object"),
+                                                  ("confirmation_required", "boolean"),
+                                                  ("confirmation_token", "string"),
+                                                  ("case_identities", "array"),
+                                                  ("selection", "object"), ("target", "object")))
+NATIVE_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),
+                                              ("selection", "object"), ("target", "object")))
+NATIVE_SELECTION = ResponseSchema("json-object", (("client", "string"), ("cases", "array"),
+                                                    ("model", "string"),
+                                                    ("source_commit", "string"),
+                                                    ("progress_id", "string"),
+                                                    ("target_kind", "string"),
+                                                    ("target_ref", "string"),
+                                                    ("retry_source", "string"),
+                                                    ("retry_case", "string")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -828,6 +1002,21 @@ ROUTES = RouteRegistry((
           _run_cancel, None, "application/json", ("citizen", "runs", "cancel")),
     Route("POST", "/api/runs/stream", "text/event-stream; charset=utf-8", RUN_STREAM,
           _run_stream, "sse", "application/json"),
+    Route("GET", "/api/experiments/native-acceptance/catalog", "application/json",
+          NATIVE_CATALOG, _native_catalog, None,
+          cli_command=("python3", "scripts/native_acceptance.py", "--help")),
+    Route("POST", "/api/experiments/native-acceptance/progress", "application/json",
+          NATIVE_SNAPSHOT, _native_progress, None, "application/json",
+          ("python3", "scripts/native_acceptance.py")),
+    Route("POST", "/api/experiments/native-acceptance/preview", "application/json",
+          NATIVE_PREVIEW, _native_preview, None, "application/json",
+          ("citizen", "runs", "spend-preview")),
+    Route("POST", "/api/experiments/native-acceptance/start", "application/json",
+          NATIVE_RUN, _native_start, None, "application/json",
+          ("citizen", "runs", "start")),
+    Route("POST", "/api/experiments/native-acceptance/retry", "application/json",
+          NATIVE_SELECTION, _native_retry, None, "application/json",
+          ("python3", "scripts/native_acceptance.py")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

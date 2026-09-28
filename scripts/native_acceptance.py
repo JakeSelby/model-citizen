@@ -20,17 +20,21 @@ the same commit, a round skips every case the log already holds a verdict for, p
 and reruns only the unverified and the unfinished.
 """
 import argparse
+import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +72,7 @@ SECRET_SHAPES = (
 )
 REDACTED = "<redacted>"
 NOT_AUTOMATED = "not automated yet"
+SPEND_RESULT_SCHEMA = 1
 
 # A client surface the runner can drive. `home_var` is the environment variable that moves the
 # client's whole configuration home, which is what makes a disposable home possible at all;
@@ -96,6 +101,151 @@ UNOBSERVED_HOME = ("this runner's %s configuration home has not been confirmed a
 
 class Unverified(Exception):
     """The runner could not observe the behaviour the case is about."""
+
+
+class SpendAccountingError(ValueError):
+    """A usage-spending run cannot prove or bound what its native turns spent."""
+
+
+def money(value, name):
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise SpendAccountingError(name + " must be a finite positive dollar amount") from error
+    if not amount.is_finite() or amount <= 0:
+        raise SpendAccountingError(name + " must be a finite positive dollar amount")
+    return amount
+
+
+class SpendBudget:
+    """Bound native Claude turns and account case spend without treating unknown as zero."""
+
+    def __init__(self, maximum, cap):
+        self.maximum = money(maximum, "--max-budget-usd")
+        self.cap = money(cap, "--spend-cap")
+        if self.maximum > self.cap:
+            raise SpendAccountingError("--max-budget-usd cannot exceed --spend-cap")
+        self.total = Decimal("0")
+        self.incurred = Decimal("0")
+        self.case_start = Decimal("0")
+        self.error = ""
+        self.cases = {}
+
+    def begin_case(self):
+        self.case_start = self.total
+
+    def turn_limit(self):
+        remaining = self.cap - self.total
+        if remaining <= 0:
+            raise SpendAccountingError("spend cap reached before the next native turn")
+        return min(self.maximum, remaining)
+
+    def add(self, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value < 0:
+            self.error = "the native client returned missing or malformed spend accounting"
+            raise SpendAccountingError(self.error)
+        self.total += Decimal(str(value))
+        self.incurred += Decimal(str(value))
+
+    def unknown(self, reason):
+        self.error = reason
+        raise SpendAccountingError(reason)
+
+    def case_spend(self):
+        return float(self.total - self.case_start)
+
+    def capped(self):
+        return self.total >= self.cap
+
+    def finish_case(self, case, item):
+        amount = item.get("spend_usd")
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)) \
+                or not math.isfinite(amount) or amount < 0:
+            self.error = "the native case finished without trustworthy spend accounting"
+            return
+        self.cases[case] = {"id": case, "status": "completed",
+                            "spend_usd": round(float(amount), 6)}
+
+    def reuse_case(self, case, value):
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value < 0:
+            self.error = "a resumed verdict has unknown or malformed spend accounting"
+            raise SpendAccountingError(self.error)
+        amount = Decimal(str(value))
+        self.total += amount
+        # The prior process already reported this spend to the usage ledger. It still constrains
+        # this set's remaining cap, while this process reports zero incremental spend for reuse.
+        self.cases[case] = {"id": case, "status": "completed", "spend_usd": 0.0}
+
+    def result(self, run_id, names, studio_case=None):
+        if self.error:
+            raise SpendAccountingError(self.error)
+        stopped = any(name not in self.cases for name in names)
+        if studio_case is None:
+            rows = [self.cases.get(name, {"id": name, "status": "not_run",
+                                          "spend_usd": 0.0}) for name in names]
+        else:
+            rows = [{"id": studio_case, "status": "completed",
+                     "spend_usd": round(float(self.incurred), 6)}]
+        accounted = round(sum(row["spend_usd"] for row in rows), 6)
+        return {"schema_version": SPEND_RESULT_SCHEMA, "run_id": run_id,
+                "spend_usd": accounted, "cases": rows,
+                "stop_reason": "spend_cap" if stopped and self.capped() else None}
+
+
+def secure_directory(path, studio_owned=False):
+    directory = Path(path)
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not studio_owned:
+        if not directory.is_dir():
+            raise SpendAccountingError("native evidence directory is unavailable")
+        return directory
+    try:
+        info = directory.lstat()
+    except OSError as error:
+        raise SpendAccountingError("native evidence directory is unavailable") from error
+    if (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)
+            or stat.S_IMODE(info.st_mode) & 0o022
+            or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+        raise SpendAccountingError(
+            "Studio native evidence directory must be owned and not group/world writable")
+    return directory
+
+
+def write_private_text(path, text, studio_owned=True):
+    target = Path(path)
+    secure_directory(target.parent, studio_owned=studio_owned)
+    if target.exists() or target.is_symlink():
+        try:
+            info = target.lstat()
+        except OSError as error:
+            raise SpendAccountingError("native evidence file is unsafe") from error
+        if (stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode)
+                or (studio_owned and stat.S_IMODE(info.st_mode) != 0o600)
+                or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+            raise SpendAccountingError(
+                "native evidence file must be an owned regular file"
+                + (" with mode 0600" if studio_owned else ""))
+    temporary = target.with_name("." + target.name + "." + str(os.getpid()) + ".tmp")
+    descriptor = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(str(temporary), str(target))
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def write_spend_result(path, value):
+    """Atomically publish the bounded result consumed by Studio's spend guard."""
+    write_private_text(path, json.dumps(value, sort_keys=True) + "\n", studio_owned=True)
 
 
 def catalog():
@@ -185,6 +335,9 @@ class Home:
         self.primitives = self.root / "primitives"
         self.launched = 0
         self.last_code = 0
+        self.spend_budget = None
+        self.spend_report = []
+        self.spend_price_as_of = []
         self.keychain_error = None
         try:
             keychain(self.root)
@@ -248,6 +401,9 @@ class Home:
     def session(self, prompt, tools=("Agent",), resume=None, timeout=TURN_TIMEOUT):
         """One short headless turn of the real client, in this home. Returns its JSON result."""
         args = [self.command, "-p", prompt, "--model", self.model, "--output-format", "json"]
+        budget = getattr(self, "spend_budget", None)
+        if budget is not None:
+            args += ["--max-budget-usd", format(budget.turn_limit(), "f")]
         if tools:
             args += ["--allowedTools", ",".join(tools)]
         if resume:
@@ -259,12 +415,28 @@ class Home:
             result = run(args, cwd=str(self.project), env=self.env(),
                          stdin=subprocess.DEVNULL, timeout=timeout)
         except subprocess.TimeoutExpired:
+            if budget is not None:
+                budget.unknown(
+                    "the native client timed out before spend accounting was available")
             raise Unverified("the client did not finish one turn within %ss" % timeout)
         try:
             data = json.loads(result.stdout)
         except ValueError:
+            if budget is not None:
+                budget.unknown(
+                    "the native client returned no readable spend accounting")
             raise Unverified("the client returned no JSON result: "
                              + redact(result.stdout[-200:] + result.stderr[-200:]))
+        if not isinstance(data, dict):
+            if budget is not None:
+                budget.unknown("the native client returned malformed spend accounting")
+            raise Unverified("the client returned an invalid JSON result")
+        amount = data.get("total_cost_usd")
+        if budget is not None:
+            budget.add(amount)
+        if isinstance(amount, (int, float)) and not isinstance(amount, bool) \
+                and math.isfinite(amount) and amount >= 0:
+            getattr(self, "spend_report", []).append(float(amount))
         if data.get("is_error"):
             raise Unverified("the client could not run the turn: " + redact(data.get("result")))
         return data
@@ -343,6 +515,45 @@ def codex_events(text):
     return events
 
 
+def _hook_module(name):
+    path = ROOT / "policy" / "hooks" / (name + ".py")
+    spec = importlib.util.spec_from_file_location("native_" + name.replace("-", "_"), path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def codex_token_totals(events):
+    """The last complete cumulative token snapshot in a Codex event stream."""
+    found = None
+    for event in events:
+        scopes = [event]
+        for key in ("msg", "payload", "item", "info"):
+            if isinstance(event.get(key), dict):
+                scopes.append(event[key])
+        for scope in list(scopes):
+            if isinstance(scope.get("info"), dict):
+                scopes.append(scope["info"])
+        for scope in scopes:
+            value = scope.get("total_token_usage") if isinstance(scope, dict) else None
+            if isinstance(value, dict):
+                found = value
+    return found
+
+
+def codex_spend(events, model):
+    """Priced Codex exec usage with its source date, or None when it is unpriceable."""
+    totals = codex_token_totals(events)
+    if not totals:
+        return None
+    usage = _hook_module("usage-log")
+    pricing = _hook_module("pricing")
+    row = {"kind": "session", "runtime": "codex", "model": model}
+    usage.codex_totals(row, totals)
+    amount, as_of = pricing.priced([row], pricing.load_prices({}))[0]
+    return None if amount is None else {"amount_usd": amount, "price_as_of": as_of}
+
+
 def codex_answer(events):
     """The last thing the model said in a `codex exec --json` run, or ``""``.
 
@@ -417,6 +628,9 @@ class CodexHome(Home):
         return login_secrets(login)
 
     def session(self, prompt, tools=("Agent",), resume=None, timeout=TURN_TIMEOUT):
+        if getattr(self, "spend_budget", None) is not None:
+            raise SpendAccountingError(
+                "Codex native acceptance has no in-flight dollar cap; launch refused")
         args = [self.command, "exec", "--json", "--skip-git-repo-check",
                 "--cd", str(self.project), "-m", self.model]
         if resume:
@@ -435,6 +649,10 @@ class CodexHome(Home):
         if result.returncode:
             raise Unverified("the client exited %s on a turn that wrote %s event(s): %s"
                              % (result.returncode, len(events), redact(result.stderr[-200:])))
+        spend = codex_spend(events, self.model)
+        if spend is not None:
+            getattr(self, "spend_report", []).append(float(spend["amount_usd"]))
+            getattr(self, "spend_price_as_of", []).append(spend["price_as_of"])
         return {"result": codex_answer(events), "session_id": self.thread_id(events),
                 "permission_denials": codex_denials(events), "events": events}
 
@@ -3334,7 +3552,7 @@ def unobserved_note(client, confirmed):
     return UNOBSERVED_HOME % (spec["home_var"], spec["runtime"], spec["runtime"])
 
 
-def probe(client, name, model, keep, confirmed=(), login=None):
+def probe(client, name, model, keep, confirmed=(), login=None, budget=None):
     """Run one case and return its result, observation and the home it used.
 
     A surface whose configuration home this runner has never been run against cannot turn an
@@ -3347,6 +3565,13 @@ def probe(client, name, model, keep, confirmed=(), login=None):
     started = time.time()
     spec = CLIENTS[client]
     home = HOMES[spec["runtime"]](spec, name, model, keep=keep)
+    home.spend_budget = budget
+    if not hasattr(home, "spend_report"):
+        home.spend_report = []
+    if not hasattr(home, "spend_price_as_of"):
+        home.spend_price_as_of = []
+    if budget is not None:
+        budget.begin_case()
     caveat = unobserved_note(client, confirmed)
     secrets = []
 
@@ -3356,24 +3581,40 @@ def probe(client, name, model, keep, confirmed=(), login=None):
         fresh = [] if login is None else (login_secrets(Path(login) / "auth.json")
                                           + login_secrets(home.client_dir / "auth.json"))
         return redact(text, [home.root], secrets + fresh)
+
+    def measured(item):
+        if budget is not None:
+            item["spend_usd"] = budget.case_spend()
+        elif home.launched and len(home.spend_report) == home.launched:
+            item["spend_usd"] = round(sum(home.spend_report), 6)
+            dates = [value for value in home.spend_price_as_of if value]
+            if dates:
+                item["price_as_of"] = max(dates)
+        elif home.launched:
+            item["spend_status"] = "unknown"
+        return item
     try:
         if login is not None:
             secrets = home.use_login(login)
         observation = CASES[name][0](home)
-        return {"case": name, "result": "unverified" if caveat else "passed",
-                "observation": scrub(observed([observation], caveat) if caveat else observation),
-                "seconds": round(time.time() - started, 1), "sessions": home.launched}
+        return measured({"case": name, "result": "unverified" if caveat else "passed",
+                         "observation": scrub(observed([observation], caveat)
+                                              if caveat else observation),
+                         "seconds": round(time.time() - started, 1),
+                         "sessions": home.launched})
     except AssertionError as error:
         # On an unconfirmed surface the reading itself is in question, so an assertion that did
         # not hold is not yet a defect in the harness: it is `unverified` with what was read.
-        return {"case": name, "result": "unverified" if caveat else "failed",
-                "observation": scrub(observed([str(error)], caveat) if caveat else error),
-                "seconds": round(time.time() - started, 1), "sessions": home.launched}
+        return measured({"case": name, "result": "unverified" if caveat else "failed",
+                         "observation": scrub(observed([str(error)], caveat)
+                                              if caveat else error),
+                         "seconds": round(time.time() - started, 1),
+                         "sessions": home.launched})
     except Exception as error:  # An unobserved case is unverified, never a pass.
         reason = "%s: %s" % (type(error).__name__, error) if not isinstance(error, Unverified) else str(error)
-        return {"case": name, "result": "unverified",
-                "observation": scrub(reason),
+        item = {"case": name, "result": "unverified", "observation": scrub(reason),
                 "seconds": round(time.time() - started, 1), "sessions": home.launched}
+        return item if isinstance(error, SpendAccountingError) else measured(item)
     finally:
         home.discard()
 
@@ -3386,39 +3627,66 @@ def progress_path(client, out):
     """Where finished cases are appended, outside the checkout a clean run requires."""
     if out:
         return Path(str(out) + ".partial.jsonl")
-    return Path(tempfile.gettempdir()) / ("harness-native-%s-%s.partial.jsonl" % (client, VERSION))
+    owner = str(os.getuid()) if hasattr(os, "getuid") else "current-user"
+    return (Path(tempfile.gettempdir()) / ("harness-native-" + owner)
+            / ("%s-%s.partial.jsonl" % (client, VERSION)))
 
 
-def append_case(path, header, item):
+def reserve_progress(path, studio_owned=False):
+    """Own one progress identity for the whole run and refuse unsafe evidence paths."""
+    if path is None:
+        return None
+    target = Path(path)
+    secure_directory(target.parent, studio_owned=studio_owned)
+    try:
+        descriptor = os.open(str(target), os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                             0o600)
+    except OSError as error:
+        raise SpendAccountingError("native progress file is unavailable or already unsafe") from error
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode)
+                or (studio_owned and stat.S_IMODE(info.st_mode) != 0o600)
+                or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
+            raise SpendAccountingError(
+                "native progress file must be an owned regular file"
+                + (" with mode 0600" if studio_owned else ""))
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise SpendAccountingError(
+                "native progress identity is already owned by another run") from error
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def append_case(descriptor, header, item):
     """Record one finished case durably, before the next case is started.
 
     A killed round then costs the case it was running rather than the whole round: the lines
     already on disk rebuild a partial record, which the evidence schema accepts because it unions
     cases across records and blocks any linked failure regardless.
     """
-    if path is None:
+    if descriptor is None:
         return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(str(path), "a") as handle:
-        handle.write(json.dumps(dict(header, **item), sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    os.write(descriptor, (json.dumps(dict(header, **item), sort_keys=True) + "\n").encode())
+    os.fsync(descriptor)
 
 
-def append_routing(path, header):
+def append_routing(descriptor, header):
     """Declare the round's class routing before the first case runs.
 
     A line with no case is not a result and `progress_lines` ignores it; what it does is put the
     executing and assessing classes on disk before anything they could bias has run, so a round
     killed in its first case still says who ran it.
     """
-    if path is None:
+    if descriptor is None:
         return
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    with open(str(path), "a") as handle:
-        handle.write(json.dumps(dict(header, declared="tier_routing"), sort_keys=True) + "\n")
-        handle.flush()
-        os.fsync(handle.fileno())
+    os.write(descriptor, (json.dumps(dict(header, declared="tier_routing"), sort_keys=True)
+                          + "\n").encode())
+    os.fsync(descriptor)
 
 
 def logged_routing(items):
@@ -3482,6 +3750,15 @@ def settled(items):
     for item in items:
         latest[item["case"]] = item.get("result")
     return dict((case, result) for case, result in latest.items() if result in SETTLED)
+
+
+def settled_items(items):
+    """Latest complete evidence rows, including spend needed by a paid resumed set."""
+    latest = {}
+    for item in items:
+        latest[item["case"]] = item
+    return dict((case, item) for case, item in latest.items()
+                if item.get("result") in SETTLED)
 
 
 NO_OBSERVATION = "no observation was recorded for this case"
@@ -3593,7 +3870,7 @@ def plan(client, names, model, confirmed=(), tier_routing=None, login=False):
 
 
 def record(client, names, model, keep, runner=probe, progress=None, confirmed=(),
-           tier_routing=None, login=None):
+           tier_routing=None, login=None, budget=None):
     spec = CLIENTS[client]
     tier_routing = tier_routing or executed_by(routing(client), model)[1]
     if git("status", "--porcelain"):
@@ -3613,26 +3890,44 @@ def record(client, names, model, keep, runner=probe, progress=None, confirmed=()
         # The model passed to the client, so a record can never declare one and run another.
         "model_run": model,
     }
-    append_routing(progress, header)
-    # A verdict is kept only when this round could reach one itself: on a surface it has not
-    # confirmed, `probe` reads every case as unverified, so a pass an earlier round recorded
-    # under --home-confirmed runs again rather than surviving an unconfirmed resume.
-    kept = ({} if unobserved_note(client, confirmed)
-            else settled(progress_lines(progress, header)))
-    results = []
-    for name in names:
-        if name in kept:
-            sys.stderr.write("resume: %s already %s at %s; not rerun\n"
-                             % (name, kept[name], header["source_commit"][:12]))
-            continue
-        # The login is passed only when asked for, so a runner that never takes one still fits.
-        extra = {"login": login} if login is not None else {}
-        item = (runner(client, name, model, keep, confirmed, **extra) if name in CASES
-                else {"case": name, "result": "unverified", "observation": NOT_AUTOMATED})
-        append_case(progress, header, item)
-        results.append(item)
-    return scoped(client, build_record(progress_lines(progress, header)
-                                      or [dict(header, **item) for item in results]))
+    descriptor = reserve_progress(progress, studio_owned=budget is not None)
+    try:
+        append_routing(descriptor, header)
+        # A verdict is kept only when this round could reach one itself: on a surface it has not
+        # confirmed, `probe` reads every case as unverified, so a pass an earlier round recorded
+        # under --home-confirmed runs again rather than surviving an unconfirmed resume.
+        prior = ({} if unobserved_note(client, confirmed)
+                 else settled_items(progress_lines(progress, header)))
+        kept = {name: item["result"] for name, item in prior.items()}
+        if budget is not None:
+            for name in names:
+                if name in prior:
+                    budget.reuse_case(name, prior[name].get("spend_usd"))
+        results = []
+        for name in names:
+            if name in kept:
+                sys.stderr.write("resume: %s already %s at %s; not rerun\n"
+                                 % (name, kept[name], header["source_commit"][:12]))
+                continue
+            if budget is not None and budget.capped():
+                break
+            # The login is passed only when asked for, so a runner that never takes one still fits.
+            extra = {"login": login} if login is not None else {}
+            if budget is not None:
+                extra["budget"] = budget
+            item = (runner(client, name, model, keep, confirmed, **extra) if name in CASES
+                    else {"case": name, "result": "unverified", "observation": NOT_AUTOMATED})
+            append_case(descriptor, header, item)
+            results.append(item)
+            if budget is not None:
+                budget.finish_case(name, item)
+                if budget.error:
+                    break
+        return scoped(client, build_record(progress_lines(progress, header)
+                                          or [dict(header, **item) for item in results]))
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def session_login(client, environ=None):
@@ -3677,8 +3972,27 @@ def main(argv=None):
                         help="the capability class of the worker running the cases")
     parser.add_argument("--assessment-class", default=qualification.ASSESSMENT_DEFAULT,
                         help="the capability class of the reader assessing the observations")
+    parser.add_argument("--max-budget-usd",
+                        help="maximum spend allowed for one native client turn")
+    parser.add_argument("--spend-cap",
+                        help="whole-set spend cap; stops before the next case")
     args = parser.parse_args(argv)
     names = selected(args.cases)
+    if bool(args.max_budget_usd) != bool(args.spend_cap):
+        raise SystemExit("--max-budget-usd and --spend-cap are required together")
+    try:
+        budget = (SpendBudget(args.max_budget_usd, args.spend_cap)
+                  if args.max_budget_usd is not None else None)
+    except SpendAccountingError as error:
+        raise SystemExit(str(error))
+    if budget is not None and args.from_progress:
+        raise SystemExit("spend caps cannot be applied while rebuilding from a progress log")
+    if budget is not None and CLIENTS[args.client]["runtime"] == "codex":
+        raise SystemExit("Codex native acceptance has no in-flight dollar cap; launch refused")
+    result_path = os.environ.get("CITIZEN_STUDIO_RESULT")
+    run_id = os.environ.get("CITIZEN_STUDIO_RUN_ID")
+    if budget is not None and (not result_path or not run_id):
+        raise SystemExit("budgeted native acceptance requires the Studio result identity")
     # Rebuilding from the progress log runs no case, so it needs no login to link.
     login = (session_login(args.client) if args.codex_session_login and not args.from_progress
              else None)
@@ -3696,12 +4010,28 @@ def main(argv=None):
         mismatch = host_mismatch(args.client)
         if mismatch:
             raise SystemExit(mismatch)
-        data = record(args.client, names, model, args.keep_home, progress=progress,
-                      confirmed=args.home_confirmed, tier_routing=tier_routing, login=login)
+        try:
+            data = record(args.client, names, model, args.keep_home, progress=progress,
+                          confirmed=args.home_confirmed, tier_routing=tier_routing, login=login,
+                          budget=budget)
+        except SpendAccountingError as error:
+            sys.stderr.write("native acceptance refused: %s\n" % error)
+            return 2
     rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
     if args.out:
-        args.out.write_text(rendered)
+        try:
+            write_private_text(args.out, rendered, studio_owned=budget is not None)
+        except SpendAccountingError as error:
+            sys.stderr.write("native evidence refused: %s\n" % error)
+            return 2
     print(rendered, end="")
+    if budget is not None:
+        try:
+            write_spend_result(
+                result_path, budget.result(run_id, names, studio_case="native-acceptance"))
+        except SpendAccountingError as error:
+            sys.stderr.write("spend accounting refused: %s\n" % error)
+            return 2
     return 0 if all(value == "passed" for value in data["cases"].values()) else 1
 
 

@@ -6,6 +6,14 @@ import { NavLink } from "react-router-dom";
 
 import { EvidenceState, StatusBadge } from "../components/StudioKit";
 import { cancelRun, loadCatalog, startRun, streamRun } from "./api";
+import { NativeAcceptancePanel } from "./native-acceptance/NativeAcceptancePanel";
+import {
+  loadNativeCatalog, loadNativeProgress, retryFailedCase,
+} from "./native-acceptance/api";
+import type {
+  NativeCatalog, NativeRun, NativeSelection, NativeSnapshot,
+} from "./native-acceptance/model";
+import { stateAfterStart } from "./native-acceptance/model";
 import {
   commandFor, mergeUpdate, scopeOptions, streamComplete, terminal, type FreeSuite, type RunCatalog, type RunUpdate,
 } from "./model";
@@ -14,6 +22,10 @@ const POLL_MS = 350;
 
 export function ExperimentsPage() {
   const [catalog, setCatalog] = useState<RunCatalog | null>(null);
+  const [nativeCatalog, setNativeCatalog] = useState<NativeCatalog | null>(null);
+  const [nativeSelection, setNativeSelection] = useState<NativeSelection | null>(null);
+  const [nativeSnapshot, setNativeSnapshot] = useState<NativeSnapshot | null>(null);
+  const [nativeRun, setNativeRun] = useState<NativeRun | null>(null);
   const [error, setError] = useState("");
   const [suiteId, setSuiteId] = useState("unit-tests");
   const [selectedCase, setSelectedCase] = useState("all");
@@ -29,8 +41,34 @@ export function ExperimentsPage() {
     let active = true;
     void loadCatalog().then((value) => { if (active) setCatalog(value); })
       .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "Catalog unavailable."); });
+    void loadNativeCatalog().then((value) => {
+      if (!active) return;
+      setNativeCatalog(value);
+      setNativeSelection(value.initial);
+    }).catch(() => {});
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    if (!nativeRun) return;
+    let active = true;
+    async function followNative() {
+      while (active) {
+        try {
+          const snapshot = await loadNativeProgress(nativeRun!.selection);
+          if (!active) return;
+          setNativeSnapshot(snapshot);
+          if (terminal(snapshot.run_status ?? "")) return;
+        } catch (caught) {
+          if (active) setError(caught instanceof Error ? caught.message : "Native evidence unavailable.");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+    }
+    void followNative();
+    return () => { active = false; };
+  }, [nativeRun?.run_id]);
 
   useEffect(() => {
     if (!update || terminal(update.run.status)) return;
@@ -120,8 +158,8 @@ export function ExperimentsPage() {
     <Stack gap="xl">
       <div>
         <Text className="eyebrow">Studio / Experiments</Text>
-        <Title order={1}>Run a local check.</Title>
-        <Text c="dimmed" mt="xs">Choose an allowlisted suite or one discovered unit test. Nothing here uses a model.</Text>
+        <Title order={1}>Run a local check or native acceptance.</Title>
+        <Text c="dimmed" mt="xs">Free suites stay local. Native acceptance shows its estimate and hard caps before any model process starts.</Text>
       </div>
 
       {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
@@ -139,6 +177,27 @@ export function ExperimentsPage() {
             <Text c="dimmed" size="sm">Installed checkout · isolated profile · about {suite.expected_duration_seconds}s</Text></Group>
         </Stack>
       </Paper>}
+
+      {nativeCatalog && nativeSelection && <NativeAcceptancePanel
+        key={nativeSelection.progress_id}
+        catalog={nativeCatalog}
+        initial={nativeSelection}
+        snapshot={nativeSnapshot}
+        busy={Boolean(nativeRun && !terminal(nativeSnapshot?.run_status ?? nativeRun.status))}
+        onStarting={() => setNativeSnapshot(null)}
+        onStarted={(run) => {
+          const next = stateAfterStart(run);
+          setNativeSnapshot(next.snapshot); setNativeRun(next.run); setNativeSelection(next.selection);
+        }}
+        onResume={(selection) => { setNativeSelection(selection); setNativeRun(null); }}
+        onRetryFailed={(selection, caseId) => {
+          void retryFailedCase(selection, caseId).then((retry) => {
+            setNativeSelection(retry); setNativeSnapshot(null); setNativeRun(null);
+          }).catch((caught: unknown) => {
+            setError(caught instanceof Error ? caught.message : "Retry could not be prepared.");
+          });
+        }}
+      />}
 
       {update && <Paper className="run-console" p="xl" withBorder>
         <Stack gap="md">
