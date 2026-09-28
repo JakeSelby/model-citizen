@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 from harness_core import cache_prefix  # noqa: E402  the ledger's miss ratio, one definition
 from harness_core import catalog  # noqa: E402  the resolver the hooks load, for the profile fingerprint
+from harness_core.studio import replay as studio_replay  # noqa: E402  shared release-history lock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
@@ -99,6 +100,7 @@ SPAWN_TOOLS = ("Task", "Agent")
 STREAM_FIELDS = ("first_call_cache_write", "tool_counts", "spawns", "stop_hooks", "hook_blocks",
                  "cache_miss_ratio")
 RESULTS = "results.jsonl"
+SPEND = "spend.json"
 ENRICHED = "results.enriched.jsonl"
 
 
@@ -852,7 +854,7 @@ def reply_text(stdout):
     return str(texts[-1] or "").strip() if texts else ""
 
 
-def preflight(tasks, opts, launch=subprocess.run):
+def preflight(tasks, opts, launch=subprocess.run, report_spend=None):
     """([{arm, passed, reply, cost_usd}], spent). One gate run per arm before anything is scored.
 
     Each runs in the arm's own container, so this asks the question the scored runs depend on:
@@ -861,27 +863,39 @@ def preflight(tasks, opts, launch=subprocess.run):
     than the harness. The verdict is read from the gate's own output (`gate_passed`)."""
     checks, spent = [], 0.0
     for arm in ARMS:
+        preflight_cap = min(PREFLIGHT_CAP_USD, opts["spend_cap"] - spent, opts["run_cap"])
+        if preflight_cap <= 0:
+            break
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
-            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
+            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, preflight_cap,
                                   PREFLIGHT_TURNS)
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
                                   container_name("preflight", arm), launch)
             except subprocess.TimeoutExpired:
-                spent += PREFLIGHT_CAP_USD
+                spent += preflight_cap
+                if report_spend:
+                    report_spend(spent)
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None})
                 continue
-            if opts.get("raw"):
-                raw = Path(opts["raw"]); raw.mkdir(parents=True, exist_ok=True)
-                (raw / ("preflight-%s.json" % arm)).write_text(done.stdout or "", encoding="utf-8")
+            except BaseException:
+                spent += preflight_cap
+                if report_spend:
+                    report_spend(spent)
+                raise
             reply = reply_text(done.stdout)
             try:
                 cost = parse_result(done.stdout)["cost_usd"]
             except ValueError:
                 cost = None
-            spent += PREFLIGHT_CAP_USD if cost is None else cost
+            spent += preflight_cap if cost is None else cost
+            if report_spend:
+                report_spend(spent)
+            if opts.get("raw"):
+                raw = Path(opts["raw"]); raw.mkdir(parents=True, exist_ok=True)
+                (raw / ("preflight-%s.json" % arm)).write_text(done.stdout or "", encoding="utf-8")
             checks.append({"arm": arm, "passed": gate_passed(done.stdout), "reply": reply,
                            "cost_usd": cost})
         finally:
@@ -901,6 +915,22 @@ def probe_workdirs(tasks, opts, launch=subprocess.run):
         shutil.rmtree(str(parent), ignore_errors=True)
 
 
+def _write_spend_sidecar(results, opts, preflight_spent, total_spent, stopped):
+    """Persist the replay's own cap accounting beside its authoritative native rows."""
+    if not results:
+        return
+    path = Path(results).parent / SPEND
+    value = {"schema_version": 1, "tag": opts["tag"],
+             "run_cap_usd": opts["run_cap"], "spend_cap_usd": opts["spend_cap"],
+             "preflight_spend_usd": round(preflight_spent, 6),
+             "scored_spend_usd": round(total_spent - preflight_spent, 6),
+             "charged_spend_usd": round(total_spent, 6), "stopped_at_cap": stopped}
+    temporary = path.with_name("." + path.name + ".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+
+
 def replay(tasks, opts, launch=subprocess.run, out=None):
     """(rows, stopped). Stops before a launch that could take reported spend past the cap; the
     per-run cap is soft, so a run with no readable cost is counted at the full run cap.
@@ -912,19 +942,27 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     probe_workdirs(tasks, opts, launch)
-    rows, spent = [], 0.0
+    rows, spent, preflight_spent = [], 0.0, 0.0
     if not opts.get("skip_preflight"):
-        checks, spent = preflight(tasks, opts, launch)
+        checks, spent = preflight(tasks, opts, launch, lambda current: _write_spend_sidecar(
+            out, opts, current, current, False))
+        preflight_spent = spent
         red = [c for c in checks if not c["passed"]]
+        if len(checks) != len(ARMS):
+            _write_spend_sidecar(out, opts, preflight_spent, spent, True)
+            return rows, True
         for check in red:
             print("cost-bench: the %s arm's gate is red in its own container: %s"
                   % (check["arm"], check["reply"] or "no reply"), file=sys.stderr)
         if red:
+            _write_spend_sidecar(out, opts, preflight_spent, spent, False)
             print("cost-bench: refusing the replay; no scored run launched", file=sys.stderr)
             raise SystemExit(2)
         opts = dict(opts, preflight="passed")
-    for task, rep, arm in schedule(tasks, opts["reps"]):
+    planned = schedule(tasks, opts["reps"])
+    for position, (task, rep, arm) in enumerate(planned):
         if spent + opts["run_cap"] > opts["spend_cap"]:
+            _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
         spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
@@ -932,6 +970,11 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
         if out:
             with open(str(out), "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
+        if (spent > opts["spend_cap"]
+                or spent >= opts["spend_cap"] and position < len(planned) - 1):
+            _write_spend_sidecar(out, opts, preflight_spent, spent, True)
+            return rows, True
+    _write_spend_sidecar(out, opts, preflight_spent, spent, False)
     return rows, False
 
 
@@ -1028,6 +1071,23 @@ def history_row(rows, series):
             "threshold": THRESHOLD, "status": status, "arms": arm_records(rows)}
 
 
+def reconcile_replay_rows(rows, tasks, repetitions, complete=True):
+    """Refuse rows outside the requested task/rep/arm matrix before history is written."""
+    expected = {(task["id"], repetition, arm) for task in tasks
+                for repetition in range(1, repetitions + 1) for arm in ARMS}
+    actual = set()
+    for row in rows:
+        identity = (row.get("task"), row.get("rep"), row.get("arm"))
+        if identity not in expected:
+            raise ValueError("replay produced an unknown or out-of-range task, repetition or arm")
+        if identity in actual:
+            raise ValueError("replay produced a duplicate task, repetition and arm row")
+        actual.add(identity)
+    if complete and actual != expected:
+        raise ValueError("replay completed without every requested task, repetition and arm row")
+    return actual
+
+
 def arm_records(rows):
     """Per arm, the container its rows ran in, from the first row of that arm that names one:
     `{image_id, manifest_sha256, harness_ref, harness_commit}`. An arm with no such row,
@@ -1090,6 +1150,15 @@ def render_history(rows):
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
     return "\n".join(lines) + "\n"
+
+
+def write_history_pair(home_dir, row):
+    """Update the existing JSONL/Markdown history pair under the shared release-history lock."""
+    home_dir = Path(home_dir)
+    with studio_replay.history_lock(home_dir):
+        kept = upsert_history(home_dir / HISTORY.name, row)
+        (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
+        return kept
 
 
 def raw_path(raw_dir, row):
@@ -1257,8 +1326,10 @@ def replay_tag(tag, args, common, harness):
     version = tag_version(ROOT, commit, tag)
     # The arms are part of what is compared, so they rotate the series: a container run is not
     # comparable with one whose harness arm read a host profile.
-    series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
-                            + b"|container").hexdigest()[:8]
+    series_input = Path(args.tasks).read_bytes() + args.model.encode() + b"|container"
+    if args.task:
+        series_input += b"|tasks:" + ",".join(sorted(task["id"] for task in tasks)).encode()
+    series = hashlib.sha256(series_input).hexdigest()[:8]
     out = (common["out"] or ROOT / "benchmarks" / version) / tag
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
@@ -1285,11 +1356,11 @@ def replay_tag(tag, args, common, harness):
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
     if rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
-    elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
+    elif rows and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
         home_dir.mkdir(parents=True, exist_ok=True)
-        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series))
-        (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
+        reconcile_replay_rows(rows, tasks, args.reps)
+        kept = write_history_pair(home_dir, history_row(rows, series))
         print(json.dumps(kept[-1], indent=2))
     else:
         print("cost-bench: a partial set is not a history row; results are in %s" % out, file=sys.stderr)

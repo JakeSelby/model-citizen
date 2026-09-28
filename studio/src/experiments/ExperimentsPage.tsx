@@ -14,6 +14,9 @@ import type {
   NativeCatalog, NativeRun, NativeSelection, NativeSnapshot,
 } from "./native-acceptance/model";
 import { stateAfterStart } from "./native-acceptance/model";
+import { ReplayPanel } from "./replay/ReplayPanel";
+import { loadReplayCatalog, loadReplayResult } from "./replay/api";
+import type { ReplayCatalog, ReplayRunResult } from "./replay/model";
 import {
   commandFor, mergeUpdate, scopeOptions, streamComplete, terminal, type FreeSuite, type RunCatalog, type RunUpdate,
 } from "./model";
@@ -26,6 +29,9 @@ export function ExperimentsPage() {
   const [nativeSelection, setNativeSelection] = useState<NativeSelection | null>(null);
   const [nativeSnapshot, setNativeSnapshot] = useState<NativeSnapshot | null>(null);
   const [nativeRun, setNativeRun] = useState<NativeRun | null>(null);
+  const [replayCatalog, setReplayCatalog] = useState<ReplayCatalog | null>(null);
+  const [replayRunId, setReplayRunId] = useState("");
+  const [replayResult, setReplayResult] = useState<ReplayRunResult | null>(null);
   const [error, setError] = useState("");
   const [suiteId, setSuiteId] = useState("unit-tests");
   const [selectedCase, setSelectedCase] = useState("all");
@@ -46,6 +52,8 @@ export function ExperimentsPage() {
       setNativeCatalog(value);
       setNativeSelection(value.initial);
     }).catch(() => {});
+    void loadReplayCatalog().then((value) => { if (active) setReplayCatalog(value); })
+      .catch(() => {});
     return () => { active = false; };
   }, []);
 
@@ -69,6 +77,27 @@ export function ExperimentsPage() {
     void followNative();
     return () => { active = false; };
   }, [nativeRun?.run_id]);
+
+  useEffect(() => {
+    if (!replayRunId) return;
+    let active = true;
+    async function followReplay() {
+      while (active) {
+        try {
+          const result = await loadReplayResult(replayRunId);
+          if (!active) return;
+          setReplayResult(result);
+          if (terminal(result.run.status)) return;
+        } catch (caught) {
+          if (active) setError(caught instanceof Error ? caught.message : "Replay result unavailable.");
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+      }
+    }
+    void followReplay();
+    return () => { active = false; };
+  }, [replayRunId]);
 
   useEffect(() => {
     if (!update || terminal(update.run.status)) return;
@@ -158,8 +187,8 @@ export function ExperimentsPage() {
     <Stack gap="xl">
       <div>
         <Text className="eyebrow">Studio / Experiments</Text>
-        <Title order={1}>Run a local check or native acceptance.</Title>
-        <Text c="dimmed" mt="xs">Free suites stay local. Native acceptance shows its estimate and hard caps before any model process starts.</Text>
+        <Title order={1}>Run checks, native acceptance or a live replay.</Title>
+        <Text c="dimmed" mt="xs">Free suites stay local. Paid experiments show their estimate, resolved targets and hard caps before any model process starts.</Text>
       </div>
 
       {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
@@ -197,6 +226,15 @@ export function ExperimentsPage() {
             setError(caught instanceof Error ? caught.message : "Retry could not be prepared.");
           });
         }}
+      />}
+
+      {replayCatalog && <ReplayPanel
+        tasks={replayCatalog.tasks.map((task) => task.id)}
+        defaultModel={replayCatalog.default_model}
+        rows={replayResult?.result?.table ?? []}
+        progress={replayResult?.progress ?? []}
+        runStatus={replayResult?.run.status}
+        onStarted={(runId) => { setReplayRunId(runId); setReplayResult(null); }}
       />}
 
       {update && <Paper className="run-console" p="xl" withBorder>

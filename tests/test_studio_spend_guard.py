@@ -332,6 +332,28 @@ class StudioSpendGuardTests(unittest.TestCase):
                          ["completed", "not_run"])
         self.assertIn("usage limit", final["reason"])
 
+    def test_runner_failure_settles_reported_spend_even_with_a_zero_exit(self):
+        self.write_suite(self.result_script(
+            "runner_failure", 0.1, [("case-one", 0.1)], 0))
+        supervisor = self.supervisor()
+        preview = self.preview(supervisor, 0.2, 1.0, "api_credit")
+        with mock.patch.object(supervisor, "_admit_locked"):
+            created = supervisor.start(
+                "paid-suite", {}, "installed", "current",
+                confirmed=preview["confirmation_token"],
+                max_budget_usd=0.2, spend_cap_usd=1.0, pricing_source="api_credit")
+        token = self.starting(supervisor, created["run_id"])
+        self.assertEqual(run_worker.execute(supervisor, created["run_id"], token), 0)
+        final = supervisor.show(created["run_id"])
+        self.assertEqual((final["status"], final["returncode"], final["spend_actual"]),
+                         ("failed", 0, 0.1))
+        self.assertEqual(final["spend_stop_reason"], "runner_failure")
+        self.assertEqual(final["usage_ledger_state"], "recorded")
+        rows = [json.loads(line) for line in
+                (self.root / "usage.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual((rows[-1]["run_id"], rows[-1]["spend_usd"]),
+                         (created["run_id"], 0.1))
+
     def test_explicit_not_run_case_without_a_stop_reason_is_rejected(self):
         run_id = "00000000-0000-4000-8000-000000000001"
         directory = self.root / "result"

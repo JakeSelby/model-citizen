@@ -169,7 +169,10 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
                 record["case_results"] = paid_result["cases"]
                 if paid_result["stop_reason"] is not None:
                     record["spend_stop_reason"] = paid_result["stop_reason"]
-                if paid_result["stop_reason"] == "usage_limit":
+                if paid_result["stop_reason"] == "runner_failure":
+                    record["status"] = "failed"
+                    record["reason"] = "paid suite runner failed after reporting spend"
+                elif paid_result["stop_reason"] == "usage_limit":
                     record["status"] = "limited"
                     record["reason"] = "subscription or API usage limit reached"
                 elif (paid_result["stop_reason"] == "spend_cap"

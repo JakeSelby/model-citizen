@@ -23,7 +23,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import auth, free_suites, module_library, native_acceptance, runs, selection, settings, targets
+from . import (auth, free_suites, module_library, native_acceptance, replay, runs, selection,
+               settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -635,6 +636,100 @@ def _native_retry(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
+    return replay.ReplayAdmission(
+        handler.server.repo_root, handler.server.store.path,
+        handler.server.run_supervisor, handler.server.target_service)
+
+
+def _replay_catalog(handler: Handler, route: Route) -> None:
+    try:
+        payload = replay.task_catalog(handler.server.repo_root)
+    except replay.ReplayError:
+        handler._error(503, "replay_catalog_unavailable")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _replay_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("request",))
+    if request is None:
+        return
+    try:
+        payload = handler.server.mutations.call(
+            lambda: _replay_admission(handler).preview(request["request"]))
+    except replay.ReplayError:
+        handler._error(400, "replay_refused")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _replay_start(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("request", "confirmation_token"))
+    if request is None:
+        return
+    if not isinstance(request["confirmation_token"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: _replay_admission(handler).start(
+            request["request"], request["confirmation_token"]))
+    except replay.ReplayError:
+        handler._error(400, "replay_refused")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _replay_result(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id",))
+    if request is None:
+        return
+    if not isinstance(request["run_id"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        def snapshot():
+            supervisor = handler.server.run_supervisor
+            run = supervisor.show(request["run_id"])
+            if run.get("suite_id") != "live-replay":
+                raise runs.RunError("run is not a live replay")
+            with supervisor.lock():
+                private = supervisor._read(request["run_id"])
+            selected = replay.ReplayRequest.parse(
+                json.loads(private["parameters"]["request_json"]))
+            run_root = supervisor._run_path(request["run_id"]).parent
+            live_rows = {}
+            for index, target in enumerate(selected.targets, 1):
+                path = (run_root / "replay" / ("target-%d" % index)
+                        / target.execution_ref / replay.RESULTS_NAME)
+                live_rows[index] = replay.read_progress_rows(path, target, selected)
+            progress = replay.progress_payload(selected, live_rows)
+            result = None
+            if run.get("status") in runs.TERMINAL:
+                summary_path = run_root / "replay" / replay.SUMMARY_NAME
+                if summary_path.is_file():
+                    summary = replay.read_summary(summary_path)
+                    replay.index_native_rows(supervisor.history, run_root, summary)
+                    result = {name: summary[name] for name in (
+                        "targets", "table", "spend_usd", "reported_spend_usd",
+                        "spend_cap_usd", "stopped_at_cap")}
+            return {"schema_version": 1,
+                    "run": {"run_id": run["run_id"], "status": run["status"]},
+                    "progress": progress, "result": result}
+        payload = handler.server.mutations.call(snapshot)
+    except runs.RunError:
+        handler._error(404, "replay_not_found")
+        return
+    except (ValueError, replay.ReplayError):
+        handler._error(409, "replay_result_invalid")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _free_run(supervisor: runs.RunSupervisor, run_id: str) -> Dict[str, object]:
     record = supervisor.show(run_id)
     if record.get("suite_id") not in free_suites.FREE_SUITE_IDS:
@@ -957,6 +1052,29 @@ NATIVE_SELECTION = ResponseSchema("json-object", (("client", "string"), ("cases"
                                                     ("target_ref", "string"),
                                                     ("retry_source", "string"),
                                                     ("retry_case", "string")))
+REPLAY_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                  ("tasks", "array"),
+                                                  ("target_kinds", "array"),
+                                                  ("default_model", "string"),
+                                                  ("commands", "object")))
+REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
+                                                  ("caps", "object"),
+                                                  ("pricing", "object"),
+                                                  ("confirmation_required", "boolean"),
+                                                  ("confirmation_token", "string"),
+                                                  ("cost_class", "string"),
+                                                  ("case_identities", "array"),
+                                                  ("valid", "boolean"),
+                                                  ("errors", "array"),
+                                                  ("request", "object"),
+                                                  ("command", "string")))
+REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
+                                              ("status", "string"),
+                                              ("targets", "array")))
+REPLAY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                 ("run", "object"),
+                                                 ("progress", "array"),
+                                                 ("result", "object-or-null")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -1017,6 +1135,18 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/experiments/native-acceptance/retry", "application/json",
           NATIVE_SELECTION, _native_retry, None, "application/json",
           ("python3", "scripts/native_acceptance.py")),
+    Route("GET", "/api/runs/replay/catalog", "application/json",
+          REPLAY_CATALOG, _replay_catalog, None,
+          cli_command=("citizen", "runs", "replay", "--help")),
+    Route("POST", "/api/runs/replay/preview", "application/json",
+          REPLAY_PREVIEW, _replay_preview, None, "application/json",
+          ("citizen", "runs", "spend-preview")),
+    Route("POST", "/api/runs/replay/start", "application/json",
+          REPLAY_RUN, _replay_start, None, "application/json",
+          ("citizen", "runs", "start")),
+    Route("POST", "/api/runs/replay/result", "application/json",
+          REPLAY_RESULT, _replay_result, None, "application/json",
+          ("citizen", "runs", "show")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

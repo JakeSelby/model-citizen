@@ -4,10 +4,12 @@ import importlib.util
 import json
 import subprocess
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
 from test_harness import REPO
+from harness_core.studio import replay as studio_replay
 
 
 def load(name):
@@ -635,10 +637,83 @@ class ReplayPreflightTests(unittest.TestCase):
     def test_the_pre_flight_spends_against_the_same_cumulative_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([gate_reply(GREEN, cost=0.5)] * 2)
+            results = Path(tmp) / "results.jsonl"
             rows, stopped = BENCH.replay([TASK], options(tmp, reps=1, skip_preflight=False,
-                                                         spend_cap=2.5), launch)
+                                                         spend_cap=2.5), launch, out=results)
             self.assertEqual((rows, stopped), ([], True))  # 1.0 spent, and 1.0 + 2.0 passes 2.5
             self.assertEqual(len(launch.calls), 2)
+            spend = json.loads((Path(tmp) / BENCH.SPEND).read_text(encoding="utf-8"))
+            self.assertEqual(spend, {
+                "schema_version": 1, "tag": "v9.9.9", "run_cap_usd": 2.0,
+                "spend_cap_usd": 2.5, "preflight_spend_usd": 1.0,
+                "scored_spend_usd": 0.0, "charged_spend_usd": 1.0,
+                "stopped_at_cap": True,
+            })
+
+    def test_each_preflight_is_admitted_against_the_remaining_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([gate_reply(GREEN, cost=0.1), gate_reply(GREEN, cost=0.1)])
+            results = Path(tmp) / "results.jsonl"
+            rows, stopped = BENCH.replay([TASK], options(
+                tmp, reps=1, skip_preflight=False, spend_cap=0.3), launch, out=results)
+            self.assertEqual((rows, stopped), ([], True))
+            checks = self.preflight_calls(launch)
+            self.assertEqual(len(checks), 2)
+            self.assertEqual([call[0][call[0].index("--max-budget-usd") + 1]
+                              for call in checks], ["0.25", "0.2"])
+            spend = json.loads((Path(tmp) / BENCH.SPEND).read_text(encoding="utf-8"))
+            self.assertEqual((spend["preflight_spend_usd"], spend["charged_spend_usd"]),
+                             (0.2, 0.2))
+
+    def test_preflight_never_launches_above_the_confirmed_remaining_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([gate_reply(GREEN, cost=0.1)])
+            rows, stopped = BENCH.replay([TASK], options(
+                tmp, reps=1, skip_preflight=False, spend_cap=0.1), launch,
+                out=Path(tmp) / "results.jsonl")
+            checks = self.preflight_calls(launch)
+            self.assertEqual((rows, stopped, len(checks)), ([], True, 1))
+            self.assertEqual(checks[0][0][checks[0][0].index("--max-budget-usd") + 1], "0.1")
+
+    def test_preflight_never_launches_above_the_confirmed_per_run_budget(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([gate_reply(GREEN, cost=0.05)] * 2)
+            checks, spent = BENCH.preflight(
+                [TASK], options(tmp, run_cap=0.1), launch)
+            calls = self.preflight_calls(launch)
+            self.assertEqual((len(checks), spent), (2, 0.1))
+            self.assertEqual([call[0][call[0].index("--max-budget-usd") + 1]
+                              for call in calls], ["0.1", "0.1"])
+
+    def test_authoritative_scored_overshoot_stops_and_records_the_actual_spend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([json.dumps(result(cost=2.75))])
+            results = Path(tmp) / "results.jsonl"
+            rows, stopped = BENCH.replay([TASK], options(
+                tmp, reps=2, spend_cap=2.5), launch, out=results)
+            spend = json.loads((Path(tmp) / BENCH.SPEND).read_text(encoding="utf-8"))
+            self.assertEqual((len(rows), stopped, len(launch.calls)), (1, True, 1))
+            self.assertEqual((spend["charged_spend_usd"], spend["stopped_at_cap"]),
+                             (2.75, True))
+
+    def test_paid_preflight_spend_survives_red_and_later_launch_exceptions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp) / "results.jsonl"
+            with self.assertRaises(SystemExit):
+                BENCH.replay([TASK], options(tmp, skip_preflight=False),
+                             Launch([gate_reply(RED, cost=0.1), gate_reply(GREEN, cost=0.2)]),
+                             out=results)
+            spend = json.loads((Path(tmp) / BENCH.SPEND).read_text(encoding="utf-8"))
+            self.assertEqual(spend["preflight_spend_usd"], 0.3)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp) / "results.jsonl"
+            with self.assertRaisesRegex(RuntimeError, "second preflight failed"):
+                BENCH.replay([TASK], options(tmp, skip_preflight=False), Launch([
+                    gate_reply(GREEN, cost=0.1), RuntimeError("second preflight failed")]),
+                    out=results)
+            spend = json.loads((Path(tmp) / BENCH.SPEND).read_text(encoding="utf-8"))
+            self.assertEqual(spend["preflight_spend_usd"], 0.35)
 
     def test_skipping_the_pre_flight_stamps_the_rows_and_launches_nothing_extra(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -747,6 +822,55 @@ class ReplaySummaryTests(unittest.TestCase):
         self.assertIn("| 0.500 |", text)
         self.assertNotIn("\u2014", text)
 
+    def test_direct_history_write_rebases_after_a_concurrent_studio_publish(self):
+        studio = BENCH.history_row([
+            row("bare", 1, True, 1.0), row("harness", 1, True, 0.5)], "studio")
+        direct = BENCH.history_row([
+            row("bare", 1, True, 1.0), row("harness", 1, True, 0.4)], "direct")
+        with tempfile.TemporaryDirectory() as tmp:
+            repository = Path(tmp)
+            history = repository / "benchmarks"
+            studio_entered = threading.Event()
+            direct_started = threading.Event()
+            errors = []
+
+            def stage_studio(stage):
+                (stage / "history.jsonl").write_text(
+                    json.dumps(studio, sort_keys=True) + "\n", encoding="utf-8")
+                (stage / "history.md").write_text(
+                    BENCH.render_history([studio]), encoding="utf-8")
+                studio_entered.set()
+                direct_started.wait(timeout=2)
+                return types.SimpleNamespace(returncode=0)
+
+            def run_studio():
+                try:
+                    studio_replay.release_history_transaction(repository, stage_studio)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            def run_direct():
+                studio_entered.wait(timeout=2)
+                direct_started.set()
+                try:
+                    BENCH.write_history_pair(history, direct)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=run_studio), threading.Thread(target=run_direct)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            kept = [json.loads(line) for line in
+                    (history / "history.jsonl").read_text(encoding="utf-8").splitlines()]
+            markdown = (history / "history.md").read_text(encoding="utf-8")
+        self.assertEqual(errors, [])
+        self.assertEqual({item["series"] for item in kept}, {"studio", "direct"})
+        self.assertIn("| studio |", markdown)
+        self.assertIn("| direct |", markdown)
+
     def test_two_buckets_on_one_day_and_commit_are_two_rows_not_one(self):
         """The programme changes one thing at a time, so several buckets share a day and a sha.
         Before the bucket joined the key each row silently replaced the one before it."""
@@ -759,6 +883,21 @@ class ReplaySummaryTests(unittest.TestCase):
             self.assertEqual([r["bucket"] for r in kept], ["A", "C"])
             again = BENCH.upsert_history(path, BENCH.history_row(second, "s1"))
             self.assertEqual(len(again), 2)
+
+    def test_history_reconciliation_rejects_duplicate_unknown_missing_and_out_of_range_rows(self):
+        tasks = [dict(TASK, id="one")]
+        exact = [row(arm, repetition, True, 1.0, task="one")
+                 for repetition in (1, 2) for arm in BENCH.ARMS]
+        self.assertEqual(len(BENCH.reconcile_replay_rows(exact, tasks, 2)), 4)
+        failures = [
+            exact + [exact[0]],
+            exact + [dict(exact[0], task="unknown")],
+            exact[:-1],
+            exact + [dict(exact[0], rep=3)],
+        ]
+        for rows in failures:
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                BENCH.reconcile_replay_rows(rows, tasks, 2)
 
     def test_a_row_carries_the_ratio_its_bucket_was_predicted_to_produce(self):
         rows = [row("bare", 1, True, 1.0, bucket="A", predicted=1.03),

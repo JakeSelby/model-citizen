@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, Mapping, Sequence
 from harness_core import decision
 
 PRICING_SOURCES = frozenset(("api_credit", "subscription"))
-STOP_REASONS = frozenset(("spend_cap", "usage_limit"))
+STOP_REASONS = frozenset(("spend_cap", "usage_limit", "runner_failure"))
 RESULT_NAME = "spend-result.json"
 MAX_RESULT_BYTES = 1024 * 1024
 

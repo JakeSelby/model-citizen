@@ -79,6 +79,20 @@
       "timeout_seconds": 7200,
       "targets": ["installed", "release", "branch", "worktree", "draft"],
       "cases": ["native-acceptance"]
+    },
+    {
+      "id": "live-replay",
+      "version": 1,
+      "argv": ["python3", "-m", "harness_core.studio.replay_runner", "--request-json", "{param:request_json}", "--repository", "{param:repository}"],
+      "parameters": {
+        "request_json": {"kind": "pattern", "pattern": "^\\{.+\\}$", "max_length": 4096},
+        "repository": {"kind": "pattern", "pattern": "^/.+$", "max_length": 4096}
+      },
+      "cost_class": "spends_usage",
+      "expected_duration_seconds": 3600,
+      "timeout_seconds": 21600,
+      "targets": ["branch", "draft", "installed", "release", "worktree"],
+      "cases": []
     }
   ]
 }

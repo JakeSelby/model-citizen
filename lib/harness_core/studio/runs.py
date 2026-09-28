@@ -1149,7 +1149,8 @@ class RunSupervisor:
     def start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
               target_ref: str, *, confirmed: Optional[str] = None,
               max_budget_usd: Any = None, spend_cap_usd: Any = None,
-              pricing_source: Optional[str] = None) -> Dict[str, Any]:
+              pricing_source: Optional[str] = None,
+              case_identities: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         catalog = SuiteCatalog.load(self.catalog_path)
         suite = catalog.get(suite_id)
         argv = suite.render(parameters, target_kind, target_ref)
@@ -1159,6 +1160,13 @@ class RunSupervisor:
         except free_suites.FreeSuiteError as exc:
             raise RunError(str(exc)) from exc
         cases = list(discovered or suite.cases or (suite.suite_id,))
+        if case_identities is not None:
+            if (suite.cost_class != "spends_usage" or not case_identities
+                    or len(set(case_identities)) != len(case_identities)
+                    or any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value)
+                           for value in case_identities)):
+                raise RunError("paid run case identities are invalid")
+            cases = list(case_identities)
         if (suite.cost_class != "spends_usage"
                 and (confirmed is not None or max_budget_usd is not None
                      or spend_cap_usd is not None or pricing_source is not None)):
@@ -1259,12 +1267,19 @@ class RunSupervisor:
 
     def spend_preview(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
                       target_ref: str, max_budget_usd: Any, spend_cap_usd: Any,
-                      pricing_source: Optional[str]) -> Dict[str, Any]:
+                      pricing_source: Optional[str], *,
+                      case_identities: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         suite = SuiteCatalog.load(self.catalog_path).get(suite_id)
         suite.render(parameters, target_kind, target_ref)
         if suite.cost_class != "spends_usage":
             return {"cost_class": "free", "confirmation_required": False}
         cases = list(suite.cases or (suite.suite_id,))
+        if case_identities is not None:
+            if (not case_identities or len(set(case_identities)) != len(case_identities)
+                    or any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value)
+                           for value in case_identities)):
+                raise RunError("paid run case identities are invalid")
+            cases = list(case_identities)
         with self.lock():
             self._recover_locked()
             try:
