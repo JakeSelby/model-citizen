@@ -208,9 +208,7 @@ qualified on the Codex CLI for macOS and Linux, so if you need a qualified Codex
 that tag.
 
 <!-- harness:compatibility:start -->
-**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`.
-
-**Unqualified:** `claude-code-vscode-macos`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
+**Unqualified:** `claude-code-cli-macos`, `claude-code-vscode-macos`, `claude-code-cli-linux`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
 
 **Planned:** `cursor`, `grok`.
 

@@ -3,7 +3,7 @@
   "owner": { "name": "Jake Selby", "url": "https://github.com/JakeSelby" },
   "metadata": {
     "description": "The Model Citizen plugin: its skills, subagent roles, slash commands and output style, installable without a checkout.",
-    "version": "0.14.1"
+    "version": "0.14.2"
   },
   "plugins": [
     {

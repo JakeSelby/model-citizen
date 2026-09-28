@@ -57,9 +57,7 @@ reaches Codex as projected prose alone. The marketplace install reads `advisory`
 reason that it installs no hooks at all.
 
 <!-- harness:compatibility:start -->
-**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`.
-
-**Unqualified:** `claude-code-vscode-macos`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
+**Unqualified:** `claude-code-cli-macos`, `claude-code-vscode-macos`, `claude-code-cli-linux`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
 
 **Planned:** `cursor`, `grok`.
 

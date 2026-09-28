@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.1",
-  "summary": "Upgrade from v0.14.0 to complete the Model Citizen rename across public documentation and distribution metadata, accept every bundled skill manifest in standard YAML registries, publish plugin metadata at v0.14.1, and keep reworded framework review-layer briefs inside their declared constrained role. The patch changes no configuration schema or defaults, and the architecture-viewer preview is inert until an external adapter is registered and selected.",
+  "harness_version": "0.14.2",
+  "summary": "Upgrade from v0.14.1 to package the Claude Directory submission as a minimal regular-file plugin bundle, fix the sandbox skill's network and credential guidance, and publish matching plugin metadata at v0.14.2. The patch changes no configuration schema or defaults, and the architecture-viewer preview is inert until an external adapter is registered and selected.",
   "actions": [
-    "Run `citizen upgrade --dry-run`, inspect the recorded plugin and checkout changes, then run `citizen upgrade`. The plugin marketplace and plugin manifests now report v0.14.1.",
+    "Run `citizen upgrade --dry-run`, inspect the recorded plugin and checkout changes, then run `citizen upgrade`. The plugin marketplace and plugin manifests now report v0.14.2.",
     "Run `citizen sync --dry-run`, resolve any unmanaged-file conflict it names, then run `citizen sync`. Existing configuration and stance selections remain unchanged.",
     "Run `citizen diff` and `citizen doctor`; both should report no projection drift."
   ],
   "recovery": [
     "Preserve every conflict or adopted backup reported by the dry run.",
-    "To return to v0.14.0, check out v0.14.0, run `citizen sync --dry-run`, then `citizen sync`; no configuration migration needs reversing.",
-    "If the Claude Code plugin was upgraded, reinstall the v0.14.0 checkout as the `model-citizen` marketplace source before installing its plugin version again.",
+    "To return to v0.14.1, check out v0.14.1, run `citizen sync --dry-run`, then `citizen sync`; no configuration migration needs reversing.",
+    "If the Claude Code plugin was upgraded, reinstall the v0.14.1 checkout as the `model-citizen` marketplace source before installing its plugin version again.",
     "Use `citizen uninstall` only to remove the installation entirely; see docs/runtime-installation.md for ownership recovery."
   ]
 }
