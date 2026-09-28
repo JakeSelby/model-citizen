@@ -108,10 +108,10 @@ class LivingBrandTests(unittest.TestCase):
                 if "bin/harness" not in line:
                     continue
                 with self.subTest(path=rel, line=number):
-                    self.assertTrue(
-                        any(reference in line for reference in SOURCE_REFERENCES.get(rel, set())),
-                        msg=f"{rel}:{number}: {line}",
-                    )
+                    remaining = line
+                    for reference in SOURCE_REFERENCES.get(rel, set()):
+                        remaining = remaining.replace(reference, "")
+                    self.assertNotIn("bin/harness", remaining, msg=f"{rel}:{number}: {line}")
 
     def test_current_entry_pages_do_not_carry_the_retired_brand_disclaimer(self):
         old_brand = "Agent" + " Harness"
