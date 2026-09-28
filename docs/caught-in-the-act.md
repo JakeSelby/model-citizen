@@ -51,8 +51,8 @@ same rate before, during and after the hook existed: **3.2 hits per 100 turns be
 **Reproducing it.** Hits come from the local ledger, and a rescan rebuilds them from transcripts:
 
 ```sh
-bin/harness usage --rescan --days 30 --rules   # backfill, then hits per detector
-bin/harness usage --rules --by stance          # the same, per dimension=variant
+citizen usage --rescan --days 30 --rules   # backfill, then hits per detector
+citizen usage --rules --by stance          # the same, per dimension=variant
 ```
 
 The detector is `transcript-hygiene/model-wrote-no-cap` today; `--rules` folds the old id into the

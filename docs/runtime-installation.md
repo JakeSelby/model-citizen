@@ -6,7 +6,7 @@ Select targets independently in your user configuration:
 {"claude": {"manage": false}, "codex": {"manage": true}, "vscode": {"manage": false}}
 ```
 
-`bin/harness config set claude.manage false` makes the same change. A Codex-only sync creates
+`citizen config set claude.manage false` makes the same change. A Codex-only sync creates
 its configuration home even on a fresh machine; it does not require a Claude installation.
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` select nondefault runtime homes. `HARNESS_HOME` isolates
 the harness's own configuration and state for fixtures. It is not a native runtime setting.
@@ -69,12 +69,12 @@ curl -fsSL https://raw.githubusercontent.com/JakeSelby/model-citizen/stable/scri
    is fetched and fast-forwarded instead of re-cloned; one that cannot fast-forward, and a
    destination that is occupied by something that is not a git checkout, both stop the script
    rather than being reconciled for you.
-3. **Configuration.** `bin/harness init --yes` writes `~/.config/agent-harness/config.json` from
+3. **Configuration.** `citizen init --yes` writes `~/.config/agent-harness/config.json` from
    the example, taking the name from `git config user.name`, the handle from a signed-in `gh` and
    the timezone from the system. Any field it cannot answer keeps its example value and is listed
    on the way out for `citizen config set`. An existing config is never rewritten.
-4. **Preview.** `bin/harness install --dry-run`, which writes nothing.
-5. **Next command.** It prints `bin/harness install` and `bin/harness uninstall` and stops. The
+4. **Preview.** `citizen install --dry-run`, which writes nothing.
+5. **Next command.** It prints `citizen install` and `citizen uninstall` and stops. The
    script never runs `install` without `--dry-run`.
 
 Any failure exits non-zero with one line naming the step. `HARNESS_CHECKOUT` moves the checkout,
@@ -139,7 +139,7 @@ either ID, names `citizen upgrade` while the old one is enabled, and warns while
 because every skill would then load twice. `citizen sync` prints the same pointer. The synced home
 itself is unaffected by the plugin rename.
 
-A marketplace install is a strict subset of `bin/harness install`. It does not give you:
+A marketplace install is a strict subset of `citizen install`. It does not give you:
 
 - the ownership journal, `citizen diff`, or a restoring `citizen uninstall`;
 - stance selection — no rules, no `CLAUDE.md` projection, no personal file;

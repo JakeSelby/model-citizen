@@ -1,4 +1,4 @@
-# BMad in agent-harness and downstream repositories
+# BMad in Model Citizen and downstream repositories
 
 The harness is framework-agnostic. This page records a pattern that keeps a self-hosted
 planning framework (the [BMad Method](https://github.com/bmad-code-org/BMAD-METHOD), MIT)
@@ -18,7 +18,7 @@ npx --yes bmad-method@"$BMAD_VERSION" install --directory . --modules bmm \
   --document-output-language English --output-folder _bmad-output --shims --yes
 ```
 
-Then run `python3 bin/harness integration check bmad .`. Planning workflows run from the shared checkout;
+Then run `citizen integration check bmad .`. Planning workflows run from the shared checkout;
 implementation still happens in managed worktrees.
 
 The version-control boundary is intentional:
@@ -206,7 +206,7 @@ existed during the original delivery.
 - **Choose the artifact authority explicitly.** In `_bmad/custom/config.toml`, point
   `planning_artifacts`, `implementation_artifacts`, `project_knowledge` and `output_folder` at
   the intended repository using `{project-root}`-relative paths. A separate planning repository
-  can keep a very large private corpus out of every worktree; public projects such as agent-harness
+  can keep a very large private corpus out of every worktree; public projects such as Model Citizen
   can instead commit a sanitized local corpus.
 - **Pin the install.** One command, with versions, in the repo's `AGENTS.md`, for example
   `npx bmad-method@<version> install --directory <repo> --modules <list> --tools claude-code,codex --yes`.
@@ -347,7 +347,7 @@ the tag:
 BMAD_VERSION=6.12.0
 npx --yes bmad-method@"$BMAD_VERSION" install --directory <framework-root> --modules bmm \
   --tools claude-code,codex --output-folder _bmad-output --shims --yes
-python3 bin/harness integration apply bmad <framework-root>
+citizen integration apply bmad <framework-root>
 # then run the four-layer code review from the shared checkout against an assigned worktree,
 # and confirm each layer ran as an isolated worker rather than a native subagent.
 ```

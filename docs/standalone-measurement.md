@@ -2,7 +2,7 @@
 
 The measurement report reads one file: the session ledger at
 `~/.local/state/agent-harness/usage.jsonl`, written by the `usage-log` hook. Nothing in
-`bin/harness usage` needs a projected primitive, a merged settings file or a synced runtime, so
+`citizen usage` needs a projected primitive, a merged settings file or a synced runtime, so
 the report is useful to someone who wants the numbers and not the way of working.
 
 ## When the whole harness is the answer

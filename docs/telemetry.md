@@ -190,9 +190,9 @@ nor the session's.
 ## Replay
 
 ```sh
-bin/harness usage export --since 2026-09-01                    # everything since that day
-bin/harness usage export --since 2026-09-01 --until 2026-09-07 # one week
-bin/harness usage export --since 2026-09-01 --dry-run          # count it, connect to nothing
+citizen usage export --since 2026-09-01                    # everything since that day
+citizen usage export --since 2026-09-01 --until 2026-09-07 # one week
+citizen usage export --since 2026-09-01 --dry-run          # count it, connect to nothing
 ```
 
 Rows are re-sent in batches; the command prints how many were sent and how many failed, and

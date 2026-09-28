@@ -1,7 +1,5 @@
 # Start with your way of working
 
-Formerly Agent Harness.
-
 Model Citizen is a harness of shared custom primitives for the two runtimes it supports today,
 Claude Code and Codex. Your personal stances are switches for behavior: communication, delegation,
 testing, autonomy and decision-making. The same selection resolves in both runtimes, and three of
@@ -27,10 +25,10 @@ Read the preview it prints, then select which runtimes to manage and install:
 
 ```sh
 cd ~/repos/agent-harness
-bin/harness config set claude.manage true
-bin/harness config set codex.manage true
-bin/harness install --dry-run
-bin/harness install
+citizen config set claude.manage true
+citizen config set codex.manage true
+citizen install --dry-run
+citizen install
 ```
 
 To clone by hand instead, or to see what each step of the script does, read
@@ -48,9 +46,9 @@ where the client requires it. Use `citizen trust <repo>` separately for the repo
 ## Make your first switch
 
 ```sh
-bin/harness config set stances.voice answer-card
-bin/harness stances --json
-bin/harness sync
+citizen config set stances.voice answer-card
+citizen stances --json
+citizen sync
 ```
 
 The same selected policy reaches both adapters. Restart the client to load changed global

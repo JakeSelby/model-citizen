@@ -93,7 +93,7 @@ class BuildCommandTests(unittest.TestCase):
 
 class AgentDocTests(unittest.TestCase):
     def test_readme_points_to_authoritative_catalog_instead_of_duplicating_inventory(self):
-        self.assertIn("harness catalog", README.read_text())
+        self.assertIn("citizen catalog", README.read_text())
         self.assertIn("primitives/", README.read_text())
 
 

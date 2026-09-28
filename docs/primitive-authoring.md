@@ -7,14 +7,14 @@ native restrictions still apply. Guidance is not proof that a runtime enforces a
 ## Select and inspect a stance
 
 ```sh
-bin/harness config set stances.voice answer-card
-bin/harness stances
-bin/harness sync --dry-run
+citizen config set stances.voice answer-card
+citizen stances
+citizen sync --dry-run
 ```
 
-After reviewing the changes, `bin/harness sync` installs the selection. Claude Code reads the
+After reviewing the changes, `citizen sync` installs the selection. Claude Code reads the
 selected stance through its linked rules; Codex reads the same text in generated instructions.
-Use `HARNESS_STANCE_VOICE=scannable bin/harness stances --json` to inspect a session selection.
+Use `HARNESS_STANCE_VOICE=scannable citizen stances --json` to inspect a session selection.
 Setting an environment variable on a running agent does not itself rewrite its loaded context.
 
 A project or session selection that differs from the synced one reaches the model at the next
@@ -39,7 +39,7 @@ Lead with the conclusion. Name the specific evidence and the next useful action.
 ```
 
 Add `stances/feedback/gentle.md` with your alternative policy, then select it with
-`bin/harness config set stances.feedback gentle`. `bin/harness stances --json` shows its
+`citizen config set stances.feedback gentle`. `citizen stances --json` shows its
 source and full resolved behavior. Custom dimensions are optional until selected. Identifiers
 use lowercase letters, digits and hyphens. Duplicate dimension/variant definitions, unknown
 selections and path traversal are errors, not fallback behavior.
@@ -110,12 +110,12 @@ resolves to `tiered`. A role whose frontmatter says `posture: fixed` — the ver
 own class and effort whatever a row says, and takes the row's budgets.
 
 Unknown keys are ignored with a warning rather than an error, so a switch added in a later
-release never breaks a variant you wrote. Run `bin/harness stances --json` to see the resolved
+release never breaks a variant you wrote. Run `citizen stances --json` to see the resolved
 table, its `extends_chain`, each sidecar's path, and any warnings.
 
 ## Import instructions you already have
 
-`bin/harness import path/to/CLAUDE.md` turns an existing instruction file into rules under an
+`citizen import path/to/CLAUDE.md` turns an existing instruction file into rules under an
 external primitive root, so adopting the harness does not mean discarding what a repository
 already tells its agents. It reads `CLAUDE.md`, `AGENTS.md`, `.cursorrules` and
 `.cursor/rules/*.mdc`; rulesync's `import` is the reference for the behaviour.
@@ -130,8 +130,8 @@ name already taken and a front-matter line that is not a field all land in one
 `rules/<name>-unsorted.md` with a note saying so.
 
 ```sh
-bin/harness import ~/code/project/CLAUDE.md --dry-run   # the plan, then the sync projection
-bin/harness import ~/code/project/CLAUDE.md             # writes exactly that plan
+citizen import ~/code/project/CLAUDE.md --dry-run   # the plan, then the sync projection
+citizen import ~/code/project/CLAUDE.md             # writes exactly that plan
 ```
 
 The first run only prints — the rules it would write, then `citizen sync --dry-run` for the root
@@ -200,7 +200,7 @@ compatibility links or generated views, not another authoring home. A new rule, 
 workflow also needs its entry in `primitives/manifests.json`
 ([above](#declare-a-modules-manifest)).
 
-Run `bin/harness generate` after editing roles, workflows or base instruction templates.
-`bin/harness generate --check` and lint reject projection drift. `bin/harness catalog` emits
+Run `citizen generate` after editing roles, workflows or base instruction templates.
+`citizen generate --check` and lint reject projection drift. `citizen catalog` emits
 stable kind/ID/source/digest records for documentation and integration readers. Installation
 coverage and runtime enforcement are separate from successful source generation.

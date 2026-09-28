@@ -2,8 +2,6 @@
 
 # Model Citizen
 
-Formerly Agent Harness.
-
 [![CI](https://github.com/JakeSelby/model-citizen/actions/workflows/ci.yml/badge.svg)](https://github.com/JakeSelby/model-citizen/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
@@ -131,7 +129,7 @@ harness; each choice can be changed independently, and you can add your own dime
 | Build versus buy | `capability-ceiling`, `off` |
 
 Some stances are advisory instructions. Others also select implemented hooks or native settings.
-`bin/harness stances --json` shows the resolved choice, adapter mode and qualification status for
+`citizen stances --json` shows the resolved choice, adapter mode and qualification status for
 each one. A stance never overrides a client's native restriction.
 
 **Useful defaults. Preferences you can change. Primitives you can extend.**
@@ -162,14 +160,14 @@ trunk and can be ahead of any release:
 git clone --branch stable https://github.com/JakeSelby/model-citizen.git ~/repos/agent-harness
 cd ~/repos/agent-harness
 
-bin/harness config set claude.manage true
-bin/harness config set codex.manage true
-bin/harness config set vscode.manage false
+citizen config set claude.manage true
+citizen config set codex.manage true
+citizen config set vscode.manage false
 
-bin/harness sync --dry-run
+citizen sync --dry-run
 # Review every proposed link, rendered file, setting and conflict.
-bin/harness sync
-bin/harness doctor
+citizen sync
+citizen doctor
 ```
 
 Set either runtime to `false` if you do not use it; neither runtime requires the other. Set
@@ -223,11 +221,11 @@ This transcript was captured with Claude and Codex enabled in disposable configu
 Excerpts are shortened; paths and unrelated stances are omitted.
 
 ```console
-$ bin/harness config set stances.delegation tiered
+$ citizen config set stances.delegation tiered
 stances.delegation = "tiered"  (.../.config/agent-harness/config.json)
 run `citizen sync` to apply it
 
-$ bin/harness stances --json
+$ citizen stances --json
 "delegation": {
   "variant": "tiered",
   "behavior": "# Delegation stance: tiered models\n\n**Gather with subagents ..."
@@ -235,16 +233,16 @@ $ bin/harness stances --json
 "claude-code": { "delegation": { "mode": "instruction-and-hook", "qualification": "unqualified" } }
 "codex":       { "delegation": { "mode": "instruction-and-hook", "qualification": "unqualified" } }
 
-$ bin/harness config set stances.delegation off
+$ citizen config set stances.delegation off
 stances.delegation = "off"  (.../.config/agent-harness/config.json)
 
-$ bin/harness stances --json
+$ citizen stances --json
 "delegation": {
   "variant": "off",
   "behavior": "# Delegation stance: off\n\nDo not spawn subagents unless the user asks ..."
 }
 
-$ bin/harness sync --dry-run
+$ citizen sync --dry-run
 stances: ... delegation=off ...
 link  .../claude/rules/harness-stances/delegation.md -> .../primitives/stances/delegation/off.md
 codex hooks registered; native hook trust must be accepted in the client
@@ -277,7 +275,7 @@ flowchart LR
 `primitives/` is the authoring authority for rules, stances, skills, roles, workflows and
 presentation. `policy/` implements shared lifecycle decisions; `adapters/` translates them into
 runtime-specific controls. Paths under `claude/` are generated views or compatibility links, not a
-second catalog. Run `bin/harness catalog` for source digests and `bin/harness generate --check` for
+second catalog. Run `citizen catalog` for source digests and `citizen generate --check` for
 projection drift.
 
 Custom prose stances are advisory unless you also implement and register corresponding policy.
@@ -291,12 +289,12 @@ unverified. Hosted agents and native memory merging are also deferred.
 
 The `cost` stance sets a working posture (effort, fan-out and cache habits), not a hard dollar cap.
 Model access remains billed by the provider or covered by a subscription, and there is no claimed
-savings benchmark. `bin/harness usage` summarizes available local session measurements, labels
+savings benchmark. `citizen usage` summarizes available local session measurements, labels
 partial data and leaves unavailable metrics unknown. It does not send telemetry to a service.
 Read [usage and its limits](docs/usage.md).
 
 Each variant also carries a resolved table: a model class, a reasoning effort and a soft budget for
-each shared role and for each of the three work bands, which `bin/harness stances --json` prints.
+each shared role and for each of the three work bands, which `citizen stances --json` prints.
 A subagent brief states the budget its row expects; a subagent past it finishes or returns and says
 why, and nothing is truncated. A spawn that names no role is routed to the variant's default band
 worker, which is the only way a posture's effort reaches a spawn that named nothing. While a
@@ -308,14 +306,14 @@ budgets. All of it is a working posture and local measurement; none of it is a s
 If you also want the harness to provision missing tools, use the broader installation path:
 
 ```sh
-bin/harness init
-bin/harness install --dry-run
-bin/harness install
-bin/harness doctor
+citizen init
+citizen install --dry-run
+citizen install
+citizen doctor
 ```
 
 `install` can install applications and packages as well as synchronize configuration. Review
-`bin/harness install --help` first; flags can skip Homebrew, apps, VS Code or Codex. Existing
+`citizen install --help` first; flags can skip Homebrew, apps, VS Code or Codex. Existing
 user-owned files, credentials, model choices, MCP servers and plugins are not silently replaced.
 
 The harness tracks fields and files it owns. `uninstall` restores a previous value only when the

@@ -8,6 +8,27 @@ README = (REPO / "README.md").read_text()
 GUIDE = (REPO / "docs" / "getting-started.md").read_text()
 SUPPORT = (REPO / "SUPPORT.md").read_text()
 PREFERENCES = (REPO / "docs" / "preferences.md").read_text()
+CURRENT_COMMAND_DOCS = (
+    "README.md",
+    "docs/getting-started.md",
+    "docs/bmad.md",
+    "docs/bmad-governance.md",
+    "docs/runtime-installation.md",
+    "docs/standalone-measurement.md",
+    "docs/runtime-controls.md",
+    "docs/primitive-authoring.md",
+    "docs/telemetry.md",
+    "docs/caught-in-the-act.md",
+    "docs/usage.md",
+)
+SOURCE_REFERENCES = {
+    "README.md": {"python3 bin/harness lint", "bin/harness generate --check"},
+    "docs/bmad-governance.md": {
+        "python3 bin/harness lint",
+        "bin/harness generate --check",
+    },
+    "docs/usage.md": {"`RULE_MIN_SESSIONS` in `bin/harness`"},
+}
 
 
 class ReadmeTests(unittest.TestCase):
@@ -16,8 +37,8 @@ class ReadmeTests(unittest.TestCase):
         full_install = "## Full installation and ownership"
         self.assertIn(quick_start, README)
         self.assertLess(README.index(quick_start), README.index(full_install))
-        self.assertLess(README.index("bin/harness sync --dry-run"),
-                        README.index("\nbin/harness sync\n"))
+        self.assertLess(README.index("citizen sync --dry-run"),
+                        README.index("\ncitizen sync\n"))
 
     def test_the_account_is_stated_rather_than_assumed(self):
         prose = " ".join(README.split())
@@ -76,6 +97,25 @@ class GuideTests(unittest.TestCase):
         for name in ("usage.md", "preferences.md", "how-it-works.md", "sandboxing.md"):
             self.assertIn(f"]({name})", GUIDE, msg=name)
             self.assertTrue((REPO / "docs" / name).exists(), msg=name)
+
+
+class LivingBrandTests(unittest.TestCase):
+    def test_current_command_docs_use_citizen_except_for_source_file_references(self):
+        for rel in CURRENT_COMMAND_DOCS:
+            for number, line in enumerate((REPO / rel).read_text().splitlines(), 1):
+                if "bin/harness" not in line:
+                    continue
+                with self.subTest(path=rel, line=number):
+                    self.assertTrue(
+                        any(reference in line for reference in SOURCE_REFERENCES.get(rel, set())),
+                        msg=f"{rel}:{number}: {line}",
+                    )
+
+    def test_current_entry_pages_do_not_carry_the_retired_brand_disclaimer(self):
+        old_brand = "Agent" + " Harness"
+        for rel in ("README.md", "docs/getting-started.md"):
+            with self.subTest(path=rel):
+                self.assertNotIn("Formerly " + old_brand + ".", (REPO / rel).read_text())
 
 
 class SupportTests(unittest.TestCase):

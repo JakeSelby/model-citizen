@@ -15,14 +15,14 @@ record and the backend is a copy that `citizen usage export --since` can rebuild
 
 ## Which rules fired
 
-The same report that sums the tokens scores the rules. `bin/harness usage --rules` counts
+The same report that sums the tokens scores the rules. `citizen usage --rules` counts
 detector hits per rule over the window instead of tokens, and `citizen --help` lists it beside
 the token groupings.
 
 ```sh
-bin/harness usage --rules                      # hits per detector over the last 30 days
-bin/harness usage --rules --by repo            # sessions, hits and the top three per repo
-bin/harness usage --rules --by stance          # the same, per dimension=variant
+citizen usage --rules                      # hits per detector over the last 30 days
+citizen usage --rules --by repo            # sessions, hits and the top three per repo
+citizen usage --rules --by stance          # the same, per dimension=variant
 ```
 
 Three groupings and no more: `rule`, the default, one line per registry id; `repo`, one line
@@ -567,7 +567,7 @@ The read is the last 256 KiB of the file, so it costs the same on a transcript o
 claim older than that window reads as `no_claim` rather than as the wrong turn's words.
 
 ```sh
-bin/harness usage --by decision        # counts, outcome rates and the unlabelled share per point
+citizen usage --by decision        # counts, outcome rates and the unlabelled share per point
 ```
 
 The **unlabelled share** is the column to read first: an outcome rate over the two decisions
@@ -579,7 +579,7 @@ merge` writes one row per landing saying whether bringing in the base branch con
 (`deny`, the default) or only warned (`warn`); `citizen intent --help` has the commands.
 
 ```sh
-bin/harness usage --conflicts          # landing merge conflicts and intent overlaps per week
+citizen usage --conflicts          # landing merge conflicts and intent overlaps per week
 ```
 
 `citizen decisions eval` replays the labelled rows of this file through a question pack and
@@ -594,7 +594,7 @@ writes one `kind: "decision"` row into the usage ledger beside the session rows,
 prices it from the same table:
 
 ```sh
-bin/harness usage --by provider        # calls, statuses, tokens, dollars and latency per point
+citizen usage --by provider        # calls, statuses, tokens, dollars and latency per point
 ```
 
 The row names the decision point, the mode it ran under, the status, the requested and returned
@@ -629,15 +629,15 @@ charge a session for a bill it did not run up.
 ## Reading it
 
 ```sh
-bin/harness usage                      # last 30 days, grouped by day
-bin/harness usage --days 7 --by repo
-bin/harness usage --by model           # a session using two models groups under both, joined
-bin/harness usage --by role            # per agent type: runs, p50/p75/p90 output, p50/p75 usd
-bin/harness usage --by stance --stance cost   # tokens per variant of one stance dimension
-bin/harness usage --by profile         # tokens per profile fingerprint; older rows unattributed
-bin/harness usage --by decision        # hook decisions and their outcomes, above
-bin/harness usage --by provider        # decision-provider calls, priced, above
-bin/harness usage --rescan             # re-read transcripts in the window first, then report
+citizen usage                      # last 30 days, grouped by day
+citizen usage --days 7 --by repo
+citizen usage --by model           # a session using two models groups under both, joined
+citizen usage --by role            # per agent type: runs, p50/p75/p90 output, p50/p75 usd
+citizen usage --by stance --stance cost   # tokens per variant of one stance dimension
+citizen usage --by profile         # tokens per profile fingerprint; older rows unattributed
+citizen usage --by decision        # hook decisions and their outcomes, above
+citizen usage --by provider        # decision-provider calls, priced, above
+citizen usage --rescan             # re-read transcripts in the window first, then report
 ```
 
 `--by role` reads the subagent and worker rows. A row with a `workflow` directory is grouped under
@@ -758,7 +758,7 @@ and update the file; that is the whole maintenance cost, and it names a real fai
 ### Re-seeding budgets
 
 A cost variant's per-role budgets are measured, not guessed, so they go stale as roles change.
-Run `bin/harness usage --rescan --by role` over a window wide enough to hold a few dozen runs,
+Run `citizen usage --rescan --by role` over a window wide enough to hold a few dozen runs,
 read the p75 column for the role — the shipped figures are that point on the curve — and write it
 into your variant's row as `budget_output_tokens` and `budget_tool_calls`. A role still marked
 `n<30` has not earned a re-seed; widen the window or leave the figure where it is.
@@ -781,7 +781,7 @@ treat the sentence above as a thing to check in your own data rather than as an 
 prefix survived the session, and that is the thing `primitives/rules/cache-hygiene.md` actually
 asks for: a mid-task change to the tool set, the MCP server list, the model or the effort dial
 turns the next turn's cache reads into cache writes, and the only visible symptom is a larger
-bill. `bin/harness usage --by prefix` reports the miss ratio per session:
+bill. `citizen usage --by prefix` reports the miss ratio per session:
 
 ```
 miss = cache_write / (cache_read + cache_write)
@@ -895,10 +895,10 @@ the old id reports under the new one and the series does not split.
 ### Reading the report
 
 ```sh
-bin/harness usage --rules                      # hits per detector over the last 30 days
-bin/harness usage --rules --by repo            # sessions, hits and the top three per repo
-bin/harness usage --rules --by stance          # the same, per dimension=variant
-bin/harness usage --rescan --days 30 --rules   # backfill from the transcripts, then report
+citizen usage --rules                      # hits per detector over the last 30 days
+citizen usage --rules --by repo            # sessions, hits and the top three per repo
+citizen usage --rules --by stance          # the same, per dimension=variant
+citizen usage --rescan --days 30 --rules   # backfill from the transcripts, then report
 ```
 
 The groupings and the two annotations are in [which rules fired](#which-rules-fired) above.

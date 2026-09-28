@@ -17,7 +17,7 @@ scripted qualification round agrees with a hand-driven one, so the v0.11.1 stabl
 the last one qualifying the Codex CLI on macOS and Linux. The Claude Code and Codex VS Code surfaces, Codex Desktop on macOS and the Claude Code
 plugin-marketplace install remain unqualified previews. A marketplace install carries the
 skills, roles, commands and output style only; the ownership journal, stance selection, the
-Codex projection and the hooks come from `bin/harness install`, and
+Codex projection and the hooks come from `citizen install`, and
 [runtime installation](runtime-installation.md) states the difference. Do not read successful source generation or deterministic tests as native
 client qualification.
 

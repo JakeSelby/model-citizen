@@ -1,6 +1,6 @@
 # BMad repository governance
 
-This file is the single policy source loaded by agent-harness's BMad workflow customizations.
+This file is the single policy source loaded by Model Citizen's BMad workflow customizations.
 The repository instructions remain authoritative when they are stricter.
 
 - **Authority is split between the issue and its story file.**

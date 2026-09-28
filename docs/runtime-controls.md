@@ -243,9 +243,9 @@ gave, and the outcome the session later showed — through a question pack in `s
 writes a report to `~/.local/state/agent-harness/jev-eval.json` or wherever `--out` says.
 
 ```sh
-bin/harness decisions eval --replay tests/fixtures/jev/eval/responses.json   # no socket
-bin/harness decisions eval --point grade-bash --split heldout --out report.json
-bin/harness decisions eval --live --max-requests 50 --usd-per-mtok 3 --budget-usd 2
+citizen decisions eval --replay tests/fixtures/jev/eval/responses.json   # no socket
+citizen decisions eval --point grade-bash --split heldout --out report.json
+citizen decisions eval --live --max-requests 50 --usd-per-mtok 3 --budget-usd 2
 ```
 
 A **pack is versioned**. `lib/harness_core/decisions/packs.py` holds each one as an id, a

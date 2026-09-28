@@ -211,7 +211,7 @@ The `--check` side of it runs inside `scripts/release_preflight.py`, which warns
 when `gh` is unauthenticated.
 
 `scripts/sync_about.py --apply` writes whatever `product.json` the *current checkout* holds. Run it
-only from a worktree fast-forwarded to `origin/main` (`bin/harness worktree create main-sync <repo>`,
+only from a worktree fast-forwarded to `origin/main` (`citizen worktree create main-sync <repo>`,
 then `git merge --ff-only origin/main`); a stale checkout once reverted the About panel.
 
 ## Rollback
