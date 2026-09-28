@@ -24,7 +24,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 from harness_core import overview, workers
 
 from . import (activity, auth, free_suites, live_updates, module_library, native_acceptance, replay,
-               runs, selection, settings, targets)
+               runs, selection, selection_editing, settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -1017,6 +1017,50 @@ def _configure_save(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _draft_selection_read(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: selection_editing.read(
+        handler.server.repo_root, request["draft"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_selection_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "changes"))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: selection_editing.preview(
+        handler.server.repo_root, request["draft"], request["changes"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_selection_save(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "base_revision", "idempotency_key", "changes"))
+    if request is None:
+        return
+    strings = (request["draft"], request["base_revision"], request["idempotency_key"])
+    if any(not isinstance(value, str) or not value for value in strings):
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: selection_editing.save(
+        handler.server.repo_root, request["draft"], request["base_revision"],
+        request["idempotency_key"], request["changes"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1069,6 +1113,23 @@ CONFIGURE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error
                                                      ("base_revision", "string")))
 CONFIGURE_SAVE = ResponseSchema("json-object", CONFIGURE_PREVIEW.fields +
                                 (("saved", "boolean"), ("result", "object-or-null")))
+DRAFT_SELECTION_READ = ResponseSchema("json-object", (("status", "string"),
+                                                         ("message", "string"),
+                                                         ("draft", "object"),
+                                                         ("controls", "object"),
+                                                         ("current", "object")))
+DRAFT_SELECTION_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"),
+                                                            ("error", "string"),
+                                                            ("error_code", "string"),
+                                                            ("changed", "array"),
+                                                            ("unchanged", "boolean"),
+                                                            ("base_revision", "string"),
+                                                            ("before", "object"),
+                                                            ("after", "object"),
+                                                            ("controls", "object"),
+                                                            ("applied", "array")))
+DRAFT_SELECTION_SAVE = ResponseSchema("json-object", DRAFT_SELECTION_PREVIEW.fields +
+                                       (("saved", "boolean"), ("result", "object-or-null")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1172,6 +1233,12 @@ ROUTES = RouteRegistry((
           _configure_preview, None, "application/json", settings.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/save", "application/json", CONFIGURE_SAVE,
           _configure_save, None, "application/json", settings.CLI_COMMANDS["save"]),
+    Route("POST", "/api/configure/selection/read", "application/json", DRAFT_SELECTION_READ,
+          _draft_selection_read, None, "application/json", selection_editing.CLI_COMMANDS["read"]),
+    Route("POST", "/api/configure/selection/preview", "application/json", DRAFT_SELECTION_PREVIEW,
+          _draft_selection_preview, None, "application/json", selection_editing.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/selection/save", "application/json", DRAFT_SELECTION_SAVE,
+          _draft_selection_save, None, "application/json", selection_editing.CLI_COMMANDS["save"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

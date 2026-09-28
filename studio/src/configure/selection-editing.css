@@ -1,0 +1,32 @@
+.selection-switch-group {
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  overflow: clip;
+}
+
+.selection-switch-group > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-weight: 650;
+  justify-content: space-between;
+  min-height: 2.9rem;
+  padding: 0.65rem 0.9rem;
+}
+
+.selection-switch-group[open] > summary {
+  background: color-mix(in srgb, var(--mantine-primary-color-filled) 6%, transparent);
+  border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.selection-preview-code {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 48em) {
+  .selection-switch-group > summary {
+    min-height: 3.25rem;
+  }
+}

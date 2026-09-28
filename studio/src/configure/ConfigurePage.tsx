@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
 import { CommandChip } from "../components/StudioKit";
+import { DraftSelectionEditor } from "./DraftSelectionEditor";
 import { SelectionPanel } from "../selection/SelectionPanel";
 import {
   AUTOSAVE_DELAY_MS, errorMap, fieldEnabled, hydrateValues, parseJsonObject,
@@ -131,6 +132,7 @@ export function ConfigurePage() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const saving = useRef(false);
+  const draftLoadGeneration = useRef(0);
   const [retryAvailable, setRetryAvailable] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "unavailable" | "error">("loading");
@@ -208,10 +210,17 @@ export function ConfigurePage() {
 
   async function openDraft() {
     if (!schema || !draft.trim()) return;
+    const loadGeneration = ++draftLoadGeneration.current;
+    const requestedDraft = draft.trim();
+    setLoadedDraft("");
+    setBaseRevision("");
+    setChanges({});
+    setPreview(null);
     setStatus("loading");
     setMessage("Loading draft…");
     try {
-      const result = await loadDraft(draft.trim());
+      const result = await loadDraft(requestedDraft);
+      if (draftLoadGeneration.current !== loadGeneration) return;
       setStatus(result.status === "ready" ? "ready" : result.status);
       setMessage(result.message);
       setValues(hydrateValues(schema, result.values));
@@ -219,9 +228,10 @@ export function ConfigurePage() {
       setPreview(null);
       setWarnings(result.warnings);
       setBaseRevision(result.draft.revision ?? "");
-      setLoadedDraft(result.draft.name ?? draft.trim());
+      setLoadedDraft(result.draft.name ?? requestedDraft);
       setRetryAvailable(false);
     } catch (error) {
+      if (draftLoadGeneration.current !== loadGeneration) return;
       setStatus("error");
       setMessage(error instanceof Error ? error.message : "Draft could not be loaded.");
     }
@@ -281,6 +291,10 @@ export function ConfigurePage() {
         <Alert color="yellow" title="Configuration is valid with limitations">
           <ul className="message-list">{warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
         </Alert>
+      )}
+
+      {loadedDraft && baseRevision && (
+        <DraftSelectionEditor draft={loadedDraft} revision={baseRevision} onRevision={setBaseRevision} />
       )}
 
       <GovernedSyncReview />

@@ -24,6 +24,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen draft create NAME [--base installed|TAG] [--json]
     citizen draft list|diff|rebase|discard [NAME] [--json]
     citizen draft settings schema|read|preview|save [OPTIONS] [--json]
+    citizen draft selection read|preview|save [OPTIONS] [--json]
     citizen worktree create NAME [REPO] [--branch BRANCH] [--base BASE] [--no-fetch]
     citizen worktree audit [REPO]
     citizen worktree remove NAME [REPO] [--merged] [--also-clear NAME]
@@ -77,6 +78,7 @@ from harness_core import overview as overview_core
 from harness_core import studio
 from harness_core.studio import activity as studio_activity
 from harness_core.studio import settings as studio_settings
+from harness_core.studio import selection_editing as studio_selection_editing
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -3504,6 +3506,18 @@ def cmd_draft(args: argparse.Namespace) -> int:
                     repo, args.name, args.base_revision, args.idempotency_key,
                     integrations.read_json(args.changes),
                 )
+        elif args.action == "selection":
+            if args.selection_action == "read":
+                result = studio_selection_editing.read(repo, args.name)
+            elif args.selection_action == "preview":
+                result = studio_selection_editing.preview(
+                    repo, args.name, integrations.read_json(args.changes),
+                )
+            else:
+                result = studio_selection_editing.save(
+                    repo, args.name, args.base_revision, args.idempotency_key,
+                    integrations.read_json(args.changes),
+                )
         elif args.action == "create":
             result: Any = studio.drafts.create(
                 repo, args.name, args.base, config_path(),
@@ -3518,12 +3532,12 @@ def cmd_draft(args: argparse.Namespace) -> int:
         else:
             result = studio.drafts.discard(repo, args.name, _draft_remove_worktree)
     except (studio.drafts.DraftError, integrations.IntegrationError) as exc:
-        if args.json or args.action == "settings":
+        if args.json or args.action in ("settings", "selection"):
             say(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
         else:
             say("draft: " + str(exc))
         return 1
-    if args.json or args.action == "settings":
+    if args.json or args.action in ("settings", "selection"):
         say(json.dumps(result, sort_keys=True))
     elif args.action == "list":
         for item in result["drafts"]:
@@ -6148,6 +6162,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                                help="JSON object of path-keyed changes")
     settings_save.add_argument("--json", action="store_true")
     settings_save.set_defaults(func=cmd_draft)
+    selection_parser = draft_sub.add_parser("selection", help="read and validate draft selection")
+    selection_sub = selection_parser.add_subparsers(dest="selection_action", required=True)
+    selection_read = selection_sub.add_parser("read", help="show draft selection controls and preview")
+    selection_read.add_argument("name")
+    selection_read.add_argument("--json", action="store_true")
+    selection_read.set_defaults(func=cmd_draft)
+    selection_preview = selection_sub.add_parser("preview", help="validate selection changes")
+    selection_preview.add_argument("name")
+    selection_preview.add_argument("--changes", required=True, metavar="FILE",
+                                   help="JSON object of path-keyed changes")
+    selection_preview.add_argument("--json", action="store_true")
+    selection_preview.set_defaults(func=cmd_draft)
+    selection_save = selection_sub.add_parser("save", help="checkpoint validated selection changes")
+    selection_save.add_argument("name")
+    selection_save.add_argument("--base-revision", required=True)
+    selection_save.add_argument("--idempotency-key", required=True)
+    selection_save.add_argument("--changes", required=True, metavar="FILE",
+                                help="JSON object of path-keyed changes")
+    selection_save.add_argument("--json", action="store_true")
+    selection_save.set_defaults(func=cmd_draft)
 
     p = sub.add_parser("remote-control", help="keep a Claude Code Remote Control server running per configured folder (macOS)")
     rc_sub = p.add_subparsers(dest="action", required=True)

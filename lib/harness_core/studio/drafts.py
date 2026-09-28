@@ -272,7 +272,8 @@ def read_config(repo: Path, name: str) -> Dict[str, Any]:
 
 
 def checkpoint_config(repo: Path, name: str, base_revision: str, idempotency_key: str,
-                      config: Dict[str, Any], check_command: Optional[List[str]] = None) -> Dict[str, Any]:
+                      config: Dict[str, Any], check_command: Optional[List[str]] = None,
+                      request_identity: Optional[str] = None) -> Dict[str, Any]:
     """Save validated structured configuration through the normal draft transaction."""
     if not isinstance(config, dict):
         raise DraftError("invalid-config", "draft configuration must be a JSON object")
@@ -281,7 +282,53 @@ def checkpoint_config(repo: Path, name: str, base_revision: str, idempotency_key
     except (TypeError, ValueError, RecursionError) as exc:
         raise DraftError("invalid-config", "draft configuration must contain finite JSON values") from exc
     return checkpoint(repo, name, base_revision, idempotency_key,
-                      config=content, check_command=check_command)
+                      config=content, check_command=check_command,
+                      request_identity=request_identity)
+
+
+def replay_config_request(
+    repo: Path, name: str, idempotency_key: str, request_identity: str,
+) -> Optional[Dict[str, Any]]:
+    """Return a durable result identified by the original config request, if present."""
+    if not idempotency_key or len(idempotency_key) > 200:
+        raise DraftError("invalid-idempotency-key", "an idempotency key of 1 to 200 characters is required")
+    if not request_identity:
+        raise DraftError("invalid-idempotency-key", "a config request identity is required")
+    worktree, _ = find(repo, name)
+    with _locked(worktree):
+        state = _recover(worktree, _read_state(worktree))
+        prior = state["idempotency"].get(idempotency_key)
+        if prior is None or "request_identity" not in prior:
+            return None
+        if prior["request_identity"] != request_identity:
+            raise DraftError(
+                "idempotency-conflict", "idempotency key was already used for a different save",
+            )
+        return dict(prior["result"], replayed=True)
+
+
+def replay_config_checkpoint(
+    repo: Path, name: str, idempotency_key: str, config: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return a durable matching config checkpoint, or ``None`` for a new request."""
+    if not idempotency_key or len(idempotency_key) > 200:
+        raise DraftError("invalid-idempotency-key", "an idempotency key of 1 to 200 characters is required")
+    try:
+        content = (json.dumps(config, allow_nan=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise DraftError("invalid-config", "draft configuration must contain finite JSON values") from exc
+    digest = _request_digest({}, content)
+    worktree, _ = find(repo, name)
+    with _locked(worktree):
+        state = _recover(worktree, _read_state(worktree))
+        prior = state["idempotency"].get(idempotency_key)
+        if prior is None:
+            return None
+        if prior["digest"] != digest:
+            raise DraftError(
+                "idempotency-conflict", "idempotency key was already used for a different save",
+            )
+        return dict(prior["result"], replayed=True)
 
 
 def _text_diff(before: Optional[bytes], after: Optional[bytes], before_name: str, after_name: str) -> str:
@@ -430,7 +477,10 @@ def _recover(worktree: Path, state: Dict[str, Any]) -> Dict[str, Any]:
             raise DraftError("recovery-conflict", "draft moved during an incomplete save; preserving the journal")
         result = {"draft_id": state["draft_id"], "name": state["name"], "revision": head}
         state["revision"] = head
-        state["idempotency"][journal["key"]] = {"digest": journal["digest"], "result": result}
+        saved_request = {"digest": journal["digest"], "result": result}
+        if journal.get("request_identity") is not None:
+            saved_request["request_identity"] = journal["request_identity"]
+        state["idempotency"][journal["key"]] = saved_request
         _atomic_json(paths["state"], state)
         _snapshot(paths, head, _decoded(journal.get("config_after")))
         paths["journal"].unlink()
@@ -462,6 +512,7 @@ def checkpoint(
     config: Optional[bytes] = None,
     check_command: Optional[List[str]] = None,
     safe_symlinks: Iterable[str] = (),
+    request_identity: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Validate and commit one draft save; exact retries return the durable prior result."""
     if not idempotency_key or len(idempotency_key) > 200:
@@ -512,6 +563,8 @@ def checkpoint(
             "config_before": _encoded(before_config),
             "config_after": _encoded(after_config),
         }
+        if request_identity is not None:
+            journal["request_identity"] = request_identity
         _atomic_json(paths["journal"], journal)
         try:
             for relative, target in targets.items():
@@ -540,7 +593,10 @@ def checkpoint(
         result = {"draft_id": state["draft_id"], "name": state["name"], "revision": revision}
         state["revision"] = revision
         state["config_present"] = after_config is not None
-        state["idempotency"][idempotency_key] = {"digest": digest, "result": result}
+        saved_request = {"digest": digest, "result": result}
+        if request_identity is not None:
+            saved_request["request_identity"] = request_identity
+        state["idempotency"][idempotency_key] = saved_request
         _atomic_json(paths["state"], state)
         _snapshot(paths, revision, after_config)
         paths["journal"].unlink()
