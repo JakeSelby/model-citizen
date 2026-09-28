@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- Qualified the v0.14.2 release from frozen source
+  `040462636205d8edc766775ebe2cc9571ac6b217` on Claude Code 2.1.283 for macOS and Linux.
+
 - Documented the external services that Claude Directory workflows may contact when users request them. (#1054)
 
 ### Fixed
