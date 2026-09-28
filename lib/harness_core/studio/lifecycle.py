@@ -6,6 +6,7 @@ import json
 import http.client
 import os
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from .state import PROTOCOL_VERSION, SCHEMA_VERSION, StateError, Store
 # Hosted macOS runners can take several seconds to schedule the detached interpreter.
 START_TIMEOUT = 30.0
 STOP_TIMEOUT = 2.0
+CHILD_SESSION_ENV = "HARNESS_STUDIO_CHILD_SESSION"
 
 
 class InstanceError(RuntimeError):
@@ -132,6 +134,10 @@ def current(root: Path) -> Optional[Dict[str, object]]:
 def serve(static_root: Path, root: Path, requested_port: int, ready=None,
           browser: bool = False) -> None:
     try:
+        if os.environ.pop(CHILD_SESSION_ENV, None) == "1":
+            os.setsid()
+            maximum = os.sysconf("SC_OPEN_MAX")
+            os.closerange(3, maximum if isinstance(maximum, int) and maximum > 3 else 256)
         with Store(root) as store:
             server.run(static_root, store, requested_port, ready, browser=browser)
     except (OSError, StateError, RuntimeError) as exc:
@@ -140,10 +146,21 @@ def serve(static_root: Path, root: Path, requested_port: int, ready=None,
 
 def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict[str, object]:
     argv = list(command) + ["studio", "--_serve", "--no-open", "--port", str(requested_port)]
+    start_new_session = True
+    close_fds = True
+    child_env = None
+    if sys.platform == "darwin":
+        # Avoid Python's fork-before-exec path on macOS. The exec'd child creates its own
+        # session before opening Studio state or sockets.
+        argv = ["/usr/bin/nohup"] + argv
+        start_new_session = False
+        close_fds = False
+        child_env = dict(os.environ, **{CHILD_SESSION_ENV: "1"})
     startup_errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
     try:
         process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                   stderr=startup_errors, close_fds=True, start_new_session=True)
+                                   stderr=startup_errors, close_fds=close_fds, env=child_env,
+                                   start_new_session=start_new_session)
     except BaseException:
         startup_errors.close()
         raise

@@ -382,6 +382,42 @@ class LifecycleTests(StudioFixture):
         self.assertNotIn("requested_port", result)
         self.assertEqual(result["port"], winner["port"])
 
+    def test_macos_detach_uses_spawn_then_requests_a_child_session(self):
+        winner = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
+                  "pid": 111, "pid_start": "winner", "port": 49152,
+                  "url": "http://127.0.0.1:49152/", "control_credential": "credential",
+                  "instance_epoch": "epoch"}
+        child = mock.Mock(pid=111)
+        with mock.patch.object(studio_lifecycle.sys, "platform", "darwin"), \
+                mock.patch.object(studio_lifecycle.subprocess, "Popen", return_value=child) as popen, \
+                mock.patch.object(studio_lifecycle, "_launch_ready", return_value=winner):
+            studio_lifecycle.launch_detached(["citizen"], state_root(self.home), 49152)
+        argv = popen.call_args.args[0]
+        self.assertEqual(argv[:2], ["/usr/bin/nohup", "citizen"])
+        self.assertFalse(popen.call_args.kwargs["start_new_session"])
+        self.assertFalse(popen.call_args.kwargs["close_fds"])
+        self.assertEqual(
+            popen.call_args.kwargs["env"][studio_lifecycle.CHILD_SESSION_ENV], "1")
+
+    def test_detached_child_creates_its_session_before_serving(self):
+        events = []
+        def serve_after_isolation(*_args, **_kwargs):
+            self.assertEqual(events, ["setsid", "close-fds"])
+
+        with mock.patch.dict(os.environ, {studio_lifecycle.CHILD_SESSION_ENV: "1"}), \
+                mock.patch.object(studio_lifecycle.os, "setsid",
+                                  side_effect=lambda: events.append("setsid")) as setsid, \
+                mock.patch.object(studio_lifecycle.os, "sysconf", return_value=1024), \
+                mock.patch.object(studio_lifecycle.os, "closerange",
+                                  side_effect=lambda *_: events.append("close-fds")) as close_fds, \
+                mock.patch.object(studio_lifecycle.server, "run",
+                                  side_effect=serve_after_isolation) as run:
+            studio_lifecycle.serve(Path("/static"), state_root(self.home), 0)
+        setsid.assert_called_once_with()
+        close_fds.assert_called_once_with(3, 1024)
+        run.assert_called_once()
+        self.assertNotIn(studio_lifecycle.CHILD_SESSION_ENV, os.environ)
+
     def test_failed_launch_stops_the_child_and_removes_only_its_record(self):
         root = state_root(self.home)
         child = mock.Mock(pid=111)
