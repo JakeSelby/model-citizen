@@ -190,6 +190,20 @@ class LifecycleTests(StudioFixture):
         self.assertEqual(output.getvalue(),
                          "studio-startup: child-entered\nstudio-startup: state-published\n")
 
+    def test_server_bind_never_waits_for_dns(self):
+        root = state_root(self.home)
+        with Store(root) as store, \
+                mock.patch.object(socket, "getfqdn",
+                                  side_effect=AssertionError("loopback bind must not resolve DNS")):
+            instance, _fallback = studio_server.bind(REPO / "studio" / "dist",
+                                                     "credential", store, 0)
+            try:
+                self.assertEqual(instance.server_name, "localhost")
+                self.assertGreater(instance.server_port, 0)
+                self.assertEqual(instance.server_address[0], "127.0.0.1")
+            finally:
+                instance.server_close()
+
     def test_static_page_without_the_nonce_marker_fails_closed(self):
         handler = mock.Mock()
         handler.server.static_files.read_bytes.return_value = b"<!doctype html><title>Studio</title>"

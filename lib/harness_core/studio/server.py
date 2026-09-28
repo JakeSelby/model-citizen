@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import workers
@@ -144,6 +145,14 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        # HTTPServer resolves the bound address through getfqdn(), which can block on a
+        # misconfigured local resolver. Studio binds a literal loopback address and never uses
+        # that display name, so keep startup independent of DNS.
+        TCPServer.server_bind(self)
+        self.server_name = "localhost"
+        self.server_port = int(self.server_address[1])
 
     def __init__(self, address: Tuple[str, int], static_root: Path, credential: str, store: Store):
         self.static_root = Path(static_root)
