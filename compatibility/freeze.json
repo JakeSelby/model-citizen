@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "state": "open",
-  "branch": null,
-  "commit": null,
+  "state": "frozen",
+  "branch": "release/v0.14.1",
+  "commit": "faa802e842c1b4838e8c1fb7f38401a7fc578ad5",
   "note": "Set state to frozen with the release branch and the full commit it was cut at before a qualification round; run `harness freeze` to check drift and `harness freeze --merge-check REF` before merging into that branch."
 }
