@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.0",
+  "harness_version": "0.14.1",
   "release_state": "released",
   "required_cases": [
     "installation",
@@ -72,8 +72,8 @@
       "required_for_release": true,
       "evidence": [
         {
-          "path": "compatibility/evidence/claude-code-cli-macos-0.14.0.json",
-          "sha256": "0e80df17500ca14667029009d2ac17a7545d2e7c6b8f501c08d0a44400295f4c"
+          "path": "compatibility/evidence/claude-code-cli-macos-0.14.1.json",
+          "sha256": "326b0d86be04c13a7fb437165d02237277b8ace8d3a0227397f1ded87a96251e"
         }
       ],
       "runtime_version": "2.1.283",
@@ -99,12 +99,12 @@
       "required_for_release": true,
       "evidence": [
         {
-          "path": "compatibility/evidence/claude-code-cli-linux-0.14.0.json",
-          "sha256": "50027f629342da8ba0bcca94334ee9674e4114d073b292a5cb9b90dd235b88f1"
+          "path": "compatibility/evidence/claude-code-cli-linux-0.14.1.json",
+          "sha256": "75025a9f78b7e3875532b0bbe710a1e266f03835fb13eb4e668e5570b2e4b03a"
         }
       ],
-      "runtime_version": "2.1.280",
-      "client_version": "2.1.280"
+      "runtime_version": "2.1.283",
+      "client_version": "2.1.283"
     },
     {
       "id": "claude-code-plugin-marketplace",
@@ -196,10 +196,11 @@
     "gate-invalidation, in the 0.13.0, 0.13.1 and 0.14.0 qualifications of both Claude Code CLI targets, delivered its Stop events to the harness coordinator directly, not through client turns: no client turn ran the trusted gate's pass, reuse, rerun or block-then-release loop. The only Stop event observed from a client turn is hook-composition's untrusted skip.",
     "No Codex client ran in the 0.13.0, 0.13.1 or 0.14.0 qualifications of the two Claude Code CLI targets. The Claude to Codex continuation was not observed, because a Claude session read a Claude save, and the Codex to Claude record was written by `harness task save --runtime codex`; step 7's re-established permissions were observed in neither direction. The Codex targets are not required for this release, so no round covers these.",
     "The v0.14.0 release qualifies the two required Claude Code CLI targets from complete scripted records. The owner explicitly approved shipping without the independent hand comparisons owed by #741 because the available Claude subscription could not support that additional round; the records therefore make scripted claims only. permission-controls retains its 0.13.0 hand comparison, while the other eleven cases on macOS and the three agreed Linux gap cases remain hand-unconfirmed and move to v0.15.0.",
+    "The v0.14.1 release reran all twelve scripted cases on both required Claude Code CLI targets at the frozen source. It retains v0.14.0's narrower scripted-only claim: #741's independent hand comparisons remain scheduled for v0.15.0 and are not claimed here.",
     "In the 0.14.0 role-confinement case, confinement was evidenced by the isolated worker's init event exposing only Read, Grep and Glob, by the absence of a write-tool call, and by checking that no requested probe file landed. The case did not independently attempt a filesystem or shell escape outside that exposed tool surface.",
     "In the 0.13.0 and 0.13.1 qualifications a band worker's effort was read from the installed worker definition, not from the subagent's transcript; its model, the budget sentence in its brief, the usage feed and the usage row were observed from the run.",
     "With a token-only login (`CLAUDE_CODE_OAUTH_TOKEN`, as in CI and containers, including the Linux target image), an isolated role worker that a Claude Code session launches cannot authenticate: the client strips the token from its tool subprocesses, and the worker reports that it is not logged in. A client whose confined layers cannot run may then do their work in its own context, unconfined, as the 0.13.0 BMad integration suite observed. Qualification rounds launch their workers from the runner rather than from a client session, so they do not exercise this path. Tracked in #759.",
     "In the 0.13.0 and 0.13.1 qualifications cost-posture compared each role the cost variant does not change by its content, byte for byte, rather than by its link, so a role replaced by an identical copy would also pass; step 8 asks that every other role keeps its link. Tracked in #742."
   ],
-  "qualification_source_commit": "1d7fdbd37eb5c5251259fc16a2fe7f2bfe105bc3"
+  "qualification_source_commit": "3f843d3245c134e08bb8159f8b870d1335edb728"
 }

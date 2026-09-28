@@ -6,6 +6,25 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-09-28
+
+### Changed
+
+- Documentation-only patch releases can now carry unchanged native evidence from an immutable prior
+  release. The validator pins immutable tag commits, preserves evidence provenance across chained
+  patches and fails closed on unknown or changed claims, evidence, limitations, ancestry or any
+  ineligible release path, with a one-release v0.14.1 exception for the reviewed validator and
+  release-reporting files. (#1036)
+
+- Living documentation now uses Model Citizen, canonical repository links and `citizen` commands
+  while preserving compatibility identifiers and dated history. (#1040)
+
+### Fixed
+
+- Recognize model-written framework briefs that refer back to a declared prompt file with a qualified instruction phrase, so the spawn stays confined to its routed review role. (#739)
+
+- Made Model Citizen discoverable by registries that require standard YAML and readable plugin component files. (#1037)
+
 ## [0.14.0] — 2026-09-27
 
 ### Added

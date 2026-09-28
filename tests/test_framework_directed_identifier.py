@@ -44,6 +44,15 @@ DIRECTED = {
     "as your instructions in": "Use " + PROMPT + " as your instructions in this review of calc.py.",
     "two sentences on": ("Read " + PROMPT + ". These instructions define the layer's scope. "
                          "Follow them precisely."),
+    "qualified anaphor": (
+        "Review calc.py following the BMad Method edge-case-hunter layer instructions. First, "
+        "read the review instructions at " + PROMPT + " to understand how to conduct it. Then, "
+        "read calc.py and apply those edge-case-hunter review instructions to it."
+    ),
+    "qualified directive before prefixed path": (
+        "Review calc.py following the edge-case-hunter review layer instructions in _bmad/"
+        "review-prompts/edge-case-hunter.md."
+    ),
     "em dash explanation": (
         "Before doing anything else, read the file `" + PROMPT + "` in the current working "
         "directory — it contains this layer's actual review instructions (what to look for, "
