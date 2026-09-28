@@ -189,7 +189,8 @@ class Server(ThreadingHTTPServer):
             self.sessions = auth.Sessions(self.host)
             self.mutations = MutationExecutor()
             self.run_supervisor = self.mutations.call(lambda: runs.RunSupervisor(
-                self.store.path, runs.default_catalog_path(self.repo_root)))
+                self.store.path, runs.default_catalog_path(self.repo_root),
+                repository=self.repo_root))
             self.run_progress = OrderedDict()
         except BaseException:
             mutations = getattr(self, "mutations", None)

@@ -5825,7 +5825,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
     """Launch and inspect allowlisted suites through the shared Studio run core."""
     try:
         supervisor = studio.runs.RunSupervisor(
-            state_dir() / "studio", studio.runs.default_catalog_path(REPO))
+            state_dir() / "studio", studio.runs.default_catalog_path(REPO), repository=REPO)
         confirmation_pending = False
         if args.runs_action == "catalog":
             result = supervisor.catalog(REPO)

@@ -14,6 +14,7 @@ from unittest import mock
 
 from test_harness import REPO, harness
 from harness_core.studio import run_worker, runs
+from studio_target_support import FixtureTargetService
 
 
 def wait_for(read, predicate, timeout=8.0):
@@ -74,7 +75,8 @@ class StudioRunTests(unittest.TestCase):
         }
 
     def supervisor(self, maximum=3):
-        return runs.RunSupervisor(self.state, self.catalog_path, maximum)
+        return runs.RunSupervisor(self.state, self.catalog_path, maximum,
+                                  target_service=FixtureTargetService())
 
     def start(self, supervisor, suite="fixture", parameters=None):
         record = supervisor.start(suite, parameters or {}, "installed", "current")
@@ -98,6 +100,8 @@ class StudioRunTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(harness, "state_dir", return_value=self.state), \
              mock.patch.object(runs, "default_catalog_path", return_value=self.catalog_path), \
+             mock.patch.object(runs.targets, "TargetService",
+                               return_value=FixtureTargetService()), \
              contextlib.redirect_stdout(output):
             code = harness.main(arguments + ["--json"])
         self.assertEqual(code, expected)
@@ -160,7 +164,7 @@ class StudioRunTests(unittest.TestCase):
                             lambda item: item["status"] in runs.TERMINAL)
         self.assertEqual(terminal["status"], "succeeded")
         self.assertFalse(any(name.endswith("_path") for name in terminal))
-        profile = self.state / "runs" / created["run_id"] / "profile"
+        profile = self.state / "targets" / created["run_id"] / "profile"
         self.assertEqual((profile / "touched").read_text(), "run")
         environment = json.loads(supervisor.read_output(created["run_id"], "stdout")["chunk"])
         self.assertEqual(environment, {
@@ -529,7 +533,8 @@ class StudioRunTests(unittest.TestCase):
         self.write_catalog([self.suite()])
         started = self.cli_json(["runs", "start", "fixture", "--target-kind", "installed",
                                  "--target-ref", "/private/worktree"])
-        supervisor = runs.RunSupervisor(self.state / "studio", self.catalog_path)
+        supervisor = runs.RunSupervisor(self.state / "studio", self.catalog_path,
+                                        target_service=FixtureTargetService())
         self.started.append((supervisor, started["run_id"]))
         self.assertEqual(started["suite_id"], "fixture")
         self.assertEqual(started["target"], {"kind": "installed", "reference_set": True})

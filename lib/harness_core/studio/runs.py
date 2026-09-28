@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import signal
+import shutil
 import stat
 import subprocess
 import sys
@@ -23,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store
-from . import free_suites, run_store, spend_guard
+from . import free_suites, run_store, spend_guard, targets
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -407,14 +408,20 @@ def terminate_owned_group(pgid: int, timeout: float = 5.0,
 
 
 class RunSupervisor:
-    def __init__(self, state_root: Path, catalog_path: Path, max_running: int = MAX_RUNNING):
+    def __init__(self, state_root: Path, catalog_path: Path, max_running: int = MAX_RUNNING,
+                 *, repository: Optional[Path] = None, target_service: Any = None):
         self.state_root = Path(state_root)
         self.catalog_path = Path(catalog_path).resolve()
+        if repository is not None and target_service is not None:
+            raise RunError("repository and target_service are mutually exclusive")
+        self.target_service = (targets.TargetService(Path(repository))
+                               if repository is not None else target_service)
         if (not isinstance(max_running, int) or isinstance(max_running, bool)
                 or not 1 <= max_running <= MAX_RUNNING):
             raise RunError("max_running must be between one and three")
         self.max_running = max_running
         self.runs_dir = self.state_root / "runs"
+        self.targets_dir = self.state_root / "targets"
         self.lock_path = self.state_root / "supervisor.lock"
         self.queue_path = self.state_root / "queue.json"
         try:
@@ -423,6 +430,8 @@ class RunSupervisor:
         except (OSError, StateError) as exc:
             raise RunError(str(exc)) from exc
         self._runs_fd = _open_directory(self._state_fd, "runs", create=True)
+        self._targets_fd = _open_directory(self._state_fd, "targets", create=True)
+        self._preparations_fd = _open_directory(self._state_fd, "preparations", create=True)
         self._confirmations_fd = _open_directory(self._state_fd, "confirmations", create=True)
         try:
             self.history = run_store.RunStore(self.state_root)
@@ -439,7 +448,8 @@ class RunSupervisor:
             with contextlib.suppress(Exception):
                 history.close()
             self.history = None
-        for name in ("_confirmations_fd", "_runs_fd", "_state_fd"):
+        for name in ("_confirmations_fd", "_preparations_fd", "_targets_fd", "_runs_fd",
+                     "_state_fd"):
             descriptor = getattr(self, name, None)
             if descriptor is not None:
                 with contextlib.suppress(OSError):
@@ -538,8 +548,11 @@ class RunSupervisor:
                        for name, value in parameters.items())):
             raise RunError("run state record has invalid parameters")
         target = record.get("target")
+        target_fields = {"kind", "ref", "revision", "draft", "config_digest"}
+        built_target_fields = target_fields | {"version", "source_path", "profile_path"}
         if (not isinstance(target, dict)
-                or set(target) != {"kind", "ref", "revision", "draft", "config_digest"}
+                or set(target) not in (target_fields, target_fields | {"version"},
+                                       built_target_fields)
                 or target.get("kind") not in TARGET_KINDS
                 or not isinstance(target.get("ref"), str) or not target["ref"]
                 or len(target["ref"]) > 4096 or "\0" in target["ref"]
@@ -550,6 +563,13 @@ class RunSupervisor:
                     and (not isinstance(target["config_digest"], str)
                          or not target["config_digest"] or len(target["config_digest"]) > 4096
                          or "\0" in target["config_digest"]))
+                or ("version" in target
+                    and (not isinstance(target["version"], str) or not target["version"]
+                         or len(target["version"]) > 4096 or "\0" in target["version"]))
+                or any(not isinstance(target.get(name), str) or not target[name]
+                       or len(target[name]) > 4096 or "\0" in target[name]
+                       or not Path(target[name]).is_absolute()
+                       for name in ("source_path", "profile_path") if name in target)
                 or target.get("draft") != (target["ref"] if target["kind"] == "draft" else None)):
             raise RunError("run state record has an invalid target")
         argv = record.get("argv")
@@ -770,7 +790,7 @@ class RunSupervisor:
         })
         return token
 
-    def _consume_confirmation_locked(self, token: Optional[str], request_digest: str) -> None:
+    def _check_confirmation_locked(self, token: Optional[str], request_digest: str) -> str:
         name = self._confirmation_name(token or "")
         try:
             pending = _load_json(self._confirmations_fd, name)
@@ -780,6 +800,10 @@ class RunSupervisor:
                 or not isinstance(pending.get("request_digest"), str)
                 or not hmac.compare_digest(pending["request_digest"], request_digest)):
             raise RunError("paid run confirmation does not match the exact displayed request")
+        return name
+
+    def _consume_confirmation_locked(self, token: Optional[str], request_digest: str) -> None:
+        name = self._check_confirmation_locked(token, request_digest)
         try:
             os.unlink(name, dir_fd=self._confirmations_fd)
             os.fsync(self._confirmations_fd)
@@ -876,16 +900,135 @@ class RunSupervisor:
                 "eof": record["status"] in TERMINAL and next_cursor >= size,
             }
 
-    def prepare_profile(self, run_id: str) -> Path:
-        directory = self._run_directory(run_id)
+    def _prepared_path(self, run_id: str, name: str) -> Path:
+        self._run_path(run_id)
+        directory = _open_directory(self._targets_fd, run_id)
         try:
-            profile = _open_directory(directory, "profile", create=True)
-            os.close(profile)
+            prepared = _open_directory(directory, name)
+            os.close(prepared)
         finally:
             os.close(directory)
-        return self.runs_dir / run_id / "profile"
+        return self.targets_dir / run_id / name
+
+    def prepare_profile(self, run_id: str) -> Path:
+        return self._prepared_path(run_id, "profile")
+
+    def prepare_source(self, run_id: str) -> Path:
+        return self._prepared_path(run_id, "source")
+
+    @staticmethod
+    def _preparation_name(run_id: str) -> str:
+        try:
+            uuid.UUID(run_id)
+        except (ValueError, TypeError) as exc:
+            raise RunError("invalid run id") from exc
+        return run_id + ".json"
+
+    def _target_directory(self, run_id: str) -> Path:
+        self._preparation_name(run_id)
+        return self.targets_dir / run_id
+
+    def _reserve_preparation_locked(self, run_id: str, sequence: int, created_at: str,
+                                    confirmation_token: Optional[str],
+                                    request_digest: Optional[str]) -> None:
+        identity = process_identity(os.getpid())
+        if identity is None:
+            raise RunError("target preparation owner identity is unavailable")
+        _atomic_json(self._preparations_fd, self._preparation_name(run_id), {
+            "schema_version": 1,
+            "run_id": run_id,
+            "owner_pid": os.getpid(),
+            "owner_identity": identity,
+            "queue_sequence": sequence,
+            "created_at": created_at,
+            "confirmation_token": confirmation_token,
+            "request_digest": request_digest,
+        })
+
+    def _read_preparation_locked(self, run_id: str) -> Dict[str, Any]:
+        value = _load_json(self._preparations_fd, self._preparation_name(run_id))
+        if (set(value) != {"schema_version", "run_id", "owner_pid", "owner_identity",
+                           "queue_sequence", "created_at", "confirmation_token",
+                           "request_digest"}
+                or value.get("run_id") != run_id
+                or ((value.get("confirmation_token") is None)
+                    != (value.get("request_digest") is None))
+                or (value.get("confirmation_token") is not None
+                    and (not re.fullmatch(r"[0-9a-f]{64}", value["confirmation_token"])
+                         or not isinstance(value.get("request_digest"), str)
+                         or not re.fullmatch(r"[0-9a-f]{64}", value["request_digest"])))
+                or not process_matches(value.get("owner_pid"), value.get("owner_identity"))):
+            raise RunError("target preparation reservation is missing or stale")
+        return value
+
+    def _remove_preparation_locked(self, run_id: str) -> None:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(self._preparation_name(run_id), dir_fd=self._preparations_fd)
+            os.fsync(self._preparations_fd)
+
+    def _authoritative_preparation_record_locked(
+            self, run_id: str) -> Optional[Dict[str, Any]]:
+        try:
+            info = os.stat(run_id, dir_fd=self._runs_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise RunError("run state directory is missing or unsafe") from exc
+        if not stat.S_ISDIR(info.st_mode):
+            raise RunError("run state path is not a directory")
+        descriptor = self._run_directory(run_id)
+        try:
+            try:
+                authoritative, _authority = self.history.read_studio(descriptor, run_id)
+            except run_store.RunStoreError as exc:
+                raise RunError(str(exc)) from exc
+        finally:
+            os.close(descriptor)
+        if authoritative is None:
+            return None
+        return self._validate_record(authoritative, run_id)
+
+    def _recover_preparations_locked(self) -> None:
+        for name in sorted(os.listdir(self._preparations_fd)):
+            if not name.endswith(".json"):
+                raise RunError("target preparation state has an unsafe entry")
+            run_id = name[:-5]
+            self._preparation_name(run_id)
+            value = _load_json(self._preparations_fd, name)
+            if (set(value) != {"schema_version", "run_id", "owner_pid", "owner_identity",
+                               "queue_sequence", "created_at", "confirmation_token",
+                               "request_digest"}
+                    or value.get("run_id") != run_id
+                    or ((value.get("confirmation_token") is None)
+                        != (value.get("request_digest") is None))
+                    or (value.get("confirmation_token") is not None
+                        and (not re.fullmatch(r"[0-9a-f]{64}", value["confirmation_token"])
+                             or not isinstance(value.get("request_digest"), str)
+                             or not re.fullmatch(r"[0-9a-f]{64}", value["request_digest"])))):
+                raise RunError("target preparation state is invalid")
+            authoritative = self._authoritative_preparation_record_locked(run_id)
+            if authoritative is not None:
+                if value.get("confirmation_token") is not None:
+                    confirmation_name = self._confirmation_name(value["confirmation_token"])
+                    try:
+                        os.stat(confirmation_name, dir_fd=self._confirmations_fd,
+                                follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    except OSError as exc:
+                        raise RunError("paid run confirmation could not be recovered") from exc
+                    else:
+                        self._consume_confirmation_locked(
+                            value["confirmation_token"], value["request_digest"])
+                self._remove_preparation_locked(run_id)
+                continue
+            if process_matches(value.get("owner_pid"), value.get("owner_identity")):
+                continue
+            shutil.rmtree(str(self._target_directory(run_id)), ignore_errors=True)
+            self._remove_preparation_locked(run_id)
 
     def _recover_locked(self) -> None:
+        self._recover_preparations_locked()
         for pid, process in list(_DETACHED_WORKERS.items()):
             if process.poll() is not None:
                 _DETACHED_WORKERS.pop(pid, None)
@@ -971,6 +1114,10 @@ class RunSupervisor:
     def _admit_locked(self) -> None:
         while True:
             records = self._records()
+            pending_preparations = {
+                name[:-5] for name in os.listdir(self._preparations_fd)
+                if name.endswith(".json")
+            }
             released = False
             for record in records:
                 if record.get("capacity_reserved") is not True:
@@ -986,7 +1133,9 @@ class RunSupervisor:
                            or record.get("capacity_reserved") is True for record in records)
             if occupied >= self.max_running:
                 return
-            queued = sorted((record for record in records if record.get("status") == "queued"),
+            queued = sorted((record for record in records
+                             if record.get("status") == "queued"
+                             and record["run_id"] not in pending_preparations),
                             key=lambda item: (item.get("queue_sequence", 0), item["run_id"]))
             if not queued:
                 return
@@ -1015,51 +1164,98 @@ class RunSupervisor:
                      or spend_cap_usd is not None or pricing_source is not None)):
             raise RunError("spend flags apply only to suites that spend usage")
         run_id = str(uuid.uuid4())
-        with self.lock():
-            self._recover_locked()
-            spend_plan = None
-            if suite.cost_class == "spends_usage":
-                try:
-                    spend_plan = spend_guard.plan(self._records(), suite.suite_id, cases,
-                                                  max_budget_usd, spend_cap_usd, pricing_source)
-                    request = spend_guard.confirmation_request(
-                        suite.suite_id, suite.version, parameters, target_kind, target_ref,
-                        cases, spend_plan)
-                    self._consume_confirmation_locked(
-                        confirmed, spend_guard.confirmation_digest(request))
-                    argv = spend_guard.guarded_argv(argv, spend_plan)
-                except spend_guard.SpendGuardError as exc:
-                    raise RunError(str(exc)) from exc
-            record: Dict[str, Any] = {
-                "schema_version": SCHEMA_VERSION,
-                "run_id": run_id,
-                "suite_id": suite.suite_id,
-                "suite_version": suite.version,
-                "parameters": dict(sorted(parameters.items())),
-                "target": {
+        if self.target_service is None:
+            raise RunError("run target preparation requires an explicit repository or target service")
+        prepared = None
+        run_directory = self.runs_dir / run_id
+        target_directory = self._target_directory(run_id)
+        persisted = False
+        reserved = False
+        spend_plan = None
+        request_digest = None
+        try:
+            with self.lock():
+                self._recover_locked()
+                if suite.cost_class == "spends_usage":
+                    try:
+                        spend_plan = spend_guard.plan(self._records(), suite.suite_id, cases,
+                                                      max_budget_usd, spend_cap_usd, pricing_source)
+                        request = spend_guard.confirmation_request(
+                            suite.suite_id, suite.version, parameters, target_kind, target_ref,
+                            cases, spend_plan)
+                        request_digest = spend_guard.confirmation_digest(request)
+                        self._check_confirmation_locked(confirmed, request_digest)
+                        argv = spend_guard.guarded_argv(argv, spend_plan)
+                    except spend_guard.SpendGuardError as exc:
+                        raise RunError(str(exc)) from exc
+                sequence = self._next_sequence()
+                created_at = utc_now()
+                self._reserve_preparation_locked(
+                    run_id, sequence, created_at,
+                    confirmed if request_digest is not None else None, request_digest)
+                reserved = True
+            try:
+                prepared = self.target_service.build(target_kind, target_ref, target_directory)
+            except targets.TargetError as exc:
+                raise RunError(str(exc)) from exc
+            with self.lock():
+                self._recover_locked()
+                reservation = self._read_preparation_locked(run_id)
+                expected_source = str(target_directory / "source")
+                expected_profile = str(target_directory / "profile")
+                if (not isinstance(prepared, dict)
+                        or prepared.get("source_path") != expected_source
+                        or prepared.get("profile_path") != expected_profile):
+                    raise RunError("target service returned paths outside the reserved run target")
+                if request_digest is not None:
+                    self._check_confirmation_locked(confirmed, request_digest)
+                target = {
                     "kind": target_kind,
                     "ref": target_ref,
-                    "revision": None,
+                    "revision": prepared["revision"] if prepared else None,
                     "draft": target_ref if target_kind == "draft" else None,
-                    "config_digest": None,
-                },
-                "argv": argv,
-                "cost_class": suite.cost_class,
-                "expected_duration_seconds": suite.expected_duration_seconds,
-                "timeout_seconds": suite.timeout_seconds,
-                "case_identities": (cases if spend_plan
-                                    or suite.suite_id in free_suites.FREE_SUITE_IDS else None),
-                "spend_estimate": spend_plan["estimate"] if spend_plan else None,
-                "spend_cap": spend_plan["caps"] if spend_plan else None,
-                "pricing_identity": spend_plan["pricing"] if spend_plan else None,
-                "status": "queued",
-                "queue_sequence": self._next_sequence(),
-                "created_at": utc_now(),
-            }
-            record["canonical_run_digest"] = run_store._canonical_run_digest(record)
-            self._write(record)
-            self._admit_locked()
-            return self._public(self._read(run_id))
+                    "config_digest": prepared["config_digest"] if prepared else None,
+                }
+                if prepared:
+                    target["version"] = prepared["version"]
+                    target["source_path"] = prepared["source_path"]
+                    target["profile_path"] = prepared["profile_path"]
+                record: Dict[str, Any] = {
+                    "schema_version": SCHEMA_VERSION,
+                    "run_id": run_id,
+                    "suite_id": suite.suite_id,
+                    "suite_version": suite.version,
+                    "parameters": dict(sorted(parameters.items())),
+                    "target": target,
+                    "argv": argv,
+                    "cost_class": suite.cost_class,
+                    "expected_duration_seconds": suite.expected_duration_seconds,
+                    "timeout_seconds": suite.timeout_seconds,
+                    "case_identities": (cases if spend_plan
+                                        or suite.suite_id in free_suites.FREE_SUITE_IDS else None),
+                    "spend_estimate": spend_plan["estimate"] if spend_plan else None,
+                    "spend_cap": spend_plan["caps"] if spend_plan else None,
+                    "pricing_identity": spend_plan["pricing"] if spend_plan else None,
+                    "status": "queued",
+                    "queue_sequence": reservation["queue_sequence"],
+                    "created_at": reservation["created_at"],
+                }
+                record["canonical_run_digest"] = run_store._canonical_run_digest(record)
+                self._write(record)
+                persisted = True
+                if request_digest is not None:
+                    self._consume_confirmation_locked(confirmed, request_digest)
+                self._remove_preparation_locked(run_id)
+                reserved = False
+                self._admit_locked()
+                return self._public(self._read(run_id))
+        finally:
+            if not persisted:
+                if reserved:
+                    with self.lock():
+                        self._remove_preparation_locked(run_id)
+                shutil.rmtree(str(target_directory), ignore_errors=True)
+                shutil.rmtree(str(run_directory), ignore_errors=True)
 
     def spend_preview(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
                       target_ref: str, max_budget_usd: Any, spend_cap_usd: Any,

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 from harness_core.studio import runs  # noqa: E402
+from studio_target_support import FixtureTargetService  # noqa: E402
 
 
 class OverviewRunReadTests(unittest.TestCase):
@@ -25,7 +26,8 @@ class OverviewRunReadTests(unittest.TestCase):
                 "expected_duration_seconds": 1, "timeout_seconds": 30,
                 "targets": ["installed"],
             }]}), encoding="utf-8")
-            supervisor = runs.RunSupervisor(root / "state", catalog)
+            supervisor = runs.RunSupervisor(root / "state", catalog,
+                                            target_service=FixtureTargetService())
             with mock.patch.object(supervisor, "_admit_locked"):
                 queued = supervisor.start("fixture", {}, "installed", "current")
             before = {path.relative_to(root): (path.read_bytes(), path.stat().st_mtime_ns)

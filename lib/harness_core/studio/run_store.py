@@ -796,6 +796,7 @@ def studio_record(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Dic
         "suite": {"id": record.get("suite_id"), "version": record.get("suite_version")},
         "target": {
             "kind": target.get("kind"), "ref": target.get("ref"),
+            "version": target.get("version"),
             "commit": target.get("revision"), "draft": target.get("draft"),
             "config_digest": target.get("config_digest"),
         },

@@ -53,6 +53,16 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
             return 1
         run_dir = supervisor._run_path(run_id).parent
         profile = supervisor.prepare_profile(run_id)
+        source = supervisor.prepare_source(run_id)
+        if (record["target"].get("profile_path") != str(profile)
+                or record["target"].get("source_path") != str(source)):
+            record["status"] = "failed"
+            record.pop("admission_token", None)
+            record["completed_at"] = utc_now()
+            record["reason"] = "prepared target paths do not match the run record"
+            supervisor._write(record)
+            supervisor._admit_locked()
+            return 1
         environment = dict(os.environ)
         environment.update({
             "HOME": str(profile),
@@ -73,7 +83,7 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
         stdout = supervisor.open_run_output(run_id, "stdout.log")
         stderr = supervisor.open_run_output(run_id, "stderr.log")
         try:
-            process = subprocess.Popen(rendered, cwd=str(run_dir), stdin=subprocess.DEVNULL,
+            process = subprocess.Popen(rendered, cwd=str(source), stdin=subprocess.DEVNULL,
                                        stdout=stdout, stderr=stderr, close_fds=True,
                                        start_new_session=True, env=environment)
         except OSError as exc:

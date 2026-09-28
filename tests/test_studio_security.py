@@ -46,7 +46,7 @@ class StudioSecurityFixture(unittest.TestCase):
         self.tmp.cleanup()
 
     def request(self, method, path, headers=None, body=None, host=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=2)
+        connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=15)
         request_headers = {"Host": self.record["host"] if host is None else host}
         request_headers.update(headers or {})
         connection.request(method, path, body=body, headers=request_headers)

@@ -13,6 +13,7 @@ from unittest import mock
 
 from test_harness import REPO, harness
 from harness_core.studio import run_store, runs
+from studio_target_support import FixtureTargetService
 
 
 class RunStoreTests(unittest.TestCase):
@@ -32,7 +33,8 @@ class RunStoreTests(unittest.TestCase):
         }]}))
 
     def supervisor(self, state=None):
-        return runs.RunSupervisor(state or self.state, self.catalog)
+        return runs.RunSupervisor(state or self.state, self.catalog,
+                                  target_service=FixtureTargetService())
 
     def queued_run(self, supervisor):
         with mock.patch.object(supervisor, "_admit_locked"):
@@ -149,8 +151,11 @@ class RunStoreTests(unittest.TestCase):
         run_id = created["run_id"]
         record = supervisor._read(run_id)
         self.assertEqual(record["target"], {
-            "kind": "installed", "ref": "current", "revision": None,
-            "draft": None, "config_digest": None,
+            "kind": "installed", "ref": "current", "version": "fixture",
+            "revision": "a" * 40, "draft": None,
+            "config_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "source_path": str(self.state / "targets" / run_id / "source"),
+            "profile_path": str(self.state / "targets" / run_id / "profile"),
         })
         self.assertIsNone(record["case_identities"])
         self.assertIsNone(record["spend_estimate"])

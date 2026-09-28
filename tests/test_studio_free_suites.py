@@ -18,6 +18,7 @@ from unittest import mock
 from test_harness import REPO, harness
 from harness_core.studio import free_suites, runs
 import test_studio_security as studio_security
+from studio_target_support import FixtureTargetService
 
 
 class FreeSuiteTests(unittest.TestCase):
@@ -41,7 +42,8 @@ class FreeSuiteTests(unittest.TestCase):
 
     def supervisor(self):
         return runs.RunSupervisor(Path(self.temporary.name).resolve() / "state",
-                                  REPO / "policy" / "studio" / "suites.json")
+                                  REPO / "policy" / "studio" / "suites.json",
+                                  target_service=FixtureTargetService())
 
     def test_discovery_lists_module_class_and_single_test_scopes(self):
         cases = free_suites.discover_unit_tests(self.root)
@@ -96,6 +98,8 @@ class FreeSuiteTests(unittest.TestCase):
                 mock.patch.object(harness, "REPO", self.root), \
                 mock.patch.object(runs, "default_catalog_path",
                                   return_value=REPO / "policy" / "studio" / "suites.json"), \
+                mock.patch.object(runs.targets, "TargetService",
+                                  return_value=FixtureTargetService()), \
                 mock.patch.object(runs.RunSupervisor, "_admit_locked"), \
                 contextlib.redirect_stdout(cli_output):
             self.assertEqual(harness.main(manual[1:]), 0)

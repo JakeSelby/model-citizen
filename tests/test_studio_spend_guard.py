@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest import mock
 
 from test_harness import harness
-from harness_core.studio import run_worker, runs, spend_guard
+from harness_core.studio import run_worker, runs, spend_guard, targets
+from studio_target_support import FixtureTargetService
 
 
 class StudioSpendGuardTests(unittest.TestCase):
@@ -41,7 +42,8 @@ class StudioSpendGuardTests(unittest.TestCase):
         self.catalog.write_text(json.dumps(value), encoding="utf-8")
 
     def supervisor(self):
-        return runs.RunSupervisor(self.state, self.catalog, 1)
+        return runs.RunSupervisor(self.state, self.catalog, 1,
+                                  target_service=FixtureTargetService())
 
     def preview(self, supervisor, maximum=0.2, cap=1.0, pricing="api_credit",
                 parameters=None, target="current"):
@@ -144,6 +146,81 @@ class StudioSpendGuardTests(unittest.TestCase):
                 "paid-suite", {}, "installed", "current",
                 confirmed=changed["confirmation_token"], max_budget_usd="999999.6",
                 spend_cap_usd="1000000.1", pricing_source="api_credit")
+
+    def test_build_or_durable_record_failure_does_not_consume_confirmation(self):
+        self.write_suite("pass")
+        supervisor = self.supervisor()
+        preview = self.preview(supervisor)
+        arguments = {
+            "confirmed": preview["confirmation_token"],
+            "max_budget_usd": 0.2,
+            "spend_cap_usd": 1.0,
+            "pricing_source": "api_credit",
+        }
+        with mock.patch.object(supervisor.target_service, "build",
+                               side_effect=targets.TargetError("fixture build failed")):
+            with self.assertRaisesRegex(runs.RunError, "fixture build failed"):
+                supervisor.start("paid-suite", {}, "installed", "current", **arguments)
+
+        with mock.patch.object(supervisor, "_write",
+                               side_effect=runs.RunError("fixture durable write failed")):
+            with self.assertRaisesRegex(runs.RunError, "fixture durable write failed"):
+                supervisor.start("paid-suite", {}, "installed", "current", **arguments)
+
+        with mock.patch.object(supervisor, "_admit_locked"):
+            created = supervisor.start("paid-suite", {}, "installed", "current", **arguments)
+        self.assertEqual(supervisor._read(created["run_id"])["status"], "queued")
+
+    def test_crash_after_durable_record_recovers_confirmation_consumption(self):
+        self.write_suite("pass")
+        supervisor = self.supervisor()
+        preview = self.preview(supervisor)
+        arguments = {
+            "confirmed": preview["confirmation_token"],
+            "max_budget_usd": 0.2,
+            "spend_cap_usd": 1.0,
+            "pricing_source": "api_credit",
+        }
+        with mock.patch.object(supervisor, "_consume_confirmation_locked",
+                               side_effect=runs.RunError("simulated crash after durable record")), \
+                self.assertRaisesRegex(runs.RunError, "simulated crash"):
+            supervisor.start("paid-suite", {}, "installed", "current", **arguments)
+        run_directory = next((self.state / "runs").iterdir())
+        run_id = run_directory.name
+        (run_directory / "run.json").unlink()
+        self.assertEqual(len(list((self.state / "preparations").iterdir())), 1)
+        target_directory = self.state / "targets" / run_id
+        self.assertTrue(target_directory.is_dir())
+
+        with mock.patch.object(supervisor, "_consume_confirmation_locked",
+                               side_effect=runs.RunError("confirmation storage unavailable")), \
+                mock.patch.object(supervisor, "_spawn_locked") as spawn, \
+                self.assertRaisesRegex(runs.RunError, "storage unavailable"):
+            supervisor.reconcile_and_drain()
+        spawn.assert_not_called()
+        self.assertEqual(len(list((self.state / "preparations").iterdir())), 1)
+        self.assertTrue(target_directory.is_dir())
+
+        launches = []
+
+        def launch_once(record):
+            launches.append(record["run_id"])
+            record["status"] = "admitted"
+            record["admission_token"] = "a" * 32
+            supervisor._write(record)
+            record["status"] = "starting"
+            record["runner_pid"] = os.getpid()
+            record["runner_identity"] = runs.process_identity(os.getpid())
+            supervisor._write(record)
+
+        with mock.patch.object(supervisor, "_spawn_locked", side_effect=launch_once):
+            supervisor.reconcile_and_drain()
+            supervisor.reconcile_and_drain()
+        self.assertEqual(launches, [run_id])
+        self.assertEqual(supervisor._records()[0]["status"], "starting")
+        self.assertEqual(list((self.state / "preparations").iterdir()), [])
+        with self.assertRaisesRegex(runs.RunError, "already used"):
+            supervisor.start("paid-suite", {}, "installed", "current", **arguments)
 
     def test_concurrent_starts_cannot_reuse_one_confirmation(self):
         self.write_suite("pass")
