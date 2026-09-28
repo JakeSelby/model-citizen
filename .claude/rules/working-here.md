@@ -68,6 +68,35 @@ is not a pass, and neither is the empty review each of its thread replies create
 review body, outside the diff or marked as nitpicks, are findings too: fix them, or answer them in a
 pull request comment.
 
+### Planning-only exception
+
+CodeRabbit is not required when the complete PR diff qualifies as planning-only. Verify against
+its current base and head immediately before merging; labels, titles and a skipped or successful
+bot status do not establish eligibility.
+
+- Every changed path must be a Markdown file under `_bmad-output/planning-artifacts/`,
+  `_bmad-output/implementation-artifacts/` or `.agent-harness/plans/`, or exactly
+  `_bmad-output/issue-map.json` or `_bmad-output/implementation-artifacts/sprint-status.yaml`.
+  Check added, modified and deleted paths, and both old and new paths for renames or copies.
+  Changed symlinks, submodules and executable files do not qualify.
+- Inspect the content: the change must only record plans, scope, decisions, delivery evidence or
+  tracker metadata. Runtime behavior, executable agent instructions, policy, workflow and review
+  configuration changes require normal review even if placed under an allowed path. Mixed PRs
+  require normal review; do not move files into the allowlist to avoid it.
+- Keep the Gate block and all required CI checks. Also verify issue ownership, issue/story
+  mapping, planning audits and generated sprint status; reconcile destinations and dependencies
+  for any scope moved. No open review finding or human thread is waived.
+- Record `CodeRabbit not applicable: planning-only` in the PR body or a comment, with the checked
+  base/head SHAs, complete path inventory and validation results. This is an applicability
+  decision, never a completed CodeRabbit review. Recheck after any head or base change.
+
+The exception changes only the review requirement. All other merge conditions below still apply.
+Changes to this exception or its allowlist themselves require normal CodeRabbit review. For a
+mixed PR, separately classify every excluded file: an excluded change that does not meet the
+planning-only content and file-mode conditions must receive actual review coverage. Stop until
+CodeRabbit coverage is enabled for it; an older pass or a success status without that coverage
+cannot satisfy the normal-review requirement.
+
 **These conditions are the go-ahead `/land` asks for.** Merge a pull request from a branch of this
 repository, never from a fork, without asking once all three hold:
 
@@ -75,9 +104,11 @@ repository, never from a fork, without asking once all three hold:
    behalf awaits their confirmation, and the diff does what the issue asks and no more.
 2. **It is tested:** the Gate block passed before your last push, and every required check is green
    on the head commit.
-3. **The review is worked through:** a pass completed after your last change to a file CodeRabbit
-   reviews, each of its findings is fixed or answered with the reason, every thread is resolved,
-   and no human's thread is open. Bringing in `main` needs no new pass.
+3. **The review requirement is satisfied:** either a CodeRabbit pass completed after your last
+   change to a file it reviews, or the planning-only exception above is verified and recorded.
+   Each finding is fixed or answered with the reason, every thread is resolved, and no human's
+   thread is open. Bringing in `main` needs no new CodeRabbit pass; exception eligibility must
+   still be rechecked.
 
 Short of all three, report what remains with the pull request link and wait. A release, a tag and
 `sync_about.py --apply` keep their own approvals.
