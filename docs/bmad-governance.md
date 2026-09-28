@@ -109,7 +109,7 @@ map and the derived sprint status through the merge drivers in `scripts/bmad_mer
   changed differently, or one ID reserved for two issues. The last keeps both entries, so the
   audit's duplicate checks still fail on it. Resolve by hand, then regenerate sprint status.
 
-`citizen worktree create` registers both drivers in the repository's git config each time it
+`bin/citizen worktree create` registers both drivers in the repository's git config each time it
 runs, writing only a value that differs from the one it expects. It registers them only in the
 repository the running `citizen` checkout belongs to, so another repository that ships a script of
 the same name never has its merges routed through it. To register them in an existing checkout, run:

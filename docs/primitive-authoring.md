@@ -7,14 +7,14 @@ native restrictions still apply. Guidance is not proof that a runtime enforces a
 ## Select and inspect a stance
 
 ```sh
-citizen config set stances.voice answer-card
-citizen stances
-citizen sync --dry-run
+bin/citizen config set stances.voice answer-card
+bin/citizen stances
+bin/citizen sync --dry-run
 ```
 
-After reviewing the changes, `citizen sync` installs the selection. Claude Code reads the
+After reviewing the changes, `bin/citizen sync` installs the selection. Claude Code reads the
 selected stance through its linked rules; Codex reads the same text in generated instructions.
-Use `HARNESS_STANCE_VOICE=scannable citizen stances --json` to inspect a session selection.
+Use `HARNESS_STANCE_VOICE=scannable bin/citizen stances --json` to inspect a session selection.
 Setting an environment variable on a running agent does not itself rewrite its loaded context.
 
 A project or session selection that differs from the synced one reaches the model at the next
@@ -39,13 +39,13 @@ Lead with the conclusion. Name the specific evidence and the next useful action.
 ```
 
 Add `stances/feedback/gentle.md` with your alternative policy, then select it with
-`citizen config set stances.feedback gentle`. `citizen stances --json` shows its
+`bin/citizen config set stances.feedback gentle`. `bin/citizen stances --json` shows its
 source and full resolved behavior. Custom dimensions are optional until selected. Identifiers
 use lowercase letters, digits and hyphens. Duplicate dimension/variant definitions, unknown
 selections and path traversal are errors, not fallback behavior.
 
-A skill, role or workflow name defined in two roots is an error as well. `citizen lint` names
-both sources and `citizen sync` refuses before it writes anything, because a runtime resolves a
+A skill, role or workflow name defined in two roots is an error as well. `bin/citizen lint` names
+both sources and `bin/citizen sync` refuses before it writes anything, because a runtime resolves a
 duplicate name silently, first-wins. A project's own `.claude/agents/` or `.claude/skills/` name
 is not a duplicate: the project definition is meant to win, so sync reports the shadow as a
 notice and carries on.
@@ -73,9 +73,9 @@ while `designer` and `design-judge` are allowed to declare it:
   "reason": "Only the design roles the delegation-tiering skill exempts may declare frontier"}]}
 ```
 
-A violated constraint is a finding in `citizen stances --json` (a `conflicts` array) and in
-`citizen lint`, which evaluates the shipped constraints against `config.example.json`. It stays
-a hard error in the resolver, so `citizen sync` refuses the selection rather than projecting a
+A violated constraint is a finding in `bin/citizen stances --json` (a `conflicts` array) and in
+`bin/citizen lint`, which evaluates the shipped constraints against `config.example.json`. It stays
+a hard error in the resolver, so `bin/citizen sync` refuses the selection rather than projecting a
 contradiction; validation runs before sync changes files.
 
 ## A cost variant with numbers in it
@@ -103,19 +103,19 @@ chain routes nothing at all.
 
 A row is keyed by a role name or by a band — `A`, `B` or `C` — and may set `class`, `effort`,
 `budget_output_tokens` and `budget_tool_calls`; any of them may be omitted, and a null budget
-means unbudgeted. `budget_multiplier` scales both budgets, and `citizen stances --json` reports
+means unbudgeted. `budget_multiplier` scales both budgets, and `bin/citizen stances --json` reports
 the base figure and the scaled one. `class` never names the top class: reaching it by request is
 exactly what the `delegation` stance forbids, and it only applies at all when that stance
 resolves to `tiered`. A role whose frontmatter says `posture: fixed` — the verifiers — keeps its
 own class and effort whatever a row says, and takes the row's budgets.
 
 Unknown keys are ignored with a warning rather than an error, so a switch added in a later
-release never breaks a variant you wrote. Run `citizen stances --json` to see the resolved
+release never breaks a variant you wrote. Run `bin/citizen stances --json` to see the resolved
 table, its `extends_chain`, each sidecar's path, and any warnings.
 
 ## Import instructions you already have
 
-`citizen import path/to/CLAUDE.md` turns an existing instruction file into rules under an
+`bin/citizen import path/to/CLAUDE.md` turns an existing instruction file into rules under an
 external primitive root, so adopting the harness does not mean discarding what a repository
 already tells its agents. It reads `CLAUDE.md`, `AGENTS.md`, `.cursorrules` and
 `.cursor/rules/*.mdc`; rulesync's `import` is the reference for the behaviour.
@@ -130,11 +130,11 @@ name already taken and a front-matter line that is not a field all land in one
 `rules/<name>-unsorted.md` with a note saying so.
 
 ```sh
-citizen import ~/code/project/CLAUDE.md --dry-run   # the plan, then the sync projection
-citizen import ~/code/project/CLAUDE.md             # writes exactly that plan
+bin/citizen import ~/code/project/CLAUDE.md --dry-run   # the plan, then the sync projection
+bin/citizen import ~/code/project/CLAUDE.md             # writes exactly that plan
 ```
 
-The first run only prints — the rules it would write, then `citizen sync --dry-run` for the root
+The first run only prints — the rules it would write, then `bin/citizen sync --dry-run` for the root
 that would carry them — and a second run applies the plan it printed; a source that changed in
 between is printed again rather than written. Rules land under
 `~/.config/agent-harness/imported/<name>/` unless `--root` names another absolute directory,
@@ -144,7 +144,7 @@ journal says the harness generated is refused with its record, and so is a skill
 workflow name the new root would define twice, in sync's own words and before anything is
 written.
 
-Once the root is registered, `citizen sync` projects it like any other: the imported rules are
+Once the root is registered, `bin/citizen sync` projects it like any other: the imported rules are
 linked into `~/.claude/rules/harness-roots/<root>/` and rendered into the Codex `AGENTS.md`
 after this repository's own rules, and any skills the root carries are linked beside the shared
 ones. [The sync model](sync-model.md) covers the ordering, the drift reporting and what
@@ -187,7 +187,7 @@ selection` and every command that reads a selection refuse, naming each module i
 A module switched off asks nothing of its dependencies and holds no slot. A module from your own
 root may omit its manifest: it resolves and reports as unmeasured, and a root written before
 manifests existed keeps working. A dependency is a module whose absence breaks this one. A
-pointer to further reading is not a dependency. `citizen selection` shows each switch unit's
+pointer to further reading is not a dependency. `bin/citizen selection` shows each switch unit's
 instruments, or `unmeasured`, beside its value.
 
 ## Contribute shared primitives
@@ -200,7 +200,7 @@ compatibility links or generated views, not another authoring home. A new rule, 
 workflow also needs its entry in `primitives/manifests.json`
 ([above](#declare-a-modules-manifest)).
 
-Run `citizen generate` after editing roles, workflows or base instruction templates.
-`citizen generate --check` and lint reject projection drift. `citizen catalog` emits
+Run `bin/citizen generate` after editing roles, workflows or base instruction templates.
+`bin/citizen generate --check` and lint reject projection drift. `bin/citizen catalog` emits
 stable kind/ID/source/digest records for documentation and integration readers. Installation
 coverage and runtime enforcement are separate from successful source generation.

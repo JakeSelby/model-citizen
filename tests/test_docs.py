@@ -19,6 +19,8 @@ CURRENT_COMMAND_DOCS = (
     "docs/primitive-authoring.md",
     "docs/telemetry.md",
     "docs/caught-in-the-act.md",
+    "docs/compatibility.md",
+    "docs/releasing.md",
     "docs/usage.md",
 )
 SOURCE_REFERENCES = {
@@ -37,8 +39,8 @@ class ReadmeTests(unittest.TestCase):
         full_install = "## Full installation and ownership"
         self.assertIn(quick_start, README)
         self.assertLess(README.index(quick_start), README.index(full_install))
-        self.assertLess(README.index("citizen sync --dry-run"),
-                        README.index("\ncitizen sync\n"))
+        self.assertLess(README.index("bin/citizen sync --dry-run"),
+                        README.index("\nbin/citizen sync\n"))
 
     def test_the_account_is_stated_rather_than_assumed(self):
         prose = " ".join(README.split())
