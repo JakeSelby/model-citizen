@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 16 16" role="img" aria-label="Model Citizen">
+  <rect width="16" height="16" rx="2" fill="#FFF9F3"/>
+  <circle cx="8" cy="8.5" r="6.5" fill="#2C2418"/>
+  <path d="M9.6 6.6 L12.1 3.6" fill="none" stroke="#C4763B" stroke-width="2.4" stroke-linecap="round"/>
+</svg>

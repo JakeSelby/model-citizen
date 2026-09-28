@@ -1,0 +1,30 @@
+{
+  "name": "model-citizen",
+  "displayName": "Model Citizen",
+  "version": "0.14.1",
+  "description": "Skills, subagent roles, slash commands and an output style from the Model Citizen checkout, installable on their own.",
+  "author": { "name": "Jake Selby", "url": "https://github.com/JakeSelby" },
+  "license": "MIT",
+  "homepage": "https://model-citizen.dev",
+  "documentationUrl": "https://model-citizen.dev/",
+  "supportUrl": "https://github.com/JakeSelby/model-citizen/issues",
+  "privacyPolicyUrl": "https://github.com/JakeSelby/model-citizen/blob/main/docs/privacy.md",
+  "repository": "https://github.com/JakeSelby/model-citizen.git",
+  "keywords": ["claude-code", "codex", "agent-skills", "subagents", "context-engineering"],
+  "skills": "./primitives/skills/",
+  "agents": [
+    "./claude/agents/builder.md",
+    "./claude/agents/design-judge.md",
+    "./claude/agents/designer.md",
+    "./claude/agents/gatherer.md",
+    "./claude/agents/log-compressor.md",
+    "./claude/agents/planner.md",
+    "./claude/agents/reviewer.md",
+    "./claude/agents/spec-reviewer.md",
+    "./claude/agents/worker-a.md",
+    "./claude/agents/worker-b.md",
+    "./claude/agents/worker-c.md"
+  ],
+  "commands": "./claude/commands/",
+  "outputStyles": "./primitives/presentation/"
+}
