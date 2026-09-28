@@ -163,7 +163,7 @@ class InitTests(TempHome):
         self.assertEqual(cfg["identity"]["pronouns"], EXAMPLE["identity"]["pronouns"])
         self.assertEqual(cfg["stances"], EXAMPLE["stances"])
         self.assertEqual(harness.placeholder_identity(cfg), [])
-        self.assertIn("next: bin/citizen sync", out.getvalue())
+        self.assertIn(f"next: {harness.REPO / 'bin' / 'citizen'} sync", out.getvalue())
         harness.resolve_stances(harness.load_config(env={}))
 
     def test_a_blank_required_answer_is_asked_again(self):
