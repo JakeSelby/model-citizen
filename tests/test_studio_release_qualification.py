@@ -20,7 +20,7 @@ class StudioReleaseQualificationTests(unittest.TestCase):
 
     def test_both_platform_jobs_run_the_blocking_lifecycle(self):
         workflow = (REPO / ".github/workflows/studio-qualification.yml").read_text()
-        self.assertIn("[ubuntu-latest, macos-latest]", workflow)
+        self.assertIn("[ubuntu-latest, macos-15-intel]", workflow)
         self.assertIn("scripts/studio_lifecycle_acceptance.py", workflow)
         self.assertNotIn("continue-on-error", workflow)
 
