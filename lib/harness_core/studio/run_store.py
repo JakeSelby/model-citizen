@@ -32,7 +32,8 @@ MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 4 * 1024 * 1024
 MAX_RESULTS_FILES = 4096
 COST_BASIS = "list_price_equivalent"
-TERMINAL_STATUSES = frozenset(("succeeded", "failed", "cancelled", "timed_out", "orphaned"))
+TERMINAL_STATUSES = frozenset(("succeeded", "failed", "cancelled", "timed_out", "orphaned",
+                               "capped", "limited"))
 IMMUTABLE_FIELDS = (
     "schema_version", "run_id", "suite_id", "suite_version", "parameters", "target", "argv",
     "cost_class", "expected_duration_seconds", "timeout_seconds", "queue_sequence", "created_at",
@@ -43,7 +44,7 @@ LEGAL_TRANSITIONS = {
     "admitted": frozenset(("starting", "failed", "cancelled", "orphaned")),
     "starting": frozenset(("running", "failed", "cancelled", "orphaned", "cancel_requested")),
     "running": frozenset(("succeeded", "failed", "cancelled", "timed_out", "orphaned",
-                           "cancel_requested")),
+                           "capped", "limited", "cancel_requested")),
     "cancel_requested": frozenset(("cancelled", "failed", "orphaned")),
 }
 
@@ -179,6 +180,11 @@ def _legal_transition(previous: Mapping[str, Any], current: Mapping[str, Any]) -
     before, after = previous.get("status"), current.get("status")
     if after in LEGAL_TRANSITIONS.get(str(before), ()):
         return True
+    if (before in TERMINAL_STATUSES and after == before
+            and previous.get("usage_ledger_state") == "pending"
+            and current.get("usage_ledger_state") == "recorded"):
+        expected = dict(previous, usage_ledger_state="recorded")
+        return dict(current) == expected
     return (before == "orphaned" and after == "orphaned"
             and previous.get("capacity_reserved") is True
             and "capacity_reserved" not in current)
@@ -804,13 +810,15 @@ def studio_record(record: Mapping[str, Any], metadata: Mapping[str, Any]) -> Dic
             "estimate": record.get("spend_estimate"),
             "cap": record.get("spend_cap"),
             "pricing_identity": record.get("pricing_identity"),
+            "actual_usd": record.get("spend_actual"),
+            "ledger_state": record.get("usage_ledger_state"),
         },
         "canonical_run_digest": record.get("canonical_run_digest"),
         "status": record.get("status"),
         "times": {name: record.get(name) for name in ("created_at", "started_at", "completed_at")},
         "tokens": record.get("tokens") or {},
-        "cost": _cost(record.get("cost_usd"), record.get("cost_normalised_usd")),
-        "cases": record.get("cases") or {},
+        "cost": _cost(record.get("spend_actual")),
+        "cases": record.get("case_results") or [],
         "artifacts": ["runs/" + str(record["run_id"]) + "/" + name
                       for name in ("stdout.log", "stderr.log", "worker.log", SIDECAR_NAME,
                                    SIDECAR_META_NAME)] + [AUTHORITY_NAME],

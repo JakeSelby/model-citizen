@@ -214,13 +214,14 @@ class UsageLedgerTests(Home):
         usage_log._POSTURE[:] = []
         self.expected = posture.fingerprint(dict(os.environ))
 
-    def test_appended_and_upserted_rows_carry_the_active_profile_under_schema_1(self):
+    def test_appended_and_upserted_rows_carry_the_active_profile_under_current_schema(self):
         usage_log.append_row({"kind": "decision", "session_id": "d-1"}, path=self.usage)
         usage_log.upsert(session_row(), path=self.usage)
         rows = self.lines(self.usage)
         self.assertEqual([r[KEY] for r in rows], [self.expected] * 2)
-        self.assertEqual([r["schema_version"] for r in rows], [1, 1])
-        self.assertEqual(usage_log.SCHEMA_VERSION, 1)
+        self.assertEqual([r["schema_version"] for r in rows],
+                         [usage_log.SCHEMA_VERSION] * 2)
+        self.assertEqual(usage_log.SCHEMA_VERSION, 2)
         self.assertEqual(decisions.SCHEMA_VERSION, 1)
 
     def test_a_row_that_names_its_profile_keeps_it_even_when_null(self):

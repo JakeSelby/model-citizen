@@ -277,12 +277,19 @@ def row_prices(rows, table):
     with its subagent rows in hand — the figure on the session row already includes them.
     """
     module = pricing()
+    values = None
     if module is not None and table:
         try:
-            return module.priced(rows, table)
+            values = module.priced(rows, table)
         except Exception:
             pass
-    return [(None, "")] * len(rows)
+    values = list(values or [(None, "")] * len(rows))
+    for index, row in enumerate(rows):
+        spend = row.get("spend_usd")
+        if (row.get("kind") == "studio_run" and isinstance(spend, (int, float))
+                and not isinstance(spend, bool) and spend >= 0):
+            values[index] = (float(spend), str(row.get("ended") or "")[:10])
+    return values
 
 
 # ------------------------------------------------------------------ the OTLP/JSON payload
@@ -294,6 +301,8 @@ def row_key(row):
     A replay re-sends the same string for the same row, which is what lets a backend
     de-duplicate an at-least-once stream.
     """
+    if row.get("kind") == "studio_run":
+        return "{}|studio|studio_run|".format(row.get("run_id") or "")
     return "|".join(str(row.get(k) or d) for k, d in (
         ("session_id", ""), ("runtime", "claude-code"), ("kind", "session"), ("agent_id", "")))
 

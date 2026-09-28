@@ -4,9 +4,13 @@ from __future__ import annotations
 import contextlib
 import datetime as dt
 import fcntl
+import hashlib
+import hmac
 import json
+import math
 import os
 import re
+import secrets
 import signal
 import stat
 import subprocess
@@ -14,17 +18,18 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store
-from . import run_store
+from . import run_store, spend_guard
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
 MAX_OUTPUT_CHUNK = 64 * 1024
 ACTIVE = {"admitted", "starting", "running", "cancel_requested"}
-TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "orphaned"}
+TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "orphaned", "capped", "limited"}
 STATUSES = ACTIVE | TERMINAL | {"queued"}
 TARGET_KINDS = {"installed", "release", "branch", "worktree", "draft"}
 IDENTIFIER = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
@@ -109,13 +114,15 @@ class SuiteSpec:
     expected_duration_seconds: int
     timeout_seconds: int
     targets: Tuple[str, ...]
+    cases: Tuple[str, ...]
 
     @classmethod
     def parse(cls, value: Any) -> "SuiteSpec":
         if not isinstance(value, dict):
             raise RunError("suite entries must be objects")
         _strict_keys(value, {"id", "version", "argv", "parameters", "cost_class",
-                             "expected_duration_seconds", "timeout_seconds", "targets"}, "suite")
+                             "expected_duration_seconds", "timeout_seconds", "targets", "cases"},
+                     "suite")
         suite_id = value.get("id")
         version = value.get("version")
         argv = value.get("argv")
@@ -124,6 +131,7 @@ class SuiteSpec:
         expected = value.get("expected_duration_seconds")
         timeout = value.get("timeout_seconds")
         targets = value.get("targets")
+        cases = value.get("cases", [])
         if not isinstance(suite_id, str) or not IDENTIFIER.fullmatch(suite_id):
             raise RunError("suite id must be a lowercase identifier")
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
@@ -158,8 +166,12 @@ class SuiteSpec:
         if (not isinstance(targets, list) or not targets or len(set(targets)) != len(targets)
                 or any(target not in TARGET_KINDS for target in targets)):
             raise RunError("suite " + suite_id + " has invalid targets")
+        if (not isinstance(cases, list) or len(set(cases)) != len(cases)
+                or any(not isinstance(case, str) or not IDENTIFIER.fullmatch(case)
+                       for case in cases)):
+            raise RunError("suite " + suite_id + " has invalid cases")
         return cls(suite_id, version, tuple(argv), parsed, cost_class, expected, timeout,
-                   tuple(targets))
+                   tuple(targets), tuple(cases))
 
     def render(self, parameters: Mapping[str, str], target_kind: str,
                target_ref: str) -> List[str]:
@@ -370,6 +382,7 @@ class RunSupervisor:
         except (OSError, StateError) as exc:
             raise RunError(str(exc)) from exc
         self._runs_fd = _open_directory(self._state_fd, "runs", create=True)
+        self._confirmations_fd = _open_directory(self._state_fd, "confirmations", create=True)
         try:
             self.history = run_store.RunStore(self.state_root)
         except run_store.RunStoreError as exc:
@@ -380,7 +393,7 @@ class RunSupervisor:
         if history is not None:
             with contextlib.suppress(Exception):
                 history.close()
-        for name in ("_runs_fd", "_state_fd"):
+        for name in ("_confirmations_fd", "_runs_fd", "_state_fd"):
             descriptor = getattr(self, name, None)
             if descriptor is not None:
                 with contextlib.suppress(OSError):
@@ -453,7 +466,8 @@ class RunSupervisor:
                     "case_identities", "spend_estimate", "spend_cap", "pricing_identity",
                     "canonical_run_digest"}
         optional = {"admission_token", "runner_pid", "runner_identity", "command_pid", "command_identity",
-                    "started_at", "completed_at", "reason", "returncode", "capacity_reserved"}
+                    "started_at", "completed_at", "reason", "returncode", "capacity_reserved",
+                    "spend_actual", "spend_stop_reason", "case_results", "usage_ledger_state"}
         if set(record) - required - optional or required - set(record):
             raise RunError("run state record has unsupported or missing fields")
         if record.get("schema_version") != SCHEMA_VERSION or record.get("run_id") != run_id:
@@ -503,9 +517,40 @@ class RunSupervisor:
                      or any(not isinstance(value, str) or not value for value in case_identities)
                      or len(set(case_identities)) != len(case_identities))):
             raise RunError("run state record has invalid case identities")
-        for name in ("spend_estimate", "spend_cap", "pricing_identity"):
-            if record.get(name) is not None:
-                raise RunError("run state record has unsupported " + name)
+        paid = record.get("cost_class") == "spends_usage"
+        if paid:
+            estimate = record.get("spend_estimate")
+            caps = record.get("spend_cap")
+            pricing = record.get("pricing_identity")
+            if (not isinstance(estimate, dict)
+                    or set(estimate) != {"amount_usd", "basis", "sample_count", "suite_id",
+                                        "case_count"}
+                    or estimate.get("suite_id") != record.get("suite_id")
+                    or estimate.get("basis") not in ("no_history", "median_same_suite_scale")
+                    or not isinstance(estimate.get("sample_count"), int)
+                    or isinstance(estimate.get("sample_count"), bool)
+                    or estimate["sample_count"] < 0
+                    or not isinstance(estimate.get("case_count"), int)
+                    or estimate["case_count"] != len(case_identities or [])
+                    or (estimate.get("amount_usd") is not None
+                        and (not isinstance(estimate["amount_usd"], (int, float))
+                             or isinstance(estimate["amount_usd"], bool)
+                             or not math.isfinite(estimate["amount_usd"])
+                             or estimate["amount_usd"] < 0))):
+                raise RunError("run state record has invalid spend estimate")
+            if (not isinstance(caps, dict)
+                    or set(caps) != {"max_budget_usd", "spend_cap_usd"}
+                    or any(not spend_guard.valid_money_text(caps.get(name))
+                           for name in caps)
+                    or Decimal(caps["max_budget_usd"]) > Decimal(caps["spend_cap_usd"])):
+                raise RunError("run state record has invalid spend cap")
+            if (not isinstance(pricing, dict) or set(pricing) != {"source", "basis"}
+                    or pricing.get("source") not in spend_guard.PRICING_SOURCES
+                    or not isinstance(pricing.get("basis"), str) or not pricing["basis"]):
+                raise RunError("run state record has invalid pricing identity")
+        elif any(record.get(name) is not None
+                 for name in ("spend_estimate", "spend_cap", "pricing_identity")):
+            raise RunError("free run state record carries a spend contract")
         try:
             run_store._immutable_digest(record)
         except run_store.RunStoreError as exc:
@@ -540,6 +585,33 @@ class RunSupervisor:
                                         or isinstance(record["returncode"], bool)
                                         or not -255 <= record["returncode"] <= 255):
             raise RunError("run state record has an invalid returncode")
+        if "spend_actual" in record and (not isinstance(record["spend_actual"], (int, float))
+                                          or isinstance(record["spend_actual"], bool)
+                                          or not math.isfinite(record["spend_actual"])
+                                          or record["spend_actual"] < 0):
+            raise RunError("run state record has invalid actual spend")
+        if ("spend_stop_reason" in record
+                and record["spend_stop_reason"] not in spend_guard.STOP_REASONS):
+            raise RunError("run state record has invalid spend stop reason")
+        if "case_results" in record:
+            results = record["case_results"]
+            if (not isinstance(results, list) or len(results) != len(case_identities or [])
+                    or [item.get("id") for item in results if isinstance(item, dict)]
+                    != list(case_identities or [])
+                    or any(not isinstance(item, dict)
+                           or set(item) != {"id", "status", "spend_usd"}
+                           or item.get("status") not in ("completed", "not_run")
+                           or not isinstance(item.get("spend_usd"), (int, float))
+                           or isinstance(item.get("spend_usd"), bool)
+                           or not math.isfinite(item["spend_usd"])
+                           or item["spend_usd"] < 0 for item in results)):
+                raise RunError("run state record has invalid case results")
+        if ("usage_ledger_state" in record
+                and record["usage_ledger_state"] not in ("pending", "recorded")):
+            raise RunError("run state record has invalid usage ledger state")
+        if ("usage_ledger_state" in record
+                and (not paid or "spend_actual" not in record or record["status"] not in TERMINAL)):
+            raise RunError("only a terminal paid run may carry usage ledger state")
         if "capacity_reserved" in record and record["capacity_reserved"] is not True:
             raise RunError("run state record has an invalid capacity reservation")
         if ("admission_token" in record
@@ -630,6 +702,37 @@ class RunSupervisor:
         _atomic_json(self._state_fd, "queue.json", {"schema_version": SCHEMA_VERSION,
                                                     "next_sequence": sequence + 1})
         return sequence
+
+    @staticmethod
+    def _confirmation_name(token: str) -> str:
+        if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{64}", token):
+            raise RunError("paid run requires a valid confirmation token")
+        return hashlib.sha256(token.encode("ascii")).hexdigest() + ".json"
+
+    def _issue_confirmation_locked(self, request_digest: str) -> str:
+        token = secrets.token_hex(32)
+        _atomic_json(self._confirmations_fd, self._confirmation_name(token), {
+            "schema_version": 1,
+            "request_digest": request_digest,
+            "created_at": utc_now(),
+        })
+        return token
+
+    def _consume_confirmation_locked(self, token: Optional[str], request_digest: str) -> None:
+        name = self._confirmation_name(token or "")
+        try:
+            pending = _load_json(self._confirmations_fd, name)
+        except RunError as exc:
+            raise RunError("paid run confirmation is missing, invalid, or already used") from exc
+        if (set(pending) != {"schema_version", "request_digest", "created_at"}
+                or not isinstance(pending.get("request_digest"), str)
+                or not hmac.compare_digest(pending["request_digest"], request_digest)):
+            raise RunError("paid run confirmation does not match the exact displayed request")
+        try:
+            os.unlink(name, dir_fd=self._confirmations_fd)
+            os.fsync(self._confirmations_fd)
+        except OSError as exc:
+            raise RunError("paid run confirmation could not be consumed") from exc
 
     def open_run_output(self, run_id: str, name: str):
         if name not in ("stdout.log", "stderr.log", "worker.log"):
@@ -760,6 +863,17 @@ class RunSupervisor:
             if not stopped:
                 record["capacity_reserved"] = True
             self._write(record)
+        for record in self._records():
+            self._settle_usage_locked(record)
+
+    def _settle_usage_locked(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        current = dict(record)
+        if current.get("usage_ledger_state") != "pending":
+            return current
+        if spend_guard.upsert_usage(self.state_root.parent / "usage.jsonl", current):
+            current["usage_ledger_state"] = "recorded"
+            self._write(current)
+        return current
 
     def _spawn_locked(self, record: Dict[str, Any]) -> None:
         admission_token = uuid.uuid4().hex
@@ -832,13 +946,33 @@ class RunSupervisor:
             self._admit_locked()
 
     def start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
-              target_ref: str) -> Dict[str, Any]:
+              target_ref: str, *, confirmed: Optional[str] = None,
+              max_budget_usd: Any = None, spend_cap_usd: Any = None,
+              pricing_source: Optional[str] = None) -> Dict[str, Any]:
         catalog = SuiteCatalog.load(self.catalog_path)
         suite = catalog.get(suite_id)
         argv = suite.render(parameters, target_kind, target_ref)
+        cases = list(suite.cases or (suite.suite_id,))
+        if (suite.cost_class != "spends_usage"
+                and (confirmed is not None or max_budget_usd is not None
+                     or spend_cap_usd is not None or pricing_source is not None)):
+            raise RunError("spend flags apply only to suites that spend usage")
         run_id = str(uuid.uuid4())
         with self.lock():
             self._recover_locked()
+            spend_plan = None
+            if suite.cost_class == "spends_usage":
+                try:
+                    spend_plan = spend_guard.plan(self._records(), suite.suite_id, cases,
+                                                  max_budget_usd, spend_cap_usd, pricing_source)
+                    request = spend_guard.confirmation_request(
+                        suite.suite_id, suite.version, parameters, target_kind, target_ref,
+                        cases, spend_plan)
+                    self._consume_confirmation_locked(
+                        confirmed, spend_guard.confirmation_digest(request))
+                    argv = spend_guard.guarded_argv(argv, spend_plan)
+                except spend_guard.SpendGuardError as exc:
+                    raise RunError(str(exc)) from exc
             record: Dict[str, Any] = {
                 "schema_version": SCHEMA_VERSION,
                 "run_id": run_id,
@@ -856,10 +990,10 @@ class RunSupervisor:
                 "cost_class": suite.cost_class,
                 "expected_duration_seconds": suite.expected_duration_seconds,
                 "timeout_seconds": suite.timeout_seconds,
-                "case_identities": None,
-                "spend_estimate": None,
-                "spend_cap": None,
-                "pricing_identity": None,
+                "case_identities": cases if spend_plan else None,
+                "spend_estimate": spend_plan["estimate"] if spend_plan else None,
+                "spend_cap": spend_plan["caps"] if spend_plan else None,
+                "pricing_identity": spend_plan["pricing"] if spend_plan else None,
                 "status": "queued",
                 "queue_sequence": self._next_sequence(),
                 "created_at": utc_now(),
@@ -868,6 +1002,27 @@ class RunSupervisor:
             self._write(record)
             self._admit_locked()
             return self._public(self._read(run_id))
+
+    def spend_preview(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
+                      target_ref: str, max_budget_usd: Any, spend_cap_usd: Any,
+                      pricing_source: Optional[str]) -> Dict[str, Any]:
+        suite = SuiteCatalog.load(self.catalog_path).get(suite_id)
+        suite.render(parameters, target_kind, target_ref)
+        if suite.cost_class != "spends_usage":
+            return {"cost_class": "free", "confirmation_required": False}
+        cases = list(suite.cases or (suite.suite_id,))
+        with self.lock():
+            self._recover_locked()
+            try:
+                preview = spend_guard.plan(self._records(), suite.suite_id, cases,
+                                           max_budget_usd, spend_cap_usd, pricing_source)
+            except spend_guard.SpendGuardError as exc:
+                raise RunError(str(exc)) from exc
+            request = spend_guard.confirmation_request(
+                suite.suite_id, suite.version, parameters, target_kind, target_ref, cases, preview)
+            token = self._issue_confirmation_locked(spend_guard.confirmation_digest(request))
+            return dict(preview, confirmation_token=token, cost_class=suite.cost_class,
+                        case_identities=cases)
 
     def list(self) -> List[Dict[str, Any]]:
         self.reconcile_and_drain()

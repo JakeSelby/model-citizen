@@ -360,7 +360,7 @@ development_status:
   ah-s299-launch-watch-and-stop-the-free-local-suites-from: backlog
   ah-s300-run-history-and-run-detail-with-flaky-test-marks: backlog
   ah-s301-targets-run-against-the-installed-version-a: backlog
-  ah-s302-spend-guard-estimate-confirm-and-cap-a-run-that: backlog
+  ah-s302-spend-guard-estimate-confirm-and-cap-a-run-that: ready-for-dev
   ah-s303-run-native-acceptance-from-the-studio-case-by: backlog
   ah-s304-run-the-live-replay-benchmark-from-the-studio: backlog
   ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: backlog
