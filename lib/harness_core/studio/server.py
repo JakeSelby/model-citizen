@@ -21,7 +21,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import auth, selection, settings
+from . import auth, module_library, selection, settings
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -438,6 +438,12 @@ def _selection_read(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _library(handler: Handler, route: Route) -> None:
+    payload = module_library.inventory(handler.server.repo_root)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _ui_preferences_read(handler: Handler, route: Route) -> None:
     payload = handler.server.store.read_ui_preferences()
     route.response_schema.validate(payload)
@@ -553,6 +559,8 @@ CONFIGURE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error
                                                      ("base_revision", "string")))
 CONFIGURE_SAVE = ResponseSchema("json-object", CONFIGURE_PREVIEW.fields +
                                 (("saved", "boolean"), ("result", "object-or-null")))
+LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
+                                          ("modules", "array"), ("summary", "object")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -586,6 +594,8 @@ ROUTES = RouteRegistry((
           _configure_preview, None, "application/json", settings.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/save", "application/json", CONFIGURE_SAVE,
           _configure_save, None, "application/json", settings.CLI_COMMANDS["save"]),
+    Route("GET", "/api/library", "application/json", LIBRARY,
+          _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

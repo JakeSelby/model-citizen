@@ -3,12 +3,13 @@ import test from "node:test";
 
 import { documentTitle, NAVIGATION, pageTitle } from "../src/navigation.ts";
 
-test("the five stable areas keep their approved order and routes", () => {
+test("the stable areas keep their approved order and routes", () => {
   assert.deepEqual(
     NAVIGATION.map(({ label, path }) => [label, path]),
     [
       ["Hub", "/"],
       ["Configure", "/configure"],
+      ["Library", "/library"],
       ["Experiments", "/experiments"],
       ["Reports", "/reports"],
       ["Activity", "/activity"],

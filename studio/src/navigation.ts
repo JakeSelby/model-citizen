@@ -1,6 +1,7 @@
 export const NAVIGATION = [
   { label: "Hub", path: "/" },
   { label: "Configure", path: "/configure" },
+  { label: "Library", path: "/library" },
   { label: "Experiments", path: "/experiments" },
   { label: "Reports", path: "/reports" },
   { label: "Activity", path: "/activity" },

@@ -431,6 +431,23 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.library-module { background: var(--studio-surface-raised); }
+
+.library-detail { margin-top: var(--studio-space-4); }
+
+.library-detail summary {
+  min-height: var(--studio-control-height);
+  color: var(--studio-primary);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.library-code {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
 @media (max-width: 64rem) {
   .header-inner {
     align-items: flex-start;

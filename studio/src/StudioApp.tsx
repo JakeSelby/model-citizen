@@ -17,6 +17,7 @@ import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom"
 import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
 import { StatusBadge, ToastProvider } from "./components/StudioKit";
+import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
@@ -124,6 +125,7 @@ function StudioFrame() {
         <Routes>
           <Route path="/" element={<OverviewPage />} />
           <Route path="/configure" element={<ConfigurePage />} />
+          <Route path="/library" element={<LibraryPage />} />
           {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route
               element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}

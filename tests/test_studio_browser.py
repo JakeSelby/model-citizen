@@ -342,6 +342,23 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(self.devtools.evaluate("document.querySelector('h1')?.textContent"),
                          "Reports")
 
+        self.devtools.evaluate("location.hash = '#/library'")
+        library = None
+        for _ in range(100):
+            value = self.devtools.evaluate("JSON.stringify({"
+                "active:document.querySelector('.nav-link[aria-current=page]')?.textContent,"
+                "heading:document.querySelector('h1')?.textContent,"
+                "modules:document.querySelectorAll('.library-module').length,"
+                "filters:new Set(Array.from(document.querySelectorAll('[aria-label^=\"Filter by\"]')).map(node=>node.getAttribute('aria-label'))).size"
+                "})")
+            library = json.loads(value)
+            if library["active"] == "Library" and library["modules"] > 0:
+                break
+            time.sleep(0.05)
+        self.assertEqual(library["heading"], "Every module, from source to runtime.")
+        self.assertGreater(library["modules"], 0)
+        self.assertEqual(library["filters"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()
