@@ -13,7 +13,10 @@ The plugin does not include a remote MCP server, analytics service or account sy
 independently collect or retain that data.
 
 Claude Code and any third-party tool or service that you deliberately invoke remain governed by
-their own terms and privacy policies. Model Citizen does not change the permissions or controls
+their own terms and privacy policies. This includes GitHub or another configured Git remote used
+by the delivery workflows, and the services behind Claude Code's WebFetch and WebSearch tools.
+The [README disclosure](../README.md#data-and-external-services-in-the-claude-directory-plugin)
+lists the data those workflows can send. Model Citizen does not change the permissions or controls
 that those products apply.
 
 ## The separately installed harness

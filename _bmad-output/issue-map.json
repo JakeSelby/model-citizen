@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 122,
-    "chore": 92,
+    "chore": 93,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7912,6 +7912,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C091.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C092",
+      "github_number": 1054,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1054",
+      "title": "Disclose external services used by directory workflows",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C092.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
