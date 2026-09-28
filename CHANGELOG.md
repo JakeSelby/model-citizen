@@ -6,6 +6,24 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-09-28
+
+### Added
+
+- Added a privacy policy for the Claude Directory plugin and linked it from the manifest and README. (#1052)
+
+### Changed
+
+- Qualified the v0.14.2 release from frozen source
+  `040462636205d8edc766775ebe2cc9571ac6b217` on Claude Code 2.1.283 for macOS and Linux.
+
+- Documented the external services that Claude Directory workflows may contact when users request them. (#1054)
+
+### Fixed
+
+- Package the Claude Directory distribution from a minimal regular-file bundle so repository history,
+  planning artifacts, installer code and symlinks no longer trigger unrelated directory review holds. (#1056)
+
 ## [0.14.1] — 2026-09-28
 
 ### Changed

@@ -199,11 +199,11 @@ trust if prompted. [Start with the full guide](docs/getting-started.md).
 
 ## Release status
 
-**Release status:** `0.14.0` is the current stable release. Its shared engine, adapters,
+**Release status:** `0.14.2` is the current stable release. Its shared engine, adapters,
 configuration and hook decisions are qualified from complete scripted records on the two
 required Claude Code CLI targets, macOS and Linux. The independent hand comparisons tracked by
 #741 were explicitly deferred to v0.15.0 and remain a stated limitation. The Codex CLI is outside
-the 0.14.0 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
+the 0.14.2 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
 qualified on the Codex CLI for macOS and Linux, so if you need a qualified Codex floor, install
 that tag.
 

@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 123,
-    "chore": 93,
+    "chore": 94,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -7938,6 +7938,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B122.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C093",
+      "github_number": 1059,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1059",
+      "title": "Publish v0.14.2 with the Claude Directory bundle",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C093.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

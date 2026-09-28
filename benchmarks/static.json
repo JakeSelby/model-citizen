@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "harness_version": "0.14.1",
+  "harness_version": "0.14.2",
   "chars_per_token": 4.0,
   "scopes": {
     "always_loaded": "claude/CLAUDE.md, claude/rules/, claude/output-styles/ and the stance variant config.example.json selects, for the default selection",

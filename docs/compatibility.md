@@ -9,7 +9,7 @@ A **qualified** entry requires native evidence for its exact runtime, client and
 **Unqualified** means no complete passing evidence, **planned** means no current integration,
 and **unsupported** means a combination explicitly outside the integration contract.
 
-Claude Code and Codex are this release's integration targets. The v0.14.0 stable floor qualifies
+Claude Code and Codex are this release's integration targets. The v0.14.2 stable floor qualifies
 the Claude Code CLI on macOS and Linux from complete scripted records. The first-live hand
 comparisons tracked by #741 were explicitly deferred to v0.15.0 and remain a catalog limitation. The Codex CLI is
 outside that contract until a
