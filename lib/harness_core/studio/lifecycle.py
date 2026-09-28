@@ -6,6 +6,7 @@ import json
 import http.client
 import os
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -139,8 +140,13 @@ def serve(static_root: Path, root: Path, requested_port: int, ready=None,
 
 def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict[str, object]:
     argv = list(command) + ["studio", "--_serve", "--no-open", "--port", str(requested_port)]
-    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+    startup_errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    try:
+        process = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=startup_errors, close_fds=True, start_new_session=True)
+    except BaseException:
+        startup_errors.close()
+        raise
     deadline = time.monotonic() + START_TIMEOUT
     last_error = None
     while time.monotonic() < deadline:
@@ -161,7 +167,9 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
                             process.kill()
                             process.wait()
                 fallback = won and requested_port != 0 and record["port"] != requested_port
-                return server.public_result(record, requested_port, fallback, reused=not won)
+                result = server.public_result(record, requested_port, fallback, reused=not won)
+                startup_errors.close()
+                return result
         except InstanceError as exc:
             last_error = exc
         if process.poll() is not None:
@@ -171,8 +179,12 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
             continue
         time.sleep(0.05)
     _cleanup_failed_launch(process, root)
+    startup_errors.seek(0)
+    child_error = startup_errors.read(4096).strip()
+    startup_errors.close()
     raise InstanceError("detached Studio did not become ready" +
-                        ((": " + str(last_error)) if last_error else ""))
+                        ((": " + str(last_error)) if last_error else "") +
+                        (("; child: " + child_error) if child_error else ""))
 
 
 def prepare_browser(root: Path) -> Path:

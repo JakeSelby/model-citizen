@@ -301,7 +301,7 @@ def _health(handler: Handler, route: Route) -> None:
         handler._error(401, "unauthorized")
         return
     payload = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
-               "pid": os.getpid(), "pid_start": workers.process_start(os.getpid()),
+               "pid": os.getpid(), "pid_start": handler.server.pid_start,
                "port": handler.server.server_address[1]}
     route.response_schema.validate(payload)
     handler._send(200, (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(),
@@ -554,6 +554,7 @@ def run(static_root: Path, store: Store, requested_port: int,
             pid_start = workers.process_start(os.getpid())
             if not pid_start:
                 raise RuntimeError("this platform cannot identify the Studio process start time")
+            server.pid_start = pid_start
             port = int(server.server_address[1])
             record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
                       "pid": os.getpid(), "pid_start": pid_start, "port": port,

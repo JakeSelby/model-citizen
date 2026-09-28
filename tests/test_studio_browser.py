@@ -169,7 +169,7 @@ class StudioBrowserTests(unittest.TestCase):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self._stop_browser)
         active = self.profile / "DevToolsActivePort"
-        for _ in range(100):
+        for _ in range(400):
             if active.is_file():
                 break
             time.sleep(0.05)

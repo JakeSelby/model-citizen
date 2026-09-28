@@ -202,6 +202,19 @@ class LifecycleTests(StudioFixture):
         self.assertEqual(routes[("POST", studio_server.CONTROL_STOP)].parity_exemption,
                          "transport")
 
+    def test_health_reuses_the_start_token_published_by_the_server(self):
+        route = studio_server.ROUTES.resolve("GET", studio_server.CONTROL_HEALTH)
+        assert route is not None
+        handler = mock.Mock()
+        handler._control_authorized.return_value = True
+        handler.server.pid_start = "published-token"
+        handler.server.server_address = ("127.0.0.1", 49152)
+        with mock.patch.object(workers, "process_start",
+                               side_effect=AssertionError("health must not reprobe the process")):
+            studio_server._health(handler, route)
+        payload = json.loads(handler._send.call_args.args[1])
+        self.assertEqual(payload["pid_start"], "published-token")
+
     def test_duplicate_method_and_path_registration_is_refused(self):
         route = studio_server.ROUTES.resolve("GET", "/")
         assert route is not None
