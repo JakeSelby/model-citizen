@@ -282,8 +282,9 @@ CLAUSE_BREAK = re.compile(r"[,:()]|\b(?:and|then|but|or|while|after|before)\b")
 # fixture".
 DIRECTIVE_BACK = re.compile(
     r"\b(?:(?:follow(?:ing)?|apply(?:ing)?|obey(?:ing)?) (?:it|them|that file|this file"
-    r"|those instructions|these instructions|its instructions|the instructions)"
-    r"|use (?:those|these|its|the) instructions|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
+    r"|(?:those|these|its|the) (?:[\w-]+ ){0,3}instructions)"
+    r"|use (?:those|these|its|the) (?:[\w-]+ ){0,3}instructions"
+    r"|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
 # Work on the file rather than work under it, when the verb governs the file the way a directive
 # does: "update <path>", or "update it" after it. "Update your findings" edits something else.
 # Negated ("do not edit it") is still a directive.
@@ -315,7 +316,8 @@ def _governs(pattern, before):
 # A directive in a later sentence still points back at the file while each sentence between keeps
 # talking about it: "Read <path>. These instructions define the layer. Follow them precisely."
 FOLLOW_REACH = 3
-ANAPHOR = re.compile(r"\b(?:(?:these|those|its|the) instructions|(?:that|this|the) file)\b")
+ANAPHOR = re.compile(
+    r"\b(?:(?:these|those|its|the) (?:[\w-]+ ){0,3}instructions|(?:that|this|the) file)\b")
 # An explanatory clause can start with a bare pronoun after an em dash: "read <path> — it
 # contains the review instructions". `it` alone is too weak to carry the file forward, so require
 # the pronoun to govern instruction-like guidance in the same clause.
