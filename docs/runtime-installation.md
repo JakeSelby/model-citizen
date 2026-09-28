@@ -6,7 +6,7 @@ Select targets independently in your user configuration:
 {"claude": {"manage": false}, "codex": {"manage": true}, "vscode": {"manage": false}}
 ```
 
-`bin/harness config set claude.manage false` makes the same change. A Codex-only sync creates
+`bin/citizen config set claude.manage false` makes the same change. A Codex-only sync creates
 its configuration home even on a fresh machine; it does not require a Claude installation.
 `CLAUDE_CONFIG_DIR` and `CODEX_HOME` select nondefault runtime homes. `HARNESS_HOME` isolates
 the harness's own configuration and state for fixtures. It is not a native runtime setting.
@@ -23,7 +23,7 @@ explicit acknowledgement. `inherit` preserves native choices. Codex renamed the 
 `approvals_reviewer`, and a client drops a spelling it does not know without a word, so sync asks
 the installed client which name it accepts — from its own protocol schema, or `--strict-config`,
 neither of which starts a model turn — writes that one, and removes the other. A client that
-accepts neither gets no reviewer key, a sync notice and a `citizen doctor` finding. Native
+accepts neither gets no reviewer key, a sync notice and a `bin/citizen doctor` finding. Native
 requirements and live
 permission overrides can restrict or supersede defaults; these mappings are not an assertion
 that Claude and Codex permission modes are equivalent.
@@ -33,7 +33,7 @@ and last-applied values before replacement. TOML editing preserves unrelated tab
 TOMLKit is bundled unmodified with its MIT notice, so no global Python package install is
 required. JSON-with-comments editor files are left unchanged with an explicit diagnostic.
 
-`citizen diff` detects modified generated content and owned settings. Uninstall restores prior
+`bin/citizen diff` detects modified generated content and owned settings. Uninstall restores prior
 values only when they still match the harness's last write; intervening user changes remain
 with a conflict report and recoverable ownership state. It never deletes a redirected link.
 Concurrent sync/uninstall operations refuse a second writer. Interrupted generated/config
@@ -69,12 +69,12 @@ curl -fsSL https://raw.githubusercontent.com/JakeSelby/model-citizen/stable/scri
    is fetched and fast-forwarded instead of re-cloned; one that cannot fast-forward, and a
    destination that is occupied by something that is not a git checkout, both stop the script
    rather than being reconciled for you.
-3. **Configuration.** `bin/harness init --yes` writes `~/.config/agent-harness/config.json` from
+3. **Configuration.** `bin/citizen init --yes` writes `~/.config/agent-harness/config.json` from
    the example, taking the name from `git config user.name`, the handle from a signed-in `gh` and
    the timezone from the system. Any field it cannot answer keeps its example value and is listed
-   on the way out for `citizen config set`. An existing config is never rewritten.
-4. **Preview.** `bin/harness install --dry-run`, which writes nothing.
-5. **Next command.** It prints `bin/harness install` and `bin/harness uninstall` and stops. The
+   on the way out for `bin/citizen config set`. An existing config is never rewritten.
+4. **Preview.** `bin/citizen install --dry-run`, which writes nothing.
+5. **Next command.** It prints `bin/citizen install` and `bin/citizen uninstall` and stops. The
    script never runs `install` without `--dry-run`.
 
 Any failure exits non-zero with one line naming the step. `HARNESS_CHECKOUT` moves the checkout,
@@ -113,8 +113,8 @@ while the old marketplace is registered, so the old plugin and marketplace go fi
 With a checkout installed, run:
 
 ```sh
-citizen upgrade --dry-run   # print the four `claude plugin` commands
-citizen upgrade             # run them
+bin/citizen upgrade --dry-run   # print the four `claude plugin` commands
+bin/citizen upgrade             # run them
 ```
 
 It reads the old install's scope and the marketplace's recorded source from Claude Code's plugin
@@ -134,18 +134,18 @@ that instead of `JakeSelby/model-citizen`:
 /plugin install model-citizen@model-citizen
 ```
 
-Skills move from `/agent-harness:<name>` to `/model-citizen:<name>`. `citizen doctor` recognizes
-either ID, names `citizen upgrade` while the old one is enabled, and warns while both are enabled,
-because every skill would then load twice. `citizen sync` prints the same pointer. The synced home
+Skills move from `/agent-harness:<name>` to `/model-citizen:<name>`. `bin/citizen doctor` recognizes
+either ID, names `bin/citizen upgrade` while the old one is enabled, and warns while both are enabled,
+because every skill would then load twice. `bin/citizen sync` prints the same pointer. The synced home
 itself is unaffected by the plugin rename.
 
-A marketplace install is a strict subset of `bin/harness install`. It does not give you:
+A marketplace install is a strict subset of `bin/citizen install`. It does not give you:
 
-- the ownership journal, `citizen diff`, or a restoring `citizen uninstall`;
+- the ownership journal, `bin/citizen diff`, or a restoring `bin/citizen uninstall`;
 - stance selection — no rules, no `CLAUDE.md` projection, no personal file;
 - the Codex projection under `~/.agents/skills` and `~/.codex`;
 - hooks, so command grading, the stop gate and the usage feed are all off.
 
 The marketplace path is its own client surface in
 [the compatibility catalog](compatibility.md) and is **unqualified**: no native evidence has been
-recorded for it. `citizen doctor` reports which of the two paths is active.
+recorded for it. `bin/citizen doctor` reports which of the two paths is active.

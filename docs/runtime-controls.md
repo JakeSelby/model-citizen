@@ -7,7 +7,7 @@ decision, so a request requiring confirmation is denied with its reason. Output 
 grants an otherwise unapproved shell command merely to rewrite it.
 
 Hook registration is not activation. Codex requires native trust for the current hooks content;
-accept it in the client. `citizen trust` separately authorizes running a repository's gate and
+accept it in the client. `bin/citizen trust` separately authorizes running a repository's gate and
 does not manufacture native hook trust. Native permission restrictions always take precedence.
 Hosted search and continuation through an already running shell are not universally intercepted.
 Hooks assist workflow policy; they are not a substitute for the runtime sandbox.
@@ -29,7 +29,7 @@ posture does not move stays a symlink to the committed projection, exactly as be
 moves is rendered into the Claude home, so the class and effort it runs with are written into the
 file on disk rather than decided per session. A
 session-scoped `HARNESS_STANCE_COST`, like any `HARNESS_STANCE_*`, stays in that session and does
-not move them until the next `citizen sync`; an isolated [role worker](role-workers.md) resolves
+not move them until the next `bin/citizen sync`; an isolated [role worker](role-workers.md) resolves
 its class, effort and soft budget per run, from the same table and the same precedence, so it
 follows that session selection and a constrained role cannot run one way as a worker and another
 as a definition. A `role_bindings.<runtime>.<role>` entry still wins over the variant's row.
@@ -38,10 +38,10 @@ Routing of spawns that name no agent definition turns itself off in a workspace 
 would put that repository's instructions on every unnamed spawn; the spawn runs as written and the
 hook says so.
 Before downgrading to a release that only links these definitions, either select `balanced` with
-no role bindings and sync once, which restores the links, or run `citizen uninstall`. Syncing a
+no role bindings and sync once, which restores the links, or run `bin/citizen uninstall`. Syncing a
 home back with the older release is not enough on its own: role files the older release does not
-ship stay in `~/.claude/agents` and `~/.codex/agents`, and its `citizen diff` reports no drift,
-because code that never knew those roles cannot miss them. `citizen uninstall` before the
+ship stay in `~/.claude/agents` and `~/.codex/agents`, and its `bin/citizen diff` reports no drift,
+because code that never knew those roles cannot miss them. `bin/citizen uninstall` before the
 downgrade is the remedy; it removes what the newer release wrote.
 
 Routing is session-scoped for the same reason that effort is sync-scoped: what a native agent is
@@ -95,7 +95,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `validate-plan-card` | PostToolUse on a plan file |
 | `workspace-session` | SessionStart, from its own entry: the workspace's other folders and their instructions ([workspaces](workspaces.md#the-session-start-hook)) |
 
-`citizen config set hooks.<id> off` switches one off, and it applies from the next event with no
+`bin/citizen config set hooks.<id> off` switches one off, and it applies from the next event with no
 sync: the dispatcher resolves the selection at each event and neither loads nor runs a module
 whose id is `off`. The libraries those modules load (`decisions`, `posture`, `pricing`,
 `telemetry`, `rule-detectors`, `otel-headers`, `filter-lines`) have no id and no switch. Denying
@@ -106,14 +106,14 @@ evasion denials and the Workflow launch guard run with every hook off, so switch
 
 The four core ids enforce rather than assist. A layer may switch one off only when the user
 configuration sets `"core_switches_acknowledged": true`; `config set`, `sync` and
-`citizen selection` refuse it otherwise, before anything is written, and so does withdrawing the
+`bin/citizen selection` refuse it otherwise, before anything is written, and so does withdrawing the
 acknowledgement while a core hook is off. The acknowledgement is read from the user configuration
 alone, because a project, session or mode file may carry selection keys only. A hook that meets an
 unacknowledged `off` keeps running, and so does every hook when the selection will not resolve.
 
 Codex's adapter dispatches through the same `lifecycle.py` and reads the same id map. There is no
 Codex-only id; an id whose event Codex does not raise, such as `usage-feed`, simply never runs
-there. `citizen catalog` lists each id with kind `hooks`, its source and whether it is core.
+there. `bin/citizen catalog` lists each id with kind `hooks`, its source and whether it is core.
 
 ## Decision providers
 
@@ -168,7 +168,7 @@ mean "use the deterministic answer". A judgment may turn an `allow` into an `ask
 widen a decision or produce a `deny`. Every other outcome fails open to the deterministic
 decision: no key, a timeout, an exhausted budget, a malformed response, an unexpected exception.
 Each call writes one `event` row carrying the status, the requested and returned model ids, the
-pack and request hashes, the usage and the latency, and never the state; `citizen decide`
+pack and request hashes, the usage and the latency, and never the state; `bin/citizen decide`
 suppresses that row, because a reporting command changes nothing. The endpoint must be `https`
 and the opener can reach no other scheme, since a bearer key goes with every request, and a
 request is charged to its budget as it is sent rather than when it succeeds, so a failing
@@ -192,7 +192,7 @@ untouched, so an answer can be measured before it is trusted: nothing reaches th
 user. `advise` puts the judgment in `rule_matches`, says what `act` would have done, and changes
 no outcome. `act` lets a judgment turn an `allow` into an `ask`, and nothing else. Every mode
 defaults to `off`, so a configuration written before this existed makes no request; a mode, a
-point or a field the harness does not know fails at `citizen config set`, not at the first call,
+point or a field the harness does not know fails at `bin/citizen config set`, not at the first call,
 and a point name this harness does not know reads `off` rather than the default. Each call
 writes one ledger row carrying the mode, the judgment label, the severity level, the
 deterministic outcome and the outcome acting on the judgment would have reached, so a `shadow`
@@ -221,7 +221,7 @@ prose still travels, which is why the allowlist is two fields and not a free voc
 session rather than a process: a hook is a new process per event, so the counters live in
 `~/.local/state/agent-harness/jev-spend.json` keyed by session id, under the lock, read before
 each check and added to as each request is charged. A spend file that cannot be read or written
-leaves the in-process count standing rather than failing a decision. `citizen doctor`
+leaves the in-process count standing rather than failing a decision. `bin/citizen doctor`
 prints the mode per point, the allowlist, where the kill switch lives, the model every request
 pins, what the last call returned, and whether a credential variable is set — by name, never its
 value.
@@ -229,7 +229,7 @@ value.
 **What each call cost.** Every call also writes one `kind: "decision"` row to the usage ledger:
 the point, the mode, the status, the model ids, the pack and request hashes, the judgment and
 severity labels, the deterministic outcome and the one an `act` mode would have reached, the
-tokens, the latency and the session that asked — and none of the state it sent. `citizen usage
+tokens, the latency and the session that asked — and none of the state it sent. `bin/citizen usage
 --by provider` prices those rows from `policy/prices.json` like any other. A mode of `shadow` is
 measurable for exactly this reason: the row exists, priced and labelled, before anything the
 provider says can change an answer. Both rows stop when `telemetry.decisions` is `false`; see
@@ -237,15 +237,15 @@ provider says can change an answer. Both rows stop when `telemetry.decisions` is
 
 ## Measuring a provider before trusting it
 
-A typed answer is not evidence that it was the right one. `citizen decisions eval` replays the
+A typed answer is not evidence that it was the right one. `bin/citizen decisions eval` replays the
 labelled rows of the [decision log](usage.md) — real inputs, the answer the deterministic hook
 gave, and the outcome the session later showed — through a question pack in `shadow` mode, and
 writes a report to `~/.local/state/agent-harness/jev-eval.json` or wherever `--out` says.
 
 ```sh
-bin/harness decisions eval --replay tests/fixtures/jev/eval/responses.json   # no socket
-bin/harness decisions eval --point grade-bash --split heldout --out report.json
-bin/harness decisions eval --live --max-requests 50 --usd-per-mtok 3 --budget-usd 2
+bin/citizen decisions eval --replay tests/fixtures/jev/eval/responses.json   # no socket
+bin/citizen decisions eval --point grade-bash --split heldout --out report.json
+bin/citizen decisions eval --live --max-requests 50 --usd-per-mtok 3 --budget-usd 2
 ```
 
 A **pack is versioned**. `lib/harness_core/decisions/packs.py` holds each one as an id, a
@@ -298,9 +298,9 @@ ceiling nobody can convert is not a ceiling; and a live run with an empty
 four base fields and differ in nothing. A live run sends under the user's own allowlist, so an
 evaluation cannot send a field a hook is not allowed to send.
 
-`governance.provider` selects one; the default is `none`. `citizen decide --action <class>
+`governance.provider` selects one; the default is `none`. `bin/citizen decide --action <class>
 [--grade N] [--counterparty <slug>] [--json]` prints the decision for the current repository and
-the policy files it read, each marked present or absent; `citizen doctor` lists the same files
+the policy files it read, each marked present or absent; `bin/citizen doctor` lists the same files
 under the governance provider.
 
 ### How command grading consults the provider

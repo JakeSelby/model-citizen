@@ -25,19 +25,19 @@ What is recorded, and where it comes from, is [usage.md](usage.md).
 }
 ```
 
-- `export` is `off` or `otlp`. Any other value stops `citizen sync` rather than silently
+- `export` is `off` or `otlp`. Any other value stops `bin/citizen sync` rather than silently
   exporting nothing.
 - `endpoint` is the base URL of **any OTLP/HTTP endpoint**; `/v1/logs` is appended. No vendor is
   required and none is named in the code.
 - `labels` are attributes added to every record — the place for an environment or a host name.
 - `native` asks a runtime to export **its own** telemetry to the same endpoint. `true` is every
   runtime, `false` is none, and a list — `["claude-code"]`, `["codex"]` — names the ones it
-  applies to; any other runtime name stops `citizen sync` with the names it knows. Off by
+  applies to; any other runtime name stops `bin/citizen sync` with the names it knows. Off by
   default, and a separate decision from `export`: see [Native pass-through](#native-pass-through)
   before turning it on, because the runtimes attach identifiers the ledger does not, and because
   only Claude Code can reach an endpoint that requires a header.
 
-`citizen doctor` prints one line for this: the mode, the endpoint's scheme and host, and the
+`bin/citizen doctor` prints one line for this: the mode, the endpoint's scheme and host, and the
 **names** of the headers it resolved.
 
 ## The decision log switch
@@ -161,7 +161,7 @@ one stamp.
 
 `harness.usd` is a double and `harness.price_as_of` is the newest `as_of` date among the price
 entries that row was priced through. Both come from `policy/prices.json` and your own `prices`
-overrides, through the same code `citizen usage` prices with — `policy/hooks/pricing.py`, which
+overrides, through the same code `bin/citizen usage` prices with — `policy/hooks/pricing.py`, which
 the CLI and the hook each load rather than either one reimplementing it.
 
 - **A list-price API equivalent, fixed at export time.** It is what the tokens would cost at the
@@ -171,7 +171,7 @@ the CLI and the hook each load rather than either one reimplementing it.
 - **An unpriced row carries neither attribute** — never a zero. A row with an unknown model, a
   session that switched models with no `by_model` breakdown, or a `partial` row is priced by
   nobody, and a zero would say it was free.
-- **A Claude Code session's figure already includes its subagents**, exactly as `citizen usage`
+- **A Claude Code session's figure already includes its subagents**, exactly as `bin/citizen usage`
   reports it: the subagents' tokens are priced at their own models and added to the parent's.
   Their rows are exported priced too, for per-role reporting, so **never sum a session row and
   its subagent rows** — filter on `kind` first. A Codex subagent row and a role-run worker row
@@ -190,9 +190,9 @@ nor the session's.
 ## Replay
 
 ```sh
-bin/harness usage export --since 2026-09-01                    # everything since that day
-bin/harness usage export --since 2026-09-01 --until 2026-09-07 # one week
-bin/harness usage export --since 2026-09-01 --dry-run          # count it, connect to nothing
+bin/citizen usage export --since 2026-09-01                    # everything since that day
+bin/citizen usage export --since 2026-09-01 --until 2026-09-07 # one week
+bin/citizen usage export --since 2026-09-01 --dry-run          # count it, connect to nothing
 ```
 
 Rows are re-sent in batches; the command prints how many were sent and how many failed, and
@@ -204,7 +204,7 @@ repaired after an outage — the capability a live runtime telemetry stream does
 
 The ledger is one row per session, written after the fact. Each runtime can also export its own
 live telemetry — Claude Code counts tokens by type and reports a dollar figure per API call;
-Codex counts tokens, turn cost, tool calls and API calls. `"native": true` makes `citizen sync`
+Codex counts tokens, turn cost, tool calls and API calls. `"native": true` makes `bin/citizen sync`
 write that configuration, pointing both runtimes at the same `endpoint`. It is off by default
 and turning it on is a decision to read the two warnings below first.
 
@@ -279,7 +279,7 @@ from the configuration reference and a source read, not from a run.
 
 They are computed when `sync` runs, not per session. Switch a stance without re-syncing and the
 native stream is labelled with the old variant until the next `sync` — **the ledger row is still
-right**, because it records the stances the session actually ran under. `citizen doctor` says
+right**, because it records the stances the session actually ran under. `bin/citizen doctor` says
 whether the written labels match the current version and stances. A label whose name or value
 carries a comma, an equals sign or whitespace cannot travel in `OTEL_RESOURCE_ATTRIBUTES`, which
 has no escape the runtimes agree on: it is left off the native labels, named in the output of
@@ -296,7 +296,7 @@ has no escape the runtimes agree on: it is left off the native labels, named in 
 - **`"native": false` puts back what each key held before**, and removes the rest. An empty
   `"env": {}` can remain where the harness created the map; it is inert. Dropping one runtime
   from the list is the same operation for that runtime alone and leaves the other in place.
-- `citizen sync --dry-run` prints the pass-through lines only when the key is on.
+- `bin/citizen sync --dry-run` prints the pass-through lines only when the key is on.
 
 ## De-duplicating an at-least-once stream
 
@@ -332,7 +332,7 @@ copy is also the corrected one when a `--rescan` has since improved it — and t
 The `kind` filter is the other half of not double counting: a Claude Code session's dollars
 already contain its subagents', so a total over every row would bill them twice. A Codex
 subagent is the other way round — its tokens are in no row but its own — which is why the filter
-names the runtime too. This is the rule `citizen usage` applies; [usage.md](usage.md) says why.
+names the runtime too. This is the rule `bin/citizen usage` applies; [usage.md](usage.md) says why.
 Spend by role is the same query kept to the subagent and worker rows instead.
 
 ## Reference recipe: ClickStack
@@ -408,7 +408,7 @@ pointing the same configuration at anything hosted.
 Every OpenTelemetry table the collector creates ships with its own 30-day TTL. Ten tables
 carried one on the image measured: the logs and traces tables, the five metrics tables, the two
 `*_kv_rollup_15m` rollups and `hyperdx_sessions`. This is the ledger-as-record argument made
-concrete: the backend forgets, and `citizen usage export --since <date>` puts the window back.
+concrete: the backend forgets, and `bin/citizen usage export --since <date>` puts the window back.
 
 List what is actually there, with the TTL each table carries, rather than trusting a list in a
 document:
