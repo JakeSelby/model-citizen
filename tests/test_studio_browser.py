@@ -169,12 +169,17 @@ class StudioBrowserTests(unittest.TestCase):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self._stop_browser)
         active = self.profile / "DevToolsActivePort"
+        active_lines = []
         for _ in range(400):
-            if active.is_file():
-                break
+            try:
+                active_lines = active.read_text().splitlines()
+                if active_lines and int(active_lines[0]) > 0:
+                    break
+            except (OSError, ValueError):
+                active_lines = []
             time.sleep(0.05)
-        self.assertTrue(active.is_file(), "Chrome did not open its DevTools endpoint")
-        port = int(active.read_text().splitlines()[0])
+        self.assertTrue(active_lines, "Chrome did not open its DevTools endpoint")
+        port = int(active_lines[0])
         request = urllib.request.Request(
             "http://127.0.0.1:%d/json/new?about:blank" % port, method="PUT")
         target = None

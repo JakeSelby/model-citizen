@@ -215,6 +215,40 @@ class LifecycleTests(StudioFixture):
         payload = json.loads(handler._send.call_args.args[1])
         self.assertEqual(payload["pid_start"], "published-token")
 
+    def test_macos_process_identity_and_liveness_do_not_spawn_ps(self):
+        record = {"pid": 111, "pid_start": "private-instance-token"}
+        with mock.patch.object(studio_server.sys, "platform", "darwin"), \
+                mock.patch.object(studio_lifecycle.sys, "platform", "darwin"), \
+                mock.patch.object(studio_server.secrets, "token_hex",
+                                  return_value="private-instance-token"), \
+                mock.patch.object(workers, "process_start",
+                                  side_effect=AssertionError("macOS Studio must not spawn ps")), \
+                mock.patch.object(workers, "running",
+                                  side_effect=AssertionError("macOS Studio must not spawn ps")), \
+                mock.patch.object(studio_lifecycle.os, "kill") as kill:
+            self.assertEqual(studio_server._process_identity(), "private-instance-token")
+            self.assertTrue(studio_lifecycle._process_running(record))
+        kill.assert_called_once_with(111, 0)
+
+    def test_macos_reused_pid_with_the_wrong_private_token_is_never_stopped(self):
+        root = state_root(self.home)
+        record = {"schema_version": SCHEMA_VERSION, "protocol_version": PROTOCOL_VERSION,
+                  "pid": 111, "pid_start": "record-token", "port": 49152,
+                  "host": "0" * 32 + ".localhost:49152",
+                  "url": "http://" + "0" * 32 + ".localhost:49152/",
+                  "control_credential": "credential", "instance_epoch": "epoch"}
+        health = dict(record, pid_start="different-process-token")
+        with Store(root) as store:
+            store.write(record)
+        with mock.patch.object(studio_lifecycle.sys, "platform", "darwin"), \
+                mock.patch.object(studio_lifecycle.os, "kill"), \
+                mock.patch.object(studio_lifecycle, "_request", return_value=health) as request:
+            with self.assertRaisesRegex(studio_lifecycle.InstanceError,
+                                       "handshake does not match"):
+                studio_lifecycle.stop(root)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(request.call_args.args[1], studio_server.CONTROL_HEALTH)
+
     def test_duplicate_method_and_path_registration_is_refused(self):
         route = studio_server.ROUTES.resolve("GET", "/")
         assert route is not None

@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import signal
+import sys
 import threading
 import urllib.parse
 import uuid
@@ -36,6 +37,16 @@ STATIC_ASSET_ROUTES = {
     "css": "/assets/{content-hash}.css",
     "js": "/assets/{content-hash}.js",
 }
+
+
+def _process_identity() -> Optional[str]:
+    # Darwin lifecycle validates this private token through the authenticated handshake as well
+    # as checking PID liveness, without spawning ps from the detached child.
+    if sys.platform == "darwin":
+        return secrets.token_hex(24)
+    return workers.process_start(os.getpid())
+
+
 MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
 STYLE_NONCE_MARKER = b"__STUDIO_STYLE_NONCE__"
 
@@ -551,7 +562,7 @@ def run(static_root: Path, store: Store, requested_port: int,
                     signal.signal(signum, request_stop)
             credential = secrets.token_urlsafe(48)
             server, fallback = bind(static_root, credential, store, requested_port)
-            pid_start = workers.process_start(os.getpid())
+            pid_start = _process_identity()
             if not pid_start:
                 raise RuntimeError("this platform cannot identify the Studio process start time")
             server.pid_start = pid_start

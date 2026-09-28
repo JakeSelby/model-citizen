@@ -57,6 +57,18 @@ def _matches(record: Dict[str, object], health: Dict[str, object]) -> bool:
     return all(health.get(name) == record.get(name) for name in fields)
 
 
+def _process_running(record: Dict[str, object]):
+    if sys.platform != "darwin":
+        return workers.running(record["pid"], record["pid_start"])
+    try:
+        os.kill(int(record["pid"]), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except (OSError, TypeError, ValueError):
+        return None
+
+
 def _launch_ready(root: Path) -> Optional[Dict[str, object]]:
     """Read a newly published instance through its authenticated handshake."""
     try:
@@ -103,7 +115,7 @@ def current(root: Path) -> Optional[Dict[str, object]]:
             record = store.read()
             if record is None:
                 return None
-            running = workers.running(record["pid"], record["pid_start"])
+            running = _process_running(record)
             if running is not True:
                 lock = store.acquire()
                 if lock is not None:
@@ -224,7 +236,7 @@ def stop(root: Path) -> Optional[Dict[str, object]]:
     _request(record, server.CONTROL_STOP, method="POST")
     deadline = time.monotonic() + STOP_TIMEOUT
     while time.monotonic() < deadline:
-        if workers.running(record["pid"], record["pid_start"]) is False:
+        if _process_running(record) is False:
             break
         time.sleep(0.05)
     try:
