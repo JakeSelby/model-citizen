@@ -159,16 +159,15 @@ class BackfillTests(unittest.TestCase):
         self.assertEqual(len(missing), 1)
         self.assertIsNone(rows[0]["cache_miss_ratio"])
 
-    def test_a_missing_raw_file_clears_the_live_figure_rather_than_keeping_it(self):
-        """The row is reported as missing, so its stream fields say what this pass could read.
-        A figure kept from the run itself would read as one the enrichment confirmed."""
+    def test_a_missing_raw_file_preserves_the_live_evidence(self):
+        """Missing raw output cannot disprove diagnostic evidence the original run recorded."""
         live = {"task": "demo", "arm": "bare", "rep": 1, "cache_miss_ratio": 0.42,
                 "spawns": 3, "tool_counts": {"Bash": 2}}
         rows, missing = BENCH.backfill_rows([live], self.raw, home=self.home)
         self.assertEqual(len(missing), 1)
-        self.assertIsNone(rows[0]["cache_miss_ratio"])
-        self.assertIsNone(rows[0]["spawns"])
-        self.assertEqual(rows[0]["tool_counts"], {})
+        self.assertEqual(rows[0]["cache_miss_ratio"], 0.42)
+        self.assertEqual(rows[0]["spawns"], 3)
+        self.assertEqual(rows[0]["tool_counts"], {"Bash": 2})
 
     def test_an_errored_row_is_not_given_a_ratio_the_runner_would_have_refused(self):
         self.kept("demo-bare-1.json", json.dumps([turn(None, read=9000, write=1000),
