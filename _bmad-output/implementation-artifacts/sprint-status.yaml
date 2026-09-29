@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-28"
+generated: "2026-09-29"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -386,7 +386,7 @@ development_status:
   ah-s316-end-to-end-and-performance-checks-for-the-studio: backlog
   ah-s317-document-the-studio-and-add-it-to-the-product: backlog
   ah-s318-qualify-the-studio-in-every-release: ready-for-dev
-  ah-sp018-spike-reach-the-studio-from-a-phone-without: backlog
+  ah-sp018-spike-reach-the-studio-from-a-phone-without: ready-for-dev
 
   # Items with no epic
   ah-b001-plan-mode-prompts-for-read-only-work-it-can-t: done
