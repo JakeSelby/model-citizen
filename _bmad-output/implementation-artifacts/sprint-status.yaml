@@ -544,6 +544,7 @@ development_status:
   ah-c094-rescope-the-delivery-roadmap-around-measured-and: ready-for-dev
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-c096-remove-the-changelog-lint-s-unreleased-exemption: ready-for-dev
+  ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
   ah-c098-bring-ad-11-s-and-ad-23-s-status-tags-in-the: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
