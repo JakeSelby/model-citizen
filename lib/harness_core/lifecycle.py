@@ -110,10 +110,17 @@ def effective_selection():
         posture = load("posture")
         config = posture._user_config(os.environ, False)
         resolved = posture.selection(strict=False, config=config)
-        resolved["role_names"] = posture.role_catalog(config)[0]
-        return resolved
     except Exception:
         return {}
+    try:
+        resolved["role_names"] = posture.role_catalog(config)[0]
+    except Exception:
+        # Broken role contents cannot erase an already resolved switch. Filename membership
+        # suffices for this refusal; routing remains responsible for parsing enabled roles.
+        resolved["role_names"] = {path.stem
+                                  for root in posture.primitive_roots(config, kind="roles")
+                                  for path in root.glob("*.md") if path.is_file()}
+    return resolved
 
 
 def switches():

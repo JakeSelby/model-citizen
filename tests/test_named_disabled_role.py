@@ -115,6 +115,28 @@ class NamedDisabledRoleTests(unittest.TestCase):
         result = self.spawn("codex", role="custom-worker")
         self.assertIn("switched off", result["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_broken_custom_role_cannot_erase_effective_role_or_delegation_switches(self):
+        root = self.home / "custom"
+        (root / "roles").mkdir(parents=True)
+        (root / "roles" / "broken.md").write_bytes(b"\xff")
+        self.user({"builder": "off"})
+        path = self.home / ".config" / "agent-harness" / "config.json"
+        config = json.loads(path.read_text())
+        config["primitive_roots"] = [str(root)]
+        path.write_text(json.dumps(config))
+        for runtime in ("claude-code", "codex"):
+            with self.subTest(runtime=runtime):
+                result = self.spawn(runtime)
+                self.assertIn("switched off by the user",
+                              result["hookSpecificOutput"]["permissionDecisionReason"])
+        config["stances"] = {"delegation": "off"}
+        path.write_text(json.dumps(config))
+        for runtime in ("claude-code", "codex"):
+            with self.subTest(runtime=runtime, delegation="off"):
+                result = self.spawn(runtime)
+                self.assertIn("Delegation is off",
+                              result["hookSpecificOutput"]["permissionDecisionReason"])
+
     def test_a_disabled_constrained_role_reports_its_selection_first(self):
         result = self.spawn("codex", role="gatherer", project={"gatherer": "off"})
         self.assertIn("switched off by the project", result["hookSpecificOutput"]["permissionDecisionReason"])
