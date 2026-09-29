@@ -371,10 +371,25 @@ class AdmissionSeamTests(unittest.TestCase):
             ARMS.admit(record)
         self.assertIn("manifest entries contain a malformed path", str(caught.exception))
 
+    def test_malformed_paths_and_unsupported_entry_kinds_are_refused_without_a_crash(self):
+        for entry, expected in (({"path": 7, "kind": "file"}, "malformed path"),
+                                ({"path": "home:socket", "kind": "socket"},
+                                 "unsupported kind 'socket'")):
+            record = dict(self.record, manifest=dict(self.record["manifest"]))
+            record["manifest"]["entries"] = [entry]
+            record["manifest_sha256"] = ARMS.digest(record["manifest"])
+            with self.subTest(entry=entry), self.assertRaises(SystemExit) as caught:
+                ARMS.admit(record)
+            self.assertIn(expected, str(caught.exception))
+
+    def test_parent_segments_cannot_make_a_link_look_inside_the_harness(self):
+        self.assertFalse(ARMS._inside("/opt/model-citizen/../outside", ARMS.HARNESS_ROOT))
+        self.assertTrue(ARMS._inside("/opt/model-citizen/primitives", ARMS.HARNESS_ROOT))
+
     def test_admission_names_every_undeclared_configuration_entry(self):
         record = dict(self.record, manifest=dict(self.record["manifest"]))
-        entries = [{"path": "home:.claude/settings.json", "kind": "file"},
-                   {"path": "home:.claude/settings.local.json", "kind": "file"}]
+        entries = [{"path": "home:.claude/settings.z.json", "kind": "file"},
+                   {"path": "home:.claude/settings.a.json", "kind": "file"}]
         record["manifest"]["entries"] = entries
         record["manifest"]["summary"] = LISTER.summary(entries)
         record["manifest_sha256"] = ARMS.digest(record["manifest"])
@@ -383,6 +398,7 @@ class AdmissionSeamTests(unittest.TestCase):
         refusal = str(caught.exception)
         for entry in entries:
             self.assertIn(entry["path"], refusal)
+        self.assertLess(refusal.index(entries[1]["path"]), refusal.index(entries[0]["path"]))
 
     def test_a_further_check_can_refuse_through_the_same_seam(self):
         """The protocol's own refusals plug in here, each a function of the arm's record."""
@@ -479,9 +495,25 @@ class ManifestListerTests(unittest.TestCase):
             os.environ.update(old_environ)
         treatment = ARMS._treatment_paths(listed)
         for path in ("home:.codex/AGENTS.md", "home:.codex/agents/builder.toml",
-                     "home:.agents/skills/harness-build/SKILL.md"):
+                     "home:.agents/skills/harness-build/SKILL.md",
+                     "home:.config/agent-harness/config.json"):
             self.assertIn(path, treatment)
         self.assertNotIn("home:.codex/AGENTS.personal.md", treatment)
+
+    def test_generated_agent_and_workflow_paths_require_their_checkout_sources(self):
+        entries = [
+            {"path": "harness:primitives/roles/builder.md", "kind": "file"},
+            {"path": "harness:primitives/workflows/build.md", "kind": "file"},
+            {"path": "home:.codex/agents/builder.toml", "kind": "file"},
+            {"path": "home:.agents/skills/harness-build/SKILL.md", "kind": "file"},
+            {"path": "home:.codex/agents/personal.toml", "kind": "file"},
+            {"path": "home:.agents/skills/harness-personal/SKILL.md", "kind": "file"},
+        ]
+        treatment = ARMS._treatment_paths({"entries": entries})
+        self.assertIn("home:.codex/agents/builder.toml", treatment)
+        self.assertIn("home:.agents/skills/harness-build/SKILL.md", treatment)
+        self.assertNotIn("home:.codex/agents/personal.toml", treatment)
+        self.assertNotIn("home:.agents/skills/harness-personal/SKILL.md", treatment)
 
     def test_the_arm_image_removes_the_base_templates_codex_client(self):
         """The base is the Codex sandbox template; an arm carries Claude Code and no other client."""

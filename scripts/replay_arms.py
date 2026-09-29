@@ -21,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -298,6 +299,17 @@ def two_build_check(decl, out_dir, snapshot, launch=subprocess.run, repo=ROOT, d
 # stops the replay before anything is spent. The protocol's refusals (docs/evidence-standard.md)
 # are the checks below.
 ADMISSION_CHECKS = []
+MANIFEST_ENTRY_KINDS = ("dir", "file", "link", "other")
+
+
+def _manifest_entries(manifest):
+    """Manifest entries whose path and kind are safe for every downstream comparison."""
+    entries = manifest.get("entries") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)
+            and isinstance(entry.get("path"), str) and entry.get("path")
+            and entry.get("kind") in MANIFEST_ENTRY_KINDS]
 
 
 def _has_intact_records(record):
@@ -324,11 +336,24 @@ def _has_intact_records(record):
         if not isinstance(entries, list):
             problems.append("manifest entries is not a list")
         else:
-            paths = [entry.get("path") for entry in entries if isinstance(entry, dict)]
-            if len(paths) != len(entries) or any(not isinstance(path, str) or not path for path in paths):
-                problems.append("manifest entries contain a malformed path")
-            elif len(paths) != len(set(paths)):
+            paths = []
+            for number, entry in enumerate(entries):
+                if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) \
+                        or not entry.get("path"):
+                    problems.append("manifest entries contain a malformed path at entry %d" % number)
+                    continue
+                paths.append(entry["path"])
+                if entry.get("kind") not in MANIFEST_ENTRY_KINDS:
+                    problems.append("manifest entry %d has unsupported kind %r" %
+                                    (number, entry.get("kind")))
+            if len(paths) != len(set(paths)):
                 problems.append("manifest entries contain duplicate paths")
+        summary = manifest.get("summary")
+        if not isinstance(summary, dict) or any(not isinstance(kind, str)
+                or not isinstance(paths, list)
+                or any(not isinstance(path, str) for path in paths)
+                for kind, paths in summary.items()):
+            problems.append("manifest summary is malformed")
         environment = manifest.get("environment")
         if not isinstance(environment, dict) or EFFORT_ENV not in environment:
             problems.append("manifest does not record the image's %s override" % EFFORT_ENV)
@@ -340,6 +365,7 @@ def _has_intact_records(record):
 HARNESS_ROOT = "/opt/model-citizen"
 HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md",
                   "home:.codex/AGENTS.md", "home:.codex/config.toml", "home:.codex/hooks.json",
+                  "home:.config/agent-harness/config.json",
                   "home:.config/agent-harness/trusted.txt",
                   "home:.local/state/agent-harness/manifest.json",
                   "home:.local/state/agent-harness/applied.json")
@@ -411,17 +437,33 @@ def _matches_its_declaration(record):
 
 
 def _inside(path, root):
+    if not isinstance(path, str) or not isinstance(root, str):
+        return False
+    path, root = posixpath.normpath(path), posixpath.normpath(root)
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
-def _is_harness_write(entry):
+def _generated_writes(entries):
+    """Exact generated home paths justified by source files in the declared checkout."""
+    found = set(HARNESS_WRITES)
+    for entry in entries:
+        if entry.get("kind") != "file":
+            continue
+        path = entry["path"]
+        role = re.fullmatch(r"harness:primitives/roles/([^/]+)\.md", path)
+        workflow = re.fullmatch(r"harness:primitives/workflows/([^/]+)\.md", path)
+        if role:
+            found.add("home:.codex/agents/%s.toml" % role.group(1))
+        if workflow:
+            found.add("home:.agents/skills/harness-%s/SKILL.md" % workflow.group(1))
+    return found
+
+
+def _is_harness_write(entry, generated=None):
     """A regular file a fresh sync renders, excluding personal input files it only reads."""
     if not isinstance(entry, dict) or entry.get("kind") != "file":
         return False
-    path = entry.get("path")
-    return path in HARNESS_WRITES or bool(isinstance(path, str) and (
-        re.fullmatch(r"home:\.codex/agents/[^/]+\.toml", path)
-        or re.fullmatch(r"home:\.agents/skills/harness-[^/]+/SKILL\.md", path)))
+    return entry.get("path") in (set(HARNESS_WRITES) if generated is None else generated)
 
 
 def _configuration_is_declared(record):
@@ -431,19 +473,25 @@ def _configuration_is_declared(record):
     decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
     manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     harness = bool(decl.get("harness"))
-    listed = manifest.get("entries") if isinstance(manifest.get("entries"), list) else []
-    listed = [entry for entry in listed if isinstance(entry, dict)]
+    listed = _manifest_entries(manifest)
     entries = {e.get("path"): e for e in listed}
     expected = arm_manifest.summary(listed)
-    actual = manifest.get("summary") or {}
-    normalised = dict((kind, sorted(actual.get(kind) or [])) for kind in expected)
+    actual = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
+    if any(not isinstance(kind, str) or not isinstance(paths, list)
+           or any(not isinstance(path, str) for path in paths)
+           for kind, paths in actual.items()):
+        return "the manifest summary does not match its entries"
+    normalised = dict((kind, sorted(actual.get(kind) or [])
+                       if isinstance(actual.get(kind) or [], list) else [])
+                      for kind in expected)
     if normalised != expected or set(actual) - set(expected):
         return "the manifest summary does not match its entries"
     problems = []
+    generated = _generated_writes(listed)
     for kind, paths in sorted((manifest.get("summary") or {}).items()):
-        for path in paths:
+        for path in sorted(paths):
             entry = entries.get(path) or {}
-            if harness and (entry.get("kind") == "dir" or _is_harness_write(entry)
+            if harness and (entry.get("kind") == "dir" or _is_harness_write(entry, generated)
                             or (entry.get("kind") == "link" and _inside(entry.get("target", ""), HARNESS_ROOT))):
                 continue
             problems.append("%s entry %s is not in the declaration" % (kind, path))
@@ -496,8 +544,8 @@ def _no_host_path(record):
     environment are refused at launch by `run_command`."""
     manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     strings = _strings(record.get("declaration") or {})
-    strings += [e["target"] for e in manifest.get("entries") or []
-                if isinstance(e, dict) and e.get("kind") == "link" and e.get("target")]
+    strings += [e["target"] for e in _manifest_entries(manifest)
+                if e.get("kind") == "link" and isinstance(e.get("target"), str) and e.get("target")]
     return host_path_reason(strings=strings)
 
 
@@ -553,10 +601,11 @@ MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
 
 def _treatment_paths(manifest):
     """Exact manifest paths attributable to the harness, plus only their directory parents."""
-    entries = [entry for entry in manifest.get("entries") or [] if isinstance(entry, dict)]
+    entries = _manifest_entries(manifest)
+    generated = _generated_writes(entries)
     paths = {entry.get("path") for entry in entries
              if (entry.get("path") or "").startswith("harness:")
-             or _is_harness_write(entry)
+             or _is_harness_write(entry, generated)
              or (entry.get("kind") == "link" and _inside(entry.get("target") or "", HARNESS_ROOT))}
     leaves = set(paths)
     for entry in entries:
@@ -585,8 +634,8 @@ def pair_differences(bare, harness):
     roots = {k: v for k, v in (right.get("roots") or {}).items() if k != "harness"}
     if (left.get("roots") or {}) != roots:
         out.append("manifest roots: bare %r, harness %r" % (left.get("roots"), right.get("roots")))
-    ours = {e.get("path"): e for e in left.get("entries") or []}
-    theirs = {e.get("path"): e for e in right.get("entries") or []}
+    ours = {e["path"]: e for e in _manifest_entries(left)}
+    theirs = {e["path"]: e for e in _manifest_entries(right)}
     treatment = _treatment_paths(right)
     for path in sorted(set(ours) | set(theirs)):
         if path in treatment:
