@@ -1391,7 +1391,7 @@ def unresolved(operand):
     return None
 
 
-def _plain_words(line):
+def _plain_words(line, redirects=False):
     """([(word, quoted, marks)], the quoted delimiter of the line's one here-document or None)
     for one line of shell. `marks` holds, per character of the word, whether it sat inside
     quotes, and `quoted` is True only when every character did. None for anything but plain
@@ -1424,6 +1424,17 @@ def _plain_words(line):
             if i < n and line[i] not in " \t":
                 return None
             continue
+        elif redirects and c in "<>":
+            if started:
+                words.append(("".join(word), all(marks), marks))
+            word, marks, started = [], [], False
+            operator = c
+            if i + 1 < n and line[i + 1] == c:
+                operator += c
+                i += 1
+            words.append((operator, False, [False] * len(operator)))
+        elif redirects and c == "#":
+            return None
         elif c in ";&|<>()":
             return None
         else:
@@ -1494,6 +1505,27 @@ def gh_text_only(command, names=_names_policy):
     return not names(" ".join(rest))
 
 
+def literal_text_command(command):
+    """One data-only utility with literal arguments and an optional quoted here-document.
+
+    The caller still checks all written paths. Substitutions, unquoted here-documents, command
+    chaining and interpreters are excluded so text cannot conceal another writer.
+    """
+    lines = command.split("\n")
+    parsed = _plain_words(lines[0], redirects=True)
+    if parsed is None:
+        return False
+    words, delimiter = parsed
+    if not words or words[0][1] or words[0][0] not in ("cat", "printf", "echo", "tee"):
+        return False
+    tail = lines[1:]
+    if delimiter is not None:
+        if delimiter not in tail:
+            return False
+        tail = tail[tail.index(delimiter) + 1:]
+    return not any(line.strip() for line in tail)
+
+
 def _policy_hits(command, found, walked=True):
     """What a command changes that is a level-1 action: a policy file, the user configuration or
     a `governance` key set through `harness config set`.
@@ -1501,9 +1533,10 @@ def _policy_hits(command, found, walked=True):
     A policy path is judged first from the paths the walk found written: redirect targets and
     the operands of `tee`, `cp`, `mv`, `sed -i` and the like. The whole text, here-document
     bodies included, is then searched for a policy path by name unless the walk decomposed the
-    line and it is `gh_text_only`: almost any command may run code that writes a path it only
+    line and it is `gh_text_only`: other commands may run code that writes a path they only
     names, so the search fails closed. The search for `harness config set governance` takes the
-    same one exemption, judged by the same lexer."""
+    same exemption. A literal data-only utility may additionally mention the user configuration
+    path, but never exempts an actual write target."""
     paths = [p for entry in found for p in entry[3]]
     hits = sorted(set(filter(None, (guarded(p) if os.path.isabs(p) else unresolved(p)
                                     for p in paths))))
@@ -1517,7 +1550,7 @@ def _policy_hits(command, found, walked=True):
             hits = ["the governance policy file " + match.group(0)]
         else:
             match = CONFIG_RE.search(command)
-            if match:
+            if match and not (walked and literal_text_command(command)):
                 hits = ["the harness configuration " + match.group(0)
                         + ", which selects the decision provider"]
     try:
