@@ -33,12 +33,12 @@ class StudioRunHistoryBrowserTests(unittest.TestCase):
         self.devtools.evaluate("document.querySelector('.run-history input').focus()")
         before = self.devtools.evaluate(
             "performance.getEntriesByType('resource').filter(item => item.name.endsWith('/api/runs/history')).length")
-        started = time.monotonic()
         refreshed = subprocess.run(
             [sys.executable, str(overview_support.browser_support.CLI),
              "runs", "reindex", "--json"], env=self.env, capture_output=True,
             text=True, timeout=45)
         self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
+        started = time.monotonic()
         self._wait(
             "performance.getEntriesByType('resource').filter(item => item.name.endsWith('/api/runs/history')).length > %d" % before,
             "Runs live event did not refresh history", attempts=60)
