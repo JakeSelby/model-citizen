@@ -200,8 +200,10 @@ def arm_manifest(decl):
     entries = [{"path": "home:.claude/rules/harness", "kind": "link",
                 "target": "/opt/model-citizen/claude/rules"}] if commit else []
     roots = dict({"home": "/home/agent"}, **({"harness": "/opt/model-citizen"} if commit else {}))
-    return {"claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
+    return {"schema": BENCH.arms.arm_manifest.SCHEMA,
+            "claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
             "cli_packages": ["@anthropic-ai/claude-code@" + decl["claude_code_version"]],
+            "environment": {BENCH.arms.EFFORT_ENV: None},
             "summary": {"rules": [e["path"] for e in entries]}, "entries": entries}
 
 
@@ -213,10 +215,11 @@ def arm_record(arm, ref="v9.9.9"):
                                                {"name": "@anthropic-ai/claude-code", "version": "1.0"}]
             + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else []),
             "effort": "high"}
+    manifest = arm_manifest(decl)
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
-            "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": arm_manifest(decl),
-            "manifest_sha256": ("a" if harness else "b") * 64,
+            "declaration": decl, "declaration_sha256": BENCH.arms.digest(decl), "manifest": manifest,
+            "manifest_sha256": BENCH.arms.digest(manifest),
             "harness_ref": ref if harness else None, "harness_commit": "c" * 40 if harness else None}
 
 
@@ -437,8 +440,9 @@ class ReplayRunTests(unittest.TestCase):
             harness = [r for r in rows if r["arm"] == "harness"][0]
             self.assertNotIn("arm_label", harness)  # `harness@<dotted ref>` reads as an email to the lint
             self.assertEqual(bare["arm_image_id"], opts["arms"]["bare"]["image_id"])
-            self.assertEqual(harness["arm_manifest_sha256"], "a" * 64)
-            self.assertEqual(harness["arm_declaration_sha256"], "d" * 64)
+            self.assertEqual(harness["arm_manifest_sha256"], opts["arms"]["harness"]["manifest_sha256"])
+            self.assertEqual(harness["arm_declaration_sha256"],
+                             opts["arms"]["harness"]["declaration_sha256"])
             self.assertEqual((harness["harness_ref"], harness["harness_commit"]), ("v9.9.9", "c" * 40))
             self.assertEqual((bare["harness_ref"], bare["harness_commit"]), (None, None))
             self.assertEqual(bare["arm_base_image"], "base@sha256:" + "0" * 64)
@@ -453,11 +457,12 @@ class ReplayRunTests(unittest.TestCase):
 
     def test_an_errored_row_carries_the_arm_fields_and_no_stream_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
-            rows, _ = BENCH.replay([TASK], options(tmp, reps=1), Launch(["garbage"] * 2))
+            opts = options(tmp, reps=1)
+            rows, _ = BENCH.replay([TASK], opts, Launch(["garbage"] * 2))
             self.assertEqual([r["error"] for r in rows], [True, True])
             self.assertEqual(rows[0]["tool_counts"], {})
             self.assertIsNone(rows[0]["spawns"])
-            self.assertEqual(rows[0]["arm_manifest_sha256"], "b" * 64)
+            self.assertEqual(rows[0]["arm_manifest_sha256"], opts["arms"]["bare"]["manifest_sha256"])
 
     def test_a_run_that_times_out_has_its_container_removed_by_name(self):
         with tempfile.TemporaryDirectory() as tmp:

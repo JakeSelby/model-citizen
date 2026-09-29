@@ -291,32 +291,74 @@ class RunTests(unittest.TestCase):
 
 
 class AdmissionSeamTests(unittest.TestCase):
-    # A bare arm that holds exactly what it declares, in an exploratory run.
-    RECORD = {"label": "bare", "image": "i", "image_id": "sha256:1", "declaration_sha256": "d",
-              "manifest_sha256": "m",
-              "declaration": {"claude_code_version": "1.0", "harness": None,
-                              "components": [{"name": "base-image", "version": "base" + "@sha256:0"},
-                                             {"name": "@anthropic-ai/claude-code", "version": "1.0"}],
-                              "effort": "high"},
-              "manifest": {"claude_code_version": "1.0", "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"],
-                           "harness_commit": None, "roots": {"home": "/home/agent"}, "summary": {},
-                           "entries": []},
-              "protocol": {"evidence": "exploratory"}}
+    def setUp(self):
+        declaration = {"schema": ARMS.SCHEMA, "arm": "bare", "base_image": "base@sha256:0",
+                       "claude_code_version": "1.0", "harness": None,
+                       "components": [{"name": "base-image", "version": "base@sha256:0"},
+                                      {"name": "@anthropic-ai/claude-code", "version": "1.0"}],
+                       "effort": "high"}
+        manifest = {"schema": LISTER.SCHEMA, "claude_code_version": "1.0",
+                    "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"], "harness_commit": None,
+                    "roots": {"home": "/home/agent"}, "summary": {}, "entries": [],
+                    "environment": {ARMS.EFFORT_ENV: None}}
+        self.record = {"label": "bare", "image": "i", "image_id": "sha256:1",
+                       "declaration_sha256": ARMS.digest(declaration),
+                       "manifest_sha256": ARMS.digest(manifest), "declaration": declaration,
+                       "manifest": manifest, "protocol": {"evidence": "exploratory"}}
 
     def test_a_complete_record_is_admitted(self):
-        self.assertIsNone(ARMS.admit(self.RECORD))
+        self.assertIsNone(ARMS.admit(self.record))
 
     def test_a_record_missing_its_manifest_digest_is_refused(self):
         with self.assertRaises(SystemExit) as caught:
-            ARMS.admit(dict(self.RECORD, manifest_sha256=None))
+            ARMS.admit(dict(self.record, manifest_sha256=None))
         self.assertIn("manifest_sha256", str(caught.exception))
+
+    def test_record_schemas_and_digests_are_recomputed(self):
+        record = dict(self.record, declaration=dict(self.record["declaration"], schema=0),
+                      manifest=dict(self.record["manifest"], schema=0))
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        for text in ("declaration schema", "manifest schema", "declaration_sha256 does not match",
+                     "manifest_sha256 does not match"):
+            self.assertIn(text, refusal)
+
+    def test_missing_duplicate_and_malformed_harness_components_are_refused(self):
+        harness = {"ref": "v1", "commit": "c" * 40}
+        for components, expected in (
+                ([{"name": "base-image", "version": "base@sha256:0"},
+                  {"name": "@anthropic-ai/claude-code", "version": "1.0"}],
+                 "exactly one model-citizen"),
+                ([{"name": "model-citizen", "version": "v1", "commit": "c" * 40},
+                  {"name": "model-citizen", "version": "v1", "commit": "c" * 40}],
+                 "duplicate components"),
+                ([{"name": "model-citizen"}], "component 0 is malformed")):
+            record = dict(self.record, declaration=dict(self.record["declaration"], arm="harness",
+                                                         harness=harness, components=components))
+            record["declaration_sha256"] = ARMS.digest(record["declaration"])
+            with self.assertRaises(SystemExit) as caught:
+                ARMS.admit(record)
+            self.assertIn(expected, str(caught.exception))
+
+    def test_admission_reports_independent_defects_together(self):
+        record = dict(self.record, declaration_sha256="0" * 64,
+                      protocol={}, manifest=dict(self.record["manifest"]))
+        record["manifest"]["environment"] = {ARMS.EFFORT_ENV: "max"}
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        self.assertIn("declaration_sha256 does not match", refusal)
+        self.assertIn("no committed pre-registration", refusal)
+        self.assertIn("image bakes", refusal)
 
     def test_a_further_check_can_refuse_through_the_same_seam(self):
         """The protocol's own refusals plug in here, each a function of the arm's record."""
         differs = lambda record: "manifest differs from its declaration"
         with mock.patch.object(ARMS, "ADMISSION_CHECKS", ARMS.ADMISSION_CHECKS + [differs]):
             with self.assertRaises(SystemExit) as caught:
-                ARMS.admit(self.RECORD)
+                ARMS.admit(self.record)
         self.assertIn("differs from its declaration", str(caught.exception))
 
 

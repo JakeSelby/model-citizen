@@ -12,7 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from test_cost_bench import BENCH, TASK, Launch, arm_record, options, result
+from test_cost_bench import BENCH, GREEN, TASK, Launch, arm_record, gate_reply, options, result
 from test_cost_bench_tags import FakeArms, fake_replay, harness_repo, replay_args
 from test_replay_parity import stream
 
@@ -39,12 +39,20 @@ def run(slash=75, effort=None):
     return stream(init(slash, effort), first_call(), result())
 
 
+def rehash(record):
+    record["declaration_sha256"] = ARMS.digest(record["declaration"])
+    record["manifest_sha256"] = ARMS.digest(record["manifest"])
+    return record
+
+
 class LoadedSurfaceTests(unittest.TestCase):
     def test_a_row_carries_all_six_init_counts(self):
         parsed = BENCH.parse_result(run())
         self.assertEqual({f: parsed[f] for f in BENCH.SURFACE_FIELDS},
                          {"init_skills": 2, "init_agents": 1, "init_slash_commands": 75, "init_tools": 3,
                           "init_mcp_servers": 0, "init_memory_paths": 2})
+        self.assertEqual(parsed["init_surface_source"], "cli-init")
+        self.assertTrue(all(parsed[field] for field in BENCH.SURFACE_HASH_FIELDS))
 
     def test_a_stream_without_an_init_event_stores_none_for_each(self):
         parsed = BENCH.parse_result(stream(first_call(), result()))
@@ -72,9 +80,22 @@ class LoadedSurfaceTests(unittest.TestCase):
                                                  {"task": "demo", "arm": "harness", "rep": 1}], raw)
         self.assertEqual(missing, ["demo-harness-1.json"])
         self.assertEqual(rows[0]["init_slash_commands"], 80)
+        self.assertEqual(rows[0]["init_surface_source"], "cli-init")
+        self.assertTrue(rows[0]["init_slash_commands_sha256"])
         self.assertEqual(rows[0]["first_call_context"], 145)
         self.assertEqual({f: rows[1][f] for f in BENCH.SURFACE_FIELDS + ("first_call_context",)},
                          dict.fromkeys(BENCH.SURFACE_FIELDS + ("first_call_context",)))
+
+    def test_missing_raw_preserves_existing_diagnostics(self):
+        original = {"task": "demo", "arm": "bare", "rep": 1, "init_skills": 4,
+                    "init_skills_sha256": "a" * 64, "init_surface_source": "cli-init",
+                    "first_call_context": 123}
+        with tempfile.TemporaryDirectory() as tmp:
+            rows, missing = BENCH.backfill_rows([original], Path(tmp))
+        self.assertEqual(missing, ["demo-bare-1.json"])
+        for field in ("init_skills", "init_skills_sha256", "init_surface_source",
+                      "first_call_context"):
+            self.assertEqual(rows[0][field], original[field])
 
 
 class PairParityTests(unittest.TestCase):
@@ -93,7 +114,8 @@ class PairParityTests(unittest.TestCase):
         shared = {"path": "home:.bashrc", "kind": "file", "sha256": "1", "size": 3, "mode": "0644"}
         bare["manifest"]["entries"] = [shared]
         harness["manifest"]["entries"] += [shared, {"path": "home:.config", "kind": "dir", "mode": "0755"},
-                                           {"path": "home:.config/agent-harness/config.json", "kind": "file"},
+                                           {"path": "home:.config/agent-harness", "kind": "dir"},
+                                           {"path": "home:.config/agent-harness/trusted.txt", "kind": "file"},
                                            {"path": "harness:bin/harness", "kind": "file"}]
         self.assertEqual(ARMS.pair_differences(bare, harness), [])
         self.assertIsNone(self.refusal(bare, harness))
@@ -133,10 +155,36 @@ class PairParityTests(unittest.TestCase):
         harness["declaration"]["components"].append({"name": "@openai/codex", "version": "1"})
         self.assertIn("declaration components", self.refusal(bare, harness))
 
+    def test_unrelated_content_under_a_runtime_directory_is_compared(self):
+        bare, harness = self.pair()
+        harness["manifest"]["entries"].append(
+            {"path": "home:.claude/unrelated.md", "kind": "file", "sha256": "2"})
+        self.assertIn("home:.claude/unrelated.md", self.refusal(bare, harness))
+
+    def test_only_links_into_the_harness_are_treatment(self):
+        bare, harness = self.pair()
+        harness["manifest"]["entries"] += [
+            {"path": "home:.local", "kind": "dir"},
+            {"path": "home:.local/bin", "kind": "dir"},
+            {"path": "home:.local/bin/citizen", "kind": "link",
+             "target": "/opt/model-citizen/bin/harness"},
+            {"path": "home:.local/bin/unrelated", "kind": "link", "target": "/tmp/unrelated"},
+        ]
+        refusal = self.refusal(bare, harness)
+        self.assertNotIn("home:.local/bin/citizen", refusal)
+        self.assertIn("home:.local/bin/unrelated", refusal)
+
+    def test_a_link_at_a_generated_file_path_is_not_mistaken_for_generated_content(self):
+        bare, harness = self.pair()
+        harness["manifest"]["entries"].append(
+            {"path": "home:.claude/settings.json", "kind": "link", "target": "/tmp/settings"})
+        self.assertIn("home:.claude/settings.json", self.refusal(bare, harness))
+
     def test_the_replay_refuses_a_drifted_pair_before_anything_launches(self):
         with tempfile.TemporaryDirectory() as tmp:
             opts = options(tmp, reps=1)
             opts["arms"]["harness"]["manifest"]["entries"].append({"path": "home:.profile", "kind": "file"})
+            rehash(opts["arms"]["harness"])
             launch = Launch([])
             with self.assertRaises(SystemExit) as caught:
                 BENCH.replay([TASK], opts, launch)
@@ -157,7 +205,10 @@ class SurfaceDriftTests(unittest.TestCase):
             rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
         self.assertIn("init_slash_commands: 75 -> 84", str(caught.exception))
         self.assertEqual(len(rows), 3)  # the drifting row is written, the fourth never launches
-        self.assertEqual([r["surface_drift"] for r in rows], [[], [], ["init_slash_commands: 75 -> 84"]])
+        self.assertEqual([r["surface_drift"] for r in rows[:2]], [[], []])
+        self.assertIn("init_slash_commands: 75 -> 84", rows[2]["surface_drift"])
+        self.assertTrue(any(line.startswith("init_slash_commands_sha256:")
+                            for line in rows[2]["surface_drift"]))
         self.assertEqual(len(launch.outputs), 1)
 
     def test_allow_surface_drift_runs_on_and_stamps_every_row(self):
@@ -168,7 +219,18 @@ class SurfaceDriftTests(unittest.TestCase):
         self.assertFalse(stopped)
         self.assertEqual(len(rows), 4)
         self.assertTrue(all(r["surface_drift_allowed"] for r in rows))
-        self.assertEqual(rows[2]["surface_drift"], ["init_slash_commands: 75 -> 84"])
+        self.assertIn("init_slash_commands: 75 -> 84", rows[2]["surface_drift"])
+
+    def test_same_count_replacement_is_detected_by_the_reported_content_hash(self):
+        changed = init(slash_commands=["x"] * 74 + ["replacement"])
+        outputs = [run(), run(), stream(changed, first_call(), result()), run()]
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp)
+            opts["stamp"] = dict(opts["stamp"], surface_drift_allowed=True)
+            rows, _ = BENCH.replay([TASK], opts, Launch(outputs))
+        self.assertEqual(rows[2]["init_slash_commands"], 75)
+        self.assertTrue(any(line.startswith("init_slash_commands_sha256:")
+                            for line in rows[2]["surface_drift"]))
 
     def test_a_run_with_no_init_event_is_not_drift(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -200,6 +262,7 @@ class EffortTests(unittest.TestCase):
             opts = options(tmp, reps=1)
             for arm in BENCH.ARMS:
                 opts["arms"][arm]["declaration"]["effort"] = "low"
+                rehash(opts["arms"][arm])
             launch = Launch([run(), run()])
             rows, _ = BENCH.replay([TASK], opts, launch)
         for command, _ in launch.calls:
@@ -228,6 +291,7 @@ class EffortTests(unittest.TestCase):
     def test_an_arm_with_no_pinned_effort_is_refused(self):
         record = dict(arm_record("bare"), protocol={"evidence": "exploratory"})
         record["declaration"] = dict(record["declaration"], effort=None)
+        rehash(record)
         with self.assertRaises(SystemExit) as caught:
             ARMS.admit(record)
         self.assertIn("no reasoning effort pinned", str(caught.exception))
@@ -238,6 +302,27 @@ class EffortTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as caught:
                 ARMS.admit(record)
         self.assertIn(ARMS.EFFORT_ENV, str(caught.exception))
+
+    def test_an_arm_with_a_baked_effort_override_is_refused(self):
+        record = copy.deepcopy(arm_record("bare"))
+        record["protocol"] = {"evidence": "exploratory"}
+        record["manifest"]["environment"][ARMS.EFFORT_ENV] = "max"
+        rehash(record)
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        self.assertIn("image bakes", str(caught.exception))
+
+    def test_preflight_refuses_an_observed_effort_mismatch(self):
+        mismatched = json.loads(gate_reply(GREEN))
+        mismatched.insert(0, init(effort="max"))
+        matched = json.loads(gate_reply(GREEN))
+        matched.insert(0, init(effort="high"))
+        with tempfile.TemporaryDirectory() as tmp:
+            checks, _ = BENCH.preflight([TASK], options(tmp),
+                                        Launch([json.dumps(mismatched), json.dumps(matched)]))
+        self.assertEqual([check["passed"] for check in checks], [False, True])
+        self.assertEqual(checks[0]["observed_effort"], "max")
+        self.assertIn("observed effort max, pinned high", checks[0]["reply"])
 
     def test_a_run_that_reports_another_effort_errors_and_stops_the_set(self):
         """Even with --allow-surface-drift: a different effort is a different arm."""

@@ -14,6 +14,7 @@ compared entry by entry:
 - `harness`: the harness checkout the harness arm was synced from, less its `.git` directory,
   whose pack layout differs between two clones of one commit. The commit itself is recorded.
 - `cli_packages`: every global npm package by name and version, which is where agent clients live.
+- `environment`: image-baked variables that can override a launch pin.
 
 A file is recorded by mode, size and sha256; a link by its target; a directory by its mode.
 Timestamps are never recorded. A file whose bytes carry a build time is normalised by
@@ -37,7 +38,8 @@ EXCLUDED = {"home": (".npm", ".cache"), "harness": (".git",)}
 VOLATILE = {"home:.local/state/agent-harness/manifest.json":
             (r'"synced_at": *"[^"]*"', '"synced_at": "<normalised>"')}
 CLI_PACKAGE = "lib/node_modules/@anthropic-ai/claude-code/package.json"
-SCHEMA = 1
+SCHEMA = 2
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 
 
 def _sha(data):
@@ -157,6 +159,7 @@ def main():
                 "excluded": {k: list(v) for k, v in sorted(EXCLUDED.items())},
                 "normalised": sorted(VOLATILE), "claude_code_version": cli_version(),
                 "cli_packages": cli_packages(),
+                "environment": {EFFORT_ENV: os.environ.get(EFFORT_ENV)},
                 "harness_commit": harness_commit(roots["harness"]) if "harness" in roots else None,
                 "summary": summary(entries), "entries": entries}
     json.dump(manifest, sys.stdout, sort_keys=True, indent=1)

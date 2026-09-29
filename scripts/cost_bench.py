@@ -102,9 +102,13 @@ SPAWN_TOOLS = ("Task", "Agent")
 # `init_<key>`, so two runs of one arm can be compared on what their sessions loaded.
 SURFACE_KEYS = ("skills", "agents", "slash_commands", "tools", "mcp_servers", "memory_paths")
 SURFACE_FIELDS = tuple("init_" + key for key in SURFACE_KEYS)
+SURFACE_HASH_FIELDS = tuple(field + "_sha256" for field in SURFACE_FIELDS)
+SURFACE_SOURCE = "cli-init"
+SURFACE_SOURCE_FIELD = "init_surface_source"
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
 STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "stop_hooks",
-                 "hook_blocks", "cache_miss_ratio", "observed_effort") + SURFACE_FIELDS
+                 "hook_blocks", "cache_miss_ratio", "observed_effort", SURFACE_SOURCE_FIELD) \
+                + SURFACE_FIELDS + SURFACE_HASH_FIELDS
 RESULTS = "results.jsonl"
 ENRICHED = "results.enriched.jsonl"
 
@@ -543,32 +547,40 @@ def stop_hook_counts(messages, streamed):
 
 
 def loaded_surface(messages):
-    """(`init_*` counts, observed effort) from the first `system`/`init` event: the length of each
-    of `SURFACE_KEYS`, None for a key the event lacks, and every count None when there is no
-    event. The effort is the event's `effort` level, None when it reports none, which is how
-    Claude Code sends it to a headless client (its SDK reference: only Remote Control's copy of the
-    event carries it)."""
+    """Counts and content hashes from the first `system`/`init` event, plus observed effort.
+
+    Each hash covers the CLI-reported members, with list order normalised. It detects a same-count
+    replacement without claiming an identity the event did not provide. Missing keys stay unknown.
+    """
     init = next((m for m in messages if isinstance(m, dict) and m.get("type") == "system"
                  and m.get("subtype") == "init"), None)
     if init is None:
-        return {field: None for field in SURFACE_FIELDS}, None
-    counts = {}
-    for key, field in zip(SURFACE_KEYS, SURFACE_FIELDS):
+        empty = dict.fromkeys(SURFACE_FIELDS + SURFACE_HASH_FIELDS)
+        empty[SURFACE_SOURCE_FIELD] = None
+        return empty, None
+    surface = {SURFACE_SOURCE_FIELD: SURFACE_SOURCE}
+    for key, field, hash_field in zip(SURFACE_KEYS, SURFACE_FIELDS, SURFACE_HASH_FIELDS):
         value = init.get(key)
-        counts[field] = len(value) if isinstance(value, (list, dict)) else None
+        surface[field] = len(value) if isinstance(value, (list, dict)) else None
+        if isinstance(value, list):
+            value = sorted(value, key=lambda item: json.dumps(item, sort_keys=True, separators=(",", ":")))
+        surface[hash_field] = arms.digest(value) if isinstance(value, (list, dict)) else None
     effort = init.get("effort")
-    return counts, effort if isinstance(effort, str) and effort else None
+    return surface, effort if isinstance(effort, str) and effort else None
 
 
 def surface_of(row):
-    """A row's loaded surface as `{field: count}`, or None when its stream carried no `init` event."""
-    surface = {field: row.get(field) for field in SURFACE_FIELDS}
-    return None if all(value is None for value in surface.values()) else surface
+    """A row's observed surface, or None when its stream carried no `init` event."""
+    if row.get(SURFACE_SOURCE_FIELD) != SURFACE_SOURCE:
+        return None
+    fields = SURFACE_FIELDS + SURFACE_HASH_FIELDS + ("observed_effort",)
+    return {field: row.get(field) for field in fields}
 
 
 def surface_drift(first, now):
-    """Each `init_*` count that moved between an arm's first run and this one, as `field: a -> b`."""
-    return ["%s: %s -> %s" % (field, first.get(field), now.get(field)) for field in SURFACE_FIELDS
+    """Each reported count, content hash or effort that moved between two runs of one arm."""
+    fields = SURFACE_FIELDS + SURFACE_HASH_FIELDS + ("observed_effort",)
+    return ["%s: %s -> %s" % (field, first.get(field), now.get(field)) for field in fields
             if first.get(field) != now.get(field)]
 
 
@@ -836,12 +848,13 @@ def _attempt(task, rep, arm, opts, launch):
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, first_call_context=None, tool_counts={}, spawns=None,
                stop_hooks=None, hook_blocks=None, cache_miss_ratio=None, effort=effort, observed_effort=None,
+               init_surface_source=None,
                surface_drift=[],
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
                profile_fingerprint=arm_profile(arm, env, opts),
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
-                      **{field: None for field in SURFACE_FIELDS}))
+                      **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
     started = time.time()
     try:
@@ -918,7 +931,7 @@ def reply_text(stdout):
 
 
 def preflight(tasks, opts, launch=subprocess.run):
-    """([{arm, passed, reply, cost_usd}], spent). One gate run per arm before anything is scored.
+    """([{arm, passed, reply, cost_usd, effort, observed_effort}], spent).
 
     Each runs in the arm's own container, so this asks the question the scored runs depend on:
     can an agent in this arm make the repository's own gate pass at all? An arm that cannot
@@ -936,19 +949,26 @@ def preflight(tasks, opts, launch=subprocess.run):
                                   container_name("preflight", arm), launch)
             except subprocess.TimeoutExpired:
                 spent += PREFLIGHT_CAP_USD
-                checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None})
+                checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None,
+                               "effort": opts["arms"][arm]["declaration"]["effort"],
+                               "observed_effort": None})
                 continue
             if opts.get("raw"):
                 raw = Path(opts["raw"]); raw.mkdir(parents=True, exist_ok=True)
                 (raw / ("preflight-%s.json" % arm)).write_text(done.stdout or "", encoding="utf-8")
             reply = reply_text(done.stdout)
             try:
-                cost = parse_result(done.stdout)["cost_usd"]
+                parsed = parse_result(done.stdout)
+                cost, observed = parsed["cost_usd"], parsed["observed_effort"]
             except ValueError:
-                cost = None
+                cost, observed = None, None
+            effort = opts["arms"][arm]["declaration"]["effort"]
+            effort_matches = observed is None or observed == effort
             spent += PREFLIGHT_CAP_USD if cost is None else cost
-            checks.append({"arm": arm, "passed": gate_passed(done.stdout), "reply": reply,
-                           "cost_usd": cost})
+            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches,
+                           "reply": (reply if effort_matches else
+                                     "observed effort %s, pinned %s" % (observed, effort)),
+                           "cost_usd": cost, "effort": effort, "observed_effort": observed})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
     return checks, spent
@@ -1242,7 +1262,7 @@ def backfill_rows(rows, raw_dir, config_dir=None, home=None):
         except (OSError, ValueError):
             missing.append(path.name)
             for field in STREAM_FIELDS:
-                new[field] = {} if field == "tool_counts" else None
+                new.setdefault(field, {} if field == "tool_counts" else None)
             out.append(new)
             continue
         new.update({field: parsed[field] for field in STREAM_FIELDS})

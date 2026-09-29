@@ -295,17 +295,50 @@ def two_build_check(decl, out_dir, snapshot, launch=subprocess.run, repo=ROOT, d
 ADMISSION_CHECKS = []
 
 
-def _has_its_records(record):
-    for key in ("image", "image_id", "declaration_sha256", "manifest_sha256"):
+def _has_intact_records(record):
+    """The stored declaration and manifest are schema-known and match their recorded digests."""
+    problems = []
+    for key in ("image", "image_id"):
         if not record.get(key):
-            return "no %s recorded" % key
-    return None
+            problems.append("no %s recorded" % key)
+    for key, schema in (("declaration", SCHEMA), ("manifest", arm_manifest.SCHEMA)):
+        value = record.get(key)
+        if not isinstance(value, dict):
+            problems.append("%s is not an object" % key)
+            continue
+        if value.get("schema") != schema:
+            problems.append("%s schema is %r, expected %d" % (key, value.get("schema"), schema))
+        recorded = record.get(key + "_sha256")
+        if not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
+            problems.append("%s_sha256 is not a sha256" % key)
+        elif recorded != digest(value):
+            problems.append("%s_sha256 does not match the recorded %s" % (key, key))
+    manifest = record.get("manifest")
+    if isinstance(manifest, dict):
+        entries = manifest.get("entries")
+        if not isinstance(entries, list):
+            problems.append("manifest entries is not a list")
+        else:
+            paths = [entry.get("path") for entry in entries if isinstance(entry, dict)]
+            if len(paths) != len(entries) or any(not isinstance(path, str) or not path for path in paths):
+                problems.append("manifest entries contain a malformed path")
+            elif len(paths) != len(set(paths)):
+                problems.append("manifest entries contain duplicate paths")
+        environment = manifest.get("environment")
+        if not isinstance(environment, dict) or EFFORT_ENV not in environment:
+            problems.append("manifest does not record the image's %s override" % EFFORT_ENV)
+    return "; ".join(problems) or None
 
 
-# Where the harness arm's declared component is installed, and the two files its sync writes
-# into the profile rather than linking; every other configuration entry is a link into it.
+# Where the harness arm's declared component is installed, and the exact regular files its sync
+# and trust commands write into a fresh profile. Other entries are links into the checkout.
 HARNESS_ROOT = "/opt/model-citizen"
-HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md")
+HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md",
+                  "home:.codex/config.toml", "home:.codex/hooks.json",
+                  "home:.codex/AGENTS.personal.md",
+                  "home:.config/agent-harness/trusted.txt",
+                  "home:.local/state/agent-harness/manifest.json",
+                  "home:.local/state/agent-harness/applied.json")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
 NOT_PACKAGES = ("base-image", "model-citizen")
 
@@ -313,21 +346,45 @@ NOT_PACKAGES = ("base-image", "model-citizen")
 def _matches_its_declaration(record):
     """The manifest holds exactly the declared Claude Code, agent clients and harness commit."""
     decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    problems = []
+    components = decl.get("components")
+    if not isinstance(components, list):
+        return "declaration components is not a list"
+    valid = []
+    for number, component in enumerate(components):
+        if not isinstance(component, dict) or not isinstance(component.get("name"), str) \
+                or not component.get("name") or not isinstance(component.get("version"), str) \
+                or not component.get("version"):
+            problems.append("declaration component %d is malformed" % number)
+        else:
+            valid.append(component)
+    names = [component["name"] for component in valid]
+    duplicates = sorted(name for name in set(names) if names.count(name) > 1)
+    if duplicates:
+        problems.append("declaration has duplicate components: %s" % ", ".join(duplicates))
+    model_citizen = [component for component in valid if component["name"] == "model-citizen"]
+    harness = decl.get("harness")
+    if bool(harness) != (len(model_citizen) == 1):
+        problems.append("declaration must have exactly one model-citizen component iff it names a harness")
+    elif model_citizen and (model_citizen[0].get("version") != harness.get("ref")
+                            or model_citizen[0].get("commit") != harness.get("commit")):
+        problems.append("the model-citizen component does not match the declared harness")
     if manifest.get("claude_code_version") != decl.get("claude_code_version"):
-        return "the manifest holds Claude Code %r, the declaration %r" % (
-            manifest.get("claude_code_version"), decl.get("claude_code_version"))
-    declared = sorted("%s@%s" % (c["name"], c["version"]) for c in decl.get("components") or []
+        problems.append("the manifest holds Claude Code %r, the declaration %r" % (
+            manifest.get("claude_code_version"), decl.get("claude_code_version")))
+    declared = sorted("%s@%s" % (c["name"], c["version"]) for c in valid
                       if c["name"] not in NOT_PACKAGES)
     held = sorted(manifest.get("cli_packages") or [])
     if held != declared:
-        return "the manifest's agent clients %s differ from the declared %s" % (held, declared)
-    commit = (decl.get("harness") or {}).get("commit")
+        problems.append("the manifest's agent clients %s differ from the declared %s" % (held, declared))
+    commit = (harness or {}).get("commit") if isinstance(harness, dict) else None
     if manifest.get("harness_commit") != commit:
-        return "the manifest's harness commit %r differs from the declared %r" % (manifest.get("harness_commit"), commit)
+        problems.append("the manifest's harness commit %r differs from the declared %r"
+                        % (manifest.get("harness_commit"), commit))
     if ("harness" in (manifest.get("roots") or {})) != bool(commit):
-        return "the manifest %s a harness checkout the declaration %s" % (
-            ("holds", "does not name") if not commit else ("lacks", "names"))
-    return None
+        problems.append("the manifest %s a harness checkout the declaration %s" %
+                        (("holds", "does not name") if not commit else ("lacks", "names")))
+    return "; ".join(problems) or None
 
 
 def _inside(path, root):
@@ -427,50 +484,46 @@ def _pins_its_effort(record):
         return "no reasoning effort pinned in its declaration (got %r)" % (effort,)
     if EFFORT_ENV in ARM_ENV:
         return "%s is set for every arm and would override --effort" % EFFORT_ENV
+    baked = ((record.get("manifest") or {}).get("environment") or {}).get(EFFORT_ENV)
+    if baked:
+        return "the image bakes %s=%r, which would override --effort" % (EFFORT_ENV, baked)
     return None
 
 
-ADMISSION_CHECKS.extend([_has_its_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
+ADMISSION_CHECKS.extend([_has_intact_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
                          _is_preregistered_or_exploratory, _pins_its_effort])
 
 
 def admit(record, checks=None):
-    """SystemExit naming the first reason the arm may not run; None when every check admits it."""
-    for check in ADMISSION_CHECKS if checks is None else checks:
-        reason = check(record)
-        if reason:
-            raise SystemExit("replay-arms: refusing the %s arm: %s" % (record.get("label") or "?", reason))
+    """SystemExit naming every reason the arm may not run; None when every check admits it."""
+    reasons = [reason for reason in
+               (check(record) for check in (ADMISSION_CHECKS if checks is None else checks)) if reason]
+    if reasons:
+        raise SystemExit("replay-arms: refusing the %s arm:\n  %s"
+                         % (record.get("label") or "?", "\n  ".join(reasons)))
 
 
 # --- Pair parity: the two arms differ by the declared treatment and nothing else ----------------
 
-# Where the harness component lives in the harness arm, besides its checkout: the paths under the
-# agent user's home that its sync and trust write. Relative to the home directory.
-TREATMENT_HOME = (".claude", ".claude.json", ".codex", ".agents", ".config/agent-harness",
-                  ".local/state/agent-harness", ".local/bin")
 # Declaration keys that name the treatment itself; every other one must be equal across the pair.
 TREATMENT_KEYS = ("arm", "harness", "components")
 # Manifest keys that describe the treatment or are derived from the entries compared below.
 MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
 
 
-def _home_rel(path):
-    return path[len("home:"):] if path.startswith("home:") else None
-
-
-def _is_treatment(path):
-    """Whether a manifest path belongs to the harness component: its checkout, or a path under
-    the home directory its sync writes."""
-    if path.startswith("harness:"):
-        return True
-    rel = _home_rel(path)
-    return rel is not None and any(rel == p or rel.startswith(p + "/") for p in TREATMENT_HOME)
-
-
-def _is_treatment_parent(entry):
-    """A directory the sync had to create to reach one of `TREATMENT_HOME`, such as `.config`."""
-    rel = _home_rel(entry.get("path") or "")
-    return entry.get("kind") == "dir" and rel is not None and any(p.startswith(rel + "/") for p in TREATMENT_HOME)
+def _treatment_paths(manifest):
+    """Exact manifest paths attributable to the harness, plus only their directory parents."""
+    entries = manifest.get("entries") or []
+    paths = {entry.get("path") for entry in entries
+             if (entry.get("path") or "").startswith("harness:")
+             or (entry.get("kind") == "file" and entry.get("path") in HARNESS_WRITES)
+             or (entry.get("kind") == "link" and _inside(entry.get("target") or "", HARNESS_ROOT))}
+    leaves = set(paths)
+    for entry in entries:
+        path = entry.get("path") or ""
+        if entry.get("kind") == "dir" and any(_inside(leaf, path) for leaf in leaves):
+            paths.add(path)
+    return paths
 
 
 def pair_differences(bare, harness):
@@ -494,14 +547,14 @@ def pair_differences(bare, harness):
         out.append("manifest roots: bare %r, harness %r" % (left.get("roots"), right.get("roots")))
     ours = {e.get("path"): e for e in left.get("entries") or []}
     theirs = {e.get("path"): e for e in right.get("entries") or []}
+    treatment = _treatment_paths(right)
     for path in sorted(set(ours) | set(theirs)):
-        if _is_treatment(path):
+        if path in treatment:
             continue
         if path not in theirs:
             out.append("only in the bare arm: %s" % path)
         elif path not in ours:
-            if not _is_treatment_parent(theirs[path]):
-                out.append("only in the harness arm, outside the harness component: %s" % path)
+            out.append("only in the harness arm, outside the harness component: %s" % path)
         elif ours[path] != theirs[path]:
             fields = sorted(k for k in set(ours[path]) | set(theirs[path]) if ours[path].get(k) != theirs[path].get(k))
             out.append("differs outside the harness component: %s (%s)" % (path, ", ".join(fields)))
