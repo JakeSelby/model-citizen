@@ -237,7 +237,7 @@ development_status:
   ah-s236-adherence-events-record-each-recommendation-and: done
   ah-s237-replay-fix-the-six-defects-that-keep-the-two: done
   ah-s238-an-evidence-standard-and-a-pre-registration: done
-  ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: backlog
+  ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
   ah-s240-replay-a-task-set-sized-by-power-analysis-long: backlog
   ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: backlog
   ah-s242-the-soft-estimate-report-adherence-rate-and-the: backlog
@@ -484,6 +484,7 @@ development_status:
   ah-b126-grade-bash-falls-back-to-its-most-permissive: ready-for-dev
   ah-b127-config-set-refuses-a-switch-that-repairs-a: done
   ah-b128-three-timing-tests-fail-under-a-loaded-full: ready-for-dev
+  ah-b130-the-installation-case-skips-the-role-list-on: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
