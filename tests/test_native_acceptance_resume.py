@@ -79,8 +79,10 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(data["cases"], {name: "passed" for name in CASES})
         self.assertEqual([row["model_run"] for row in self.lines()],
                          ["first"] * len(CASES) + ["second"] * len(CASES))
-        self.run_round(verdict("failed"), model="second", tier_routing=routing)
+        resumed, err = self.run_round(verdict("failed"), model="second", tier_routing=routing)
         self.assertEqual(self.ran, [])
+        self.assertEqual(resumed["cases"], {name: "passed" for name in CASES})
+        self.assertEqual(err.count("already passed"), len(CASES))
 
     def test_changed_class_routing_reruns_all_cases_at_the_same_commit_and_model(self):
         original = MODULE.executed_by(MODULE.routing(CLIENT), "same-model")[1]
@@ -96,8 +98,10 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(data["cases"], {name: "passed" for name in CASES})
         self.assertEqual([row["tier_routing"] for row in self.lines()],
                          [original] * len(CASES) + [changed] * len(CASES))
-        self.run_round(verdict("failed"), model="same-model", tier_routing=changed)
+        resumed, err = self.run_round(verdict("failed"), model="same-model", tier_routing=changed)
         self.assertEqual(self.ran, [])
+        self.assertEqual(resumed["cases"], {name: "passed" for name in CASES})
+        self.assertEqual(err.count("already passed"), len(CASES))
 
     def test_a_failed_case_keeps_its_verdict_and_is_not_rerun(self):
         self.run_round(verdict("failed"), names=[CASES[0]])
