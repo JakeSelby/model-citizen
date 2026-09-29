@@ -504,7 +504,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `role-confinement` | `deny`, on a native spawn naming a constrained role, by `subagent_type` or a `harness-role:` line; `input` leads with the role and which of the two named it | not labelled yet |
 | `framework-spawn` | `deny`, when a framework descriptor maps a spawn to a constrained role | not labelled yet |
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
-| `governance` | the decision provider's permission answer, `allow`, `ask` or `deny`; an unavailable provider produces `ask` | not labelled yet |
+| `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
 | `workflow-launch` | `allow` or `deny`, on every `Workflow` tool launch | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
