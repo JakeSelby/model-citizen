@@ -962,6 +962,24 @@ def _partial_diagnostics(row, stdout):
     return row
 
 
+def save_stream(opts, task_id, arm, rep, stdout):
+    """Keep one run's stream under `--raw` as `<task>-<arm>-<rep>.json`, and, when the set keeps
+    a `streams` record, note it there with its digest as this run's own. The name carries no tag,
+    so the next tag's run of the same name overwrites it; detection reads a run only from the
+    stream the record names (`replay_detect.detect_saved`)."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    data = (stdout or "").encode("utf-8", errors="replace")
+    raw = Path(opts["raw"])
+    raw.mkdir(parents=True, exist_ok=True)
+    path = raw / replay_detect.raw_name(task_id, arm, rep)
+    path.write_bytes(data)
+    streams = opts.get("streams")
+    if streams is not None:
+        streams[(task_id, arm, rep)] = (path, hashlib.sha256(data).hexdigest())
+    return path
+
+
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
@@ -979,6 +997,8 @@ def _attempt(task, rep, arm, opts, launch):
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
+    if opts.get("streams") is not None:
+        opts["streams"].pop((task["id"], arm, rep), None)
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
     started = time.time()
     try:
@@ -995,9 +1015,7 @@ def _attempt(task, rep, arm, opts, launch):
                         wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
         if opts.get("raw"):
-            Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
-            (Path(opts["raw"]) / ("%s-%s-%d.json" % (task["id"], arm, rep))).write_text(done.stdout or "",
-                                                                                     encoding="utf-8")
+            save_stream(opts, task["id"], arm, rep, done.stdout)
         try:
             parsed = parse_result(done.stdout)
         except ValueError as exc:
@@ -1575,6 +1593,7 @@ def replay_tag(tag, args, common, harness):
     series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
                             + b"|container").hexdigest()[:8]
     out = (common["out"] or ROOT / "benchmarks" / version) / tag
+    streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
         (parent / "home").mkdir()
@@ -1583,7 +1602,7 @@ def replay_tag(tag, args, common, harness):
                 "tag": tag, "reps": args.reps, "run_cap": args.run_cap, "spend_cap": args.spend_cap,
                 "prices": common["prices"], "arms": {"bare": common["bare"], "harness": harness},
                 "network": common["network"], "proxy": common["proxy"], "client_env": common["client_env"],
-                "stance_cost": args.stance_cost, "raw": args.raw, "tmp": args.tmp,
+                "stance_cost": args.stance_cost, "raw": args.raw, "streams": streams, "tmp": args.tmp,
                 "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
                 "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
                           "cli_version": common["cli_version"],
@@ -1598,8 +1617,9 @@ def replay_tag(tag, args, common, harness):
         shutil.rmtree(str(parent), ignore_errors=True)
     detections = None
     if args.raw and rows:
-        # Now, before the next tag's runs overwrite these streams under the same names.
-        detections = replay_detect.detect_rows(rows, [Path(args.raw)], cli_messages, replay_detect.load_detectors())
+        # Now, before the next tag's runs overwrite these streams under the same names, and only
+        # from the streams this tag's runs saved: a timeout saves none.
+        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
         write_jsonl(out / DETECTIONS, detections)
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
@@ -1625,6 +1645,8 @@ def cmd_detect(args):
         raw = Path(args.raw).expanduser()
         if not raw.is_dir():
             raise SystemExit("cost-bench: %s is not a directory" % raw)
+        if (raw / DETECTIONS).exists() and not args.overwrite:
+            raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
         rows, runs = replay_detect.detect_dir(raw, ARMS, cli_messages, module)
         write_jsonl(raw / DETECTIONS, rows)
         unread = len(set(r["source"] for r in rows if r.get("count") is None))
@@ -1633,9 +1655,12 @@ def cmd_detect(args):
     root = Path(args.backfill).expanduser()
     if not root.is_dir():
         raise SystemExit("cost-bench: %s is not a directory" % root)
-    report = replay_detect.backfill(root, cli_messages, module)
+    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite)
     for target, runs, unread in report:
-        print("detected over %d run(s), %d without a readable stream, into %s" % (runs, unread, target))
+        if runs is None:
+            print("cost-bench: %s exists, left alone; --overwrite replaces it" % target, file=sys.stderr)
+        else:
+            print("detected over %d run(s), %d without a readable stream, into %s" % (runs, unread, target))
     if not report:
         print("cost-bench: no %s under %s" % (RESULTS, root), file=sys.stderr)
     return 0
@@ -1760,6 +1785,8 @@ def main(argv=None):
     source.add_argument("--raw", help="a --raw directory; writes %s there" % DETECTIONS)
     source.add_argument("--backfill", help="a root to search for %s files; writes %s beside each "
                         "and never rewrites them" % (RESULTS, DETECTIONS))
+    detect.add_argument("--overwrite", action="store_true",
+                        help="replace a %s already there; without it one is left alone" % DETECTIONS)
     args = parser.parse_args(argv)
     if args.command == "detect":
         return cmd_detect(args)

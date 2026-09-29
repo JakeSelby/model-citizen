@@ -5,13 +5,14 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from test_cost_bench import BENCH
+from test_cost_bench import BENCH, TASK, Launch, options, result
 from test_cost_bench_tags import FakeArms, fake_replay, harness_repo, replay_args
 
 DETECT = BENCH.replay_detect
@@ -83,6 +84,52 @@ class StreamDetectionTests(unittest.TestCase):
         self.assertEqual(len(rows), len(MODULE.DETECTORS))
         self.assertTrue(all(r["count"] is None and r["error"] == "unreadable: PermissionError"
                             for r in rows))
+
+    def test_detect_reports_an_unreadable_stream_as_unknown_end_to_end(self):
+        original = Path.read_text
+
+        def refuse(path, *args, **kwargs):
+            if path.name == "gate-run-bare-1.json":
+                raise PermissionError("denied")
+            return original(path, *args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = copy_of("raw", tmp)
+            with mock.patch.object(Path, "read_text", refuse), redirect_stdout(io.StringIO()) as out:
+                self.assertEqual(BENCH.main(["detect", "--raw", str(raw)]), 0)
+            rows = BENCH.read_jsonl(raw / BENCH.DETECTIONS)
+        bare = by_detector(rows, "gate-run-bare-1.json")
+        self.assertEqual(set(bare), set(MODULE.DETECTORS))
+        self.assertTrue(all(r["count"] is None and r["error"] == "unreadable: PermissionError"
+                            for r in bare.values()))
+        self.assertEqual(by_detector(rows, "gate-run-harness-1.json")["verification/no-verify"]["count"], 1)
+        self.assertIn("3 run(s), 2 unreadable", out.getvalue())
+
+    def test_detect_reports_a_detector_that_raised_as_unknown_end_to_end(self):
+        module = DETECT.load_detectors()
+
+        def broken(events, ctx):
+            raise RuntimeError("boom")
+        module.DETECTORS["test/broken"] = module.Detector("test/broken", "testing", "session", broken)
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = copy_of("raw", tmp)
+            with mock.patch.object(DETECT, "load_detectors", return_value=module), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(BENCH.main(["detect", "--raw", str(raw)]), 0)
+            run = by_detector(BENCH.read_jsonl(raw / BENCH.DETECTIONS), "gate-run-harness-1.json")
+        self.assertEqual((run["test/broken"]["count"], run["test/broken"]["error"]), (None, "RuntimeError"))
+        self.assertEqual(run["verification/no-verify"]["turns"], [4])
+
+    def test_detect_leaves_existing_detections_alone_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = copy_of("raw", tmp)
+            (raw / BENCH.DETECTIONS).write_text("kept\n", encoding="utf-8")
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.main(["detect", "--raw", str(raw)])
+            self.assertIn("--overwrite", str(caught.exception))
+            self.assertEqual((raw / BENCH.DETECTIONS).read_text(encoding="utf-8"), "kept\n")
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(BENCH.main(["detect", "--raw", str(raw), "--overwrite"]), 0)
+            self.assertNotEqual((raw / BENCH.DETECTIONS).read_text(encoding="utf-8"), "kept\n")
 
     def test_the_preflights_are_not_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,6 +206,66 @@ class BackfillTests(unittest.TestCase):
             bare = [r for r in rows if r["arm"] == "bare"]
             self.assertTrue(all(r["count"] is None and r["error"].startswith("ambiguous") for r in bare))
 
+    def sibling_sets(self, tmp):
+        """Two tags' sets side by side, each looking in the `../raw` they share."""
+        root = Path(tmp) / "evidence"
+        (root / "raw").mkdir(parents=True)
+        shutil.copy(str(FIXTURES / "raw" / "gate-run-harness-1.json"), str(root / "raw"))
+        for tag in ("v1", "v2"):
+            (root / tag).mkdir()
+            (root / tag / BENCH.RESULTS).write_text(json.dumps(
+                {"task": "gate-run", "arm": "harness", "rep": 1, "tag": tag}) + "\n", encoding="utf-8")
+        return root
+
+    def test_sibling_sets_sharing_a_raw_directory_are_ambiguous_not_guessed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.sibling_sets(tmp)
+            with redirect_stdout(io.StringIO()):
+                BENCH.main(["detect", "--backfill", str(root)])
+            for tag in ("v1", "v2"):
+                rows = BENCH.read_jsonl(root / tag / BENCH.DETECTIONS)
+                self.assertEqual(len(rows), len(MODULE.DETECTORS))
+                self.assertTrue(all(r["count"] is None and r["error"].startswith("ambiguous")
+                                    for r in rows), tag)
+
+    def test_a_shared_raw_directory_is_ambiguous_even_when_the_root_holds_one_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.sibling_sets(tmp)
+            with redirect_stdout(io.StringIO()):
+                BENCH.main(["detect", "--backfill", str(root / "v1")])
+            rows = BENCH.read_jsonl(root / "v1" / BENCH.DETECTIONS)
+            self.assertTrue(all(r["count"] is None and "searched by 2 sets" in r["error"] for r in rows))
+            self.assertFalse((root / "v2" / BENCH.DETECTIONS).exists())
+
+    def test_a_nested_sets_streams_are_not_the_outer_sets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outer = Path(tmp) / "outer"
+            inner = outer / "inner"
+            inner.mkdir(parents=True)
+            line = json.dumps({"task": "gate-run", "arm": "harness", "rep": 1}) + "\n"
+            for directory in (outer, inner):
+                (directory / BENCH.RESULTS).write_text(line, encoding="utf-8")
+            shutil.copy(str(FIXTURES / "raw" / "gate-run-harness-1.json"), str(inner))
+            with redirect_stdout(io.StringIO()):
+                BENCH.main(["detect", "--backfill", str(outer)])
+            outer_rows = BENCH.read_jsonl(outer / BENCH.DETECTIONS)
+            inner_rows = BENCH.read_jsonl(inner / BENCH.DETECTIONS)
+        self.assertTrue(all(r["count"] is None and r["error"] == "no raw output" for r in outer_rows))
+        self.assertEqual(by_detector(inner_rows, "gate-run-harness-1.json")["verification/no-verify"]["count"], 1)
+
+    def test_backfill_leaves_an_existing_detections_file_alone_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = copy_of("evidence", tmp)
+            target = root / "set-a" / "results" / BENCH.DETECTIONS
+            target.write_text("kept\n", encoding="utf-8")
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(BENCH.main(["detect", "--backfill", str(root)]), 0)
+            self.assertEqual(target.read_text(encoding="utf-8"), "kept\n")
+            self.assertIn("left alone", err.getvalue())
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(BENCH.main(["detect", "--backfill", str(root), "--overwrite"]), 0)
+            self.assertNotEqual(target.read_text(encoding="utf-8"), "kept\n")
+
     def test_a_root_with_no_results_says_so(self):
         with tempfile.TemporaryDirectory() as tmp, redirect_stdout(io.StringIO()), \
                 redirect_stderr(io.StringIO()) as err:
@@ -182,6 +289,12 @@ class MechanismTests(unittest.TestCase):
                                 "errors": {"a/x": {"runs": 1, "reasons": {"boom": 1}}}},
                           "quiet": {"runs": 1, "fired": {}, "errors": {}}})
 
+    def test_a_repeated_task_and_rep_counts_one_run_not_two(self):
+        base = {"task": "t", "arm": "harness", "detector": "a/x"}
+        rows = [dict(base, rep=1, count=1), dict(base, rep=1, count=2), dict(base, rep=2, count=0)]
+        self.assertEqual(DETECT.mechanisms(rows)["t"]["fired"]["a/x"],
+                         {"runs": 1, "measured_runs": 2, "hits": 3})
+
     def test_history_renders_attribution_denominators_and_errors(self):
         lines = DETECT.render_mechanisms(DETECT.mechanisms(self.rows()))
         self.assertEqual(lines, ["    fired in harness arm, quiet: none recorded across 1 run(s)",
@@ -189,13 +302,17 @@ class MechanismTests(unittest.TestCase):
                                  "3 total run(s); errors: a/x in 1 run(s) (boom: 1)"])
 
 
-def raw_replay(raw):
-    """`fake_replay`, with each run's stream written where `--raw` keeps it."""
+def raw_replay(raw, timeouts=()):
+    """`fake_replay`, with each run's stream saved where `--raw` keeps it, as the runner saves
+    it; a `(tag, arm)` in `timeouts` times out and saves none."""
     def replay(tasks, opts, launch=None, out=None):
         rows, stopped = fake_replay(tasks, opts, launch, out)
         for row in rows:
+            if (opts["tag"], row["arm"]) in timeouts:
+                row.update(error=True, passed=None, error_kind="timeout")
+                continue
             source = FIXTURES / "raw" / ("gate-run-%s-1.json" % row["arm"])
-            shutil.copy(str(source), str(Path(raw) / DETECT.raw_name(row["task"], row["arm"], row["rep"])))
+            BENCH.save_stream(opts, row["task"], row["arm"], row["rep"], source.read_text(encoding="utf-8"))
         return rows, stopped
     return replay
 
@@ -222,6 +339,63 @@ class ReplayDetectsTests(unittest.TestCase):
                              {"runs": 1, "measured_runs": 1, "hits": 1})
             text = (Path(tmp) / "history" / "history.md").read_text(encoding="utf-8")
             self.assertIn("fired in harness arm, demo:", text)
+
+    def test_two_tags_sharing_raw_never_score_a_timeout_against_the_other_tags_stream(self):
+        """v1's harness run saves a stream that fires; v2's times out and saves none, so the file
+        of that name in the shared `--raw` is still v1's."""
+        with tempfile.TemporaryDirectory() as tmp:
+            harness_repo(Path(tmp) / "repo")
+            raw = Path(tmp) / "raw"
+            raw.mkdir()
+            fake = FakeArms()
+            with mock.patch.object(BENCH, "ROOT", Path(tmp) / "repo"), \
+                    mock.patch.object(BENCH.arms, "build_arm", fake.build_arm), \
+                    mock.patch.object(BENCH.arms, "egress", fake.egress), \
+                    mock.patch.object(BENCH, "replay", raw_replay(raw, timeouts={("v2", "harness")})), \
+                    mock.patch.dict(os.environ, {"CLAUDE_CODE_OAUTH_TOKEN": "t"}), redirect_stdout(io.StringIO()):
+                self.assertEqual(BENCH.cmd_replay(replay_args(tmp, raw=str(raw), tag=["v1", "v2"])), 0)
+            self.assertTrue((raw / "demo-harness-1.json").exists())
+            v1 = [r for r in BENCH.read_jsonl(Path(tmp) / "out" / "v1" / BENCH.DETECTIONS) if r["arm"] == "harness"]
+            v2 = [r for r in BENCH.read_jsonl(Path(tmp) / "out" / "v2" / BENCH.DETECTIONS) if r["arm"] == "harness"]
+            self.assertEqual(by_detector(v1, "demo-harness-1.json")["verification/no-verify"]["count"], 1)
+            self.assertEqual(len(v2), len(MODULE.DETECTORS))
+            self.assertTrue(all(r["count"] is None and r["error"] == "no stream saved by this run (timeout)"
+                                for r in v2))
+            history = dict((r["tag"], r) for r in BENCH.read_jsonl(Path(tmp) / "history" / "history.jsonl"))
+            self.assertEqual(history["v2"]["mechanisms"]["demo"]["fired"], {})
+            self.assertIn("verification/no-verify", history["v2"]["mechanisms"]["demo"]["errors"])
+            self.assertIn("verification/no-verify", history["v1"]["mechanisms"]["demo"]["fired"])
+
+    def test_a_run_that_times_out_saves_no_stream_and_a_stale_one_is_never_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw"
+            raw.mkdir()
+            for arm in BENCH.ARMS:  # an earlier tag's streams, under the names this set reuses
+                shutil.copy(str(FIXTURES / "raw" / "gate-run-harness-1.json"),
+                            str(raw / DETECT.raw_name("demo", arm, 1)))
+            streams = {}
+            launch = Launch([subprocess.TimeoutExpired("docker", 1), json.dumps(result())])
+            rows, _ = BENCH.replay([TASK], options(tmp, reps=1, raw=str(raw), streams=streams), launch)
+            timed_out = [r for r in rows if r["error_kind"] == "timeout"]
+            self.assertEqual(len(timed_out), 1)
+            key = ("demo", timed_out[0]["arm"], 1)
+            self.assertNotIn(key, streams)
+            self.assertEqual(len(streams), 1)
+            detections = DETECT.detect_saved(rows, streams, BENCH.cli_messages, MODULE)
+        stale = [r for r in detections if r["arm"] == timed_out[0]["arm"]]
+        self.assertTrue(all(r["count"] is None and r["error"] == "no stream saved by this run (timeout)"
+                            for r in stale))
+
+    def test_a_saved_stream_overwritten_since_is_not_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = {"raw": tmp, "streams": {}}
+            text = (FIXTURES / "raw" / "gate-run-bare-1.json").read_text(encoding="utf-8")
+            path = BENCH.save_stream(opts, "demo", "harness", 1, text)
+            shutil.copy(str(FIXTURES / "raw" / "gate-run-harness-1.json"), str(path))
+            rows = DETECT.detect_saved([{"task": "demo", "arm": "harness", "rep": 1}], opts["streams"],
+                                       BENCH.cli_messages, MODULE)
+        self.assertTrue(all(r["count"] is None and r["error"] == "stream changed since this run saved it"
+                            for r in rows))
 
     def test_a_replay_without_raw_writes_no_detections_and_no_mechanisms(self):
         with tempfile.TemporaryDirectory() as tmp:
