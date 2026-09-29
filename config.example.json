@@ -33,6 +33,9 @@
   "telemetry": {
     "export": "off"
   },
+  "observation": {
+    "enabled": false
+  },
   "governance": {
     "provider": "none",
     "jev": {
