@@ -192,9 +192,10 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   (`rep`), `outcome` (`pass` or `fail`), `cost_usd` and `task_long`, so `summarise` re-derives
   every figure from `results.jsonl` without calling a model; rows that saved no pass or fail, as
   the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, arm trial-set
-  mismatches, contradictory outcomes, inconsistent long-task markers and non-finite pooled costs
-  are refused too. A replay refuses a nonempty results file before its probes or model calls, so a
-  rerun cannot mix cohorts or overwrite prior rows. It reports, per arm, Cost-of-Pass (the
+  mismatches across arms or tasks, contradictory outcomes, inconsistent long-task markers, boolean
+  costs and non-finite pooled costs or ratios are refused too. A replay exclusively creates its
+  results file before probes or model calls; even an existing empty file is refused, so concurrent
+  runs cannot mix cohorts. After an interrupted run, choose a fresh output path. It reports, per arm, Cost-of-Pass (the
   total cost of every attempt over total passes, pooled across the set) and the pass rate with a
   Wilson 95% interval, which is descriptive only. The harness-over-bare ratio and the pass-rate
   difference (harness minus bare) carry paired, task-clustered 95% intervals from a percentile

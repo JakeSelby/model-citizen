@@ -8,6 +8,7 @@ import os
 import random
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -339,6 +340,43 @@ class RederivationTests(unittest.TestCase):
         mismatched[1]["rep"] = 2
         with self.assertRaisesRegex(ValueError, "different trial ids"):
             STATS.analyse(mismatched)
+
+    def test_tasks_must_share_the_same_fixed_sample_trial_ids(self):
+        rows = rows_for(cheaper_set(tasks=2))
+        for row in rows:
+            if row["task"] == "t1":
+                row["rep"] += 1
+        with self.assertRaisesRegex(ValueError, "tasks have different trial ids"):
+            STATS.analyse(rows)
+
+    def test_boolean_costs_and_overflowing_ratios_are_refused(self):
+        rows = rows_for(cheaper_set(tasks=1))
+        rows[0]["cost_usd"] = True
+        with self.assertRaisesRegex(ValueError, "boolean cost_usd"):
+            STATS.analyse(rows)
+        rows = rows_for(cheaper_set(tasks=1, bare_cost=1e-300, harness_cost=1e300))
+        with self.assertRaisesRegex(ValueError, "ratio is non-finite"):
+            STATS.analyse(rows)
+
+    def test_difference_rounds_once_after_subtracting_raw_rates(self):
+        rows = rows_for({"a": {"bare": [(True, 1)] + [(False, 1)] * 6,
+                              "harness": [(True, 1)] * 2 + [(False, 1)] * 5}})
+        self.assertEqual(STATS.analyse(rows, resamples=20)["difference"], 0.1429)
+
+    def test_results_are_exclusively_claimed_before_any_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / BENCH.RESULTS
+            launch = Launch([])
+            opts = options(tmp)
+            def competing_replay(*args):
+                with self.assertRaisesRegex(SystemExit, "existing saved results"):
+                    BENCH.replay([TASK], opts, launch, out)
+                return [], False
+            with mock.patch.object(BENCH, "_replay", side_effect=competing_replay) as run:
+                self.assertEqual(BENCH.replay([TASK], opts, launch, out), ([], False))
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual((launch.probes, launch.calls), ([], []))
+            self.assertEqual(out.read_bytes(), b"")
 
     def test_trial_ids_must_be_positive_non_boolean_integers(self):
         base = {"task": "a", "arm": "bare", "passed": True, "cost_usd": 1.0}

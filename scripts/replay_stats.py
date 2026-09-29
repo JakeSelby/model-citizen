@@ -77,6 +77,8 @@ def attempts(rows):
             raise ValueError("row %d gives task %r inconsistent task_long values" % (index, row["task"]))
         long_by_task[row["task"]] = task_long
         cost = row["cost_usd"]
+        if type(cost) is bool:
+            raise ValueError("row %d has a boolean cost_usd" % index)
         try:
             cost = None if cost is None else float(cost)
         except (TypeError, ValueError) as exc:
@@ -122,7 +124,10 @@ def _cells(atts):
     mismatched = sorted(t for t in cells if trial_ids[t]["bare"] != trial_ids[t]["harness"])
     if mismatched:
         raise ValueError("task %s has different trial ids in its two arms" % mismatched[0])
-    return cells, sorted(cells)
+    tasks = sorted(cells)
+    if tasks and any(trial_ids[t]["bare"] != trial_ids[tasks[0]]["bare"] for t in tasks):
+        raise ValueError("tasks have different trial ids; a fixed sample needs one trial set")
+    return cells, tasks
 
 
 def _totals(cells, tasks):
@@ -148,7 +153,10 @@ def _ratio(totals):
     harness, bare = (cost_of_pass(totals[arm][0], totals[arm][1]) for arm in ("harness", "bare"))
     if not bare:
         return None, "the bare arm's cost is zero"
-    return harness / bare, None
+    ratio = harness / bare
+    if not math.isfinite(ratio):
+        raise ValueError("the cost-of-pass ratio is non-finite")
+    return ratio, None
 
 
 def _rank(values, q):
@@ -267,7 +275,8 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES):
             "delta": DELTA, "tasks": len(tasks), "arms": arms,
             "ratio": None if ratio is None else round(ratio, 4), "ratio_undefined": undefined_reason,
             "ratio_interval": ratio_ci, "undefined_resamples": undefined,
-            "difference": round(arms["harness"]["pass_rate"] - arms["bare"]["pass_rate"], 4),
+            "difference": round(totals["harness"][1] / totals["harness"][2] -
+                                totals["bare"][1] / totals["bare"][2], 4),
             "difference_interval": diff_ci, "long": long, "sm2_eligible": eligible,
             "limitation": limitation,
             "verdict": verdict, "reason": reason, "claim": claim}

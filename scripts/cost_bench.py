@@ -922,8 +922,17 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
-    if out and Path(out).is_file() and Path(out).stat().st_size:
-        raise SystemExit("cost-bench: refusing to append to nonempty saved results: %s" % out)
+    if out is None:
+        return _replay(tasks, opts, launch, None)
+    try:
+        sink = open(str(out), "x", encoding="utf-8")
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing to append to existing saved results: %s" % out)
+    with sink:
+        return _replay(tasks, opts, launch, sink)
+
+
+def _replay(tasks, opts, launch, sink):
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     probe_workdirs(tasks, opts, launch)
@@ -944,9 +953,9 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
         row = run_one(task, rep, arm, opts, launch)
         spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
         rows.append(row)
-        if out:
-            with open(str(out), "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        if sink is not None:
+            sink.write(json.dumps(row, sort_keys=True) + "\n")
+            sink.flush()
     return rows, False
 
 
