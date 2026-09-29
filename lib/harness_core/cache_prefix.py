@@ -53,7 +53,7 @@ def _count(row, name):
         return None
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return max(value, 0)
 
@@ -209,9 +209,23 @@ def _cell(value, width, unknown="unknown"):
     return "{:>{}}".format(unknown if value is None else "{:,}".format(value), width)
 
 
+def summary(ledger, cutoff=""):
+    """Structured prefix figures and totals, shared by text and JSON renderers."""
+    found = figures(ledger, cutoff)
+    return {
+        "groups": found,
+        "totals": {
+            "sessions": len(found),
+            "stepped": sum(1 for item in found if item["step"] is not None),
+            "unknown": sum(1 for item in found if item["ratio"] is None),
+        },
+    }
+
+
 def report(ledger, cutoff, days, say):
     """`harness usage --by prefix`: the miss ratio per session, and where it jumped."""
-    found = figures(ledger, cutoff)
+    data = summary(ledger, cutoff)
+    found = data["groups"]
     if not found:
         say("no sessions recorded in the last {} day(s)".format(days))
         return 0
@@ -222,10 +236,8 @@ def report(ledger, cutoff, days, say):
     say("Subagent tokens are subtracted: the figure is the session's own prefix.")
     say(head)
     say("-" * len(head))
-    unknown = 0
     for item in found:
         if item["ratio"] is None:
-            unknown += 1
             ratio = "{:>9}".format("unknown")
         else:
             ratio = "{:>9.0%}".format(item["ratio"])
@@ -241,7 +253,7 @@ def report(ledger, cutoff, days, say):
                     _cell(item["turns"], 7, "?"), _cell(item["cache_read"], 14),
                     _cell(item["cache_write"], 14), ratio, detail))
     say("-" * len(head))
-    stepped = sum(1 for item in found if item["step"] is not None)
     say("{} session(s), {} with a mid-session step, {} reporting no cache figures"
-        .format(len(found), stepped, unknown))
+        .format(data["totals"]["sessions"], data["totals"]["stepped"],
+                data["totals"]["unknown"]))
     return 0

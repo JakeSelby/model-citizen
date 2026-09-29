@@ -13,6 +13,26 @@ the branch, model ids and token counts. Sending those rows to an observability b
 opt-in, off by default and described in [telemetry.md](telemetry.md); the ledger stays the
 record and the backend is a copy that `bin/citizen usage export --since` can rebuild.
 
+## Machine-readable reports
+
+Add `--json` to any local usage report to receive the report's own aggregates as one JSON
+document. The document has `schema_version: 1`, names its `report`, `by` grouping and `days`
+window, and carries one object per displayed group in `groups`. Numeric fields are JSON numbers;
+an unavailable percentile, ratio or price is `null`, never zero or a non-standard `NaN` value.
+
+```sh
+bin/citizen usage --json
+bin/citizen usage --by role --json
+bin/citizen usage --rules --by repo --json
+bin/citizen usage --conflicts --json
+```
+
+The JSON and text renderers share the aggregation that assigns Workflow-tool runs to
+`(workflow)`, rows without a profile fingerprint to `(unattributed)` and rescanned stance rows to
+`(unknown)`. An empty window succeeds with `groups: []`. Invalid option combinations fail on
+stderr without printing a success document. `usage export` is a separate OTLP action and rejects
+`--json` rather than silently ignoring it.
+
 ## Which rules fired
 
 The same report that sums the tokens scores the rules. `bin/citizen usage --rules` counts
