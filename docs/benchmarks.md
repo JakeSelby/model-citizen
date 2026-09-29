@@ -114,12 +114,34 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   difference, and `--dry-run` prints every command without building. `replay --dry-run` prints the
   image each arm will be.
 - **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
-  refuses an arm whose manifest holds a Claude Code version, agent client or harness commit other
-  than its declaration names; whose settings, hooks, rules, skills, agents, plugins or instruction
-  files are not the declared harness's (a link into its checkout, or the settings files its sync
-  writes; the bare arm has none); whose recorded inputs name your home directory, this checkout or
-  an ambient `CLAUDE_CONFIG_DIR`; or whose run is neither pre-registered nor exploratory. Every
-  `docker run` is refused the same way when a mount or a variable names one of those paths.
+  recomputes the declaration and manifest digests and requires their known schemas. It refuses an
+  arm whose components are missing, duplicated or malformed; whose manifest holds a Claude Code
+  version, agent client or harness commit other than its declaration names; whose settings, hooks,
+  rules, skills, agents, plugins or instruction files are not the declared harness's; whose
+  recorded inputs name your home directory, this checkout or an ambient `CLAUDE_CONFIG_DIR`; whose
+  declaration pins no reasoning effort; or whose run is neither pre-registered nor exploratory.
+  A refusal prints every admission defect found. Every `docker run` is refused the same way when a
+  mount or a variable names one of those paths.
+- **The two arms differ by the harness and nothing else.** After each arm is admitted,
+  `replay_arms.admit_pair` compares the pair and refuses the replay, printing every difference,
+  when their declarations differ in anything but the harness component (base digest, Claude Code
+  version, Dockerfile, lister or effort), when their manifests differ in Claude Code, agent
+  clients or roots, or when any manifest entry outside the harness component is not identical in
+  both. The harness treatment is its checkout, links whose targets are inside that checkout, the
+  exact regular files its sync and trust commands generate, and only the parent directories needed
+  to reach those entries. Unrelated files and links remain part of pair parity even when they sit
+  under `.claude`, `.codex` or `.local/bin`.
+- **Every run pins its reasoning effort.** `--effort` (`low`, `medium`, `high`, `xhigh` or `max`;
+  default `high`) is recorded in each arm's declaration and passed to Claude Code as `--effort` on
+  every launch, the pre-flight's included, so no arm takes its model's default, which differs by
+  model. Every row records it as `effort`. The effort is a launch input, so it changes the
+  declaration's digest but not the image. `CLAUDE_CODE_EFFORT_LEVEL` outranks `--effort`, so the
+  image manifest records whether it was baked into the image, and admission refuses it there or in
+  the run environment. Each row also records `observed_effort`, the
+  level the `init` event reports; a run whose observed effort differs from the pinned one is an
+  errored row and stops the set, with no override. The pre-flight applies the same check and keeps
+  both the pinned and observed values in its verdict. Claude Code sends that field only to Remote
+  Control clients, so on a headless run it is normally `null` and the pin rests on the flag.
 - **Every row records the container it ran in**: `arm_image`, `arm_image_id`,
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
@@ -132,7 +154,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   gate container is named, and one that times out is removed by name. The credential is
   passed by name, so its value is on no command line and in no row. The container runs with
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
-  `--model`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
+  `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
@@ -156,6 +178,22 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   Stop hook's decisions, so each row records `stop_hooks`, how often the hook ran, and
   `hook_blocks`, how often it refused the stop. A raw file kept in the older single-document form
   still reads, with both fields `null`.
+- **Every row records the loaded surface, as the CLI reports it.** The stream's `init` event lists
+  what the session loaded, so each row carries `init_skills`, `init_agents`,
+  `init_slash_commands`, `init_tools`, `init_mcp_servers` and `init_memory_paths`, the length of
+  each list, plus an `init_<name>_sha256` over each key's canonical reported members and
+  `init_surface_source: cli-init`. The hashes detect a member replacement that leaves the count
+  unchanged without claiming identities the event did not report. All fields are `null` for a
+  stream with no `init` event, and one count and hash are `null` when the event lacks its key.
+  Within a set, each run is compared with its own arm's first run that reported a surface, including
+  its reported effort. A difference is written on the row as `surface_drift`, one
+  `field: before -> after` line each, and stops the set once that row is written.
+  `--allow-surface-drift` runs on instead and stamps every row of the set
+  `surface_drift_allowed: true`. Beside `first_call_cache_write`, each row carries
+  `first_call_context`, the first call's input, cache write and cache read together: the write
+  alone moves with how warm the cache was and the total does not, so compare runs on the total.
+  `backfill` derives all of these for sets already on disk; missing or unreadable raw output never
+  replaces diagnostic evidence already present on a row.
 - **Contamination is refused before either arm spends.** While the harness image contains a checkout
   of this repository, every issue task mined from the same repository is refused: commit ancestry
   cannot prove the files lack a cherry-picked, squashed or equivalent fix. The synthetic tasks are
