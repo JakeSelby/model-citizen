@@ -289,6 +289,19 @@ class Counterparty(Home):
         self.assertEqual(answer, "ask")
         self.assertIn("repo:beta/trunk", reason)
 
+    def test_git_dash_c_expands_the_current_users_home(self):
+        answer, reason = self.bash("git -C ~/beta push")
+        self.assertEqual(answer, "ask")
+        self.assertIn("repo:beta/trunk", reason)
+
+    def test_git_dash_c_resolves_an_earlier_static_assignment(self):
+        for operand in ("$WORKTREE", '"$WORKTREE"', "${WORKTREE}", '"${WORKTREE}"'):
+            with self.subTest(operand=operand):
+                answer, reason = self.bash("WORKTREE=%s; git -C %s push" %
+                                           (self.beta, operand))
+                self.assertEqual(answer, "ask")
+                self.assertIn("repo:beta/trunk", reason)
+
     def test_a_leading_cd_names_the_other_repository(self):
         answer, reason = self.bash("cd ../beta && git push")
         self.assertEqual(answer, "ask")
@@ -371,11 +384,192 @@ class UnknownDirectory(Home):
         self.assert_unknown("env -C ../other git push")
         self.assert_unknown("git --git-dir=../other/.git push")
 
+    def test_unresolved_git_dash_c_names_the_operand_and_requests_a_literal(self):
+        answer, reason = self.bash("git -C $MISSING push")
+        self.assertEqual(answer, "ask")
+        self.assertIn("repo:unknown/local", reason)
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+        self.assertIn("pass the repository path literally", reason)
+
+    def test_assignments_with_dynamic_or_ambiguous_scope_stay_unknown(self):
+        spaced = self.home / "other path"
+        cases = (
+            "WORKTREE=$(pwd); git -C $WORKTREE push",
+            "WORKTREE=../oth*; git -C $WORKTREE push",
+            "WORKTREE=%s; git -C '$WORKTREE' push" % self.other,
+            r"WORKTREE=%s; git -C \$WORKTREE push" % self.other,
+            "WORKTREE='~/other'; git -C $WORKTREE push",
+            'WORKTREE="%s"; git -C "$WORKTREE" push' % spaced,
+            "WORKTREE=%s git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s && git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s | true; git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s & wait; git -C $WORKTREE push" % self.other,
+            "(WORKTREE=%s); git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s; if true; then git -C $WORKTREE push; fi" % self.other,
+            "true; WORKTREE=%s; git -C $WORKTREE push" % self.other,
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_quote_and_environment_semantics_never_turn_dynamic_paths_literal(self):
+        cases = (
+            "git -C '~/other' push",
+            "WORKTREE=%s; git -C '$'WORKTREE push" % self.other,
+            "HOME=/unsafe; git -C ~/other push",
+            "WORKTREE=/allowed:~/unsafe; git -C $WORKTREE push",
+            "typeset -i WORKTREE; WORKTREE=6/2; git -C $WORKTREE push",
+            "git -C '~/other' push | cat",
+            "git -C '~/other' push & wait",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_assignment_before_a_failed_redirect_is_not_assumed_to_run(self):
+        command = ("WORKTREE=/unsafe; WORKTREE=%s </definitely/missing; "
+                   "git -C $WORKTREE push" % self.other)
+        self.assert_unknown(command)
+
+    def test_transparent_shell_names_its_unresolved_git_operand(self):
+        answer, reason = self.bash("bash -c 'git -C $MISSING push'")
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+        self.assertIn("pass the repository path literally", reason)
+
+    def test_unresolved_nonpush_operand_is_not_attached_to_a_later_push(self):
+        command = "git -C $MISSING status; cd $OTHER; git push"
+        self.assert_unknown(command)
+        _answer, reason = self.bash(command)
+        self.assertNotIn("Git -C operand", reason)
+
+    def test_continued_and_quoted_git_options_keep_operand_semantics(self):
+        cases = (
+            "WORKTREE=/unsafe; git -\\\nC '$WORKTREE' push",
+            "WORKTREE=/unsafe; git \"-C\" '~/beta' push",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_shell_special_assignments_never_supply_static_paths(self):
+        for command in ("SECONDS=6/2; git -C $SECONDS push",
+                        "OPTIND=6/2; git -C $OPTIND push",
+                        "IFS=/; WORKTREE=/unsafe; git -C $WORKTREE push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_eval_names_its_unresolved_git_operand(self):
+        answer, reason = self.bash("eval 'git -C $MISSING push'")
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+
+    def test_substitution_operand_diagnostic_stays_with_its_push(self):
+        command = 'echo "$(git -C $FIRST push)"; git -C $SECOND push'
+        self.assertEqual(self.places(command), [("coding.git_push", None),
+                                                ("coding.git_push", None)])
+        answer, reason = self.bash(command)
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$FIRST` could not be resolved", reason)
+        self.assertNotIn("`$SECOND`", reason)
+
+    def test_single_quoted_backslash_newline_stays_literal(self):
+        self.assert_unknown("git -C '/tmp/safe\\\nrepo' push")
+
+    def test_wrapper_diagnostics_stay_with_their_push(self):
+        command = "sudo git -C $FIRST push; git -C $SECOND push"
+        self.assertEqual(grader._unresolved_git_c_operands(command, str(self.repo)),
+                         ["$FIRST", "$SECOND"])
+        answer, reason = self.bash("poetry run git -C $MISSING push")
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+
+    def test_wrapper_diagnostics_pair_each_push_once_in_execution_order(self):
+        command = ('sudo -u root git -C $FIRST push; env git -C $SKIPPED status; '
+                   'poetry run git -C $THIRD push; nice -n 5 git -C %s push; '
+                   'echo "$(timeout 5 git -C $FOURTH push)"' % self.other)
+        causes = grader._unresolved_git_c_operands(command, str(self.repo))
+        self.assertEqual(causes, ["$FIRST", "$THIRD", None, "$FOURTH"])
+        self.assertEqual(self.places(command), [("coding.git_push", None),
+                                                ("coding.git_push", None),
+                                                ("coding.git_push", str(self.other)),
+                                                ("coding.git_push", None)])
+        # `sudo` grades 3 and asks before governance; the runner chain reaches governance.
+        answer, reason = self.bash("poetry run git -C $FIRST push; env git -C $SKIPPED status; "
+                                   "nice -n 5 git -C $SECOND push")
+        self.assertEqual(answer, "ask")
+        self.assertEqual(reason.count("Git -C operand"), 1, reason)
+        self.assertIn("Git -C operand `$FIRST` could not be resolved", reason)
+
+    def test_a_comment_apostrophe_does_not_hide_a_continued_option(self):
+        # bash: the comment ends at the newline, opens no quote, and `-\<newline>C` is `-C`.
+        command = "# don't\ngit -\\\nC %s push" % self.other
+        self.assertEqual(self.places(command), [("coding.git_push", str(self.other))])
+        answer, reason = self.bash(command)
+        self.assertEqual(answer, "ask")
+        self.assertIn("repo:other/main", reason)
+
+    def test_a_continuation_the_lexer_cannot_place_fails_closed(self):
+        # bash runs the push to `other` in each; quotes inside `${…}` differ between bash
+        # versions, and a quote left open on a later line does not stop the first from running.
+        for command in ('echo "${X:-\'\'}"; git -\\\nC %s push' % self.other,
+                        "git -\\\nC %s push\necho 'open" % self.other,
+                        "git -\\\nC %s push\necho $(echo open" % self.other):
+            with self.subTest(command=command):
+                places = self.places(command)
+                self.assertTrue(places)
+                self.assertEqual({where for _action, where in places}, {None})
+                self.assertGreaterEqual(grader.grade_text(command, str(self.repo))[0], 1)
+                answer, reason = self.bash(command)
+                self.assertEqual(answer, "ask")
+                self.assertIn("repo:unknown/local", reason)
+                self.assertNotIn("repo:other", reason)
+
+    def test_getopts_variables_never_supply_static_paths(self):
+        # bash: `getopts C: W -C DIR` sets W to `C` and OPTARG to DIR.
+        for command in ("OPTARG=%s; git -C $OPTARG push" % self.other,
+                        "getopts C: W -C %s; git -C $OPTARG push" % self.other,
+                        "W=%s; getopts C: W -C %s; git -C $W push" % (self.other, self.other)):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
     def test_a_literal_cd_still_resolves(self):
         answer, reason = self.bash("cd %s && git push" % self.other)
         self.assertEqual(answer, "ask")
         self.assertIn("repo:other/main", reason)
         self.assertIsNone(self.bash("cd %s && git push" % self.repo)[0])
+
+
+class ContinuationLexing(unittest.TestCase):
+    """Backslash-newline is removed only where bash removes it; each expectation was checked
+    with `bash -c`, the reading of the source and of the expected text printing the same."""
+
+    CASES = (
+        ("echo foo # it's a comment \\\necho bar", "echo foo # it's a comment \\\necho bar"),
+        ("# don't\ngit -\\\nC /x push", "# don't\ngit -C /x push"),
+        ("echo \"$(echo 'a\\\nb')\"", "echo \"$(echo 'a\\\nb')\""),
+        ("echo $'x\\\ny'", "echo $'x\\\ny'"),
+        ("echo $'x\\'y\\\nz'", "echo $'x\\'y\\\nz'"),
+        ("echo $'x\\\\'y\\\nz", "echo $'x\\\\'yz"),
+        ("echo 'a\\\nb'", "echo 'a\\\nb'"),
+        ('echo "a\\\nb"', 'echo "ab"'),
+        ("echo `echo 'a\\\nb'`", "echo `echo 'ab'`"),
+        ("echo a \\\n#b\necho c", "echo a #b\necho c"),
+    )
+
+    def test_pairs_are_removed_only_where_bash_removes_them(self):
+        for source, expected in self.CASES:
+            with self.subTest(source=source):
+                self.assertEqual(grader._join_continuations(source), (expected, True))
+
+    def test_constructs_bash_versions_read_differently_are_not_certain(self):
+        for source in ('echo "${X:-\'a\\\nb\'}"',
+                       "echo \"$(case a in a) echo 'x\\\ny';; esac)\"",
+                       "echo $(echo a # c\\\necho b)",
+                       "echo 'open\\\n",
+                       "echo $\\\n(git push)"):
+            with self.subTest(source=source):
+                self.assertFalse(grader._join_continuations(source)[1])
 
 
 class FailClosed(Home):
