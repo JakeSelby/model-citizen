@@ -1363,7 +1363,7 @@ _LEDGER = []
 
 def _log(action_class, slug, level, grade, outcome, provider, event, runtime,
          error=None):
-    """One `governance` row: the class, counterparty, level, grade and outcome, never the text."""
+    """One `governance` row, with level None when no provider answer supplied one."""
     if not _LEDGER:
         _LEDGER.append(_sibling("decisions.py", "grade_bash_decisions"))
     module = _LEDGER[0]
@@ -1556,34 +1556,44 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
         _log(FILE_WRITE, None, POLICY_LEVEL, grade, "ask", name, event, runtime)
         return "ask", ("Governance: this changes %s, which is level %d: every change to it"
                        " needs the user's explicit yes." % ("; ".join(hits), POLICY_LEVEL))
-    worst = None
+    positive = [(action_class, level_grade, where)
+                for action_class, level_grade, where, _written_paths in found
+                if level_grade > 0]
+    resolved, providers = [], {}
     try:
         decision = _decision_module()
-        places, providers = {}, {}
-        # The provider is selected, loaded and its policy read for the command's own directory
-        # before any segment is looked at. A provider that cannot be used then asks for the whole
-        # command, whatever its segments grade: a line whose only graded part is hidden from the
-        # segment walk, such as `cd $(cat x)`, must not pass for want of a segment to ask about.
-        places[cwd] = decision.locate(cwd)
+        places = {cwd: decision.locate(cwd)}
         home_root = places[cwd][1] or cwd
-        providers[home_root] = decision.select_provider(config, root=home_root, variant=variant)
-        load = getattr(providers[home_root], "policy", None)
-        if callable(load):
-            load()
-        for action_class, level_grade, where, _written_paths in found:
-            if level_grade <= 0:
-                continue
+        for action_class, level_grade, where in positive:
             if where is None:
-                # A directory the walk could not know: no pair names this counterparty, so the
-                # class default governs, read from the policies the hook's own directory sees.
                 slug, root = decision.UNKNOWN_COUNTERPARTY, home_root
             else:
                 if where not in places:
                     places[where] = decision.locate(where)
                 slug, top = places[where]
                 root = top or where
-            if root not in providers:
-                providers[root] = decision.select_provider(config, root=root, variant=variant)
+            resolved.append((action_class, level_grade, slug, root))
+        # Validate every involved policy before any judgments, including the command's home
+        # policy when its only positive-grade action is hidden from the segment walk.
+        roots = dict.fromkeys([home_root] + [row[3] for row in resolved])
+        for root in roots:
+            providers[root] = decision.select_provider(config, root=root, variant=variant)
+            load = getattr(providers[root], "policy", None)
+            if callable(load):
+                load()
+    except Exception as exc:
+        error = "%s: %s" % (type(exc).__name__, exc)
+        rows = resolved + [(action_class, level_grade, None, None)
+                           for action_class, level_grade, _where in positive[len(resolved):]]
+        for action_class, level_grade, slug, _root in rows:
+            _log(action_class, slug, None, level_grade, "ask", name, event, runtime,
+                 error=type(exc).__name__)
+        return "ask", ("Governance: provider %s could not be set up, so this asks rather than runs"
+                       " (%s)." % (name, error))
+
+    worst = None
+    for action_class, level_grade, slug, root in resolved:
+        try:
             answer = providers[root].decide(decision.Action(action_class, level_grade), slug)
             if answer.outcome not in RANK:
                 raise decision.PolicyError("provider %s answered %r, not allow, ask or deny"
@@ -1594,11 +1604,14 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
                                               or RANK[answer.outcome] > RANK[worst[0]]):
                 worst = (answer.outcome, "Governance: %s on %s is level %d (%s)."
                          % (action_class, slug, answer.autonomy_level, answer.reason))
-    except Exception as exc:
-        error = "%s: %s" % (type(exc).__name__, exc)
-        _log(None, None, None, grade, "ask", name, event, runtime, error=type(exc).__name__)
-        return "ask", ("Governance: provider %s could not answer, so this asks rather than runs"
-                       " (%s)." % (name, error))
+        except Exception as exc:
+            error = "%s: %s" % (type(exc).__name__, exc)
+            _log(action_class, slug, None, level_grade, "ask", name, event, runtime,
+                 error=type(exc).__name__)
+            if worst is None or RANK["ask"] > RANK[worst[0]]:
+                worst = ("ask", "Governance: provider %s could not answer %s on %s at grade %d, "
+                         "so this asks rather than runs (%s)."
+                         % (name, action_class, slug, level_grade, error))
     return worst
 
 

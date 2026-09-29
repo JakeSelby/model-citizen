@@ -6761,6 +6761,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-T037",
+      "github_number": 897,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/897",
+      "title": "Governance decision rows lose their segment fields when the provider errors",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T037.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B110",
       "github_number": 898,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/898",
