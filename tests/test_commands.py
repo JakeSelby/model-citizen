@@ -138,7 +138,8 @@ class CommandContentTests(unittest.TestCase):
 
     def test_the_repository_bound_commands_name_a_fallback_rather_than_only_stopping(self):
         build = split(COMMANDS / "build.md")[1]
-        self.assertIn("No repository: say so and offer to make the change in place", build)
+        self.assertIn("No repository: implement the authorized change in place", build)
+        self.assertIn("do not spawn the worktree-only builder", build)
         self.assertIn("stop at the local commit", build)
         review = split(COMMANDS / "review.md")[1]
         self.assertIn("offer to\n   review named files or a pasted patch instead", review)
