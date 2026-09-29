@@ -289,6 +289,19 @@ class Counterparty(Home):
         self.assertEqual(answer, "ask")
         self.assertIn("repo:beta/trunk", reason)
 
+    def test_git_dash_c_expands_the_current_users_home(self):
+        answer, reason = self.bash("git -C ~/beta push")
+        self.assertEqual(answer, "ask")
+        self.assertIn("repo:beta/trunk", reason)
+
+    def test_git_dash_c_resolves_an_earlier_static_assignment(self):
+        for operand in ("$WORKTREE", '"$WORKTREE"', "${WORKTREE}", '"${WORKTREE}"'):
+            with self.subTest(operand=operand):
+                answer, reason = self.bash("WORKTREE=%s; git -C %s push" %
+                                           (self.beta, operand))
+                self.assertEqual(answer, "ask")
+                self.assertIn("repo:beta/trunk", reason)
+
     def test_a_leading_cd_names_the_other_repository(self):
         answer, reason = self.bash("cd ../beta && git push")
         self.assertEqual(answer, "ask")
@@ -370,6 +383,65 @@ class UnknownDirectory(Home):
         self.assert_unknown("git -C $(pwd) push")
         self.assert_unknown("env -C ../other git push")
         self.assert_unknown("git --git-dir=../other/.git push")
+
+    def test_unresolved_git_dash_c_names_the_operand_and_requests_a_literal(self):
+        answer, reason = self.bash("git -C $MISSING push")
+        self.assertEqual(answer, "ask")
+        self.assertIn("repo:unknown/local", reason)
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+        self.assertIn("pass the repository path literally", reason)
+
+    def test_assignments_with_dynamic_or_ambiguous_scope_stay_unknown(self):
+        spaced = self.home / "other path"
+        cases = (
+            "WORKTREE=$(pwd); git -C $WORKTREE push",
+            "WORKTREE=../oth*; git -C $WORKTREE push",
+            "WORKTREE=%s; git -C '$WORKTREE' push" % self.other,
+            r"WORKTREE=%s; git -C \$WORKTREE push" % self.other,
+            "WORKTREE='~/other'; git -C $WORKTREE push",
+            'WORKTREE="%s"; git -C "$WORKTREE" push' % spaced,
+            "WORKTREE=%s git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s && git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s | true; git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s & wait; git -C $WORKTREE push" % self.other,
+            "(WORKTREE=%s); git -C $WORKTREE push" % self.other,
+            "WORKTREE=%s; if true; then git -C $WORKTREE push; fi" % self.other,
+            "true; WORKTREE=%s; git -C $WORKTREE push" % self.other,
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_quote_and_environment_semantics_never_turn_dynamic_paths_literal(self):
+        cases = (
+            "git -C '~/other' push",
+            "WORKTREE=%s; git -C '$'WORKTREE push" % self.other,
+            "HOME=/unsafe; git -C ~/other push",
+            "WORKTREE=/allowed:~/unsafe; git -C $WORKTREE push",
+            "typeset -i WORKTREE; WORKTREE=6/2; git -C $WORKTREE push",
+            "git -C '~/other' push | cat",
+            "git -C '~/other' push & wait",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_assignment_before_a_failed_redirect_is_not_assumed_to_run(self):
+        command = ("WORKTREE=/unsafe; WORKTREE=%s </definitely/missing; "
+                   "git -C $WORKTREE push" % self.other)
+        self.assert_unknown(command)
+
+    def test_transparent_shell_names_its_unresolved_git_operand(self):
+        answer, reason = self.bash("bash -c 'git -C $MISSING push'")
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+        self.assertIn("pass the repository path literally", reason)
+
+    def test_unresolved_nonpush_operand_is_not_attached_to_a_later_push(self):
+        command = "git -C $MISSING status; cd $OTHER; git push"
+        self.assert_unknown(command)
+        _answer, reason = self.bash(command)
+        self.assertNotIn("Git -C operand", reason)
 
     def test_a_literal_cd_still_resolves(self):
         answer, reason = self.bash("cd %s && git push" % self.other)

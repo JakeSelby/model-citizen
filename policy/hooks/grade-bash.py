@@ -1045,6 +1045,12 @@ def _resolve(target, cwd):
 # A directory change is statically known only when its target is a literal path: nothing the
 # shell expands at run time. `~` and `~/…` are the one expansion allowed, being the user's home.
 DYNAMIC_CHARS = set("$`*?[{") | {"\\"}
+VARIABLE_OPERAND_RE = re.compile(r"^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))$")
+SAFE_ASSIGNMENT_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=([A-Za-z0-9_./-]+)$")
+SAFE_VARIABLE_WORD_RE = re.compile(
+    r'^(?:\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))|'
+    r'"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")$')
+_UNSAFE_OPERANDS = object()
 
 
 def _static_dir(target, cwd):
@@ -1055,6 +1061,139 @@ def _static_dir(target, cwd):
             or (target.startswith("~") and target != "~" and not target.startswith("~/"))):
         return None
     return _resolve(target, cwd)
+
+
+def _source_segments(text):
+    """Semicolon-separated source segments, retaining quote and escape provenance.
+
+    Anything with shell control flow, a pipeline, a background job or a subshell is outside
+    the static assignment model. Returning None disables assignment resolution for the line.
+    """
+    out, current, quote, i = [], [], "", 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and quote != "'" and i + 1 < len(text):
+            current.append(text[i:i + 2])
+            i += 2
+            continue
+        if char in "'\"":
+            quote = "" if quote == char else char if not quote else quote
+            current.append(char)
+        elif not quote and char in "|&()":
+            return None
+        elif not quote and char in ";\n":
+            if "".join(current).strip():
+                out.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+        i += 1
+    if quote:
+        return None
+    if "".join(current).strip():
+        out.append("".join(current).strip())
+    return out
+
+
+def _source_words(text):
+    """Shell words as written, quotes included; None when an operator is present."""
+    words, word, quote, i = [], [], "", 0
+    while i < len(text):
+        char = text[i]
+        if char == "\\" and quote != "'" and i + 1 < len(text):
+            word.append(text[i:i + 2])
+            i += 2
+            continue
+        if char in "'\"":
+            quote = "" if quote == char else char if not quote else quote
+            word.append(char)
+        elif not quote and char in " \t":
+            if word:
+                words.append("".join(word))
+                word = []
+        elif not quote and char in ";|&()<>":
+            return None
+        else:
+            word.append(char)
+        i += 1
+    if quote:
+        return None
+    if word:
+        words.append("".join(word))
+    return words
+
+
+def _operand_context(values, source):
+    """Assignment values plus source operands whose quote semantics make them unsafe."""
+    context = dict(values)
+    words = _source_words(source)
+    unsafe = set()
+    if words is None:
+        context[_UNSAFE_OPERANDS] = None
+        return context
+    for index, word in enumerate(words[:-1]):
+        if word != "-C":
+            continue
+        raw = words[index + 1]
+        try:
+            cooked = ro.tokenize(raw)
+        except ValueError:
+            cooked = []
+        if len(cooked) != 1:
+            continue
+        target = cooked[0]
+        variable = SAFE_VARIABLE_WORD_RE.match(raw)
+        if variable:
+            continue
+        quoted = raw[:1] in ("'", '"')
+        if "$" in raw or "`" in raw or "\\" in raw or (target.startswith("~") and quoted):
+            unsafe.add(target)
+        if target.startswith("~") and "HOME" in values:
+            unsafe.add(target)
+    context[_UNSAFE_OPERANDS] = unsafe
+    return context
+
+
+def _assignment_contexts(text, parts):
+    """Static assignment values visible before each parsed command in a straight sequence."""
+    values, contexts, enabled = {}, [], True
+    sources = _source_segments(text)
+    if sources is None or len(sources) != len(parts):
+        return [{_UNSAFE_OPERANDS: None} for _part in parts]
+    reserved = ro.WORD_DROP | ro.WORD_COND | ro.WORD_HEADER
+    for tokens, source in zip(parts, sources):
+        contexts.append(_operand_context(values, source)
+                        if enabled else {_UNSAFE_OPERANDS: None})
+        raw_words = _source_words(source)
+        matches = [SAFE_ASSIGNMENT_RE.match(word) for word in (raw_words or [])]
+        assignments = bool(matches) and all(matches) and not any(token in reserved
+                                                                 for token in tokens)
+        if not enabled or not assignments:
+            # A command may change variable attributes, shell options, or whether a later
+            # assignment succeeds. Once one runs, no later assignment is statically trusted.
+            enabled = False
+            values.clear()
+            continue
+        for match in matches:
+            name, value = match.group(1), match.group(2)
+            if _static_dir(value, "/") is None:
+                values.pop(name, None)
+            else:
+                values[name] = value
+    return contexts
+
+
+def _static_operand(target, variables):
+    """A literal operand, including an exact reference to an earlier static assignment."""
+    unsafe = (variables or {}).get(_UNSAFE_OPERANDS, set())
+    if unsafe is None and (VARIABLE_OPERAND_RE.match(target) or target.startswith("~")):
+        return None
+    if unsafe is not None and target in unsafe:
+        return None
+    match = VARIABLE_OPERAND_RE.match(target)
+    if not match:
+        return target
+    return (variables or {}).get(match.group(1) or match.group(2))
 
 
 def _isolating(text):
@@ -1203,7 +1342,7 @@ def is_policy_file(path):
     return real == user or os.path.basename(os.path.dirname(real)) == POLICY_DIR
 
 
-def _git_dir(args, cwd):
+def _git_dir(args, cwd, variables=None):
     """(the directory a git command runs in, after each `-C <dir>`, and its subcommand). The
     directory is None when a `-C` is not a literal path, or `--git-dir` or `--work-tree` points
     the command at a repository its directory does not name."""
@@ -1214,7 +1353,8 @@ def _git_dir(args, cwd):
             cwd = None
         if a in GIT_VALUE_GLOBALS and i + 1 < len(args):
             if a == "-C":
-                cwd = _static_dir(args[i + 1], cwd)
+                operand = _static_operand(args[i + 1], variables)
+                cwd = _static_dir(operand, cwd) if operand is not None else None
             elif a in ("--git-dir", "--work-tree"):
                 cwd = None
             i += 2
@@ -1243,7 +1383,7 @@ def _written(prog, args, targets, cwd):
     return out
 
 
-def _governed(tokens, cwd, depth):
+def _governed(tokens, cwd, depth, variables=None):
     """[(action class, grade, directory, paths written)] for one simple command.
 
     Wrappers, runners, `sudo` and a shell's `-c` text are looked through, as the grader looks
@@ -1283,13 +1423,13 @@ def _governed(tokens, cwd, depth):
             inner = ("text", " ".join(args))
     if inner is not None and inner[1]:
         if inner[0] == "tokens":
-            found = _governed(inner[1], cwd, depth + 1)
+            found = _governed(inner[1], cwd, depth + 1, variables)
         else:
             found = governed_text(inner[1], cwd, depth + 1)
         if found:
             return [(c, max(g, grade), d, w + written) for c, g, d, w in found]
     if prog == "git":
-        where, sub = _git_dir(args, cwd)
+        where, sub = _git_dir(args, cwd, variables)
         return [({"push": PUSH, "commit": COMMIT}.get(sub, SHELL), grade, where, written)]
     if prog == "gh" and ops[:2] == ["pr", "merge"]:
         return [(MERGE, grade, cwd, written)]
@@ -1322,6 +1462,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
         confined = [None] * len(parts)
     queue = list(inners)
     found = []
+    assignment_contexts = _assignment_contexts(stripped, parts)
 
     def substitutions(count, where):
         for _ in range(min(count, len(queue))):
@@ -1330,7 +1471,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     here = cwd
-    for tokens, alone in zip(parts, confined):
+    for tokens, alone, variables in zip(parts, confined, assignment_contexts):
         substitutions(sum(t.count(PLACEHOLDER) for t in tokens), here)
         body, _targets = _redirects(list(tokens))
         while body and ASSIGN_RE.match(body[0]):
@@ -1353,9 +1494,66 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue
-        found.extend(_governed(tokens, here, depth))
+        found.extend(_governed(tokens, here, depth, variables))
     substitutions(len(queue), None)  # any the segments did not account for: fail closed
     return found
+
+
+def _unresolved_git_c_operands(command, cwd, depth=0):
+    """One unresolved operand or None per governed `git push`, in execution order."""
+    if depth >= MAX_DEPTH:
+        return []
+    text, _bodies = normalize(command)
+    stripped, _inners = _extract_subs(text)
+    parts = segments(stripped) if stripped is not None else None
+    if parts is None:
+        return []
+    contexts = _assignment_contexts(stripped, parts)
+    unresolved = []
+    for tokens, variables in zip(parts, contexts):
+        body, _targets = _redirects(list(tokens))
+        while body and ASSIGN_RE.match(body[0]):
+            body = body[1:]
+        # Shell expansion happens before these transparent wrappers run.
+        while body and body[0].rpartition("/")[2] in WRAPPERS:
+            prog, args = body[0].rpartition("/")[2], body[1:]
+            rest = strip_options(args, WRAPPERS[prog])
+            while rest and ASSIGN_RE.match(rest[0]):
+                rest = rest[1:]
+            body = rest[1:] if prog == "timeout" and rest else rest
+        if not body:
+            continue
+        prog = body[0].rpartition("/")[2]
+        if prog in SHELLS:
+            for index, arg in enumerate(body[1:]):
+                if DASH_C_RE.match(arg) and index + 2 < len(body):
+                    unresolved.extend(_unresolved_git_c_operands(body[index + 2], cwd, depth + 1))
+                    break
+            continue
+        if prog != "git":
+            continue
+        args, where, cause, i = body[1:], cwd, None, 0
+        while i < len(args):
+            arg = args[i]
+            if arg in GIT_VALUE_GLOBALS and i + 1 < len(args):
+                if arg == "-C":
+                    raw = args[i + 1]
+                    operand = _static_operand(raw, variables)
+                    where = _static_dir(operand, where) if operand is not None else None
+                    cause = raw if where is None else None
+                elif arg in ("--git-dir", "--work-tree"):
+                    where, cause = None, None
+                i += 2
+                continue
+            if arg.startswith(("--git-dir=", "--work-tree=")):
+                where, cause = None, None
+            if not arg.startswith("-"):
+                break
+            i += 1
+        subcommand = args[i] if i < len(args) else ""
+        if subcommand == "push":
+            unresolved.append(cause)
+    return unresolved
 
 
 _LEDGER = []
@@ -1546,6 +1744,10 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
         found = governed_text(command, cwd)
     except Exception:
         found = None
+    try:
+        unresolved_git_c = _unresolved_git_c_operands(command, cwd)
+    except Exception:
+        unresolved_git_c = []
     walked = found is not None
     if not found or max(entry[1] for entry in found) <= 0:
         # The grader graded the line above 0 yet no segment carries that grade: govern the whole
@@ -1573,6 +1775,8 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
         for action_class, level_grade, where, _written_paths in found:
             if level_grade <= 0:
                 continue
+            unresolved_operand = (unresolved_git_c.pop(0)
+                                  if action_class == PUSH and unresolved_git_c else None)
             if where is None:
                 # A directory the walk could not know: no pair names this counterparty, so the
                 # class default governs, read from the policies the hook's own directory sees.
@@ -1592,8 +1796,13 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
                  answer.provider, event, runtime)
             if answer.outcome != "allow" and (worst is None
                                               or RANK[answer.outcome] > RANK[worst[0]]):
-                worst = (answer.outcome, "Governance: %s on %s is level %d (%s)."
-                         % (action_class, slug, answer.autonomy_level, answer.reason))
+                sentence = ("Governance: %s on %s is level %d (%s)."
+                            % (action_class, slug, answer.autonomy_level, answer.reason))
+                if unresolved_operand is not None:
+                    shown = unresolved_operand.replace("`", "'")[:160]
+                    sentence += (" Git -C operand `%s` could not be resolved; pass the"
+                                 " repository path literally." % shown)
+                worst = answer.outcome, sentence
     except Exception as exc:
         error = "%s: %s" % (type(exc).__name__, exc)
         _log(None, None, None, grade, "ask", name, event, runtime, error=type(exc).__name__)
