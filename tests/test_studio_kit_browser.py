@@ -11,7 +11,6 @@ import test_studio_configure_browser as configure_support
 
 class StudioKitBrowserTests(unittest.TestCase):
     setUp = configure_support.ConfigureBrowserTests.setUp
-    _discard_draft = configure_support.ConfigureBrowserTests._discard_draft
     _close_devtools = browser_support.StudioBrowserTests._close_devtools
     _stop_browser = browser_support.StudioBrowserTests._stop_browser
     _stop_studio = browser_support.StudioBrowserTests._stop_studio
