@@ -97,7 +97,9 @@ CONFIG_GLOBS = ("CLAUDE.md", "CLAUDE.personal.md", "rules/**/*.md", "skills/*/SK
 SPAWN_TOOLS = ("Task", "Agent")
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
 STREAM_FIELDS = ("first_call_cache_write", "tool_counts", "spawns", "stop_hooks", "hook_blocks",
-                 "cache_miss_ratio")
+                 "cache_miss_ratio", "installed_checkout_reads")
+INSTALLED_CHECKOUT = "/opt/model-citizen"
+CONTAMINATION_CONTROL = "installed-checkout-oracle-and-transcript-v1"
 RESULTS = "results.jsonl"
 ENRICHED = "results.enriched.jsonl"
 
@@ -529,6 +531,35 @@ def stop_hook_counts(messages, streamed):
     return len(stops), sum(1 for m in stops if _hook_blocked(m))
 
 
+def installed_checkout_reads(messages):
+    """Tool calls whose input names the harness checkout installed in the image.
+
+    The checkout is available only to the harness arm, so a scored task that consults it has seen
+    evidence unavailable to bare even when the task's completed output is not already there. Keep
+    the record to the tool and root rather than copying arbitrary command text into the ledger.
+    """
+    reads = []
+
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from strings(item)
+
+    for message in messages:
+        body = message.get("message") if isinstance(message, dict) else None
+        for block in (body or {}).get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if any(INSTALLED_CHECKOUT in value for value in strings(block.get("input") or {})):
+                reads.append("%s:%s" % (str(block.get("name") or "unknown"), INSTALLED_CHECKOUT))
+    return reads
+
+
 def parse_result(stdout):
     """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
     is no result to read.
@@ -547,6 +578,7 @@ def parse_result(stdout):
     in the older single-document form both are None, never zero. See `stop_hook_counts`."""
     messages, streamed = cli_messages(stdout)
     stops, blocks = stop_hook_counts(messages, streamed)
+    checkout_reads = installed_checkout_reads(messages)
     results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
     if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
         raise ValueError("the CLI returned no result with total_cost_usd")
@@ -589,7 +621,8 @@ def parse_result(stdout):
             "first_call_cache_write": first_write, "tool_counts": tools,
             "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
             "hook_blocks": blocks,
-            "cache_miss_ratio": run_miss_ratio(cache)}
+            "cache_miss_ratio": run_miss_ratio(cache),
+            "installed_checkout_reads": checkout_reads}
 
 
 def run_miss_ratio(cache):
@@ -738,6 +771,34 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
     return errors
 
 
+def contamination_errors(tasks, repo, harness_commit, tmp=None):
+    """Tasks whose answer is present in the checkout installed in the harness image.
+
+    An issue task mined from this repository is refused while the installed image contains this
+    repository: ancestry cannot rule out a cherry-pick, squash or equivalent implementation in
+    its files. Synthetic tasks have no good commit, so their held-back oracle is applied to the
+    installed tree: a pass means the requested output is already present. This check is local and
+    deterministic, and therefore runs before the first model call.
+    """
+    parent = Path(tempfile.mkdtemp(prefix="cost-contamination-", dir=tmp))
+    try:
+        errors = []
+        synthetic = [task for task in tasks if task["kind"] == "synthetic"]
+        checkout = snapshot(repo, harness_commit, parent / "checkout") if synthetic else None
+        for task in tasks:
+            if task["kind"] == "issue":
+                errors.append("%s: same-repository issue task cannot prove its fixed files are "
+                              "absent from the installed checkout" % task["id"])
+                continue
+            oracle_errors = _oracle(repo, task["tests"]["oracle"]).check(checkout)
+            if not oracle_errors:
+                errors.append("%s: held-back oracle already passes in the installed checkout"
+                              % task["id"])
+        return errors
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
 def schedule(tasks, reps):
     """Arms interleaved inside each task and rep, the leading arm alternating so neither always
     runs on the other's warm cache."""
@@ -776,7 +837,8 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
     row = dict(opts["stamp"], task=task["id"], arm=arm, tag=opts["tag"], rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, tool_counts={}, spawns=None, stop_hooks=None, hook_blocks=None,
-               cache_miss_ratio=None,
+               cache_miss_ratio=None, installed_checkout_reads=[],
+               contamination_control=CONTAMINATION_CONTROL,
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
                profile_fingerprint=arm_profile(arm, env, opts),
                context_attribution=arm_attribution(arm, env, opts),
@@ -804,6 +866,8 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),
                    **{field: parsed[field] for field in STREAM_FIELDS})
+        if parsed["installed_checkout_reads"]:
+            return dict(row, error=True, error_kind="installed-checkout-read")
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
@@ -911,6 +975,14 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     Its own cost counts against the same cumulative cap."""
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
+    check_contamination = opts.get("contamination_checker", contamination_errors)
+    contaminated = check_contamination(tasks, opts["repo"],
+                                       opts["arms"]["harness"]["harness_commit"], opts.get("tmp"))
+    if contaminated:
+        for error in contaminated:
+            print("cost-bench: contamination: %s" % error, file=sys.stderr)
+        print("cost-bench: refusing the replay before any model call", file=sys.stderr)
+        raise SystemExit(2)
     probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):

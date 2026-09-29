@@ -53,6 +53,10 @@ an appended entry in the deviation log, never an edit above it.
 
 ## Guardrails
 
+- **Contamination control:** `installed-checkout-oracle-and-transcript-v1`; every task must pass the
+  prelaunch installed-checkout check, and any scored transcript that literally names
+  `/opt/model-citizen` in a tool input fails that attempt. List any task excluded by this control
+  and its manifest reason; do not treat the transcript check as proof against aliases or copies.
 - **Pass rate:** non-inferiority margin δ = 0.125 on the paired, task-clustered pass-rate difference
   (harness minus bare).
 - **Fallback rate:** <the share of trials on an unpinned model above which the run is reported as
