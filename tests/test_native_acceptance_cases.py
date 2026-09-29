@@ -179,6 +179,13 @@ class InstallationRolesTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "starting with " + roles[0]):
             MODULE.case_installation(home)
         self.assertEqual(home.session.call_count, 3)
+    def test_a_similarly_named_role_does_not_satisfy_a_missing_role(self):
+        roles = sorted(path.stem for path in (MODULE.ROOT / "primitives" / "roles").glob("*.md"))
+        self.assertIn("spec-reviewer", roles)
+        home = self.home("codex", ["`" + name + "`" for name in roles if name != "reviewer"])
+        with self.assertRaisesRegex(AssertionError, "starting with reviewer"):
+            MODULE.case_installation(home)
+
 
 
 class RuntimeGapTests(unittest.TestCase):

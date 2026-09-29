@@ -1175,7 +1175,12 @@ def case_installation(home):
     expected = sorted(path.stem for path in (ROOT / "primitives" / "roles").glob("*.md"))
     prompt = CODEX_ROLES_PROMPT if home.runtime == "codex" else ROLES_PROMPT
     listed = home.answer(home.session(prompt, tools=()))
-    missing = [name for name in expected if name not in listed]
+    names = set()
+    for line in listed.splitlines():
+        match = re.fullmatch(r"(?:[-*]\s+)?`?([a-z][a-z0-9-]*)`?", line.strip())
+        if match:
+            names.add(match.group(1))
+    missing = [name for name in expected if name not in names]
     if missing:
         raise AssertionError(observed(notes, "the client listed no agent type for %s of %s "
                                       "harness roles, starting with %s"
