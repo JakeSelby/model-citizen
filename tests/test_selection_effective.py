@@ -40,11 +40,35 @@ def compaction_switch(variant):
 
 
 class CompactionPrecedenceTests(unittest.TestCase):
-    def test_the_frozen_set_is_every_variant_whose_switch_allows_compaction(self):
-        shipped = {p.stem for p in COST.glob("*.md")}
-        allowed = {v for v in shipped if compaction_switch(v) == "compact-allowed"}
-        self.assertEqual(set(rd.COMPACTION_ALLOWED), allowed)
-        self.assertIn("max", allowed)
+    def test_shipped_switches_determine_whether_compaction_is_a_miss(self):
+        for path in COST.glob("*.md"):
+            with self.subTest(variant=path.stem):
+                found = rd.run(SESSION, {"cost": path.stem}, strict=True)
+                self.assertEqual(COMPACT not in found,
+                                 compaction_switch(path.stem) == "compact-allowed")
+
+    def test_custom_inheritance_and_explicit_switches_determine_compaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            primitives = home / "custom"
+            cost = primitives / "stances" / "cost"
+            cost.mkdir(parents=True)
+            cfg = home / ".config" / "agent-harness" / "config.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text(json.dumps({"primitive_roots": [str(primitives)]}))
+            variants = {
+                "inherited": {"extends": "max"},
+                "explicit": {"extends": "balanced", "switches": {"compaction": "compact-allowed"}},
+                "restricted": {"extends": "max", "switches": {"compaction": "clear-only"}},
+            }
+            for name, data in variants.items():
+                (cost / (name + ".json")).write_text(json.dumps(dict(schema_version=1, **data)))
+                (cost / (name + ".md")).write_text("# Custom cost\n")
+            with patch.dict(os.environ, {"HOME": tmp, "HARNESS_HOME": tmp}):
+                for name in variants:
+                    with self.subTest(variant=name):
+                        found = rd.run(SESSION, {"cost": name}, strict=True)
+                        self.assertEqual(COMPACT in found, name == "restricted")
 
     def test_a_compaction_under_max_is_not_counted_as_a_miss(self):
         self.assertNotIn(COMPACT, rd.run(SESSION, {"cost": "max"}, strict=True))
