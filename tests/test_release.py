@@ -44,6 +44,38 @@ class ReleaseTests(unittest.TestCase):
         self.assertIn("architecture-viewer preview is inert", text)
         self.assertIn("### Recovery", text)
 
+    def test_release_notes_disclose_carried_evidence_and_the_bootstrap_exception(self):
+        module = load("release_notes")
+        data = {"clients": [], "qualification_reuse": {
+            "schema_version": 1, "kind": "v0.14.1-bootstrap", "prior_version": "0.14.0",
+            "prior_tag": "v0.14.0", "evidence_version": "0.14.0",
+            "qualification_source_commit": "a" * 40,
+            "includes_bootstrap_exception": True,
+            "limitation": "Native evidence for v0.14.0 was carried into v0.14.1 under the "
+                          "one-release v0.14.1 bootstrap exception; no native client was rerun."}}
+        with patch.object(module.compatibility, "catalog", return_value=data):
+            text = module.notes()
+        self.assertIn("Native evidence for v0.14.0 was carried into v0.14.1", text)
+        self.assertIn("one-release v0.14.1 bootstrap exception", text)
+        self.assertIn("no native client was rerun.", text)
+
+    def test_successful_preflight_names_the_carried_qualification_basis(self):
+        module = load("release_preflight")
+        data = {"harness_version": "1.2.4", "qualification_reuse": {
+            "schema_version": 1, "kind": "carry-forward", "prior_version": "1.2.3",
+            "prior_tag": "v1.2.3", "evidence_version": "1.2.3",
+            "qualification_source_commit": "a" * 40,
+            "includes_bootstrap_exception": False,
+            "limitation": "Native evidence for v1.2.3 was carried forward through v1.2.3; "
+                          "no native client was rerun for v1.2.4."}}
+        with patch.object(module, "check", return_value=[]), \
+                patch.object(module.compatibility, "catalog", return_value=data), \
+                patch.object(sys, "argv", ["release_preflight.py"]), \
+                patch("builtins.print") as printed:
+            self.assertEqual(module.main(), 0)
+        self.assertIn("Native evidence for v1.2.3 was carried forward through v1.2.3",
+                      printed.call_args.args[0])
+
     def test_release_notes_reject_stale_or_incomplete_migration_metadata(self):
         module = load("release_notes")
         with tempfile.TemporaryDirectory() as temp:

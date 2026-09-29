@@ -2,13 +2,29 @@
 
 # Model Citizen
 
-Formerly Agent Harness.
-
 [![CI](https://github.com/JakeSelby/model-citizen/actions/workflows/ci.yml/badge.svg)](https://github.com/JakeSelby/model-citizen/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 [![Reference](https://img.shields.io/badge/reference-model--citizen.dev-d97706.svg)](https://model-citizen.dev)
 ![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/JakeSelby/model-citizen?utm_source=oss&utm_medium=github&utm_campaign=JakeSelby%2Fmodel-citizen&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews)
+
+[Privacy](docs/privacy.md)
+
+### Data and external services in the Claude Directory plugin
+
+The plugin does not contact a Model Citizen-operated service. Some workflows can contact other
+services when you ask Claude Code to perform the corresponding work:
+
+- `git` and `gh` can send repository content and metadata, issue or pull-request text, and related
+  account information to GitHub or the remote you configured.
+- Web-capable roles can send URLs and search queries through Claude Code's WebFetch and WebSearch
+  tools to retrieve public web content.
+- A workflow can use another tool or service you explicitly choose for the task.
+
+These actions are user-directed, remain subject to Claude Code's native permissions, and are
+governed by the selected service's terms and privacy policy. The plugin has no background data
+transmission. See the [privacy policy](docs/privacy.md) for the boundary between this plugin and
+the separately installed harness.
 
 ## The control plane for your coding agents, however you run them.
 
@@ -44,7 +60,7 @@ Sync keeps a journal of what it changed and refuses to overwrite what it does no
 - [Reversible](docs/settings-ownership.md): Sync has a dry run, diff shows drift, an ownership journal records prior and applied values, and uninstall restores what it adopted.
 - [Shared primitives](docs/sync-model.md): Rules, skills, roles and workflows live in one place and sync into each runtime's native settings. Switch one off and sync leaves it out of both.
 - [Same policy on both](docs/runtime-controls.md): A Claude Code spawn and a Codex spawn resolve to the same delegation policy.
-- [Declared integrations](docs/bmad.md): A planning framework declares itself in one descriptor. citizen integration check|apply installs its overrides, and the spawn hook confines its review layers.
+- [Declared integrations](docs/bmad.md): A planning framework declares itself in one descriptor. bin/citizen integration check|apply installs its overrides, and the spawn hook confines its review layers.
 - [Honest compatibility](docs/compatibility.md): The catalog says which clients are qualified and where the gaps are: two runtimes today, and the headline does not claim more.
 - [Worktrees and workspaces](docs/workspaces.md): Each agent works in its own worktree and claims the paths it writes. Your .code-workspace files decide which repositories a session sees, instructions included.
 
@@ -74,12 +90,12 @@ Most agent output is a wall of text. This puts the verdict first and the ask whe
 Every project in this field writes instructions and hopes. Here a rule nobody can observe is a rule nobody can prune, and lint says so before the commit lands.
 
 Every rule names a deterministic detector over the agent's own transcript, or says in one line why nothing in a transcript can decide it,
-and lint fails the commit otherwise. `citizen usage --rules` then reports how often each rule fired,
+and lint fails the commit otherwise. `bin/citizen usage --rules` then reports how often each rule fired,
 grouped by repository and by the preference variant you had selected at the time.
 
 - [Detector or reason](primitives/rules): Every rule names a deterministic detector over the transcript, or says in one line why nothing in a transcript can decide it. Lint fails the commit otherwise.
-- [Hit rate per rule](docs/usage.md): citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.
-- [Cache prefix held](docs/usage.md): citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.
+- [Hit rate per rule](docs/usage.md): bin/citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.
+- [Cache prefix held](docs/usage.md): bin/citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.
 - [What is detected](claude/hooks/rule-detectors.py): Nineteen deterministic detectors read the transcript: whole-file reads, unverified pushes, secrets in a write, banned openers, non-conventional commits.
 - [Caught in the act](docs/field-scan.md): The instrument has already caught two of this repository's own shipped features doing nothing. Both are filed as issues, not hidden.
 - [Exports where you already look](docs/telemetry.md): The same ledger exports over OTLP, off by default, to Langfuse, Phoenix or Opik, adding the one thing they cannot see: which rule fired.
@@ -89,7 +105,7 @@ grouped by repository and by the preference variant you had selected at the time
 Reasonable developers disagree about testing, autonomy and how much to delegate. Nine axes, each a named choice: three bind to enforcement today, the rest are prose that swaps cleanly.
 
 - [Stance dimensions and variants](primitives/stances): Autonomy, delegation, testing, cost, voice, commits, planning, licensing and build versus buy.
-- [User, project, session](docs/preferences.md): Set a default or pick a mode, override it for one repo or session, and the agent follows the override from its next session. citizen selection shows what set each unit.
+- [User, project, session](docs/preferences.md): Set a default or pick a mode, override it for one repo or session, and the agent follows the override from its next session. bin/citizen selection shows what set each unit.
 - [Write your own](docs/primitive-authoring.md): A new stance dimension is a folder of Markdown files. No fork needed.
 - [See one switch end to end](docs/stance-demo.md): The demo flips delegation and shows what changes in both runtimes.
 - [Autonomy stances](primitives/stances/autonomy): Execute, confirm-writes or ask. The choice sets which shell-command grade stops and asks; it is enforced, not advised.
@@ -131,7 +147,7 @@ harness; each choice can be changed independently, and you can add your own dime
 | Build versus buy | `capability-ceiling`, `off` |
 
 Some stances are advisory instructions. Others also select implemented hooks or native settings.
-`bin/harness stances --json` shows the resolved choice, adapter mode and qualification status for
+`bin/citizen stances --json` shows the resolved choice, adapter mode and qualification status for
 each one. A stance never overrides a client's native restriction.
 
 **Useful defaults. Preferences you can change. Primitives you can extend.**
@@ -162,14 +178,14 @@ trunk and can be ahead of any release:
 git clone --branch stable https://github.com/JakeSelby/model-citizen.git ~/repos/agent-harness
 cd ~/repos/agent-harness
 
-bin/harness config set claude.manage true
-bin/harness config set codex.manage true
-bin/harness config set vscode.manage false
+bin/citizen config set claude.manage true
+bin/citizen config set codex.manage true
+bin/citizen config set vscode.manage false
 
-bin/harness sync --dry-run
+bin/citizen sync --dry-run
 # Review every proposed link, rendered file, setting and conflict.
-bin/harness sync
-bin/harness doctor
+bin/citizen sync
+bin/citizen doctor
 ```
 
 Set either runtime to `false` if you do not use it; neither runtime requires the other. Set
@@ -183,16 +199,18 @@ trust if prompted. [Start with the full guide](docs/getting-started.md).
 
 ## Release status
 
-**Release status:** `0.14.0` is a release candidate, awaiting native qualification on the two
-required Claude Code CLI targets, macOS and Linux, listed below. `0.13.1` is the current stable
-release; its shared engine, adapters, configuration and hook decisions are qualified on those
-same two targets. The Codex CLI is outside the 0.13.1 contract and the 0.14.0 candidate's until
-a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
+**Release status:** `0.14.2` is the current stable release. Its shared engine, adapters,
+configuration and hook decisions are qualified from complete scripted records on the two
+required Claude Code CLI targets, macOS and Linux. The independent hand comparisons tracked by
+#741 were explicitly deferred to v0.15.0 and remain a stated limitation. The Codex CLI is outside
+the 0.14.2 contract until a scripted qualification round agrees with a hand-driven one; `0.11.1` remains the last release
 qualified on the Codex CLI for macOS and Linux, so if you need a qualified Codex floor, install
 that tag.
 
 <!-- harness:compatibility:start -->
-**Unqualified:** `claude-code-cli-macos`, `claude-code-vscode-macos`, `claude-code-cli-linux`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
+**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`.
+
+**Unqualified:** `claude-code-vscode-macos`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
 
 **Planned:** `cursor`, `grok`.
 
@@ -221,11 +239,11 @@ This transcript was captured with Claude and Codex enabled in disposable configu
 Excerpts are shortened; paths and unrelated stances are omitted.
 
 ```console
-$ bin/harness config set stances.delegation tiered
+$ bin/citizen config set stances.delegation tiered
 stances.delegation = "tiered"  (.../.config/agent-harness/config.json)
-run `citizen sync` to apply it
+run `bin/citizen sync` to apply it
 
-$ bin/harness stances --json
+$ bin/citizen stances --json
 "delegation": {
   "variant": "tiered",
   "behavior": "# Delegation stance: tiered models\n\n**Gather with subagents ..."
@@ -233,16 +251,16 @@ $ bin/harness stances --json
 "claude-code": { "delegation": { "mode": "instruction-and-hook", "qualification": "unqualified" } }
 "codex":       { "delegation": { "mode": "instruction-and-hook", "qualification": "unqualified" } }
 
-$ bin/harness config set stances.delegation off
+$ bin/citizen config set stances.delegation off
 stances.delegation = "off"  (.../.config/agent-harness/config.json)
 
-$ bin/harness stances --json
+$ bin/citizen stances --json
 "delegation": {
   "variant": "off",
   "behavior": "# Delegation stance: off\n\nDo not spawn subagents unless the user asks ..."
 }
 
-$ bin/harness sync --dry-run
+$ bin/citizen sync --dry-run
 stances: ... delegation=off ...
 link  .../claude/rules/harness-stances/delegation.md -> .../primitives/stances/delegation/off.md
 codex hooks registered; native hook trust must be accepted in the client
@@ -275,7 +293,7 @@ flowchart LR
 `primitives/` is the authoring authority for rules, stances, skills, roles, workflows and
 presentation. `policy/` implements shared lifecycle decisions; `adapters/` translates them into
 runtime-specific controls. Paths under `claude/` are generated views or compatibility links, not a
-second catalog. Run `bin/harness catalog` for source digests and `bin/harness generate --check` for
+second catalog. Run `bin/citizen catalog` for source digests and `bin/citizen generate --check` for
 projection drift.
 
 Custom prose stances are advisory unless you also implement and register corresponding policy.
@@ -289,12 +307,12 @@ unverified. Hosted agents and native memory merging are also deferred.
 
 The `cost` stance sets a working posture (effort, fan-out and cache habits), not a hard dollar cap.
 Model access remains billed by the provider or covered by a subscription, and there is no claimed
-savings benchmark. `bin/harness usage` summarizes available local session measurements, labels
+savings benchmark. `bin/citizen usage` summarizes available local session measurements, labels
 partial data and leaves unavailable metrics unknown. It does not send telemetry to a service.
 Read [usage and its limits](docs/usage.md).
 
 Each variant also carries a resolved table: a model class, a reasoning effort and a soft budget for
-each shared role and for each of the three work bands, which `bin/harness stances --json` prints.
+each shared role and for each of the three work bands, which `bin/citizen stances --json` prints.
 A subagent brief states the budget its row expects; a subagent past it finishes or returns and says
 why, and nothing is truncated. A spawn that names no role is routed to the variant's default band
 worker, which is the only way a posture's effort reaches a spawn that named nothing. While a
@@ -306,14 +324,14 @@ budgets. All of it is a working posture and local measurement; none of it is a s
 If you also want the harness to provision missing tools, use the broader installation path:
 
 ```sh
-bin/harness init
-bin/harness install --dry-run
-bin/harness install
-bin/harness doctor
+bin/citizen init
+bin/citizen install --dry-run
+bin/citizen install
+bin/citizen doctor
 ```
 
 `install` can install applications and packages as well as synchronize configuration. Review
-`bin/harness install --help` first; flags can skip Homebrew, apps, VS Code or Codex. Existing
+`bin/citizen install --help` first; flags can skip Homebrew, apps, VS Code or Codex. Existing
 user-owned files, credentials, model choices, MCP servers and plugins are not silently replaced.
 
 The harness tracks fields and files it owns. `uninstall` restores a previous value only when the
@@ -343,9 +361,9 @@ Installed links may point at the checkout, so contribute from a managed worktree
 gate is:
 
 ```sh
-python3 bin/harness lint
+bin/citizen lint
 python3 -m unittest discover -s tests
-bin/harness generate --check
+bin/citizen generate --check
 ```
 
 If the idea of user-owned working preferences across agents is useful, try the dry run, open an

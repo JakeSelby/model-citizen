@@ -10,6 +10,7 @@ import os
 import tempfile
 import unittest
 import unittest.mock
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from test_harness import harness, REPO
@@ -33,6 +34,26 @@ class MarketplaceManifestTests(unittest.TestCase):
         self.assertEqual(len(MARKETPLACE["plugins"]), 1)
         self.assertTrue(entry()["description"])
 
+    def test_the_plugin_listing_links_to_public_documentation_and_support(self):
+        self.assertEqual(PLUGIN["documentationUrl"], "https://model-citizen.dev/")
+        self.assertEqual(PLUGIN["supportUrl"],
+                         "https://github.com/JakeSelby/model-citizen/issues")
+
+    def test_the_plugin_listing_links_to_its_privacy_policy(self):
+        self.assertEqual(
+            PLUGIN["privacyPolicyUrl"],
+            "https://github.com/JakeSelby/model-citizen/blob/main/docs/privacy.md",
+        )
+        self.assertTrue((REPO / "docs" / "privacy.md").is_file())
+        self.assertIn("[Privacy](docs/privacy.md)", (REPO / "README.md").read_text())
+
+    def test_the_readme_discloses_directory_plugin_external_services(self):
+        readme = (REPO / "README.md").read_text()
+        self.assertIn("Data and external services in the Claude Directory plugin", readme)
+        self.assertIn("repository content and metadata", readme)
+        self.assertIn("WebFetch and WebSearch", readme)
+        self.assertIn("native permissions", readme)
+
     def test_the_entry_resolves_to_the_plugin_manifest_rather_than_copying_it(self):
         source = (REPO / entry()["source"]).resolve()
         self.assertTrue((source / ".claude-plugin" / "plugin.json").is_file())
@@ -43,6 +64,27 @@ class MarketplaceManifestTests(unittest.TestCase):
         targets = [PLUGIN["skills"], PLUGIN["commands"], PLUGIN["outputStyles"], *PLUGIN["agents"]]
         for target in targets:
             self.assertTrue((REPO / target).exists(), msg=target)
+            self.assertFalse((REPO / target).is_symlink(), msg=target)
+
+    def test_the_directory_icon_is_a_regular_square_svg(self):
+        icon = REPO / ".claude-plugin" / "icon.svg"
+        self.assertTrue(icon.is_file())
+        self.assertFalse(icon.is_symlink())
+        root = ET.parse(icon).getroot()
+        self.assertEqual(root.attrib["width"], root.attrib["height"])
+        self.assertGreaterEqual(int(root.attrib["width"]), 128)
+
+    def test_complex_command_argument_hints_are_quoted(self):
+        commands = list((REPO / "claude" / "commands").glob("*.md"))
+        commands += list((REPO / "primitives" / "workflows").glob("*.md"))
+        for command in commands:
+            block = command.read_text(encoding="utf-8").split("---", 2)[1]
+            hints = [line.split(":", 1)[1].strip() for line in block.splitlines()
+                     if line.startswith("argument-hint:")]
+            for hint in hints:
+                if hint.count("[") > 1 or ": " in hint:
+                    self.assertTrue(hint.startswith(('"', "'")), msg=command.name)
+                    self.assertEqual(hint[-1], hint[0], msg=command.name)
 
     def test_the_plugin_ships_no_hooks_because_a_synced_home_already_registers_them(self):
         # Plugin hooks merge with user hooks rather than replacing them, so a machine running

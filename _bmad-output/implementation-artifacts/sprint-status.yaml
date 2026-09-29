@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-26"
+generated: "2026-09-28"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -46,12 +46,13 @@ development_status:
   ah-s088-qualify-codex-vs-code-and-desktop-for-0-9-0: done
 
   ah-e002-complete-the-harness-stance-and-settings: in-progress
+  ah-b118-citizen-config-cannot-unset-workspaces-dir-so: done
   ah-c045-say-once-that-subagents-never-message-each-other: done
   ah-c046-reserve-bmad-ids-for-the-orchestration-conflict: done
-  ah-d002-decide-how-project-and-session-stance-selections: ready-for-dev
+  ah-d002-decide-how-project-and-session-stance-selections: done
   ah-d007-hold-semantic-retrieval-over-the-session-archive: ready-for-dev
-  ah-d009-decide-whether-the-session-archive-may-store-the: ready-for-dev
-  ah-s034-make-existing-stance-selections-effective-across: ready-for-dev
+  ah-d009-decide-whether-the-session-archive-may-store-the: done
+  ah-s034-make-existing-stance-selections-effective-across: done
   ah-s035-separate-verification-policy-from-test-writing: ready-for-dev
   ah-s036-make-external-action-approval-configurable: ready-for-dev
   ah-s037-make-delegation-topology-configurable-without: ready-for-dev
@@ -67,13 +68,13 @@ development_status:
   ah-s047-document-invariants-and-enforce-end-to-end: ready-for-dev
   ah-s089-add-a-shared-architecture-viewer-capability-and: done
   ah-s169-ship-the-first-stance-constraints-the-delegation: done
-  ah-s190-write-intent-ledger-builders-claim-paths-and-a: ready-for-dev
+  ah-s190-write-intent-ledger-builders-claim-paths-and-a: done
   ah-s191-harness-sessions-a-durable-cross-runtime-session: ready-for-dev
   ah-s192-session-recall-a-pull-based-tool-over-the: ready-for-dev
   ah-s219-architecture-viewer-the-mailbox-adapter-behind: ready-for-dev
   ah-s221-log-every-session-archive-search-with-a: ready-for-dev
-  ah-s271-workspace-map-from-code-workspace-files-with: ready-for-dev
-  ah-s272-workspace-members-instructions-at-session-start: ready-for-dev
+  ah-s271-workspace-map-from-code-workspace-files-with: done
+  ah-s272-workspace-members-instructions-at-session-start: done
   ah-sp008-choose-the-neutral-session-turn-row-nirsession: ready-for-dev
 
   ah-e003-close-the-loop-jev-as-the-controller-between: in-progress
@@ -106,8 +107,8 @@ development_status:
   ah-s220-report-stance-drift-and-propose-promotions-or: ready-for-dev
   ah-s230-replay-judge-a-one-policy-arm-pair-on-cost-per: ready-for-dev
   ah-s245-jev-compliance-packs-calibrated-on-hand-labels: backlog
-  ah-s266-local-governance-add-coding-pr-merge-a-user: ready-for-dev
-  ah-s270-local-governance-bind-the-decision-provider-into: ready-for-dev
+  ah-s266-local-governance-add-coding-pr-merge-a-user: done
+  ah-s270-local-governance-bind-the-decision-provider-into: done
   ah-sp001-jev-verify-stop-claims-against-gate-evidence: ready-for-dev
   ah-sp002-jev-evaluate-advisory-action-risk-and-tool: done
   ah-sp003-jev-evaluate-short-source-to-output-fidelity: done
@@ -145,7 +146,7 @@ development_status:
   ah-c039-run-the-detector-corpus-in-ci-and-label-the: done
   ah-c040-capped-reads-ask-for-newest-first-and-assert-the: done
   ah-c041-log-the-enterprise-review-roadmap-intake: done
-  ah-c055-align-product-json-on-the-way-entries-with-the: ready-for-dev
+  ah-c055-align-product-json-on-the-way-entries-with-the: done
   ah-s095-publish-a-two-runtime-proof-and-reproducible: ready-for-dev
   ah-s096-run-a-focused-external-developer-feedback-cohort: ready-for-dev
   ah-s097-stage-the-public-launch-after-onboarding: ready-for-dev
@@ -184,17 +185,17 @@ development_status:
 
   ah-e011-a-configurable-layer-under-your-skill-library: in-progress
   ah-c048-docs-for-the-selection-model-modes-and-the-four: ready-for-dev
-  ah-c049-qualify-and-tag-the-release: ready-for-dev
+  ah-c049-qualify-and-tag-the-release: done
   ah-c050-reserve-bmad-ids-for-the-v0-14-0-release-issues: done
-  ah-s197-one-selection-document-and-one-resolver: ready-for-dev
-  ah-s198-hook-ids-and-the-hooks-switch-kind: ready-for-dev
-  ah-s199-rules-skills-workflows-and-roles-as-switch-kinds: ready-for-dev
-  ah-s200-modes-named-selection-bundles: ready-for-dev
+  ah-s197-one-selection-document-and-one-resolver: done
+  ah-s198-hook-ids-and-the-hooks-switch-kind: done
+  ah-s199-rules-skills-workflows-and-roles-as-switch-kinds: done
+  ah-s200-modes-named-selection-bundles: done
   ah-s201-delegated-stance-variants-the-superpowers-mode: ready-for-dev
-  ah-s202-replay-arms-as-built-profiles-with-pair-parity: ready-for-dev
-  ah-s203-the-first-four-arm-live-set: ready-for-dev
+  ah-s202-replay-arms-as-built-profiles-with-pair-parity: done
+  ah-s203-record-the-powered-two-arm-proof-set-for: ready-for-dev
   ah-s204-copy-the-layer-under-your-agents-skills: ready-for-dev
-  ah-s232-module-manifest-claims-surface-instruments-slot: ready-for-dev
+  ah-s232-module-manifest-claims-surface-instruments-slot: done
   ah-s244-the-slot-model-and-the-adapter-contract: backlog
   ah-s246-the-four-arm-bench-and-layer-swaps: backlog
   ah-s321-four-arm-replay-the-superpowers-arms-and-pair: backlog
@@ -225,25 +226,26 @@ development_status:
 
   ah-e013-measurement-the-cost-benchmark-detector: in-progress
   ah-b095-the-delegation-stance-never-fires-zero-subagent: backlog
+  ah-b117-adherence-emissions-are-never-settled-in-a-live: done
   ah-b119-the-harness-arm-s-image-holds-a-checkout-with: backlog
   ah-s138-record-the-first-live-cost-replay-results: done
   ah-s194-trim-the-harness-s-12-607-token-standing-context: ready-for-dev
   ah-s215-tighten-the-two-detectors-the-corpus-records: ready-for-dev
-  ah-s233-stamp-the-profile-fingerprint-on-every-ledger: ready-for-dev
-  ah-s234-attribute-context-tokens-and-hook-decisions-to: ready-for-dev
-  ah-s235-zero-footprint-observation-watching-the-bare-arm: ready-for-dev
-  ah-s236-adherence-events-record-each-recommendation-and: ready-for-dev
-  ah-s237-replay-fix-the-six-defects-that-keep-the-two: ready-for-dev
-  ah-s238-an-evidence-standard-and-a-pre-registration: ready-for-dev
+  ah-s233-stamp-the-profile-fingerprint-on-every-ledger: done
+  ah-s234-attribute-context-tokens-and-hook-decisions-to: done
+  ah-s235-zero-footprint-observation-watching-the-bare-arm: done
+  ah-s236-adherence-events-record-each-recommendation-and: done
+  ah-s237-replay-fix-the-six-defects-that-keep-the-two: done
+  ah-s238-an-evidence-standard-and-a-pre-registration: done
   ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
   ah-s240-replay-a-task-set-sized-by-power-analysis-long: backlog
   ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: backlog
   ah-s242-the-soft-estimate-report-adherence-rate-and-the: backlog
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
-  ah-s252-replay-charges-the-user-s-personal-layer-to-the: backlog
+  ah-s252-replay-charges-the-user-s-personal-layer-to-the: done
   ah-s253-record-the-cli-s-own-account-of-the-loaded: backlog
-  ah-s254-price-every-rule-stance-variant-skill-and-agent: ready-for-dev
+  ah-s254-price-every-rule-stance-variant-skill-and-agent: done
   ah-s255-replay-stored-transcripts-through-the-rule: backlog
   ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: backlog
@@ -251,34 +253,34 @@ development_status:
   ah-s259-per-rule-cost-attribution-across-the-whole: backlog
 
   ah-e014-qualify-a-release-in-one-round-and-let-its: in-progress
-  ah-b073-a-resumed-qualification-round-reruns-completed: ready-for-dev
-  ah-b096-provisioning-leaves-an-untracked-marker-in-the: ready-for-dev
+  ah-b073-a-resumed-qualification-round-reruns-completed: done
+  ah-b096-provisioning-leaves-an-untracked-marker-in-the: done
   ah-b097-cli-ergonomics-found-by-the-first-live: backlog
   ah-c043-qualify-the-required-cli-targets-and-restore-the: done
   ah-c052-open-the-0-13-0-candidate: done
-  ah-c053-ci-check-the-python-3-9-floor-on-every-pull: ready-for-dev
-  ah-d008-decide-whether-qualification-evidence-is: ready-for-dev
+  ah-c053-ci-check-the-python-3-9-floor-on-every-pull: done
+  ah-d008-decide-whether-qualification-evidence-is: done
   ah-d010-decide-whether-a-release-may-require-codex-cli: ready-for-dev
-  ah-d011-decide-whether-a-red-smoke-tier-blocks-the: ready-for-dev
+  ah-d011-decide-whether-a-red-smoke-tier-blocks-the: done
   ah-s209-compatibility-catalog-an-explicit-waiver-for-a: ready-for-dev
-  ah-s214-acceptance-runner-use-the-codex-session-login-in: ready-for-dev
+  ah-s214-acceptance-runner-use-the-codex-session-login-in: done
   ah-s243-proof-set-1-the-proof-bundle-harness-evidence: backlog
   ah-t013-amend-the-0-12-0-release-notes-with-the-work: done
 
   ah-e015-guardrails-and-runtime-parity-close-the-gaps: in-progress
   ah-b022-output-filter-rewrites-never-reach-codex: ready-for-dev
   ah-b023-isolated-role-workers-stall-without-network: ready-for-dev
-  ah-b024-harness-sync-ignores-harness-stance-variables: ready-for-dev
+  ah-b024-harness-sync-ignores-harness-stance-variables: done
   ah-b047-harness-task-save-writes-an-absolute-path-its: ready-for-dev
   ah-b049-harness-worktree-remove-cannot-finish-a-checkout: ready-for-dev
   ah-b064-plugin-channel-constrained-roles-install: ready-for-dev
   ah-b067-stop-gate-interleaved-sessions-in-one-checkout: done
   ah-b068-hide-an-installed-codex-client-from-the-reviewer: done
   ah-b070-sync-dry-run-words-its-summary-lines-as-if-it: ready-for-dev
-  ah-b072-delegation-off-the-spawn-hook-emits-ask-while: ready-for-dev
+  ah-b072-delegation-off-the-spawn-hook-emits-ask-while: done
   ah-c060-docs-the-standalone-measurement-page-still-calls: ready-for-dev
-  ah-s216-harness-usage-separate-workflow-rows-and-stop: ready-for-dev
-  ah-s217-guard-the-workflow-tool-launch-log-it-honour: ready-for-dev
+  ah-s216-harness-usage-separate-workflow-rows-and-stop: done
+  ah-s217-guard-the-workflow-tool-launch-log-it-honour: done
   ah-s248-codex-parity-ingest-codex-telemetry-and-add-a: backlog
 
   ah-e016-harden-bmad-traceability-for-many-sessions: in-progress
@@ -297,12 +299,12 @@ development_status:
 
   ah-e017-bring-the-code-into-line-with-the-2026-09-23: in-progress
   ah-c054-one-kernel-helper-for-atomic-whole-file-rewrites: ready-for-dev
-  ah-s210-resolve-stances-only-through-posture-py-and: ready-for-dev
-  ah-s211-ledger-rows-carry-a-schema-version-and-readers: ready-for-dev
+  ah-s210-resolve-stances-only-through-posture-py-and: done
+  ah-s211-ledger-rows-carry-a-schema-version-and-readers: done
   ah-s212-remote-control-pin-the-verified-client-versions: ready-for-dev
 
   ah-e018-cut-cache-rebuild-spend-in-long-interactive: in-progress
-  ah-c067-reserve-ids-and-write-story-files-for-the-cache: ready-for-dev
+  ah-c067-reserve-ids-and-write-story-files-for-the-cache: done
   ah-s227-harness-usage-by-rebuild-attribute-cache: ready-for-dev
   ah-s228-refresh-the-handoff-at-task-boundaries-in-land: ready-for-dev
   ah-s229-cold-resume-guard-hold-one-prompt-after-a-long: ready-for-dev
@@ -312,13 +314,13 @@ development_status:
   ah-e019-adopt-bmad-s-native-ticketing-once-upstream-s: in-progress
   ah-c073-record-the-bmad-ticketing-adoption-epic-and-its: done
 
-  ah-e020-rename-the-product-to-model-citizen: in-progress
-  ah-b109-bmad-issue-sync-py-new-and-apply-fail-with-http: ready-for-dev
-  ah-c078-record-the-model-citizen-rename-s-sprint-change: ready-for-dev
-  ah-c079-point-hardcoded-links-at-the-new-repo-and-domain: ready-for-dev
-  ah-s267-add-the-citizen-command-and-keep-harness-as-an: ready-for-dev
-  ah-s268-rename-the-plugin-to-model-citizen-and-keep: ready-for-dev
-  ah-s269-rename-the-product-copy-to-model-citizen: ready-for-dev
+  ah-e020-rename-the-product-to-model-citizen: done
+  ah-b109-bmad-issue-sync-py-new-and-apply-fail-with-http: done
+  ah-c078-record-the-model-citizen-rename-s-sprint-change: done
+  ah-c079-point-hardcoded-links-at-the-new-repo-and-domain: done
+  ah-s267-add-the-citizen-command-and-keep-harness-as-an: done
+  ah-s268-rename-the-plugin-to-model-citizen-and-keep: done
+  ah-s269-rename-the-product-copy-to-model-citizen: done
 
   ah-e021-run-a-burndown-bot-for-owner-labelled-bugs-and: in-progress
   ah-s273-keep-bot-work-out-of-benchmark-task-mining-and: ready-for-dev
@@ -332,8 +334,8 @@ development_status:
   ah-sp016-spike-which-identity-and-surface-can-trigger: ready-for-dev
 
   ah-e022-open-the-studio-one-local-ui-that-shows-the: in-progress
-  ah-c082-file-the-studio-epics-and-stories: ready-for-dev
-  ah-c083-record-the-studio-field-check-as-a-research: ready-for-dev
+  ah-c082-file-the-studio-epics-and-stories: done
+  ah-c083-record-the-studio-field-check-as-a-research: done
   ah-s281-citizen-studio-start-open-detach-check-and-stop: backlog
   ah-s282-lock-the-studio-to-its-launcher-token-host-and: backlog
   ah-s283-the-studio-s-front-end-workspace-committed: backlog
@@ -347,7 +349,7 @@ development_status:
   ah-t035-write-the-studio-s-ux-specification: backlog
   ah-t036-record-the-studio-s-architecture-decisions-in: backlog
 
-  ah-e023-tune-in-the-studio-drafts-for-every-change: backlog
+  ah-e023-tune-in-the-studio-drafts-for-every-change: in-progress
   ah-s290-drafts-create-list-diff-and-discard-a-draft-from: backlog
   ah-s291-change-mode-stance-variants-and-switches-in-a: backlog
   ah-s292-edit-identity-preferences-and-integrations-in-a: backlog
@@ -355,8 +357,9 @@ development_status:
   ah-s294-add-your-own-module-from-a-template-or-fork-a: backlog
   ah-s295-review-and-apply-a-draft-through-the-governed: backlog
   ah-s296-roll-back-an-applied-draft: backlog
+  ah-s325-configure-composition-slots-and-superpowers-in: ready-for-dev
 
-  ah-e024-run-from-the-studio-any-suite-or-single-test: backlog
+  ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress
   ah-s297-suite-catalog-and-run-supervisor-with-citizen: backlog
   ah-s298-run-store-every-run-recorded-with-benchmark-and: backlog
   ah-s299-launch-watch-and-stop-the-free-local-suites-from: backlog
@@ -366,16 +369,20 @@ development_status:
   ah-s303-run-native-acceptance-from-the-studio-case-by: backlog
   ah-s304-run-the-live-replay-benchmark-from-the-studio: backlog
   ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: backlog
-  ah-s306-run-the-four-arm-bench-layer-swaps-and-factorial: backlog
+  ah-s306-run-the-four-arm-bench-and-layer-swaps-from: backlog
   ah-s319-import-claude-plugin-eval-reports-into-the-run: backlog
+  ah-s324-adapt-studio-to-the-landed-measured-evaluation: ready-for-dev
+  ah-s327-run-factorial-switch-screens-from-studio: ready-for-dev
 
-  ah-e025-judge-in-the-studio-whether-a-change-helped: backlog
+  ah-e025-judge-in-the-studio-whether-a-change-helped: in-progress
   ah-s307-compare-two-runs-with-paired-intervals: backlog
   ah-s308-test-a-draft-run-it-against-its-base-and-report: backlog
   ah-s309-trends-across-versions-and-dates-beside-the: backlog
   ah-s310-rule-health-measurement-status-adherence-and: backlog
   ah-s311-spend-and-usage-from-the-local-ledger: backlog
   ah-s312-proposals-review-evidence-backed-stance: backlog
+  ah-s326-show-calibrated-compliance-judge-evidence-in: ready-for-dev
+  ah-s328-report-field-and-codex-evaluation-evidence-in: ready-for-dev
 
   ah-e026-adopt-the-studio-from-install-to-a-tuned-harness: backlog
   ah-s313-first-run-in-the-studio-from-install-to-an: backlog
@@ -443,31 +450,34 @@ development_status:
   ah-b084-spawn-confinement-checks-less-than-step-9-asks: done
   ah-b085-a-framework-layer-brief-the-orchestrator-rewords: ready-for-dev
   ah-b086-the-100-kb-grade-bash-timing-test-fails-under: done
-  ah-b087-an-isolated-worker-launched-from-a-token-only: ready-for-dev
-  ah-b088-a-role-confinement-refusal-writes-no-decision: ready-for-dev
-  ah-b089-the-confinement-refusal-names-a-harness-command: ready-for-dev
-  ah-b090-qualification-provisioning-installs-bmad-without: ready-for-dev
-  ah-b091-harness-role-run-accepts-a-read-directory-as: ready-for-dev
-  ah-b092-a-release-pull-request-cannot-pass-the-changelog: ready-for-dev
+  ah-b087-an-isolated-worker-launched-from-a-token-only: done
+  ah-b088-a-role-confinement-refusal-writes-no-decision: done
+  ah-b089-the-confinement-refusal-names-a-harness-command: done
+  ah-b090-qualification-provisioning-installs-bmad-without: done
+  ah-b091-harness-role-run-accepts-a-read-directory-as: done
+  ah-b092-a-release-pull-request-cannot-pass-the-changelog: done
   ah-b093-bmad-issue-sync-new-files-the-issue-then-fails: backlog
   ah-b094-harness-worktree-remove-cannot-remove-a-worktree: done
   ah-b098-grade-bash-timing-test-fails-on-wall-clock-under: done
-  ah-b099-fix-output-style-scannable-drops-claude-code-s: ready-for-dev
-  ah-b100-close-out-files-follow-ups-after-it-lands-so-the: ready-for-dev
-  ah-b101-fix-remote-control-files-an-agent-sends-cannot: ready-for-dev
-  ah-b102-sync-misreads-an-aliased-stance-link-as-a-user: ready-for-dev
-  ah-b104-fix-remote-control-sessions-a-host-starts-never: ready-for-dev
-  ah-b105-grade-bash-s-confirm-marker-is-refused-as-a: ready-for-dev
-  ah-b106-read-only-grammar-mis-tokenizes-a-closing: ready-for-dev
-  ah-b107-grade-bash-says-gh-repo-rename-locks-the: ready-for-dev
-  ah-b108-governance-attributes-a-piped-push-after-a: ready-for-dev
-  ah-b110-policy-file-guard-gates-commands-that-only: ready-for-dev
-  ah-b111-grade-bash-grades-a-redirect-only-segment-after: ready-for-dev
-  ah-b112-lock-the-intent-overlap-counter-s-read-modify: ready-for-dev
-  ah-b113-test-worker-context-budget-rewrites-a-tracked: ready-for-dev
-  ah-b114-the-governance-config-set-check-gates-commands: ready-for-dev
+  ah-b099-fix-output-style-scannable-drops-claude-code-s: done
+  ah-b100-close-out-files-follow-ups-after-it-lands-so-the: done
+  ah-b101-fix-remote-control-files-an-agent-sends-cannot: done
+  ah-b102-sync-misreads-an-aliased-stance-link-as-a-user: done
+  ah-b104-fix-remote-control-sessions-a-host-starts-never: done
+  ah-b105-grade-bash-s-confirm-marker-is-refused-as-a: done
+  ah-b106-read-only-grammar-mis-tokenizes-a-closing: done
+  ah-b107-grade-bash-says-gh-repo-rename-locks-the: done
+  ah-b108-governance-attributes-a-piped-push-after-a: done
+  ah-b110-policy-file-guard-gates-commands-that-only: done
+  ah-b111-grade-bash-grades-a-redirect-only-segment-after: done
+  ah-b112-lock-the-intent-overlap-counter-s-read-modify: done
+  ah-b113-test-worker-context-budget-rewrites-a-tracked: done
+  ah-b114-the-governance-config-set-check-gates-commands: done
   ah-b115-a-heredoc-that-only-names-the-user-config-path: backlog
   ah-b116-git-c-with-or-a-variable-resolves-a-push-to-an: backlog
+  ah-b120-directed-bmad-prompt-paths-can-evade-spawn: done
+  ah-b121-fix-skills-sh-discovery-for-five-invalid-skill: done
+  ah-b122-package-a-minimal-claude-directory-bundle-for-v0: done
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -508,15 +518,24 @@ development_status:
   ah-c070-open-the-0-13-1-candidate-for-the-landing-copy: done
   ah-c071-release-0-13-1-the-control-plane-landing-copy: done
   ah-c072-file-the-0-13-release-session-s-follow-ups: done
-  ah-c074-file-the-roadmap-s-new-stories-reserve-the: ready-for-dev
+  ah-c074-file-the-roadmap-s-new-stories-reserve-the: done
   ah-c075-re-derive-the-prd-s-stale-unreleased-status: backlog
-  ah-c076-file-the-coderabbit-build-session-s-follow-ups: ready-for-dev
-  ah-c077-add-the-bmad-issue-map-audit-to-the-agents-md: ready-for-dev
-  ah-c080-restore-headroom-in-the-always-loaded-budget: ready-for-dev
-  ah-c081-file-the-burndown-bot-epic-and-its-stories: ready-for-dev
-  ah-c084-file-the-studio-filing-session-s-follow-ups: ready-for-dev
-  ah-c085-move-repository-internal-agent-instructions-into: ready-for-dev
-  ah-c086-open-the-0-14-0-candidate: ready-for-dev
+  ah-c076-file-the-coderabbit-build-session-s-follow-ups: done
+  ah-c077-add-the-bmad-issue-map-audit-to-the-agents-md: done
+  ah-c080-restore-headroom-in-the-always-loaded-budget: done
+  ah-c081-file-the-burndown-bot-epic-and-its-stories: done
+  ah-c084-file-the-studio-filing-session-s-follow-ups: done
+  ah-c085-move-repository-internal-agent-instructions-into: done
+  ah-c086-open-the-0-14-0-candidate: done
+  ah-c087-reopen-qualification-state-after-v0-14-0: done
+  ah-c088-publish-v0-14-1-from-the-qualified-model-citizen: done
+  ah-c089-restore-v0-14-1-qualification-ancestry-before: done
+  ah-c090-reopen-qualification-state-after-v0-14-1: done
+  ah-c091-add-an-explicit-privacy-policy-for-directory: done
+  ah-c092-disclose-external-services-used-by-directory: done
+  ah-c093-publish-v0-14-2-with-the-claude-directory-bundle: done
+  ah-c094-rescope-the-delivery-roadmap-around-measured-and: ready-for-dev
+  ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
@@ -607,14 +626,16 @@ development_status:
   ah-s224-scripted-cases-drive-the-cli-with-the-contract: done
   ah-s225-round-2-unverified-cases-observe-what-happened: done
   ah-s226-docs-field-scan-credit-claude-md-doctor-and: done
-  ah-s231-adopt-coderabbit-review-and-clear-review-bot: ready-for-dev
+  ah-s231-adopt-coderabbit-review-and-clear-review-bot: done
   ah-s260-usage-feed-surface-a-running-agent-s-spend-mid: backlog
-  ah-s261-feat-voice-concise-voice-with-reply-shapes: ready-for-dev
+  ah-s261-feat-voice-concise-voice-with-reply-shapes: done
   ah-s262-rewrite-the-always-loaded-rules-in-plain: backlog
-  ah-s263-name-the-review-complete-signal-in-build-step-6: ready-for-dev
-  ah-s264-say-whether-land-waits-on-checks-that-are-not: ready-for-dev
-  ah-s265-grant-agents-a-standing-go-ahead-to-merge-pull: ready-for-dev
-  ah-s320-every-cost-efficacy-or-system-change-test-is-a: ready-for-dev
+  ah-s263-name-the-review-complete-signal-in-build-step-6: done
+  ah-s264-say-whether-land-waits-on-checks-that-are-not: done
+  ah-s265-grant-agents-a-standing-go-ahead-to-merge-pull: done
+  ah-s320-every-cost-efficacy-or-system-change-test-is-a: done
+  ah-s322-allow-documentation-only-patch-releases-to-carry: done
+  ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
@@ -629,10 +650,10 @@ development_status:
   ah-t008-rule-recognize-spawn-a-new-chat-as-a-cloud-run: done
   ah-t026-compatibility-step-8-says-a-resumed-session-is: done
   ah-t027-hand-compare-the-eleven-scripted-native-cases: backlog
-  ah-t028-close-the-round-5-assessment-s-should-fix-gaps: ready-for-dev
+  ah-t028-close-the-round-5-assessment-s-should-fix-gaps: done
   ah-t029-record-the-token-only-worker-login-limitation-in: done
   ah-t030-landing-copy-leads-with-another-tool-s-hero-and: done
   ah-t031-the-generated-compatibility-block-carries-an-em: backlog
-  ah-t032-add-a-merge-driver-for-the-bmad-issue-map-so: ready-for-dev
-  ah-t033-keep-plans-committed-by-build-lint-clean-in-this: ready-for-dev
-  ah-t034-let-bmad-code-review-run-without-halts-inside-an: ready-for-dev
+  ah-t032-add-a-merge-driver-for-the-bmad-issue-map-so: done
+  ah-t033-keep-plans-committed-by-build-lint-clean-in-this: done
+  ah-t034-let-bmad-code-review-run-without-halts-inside-an: done

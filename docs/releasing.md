@@ -22,6 +22,38 @@ change. What the release must carry before it can be tagged is the next section.
 
 ## Source and qualification
 
+### Carrying native evidence through a presentation-only patch
+
+A released patch may carry the preceding release's native evidence only when
+`compatibility/catalog.json` declares `qualification_reuse`. The declaration names the prior
+version, its immutable `v<version>` tag, the actual `evidence_version`, the exact
+`qualification_source_commit`, whether the chain includes the v0.14.1 bootstrap exception, and the
+validator's exact kind-specific no-rerun limitation. The candidate keeps every prior client, case,
+evidence path and digest, support state, invalidation claim and limitation byte-for-byte, then
+appends that one disclosure. Evidence files are never rewritten to name the patch.
+
+Preflight resolves `refs/tags/v<prior>^{commit}` once, uses that pinned commit for every read and
+comparison, proves it is an ancestor of the candidate, and requires a later patch in the same
+release line. Ordinary carry-forward permits changes only to `VERSION`, `README.md`, `CHANGELOG.md`,
+`product.json`, the three release records `compatibility/catalog.json`,
+`compatibility/freeze.json` and `compatibility/migration.json`, and files under `docs/`,
+`changelog.d/` and `_bmad-output/`. It classifies the whole release delta, so an installer,
+workflow, script or other executable change fails even when qualified runtime paths are unchanged.
+Any unavailable ref, changed claim, different digest, malformed limitation, unknown catalog field
+or ineligible path fails closed. When the prior release itself carried older evidence, preflight
+validates that earlier reuse, retains the version the evidence actually observed and carries the
+bootstrap disclosure through the chain. Release notes and preflight identify the evidence as
+carried rather than newly produced. After publication, validation uses the immutable current tag;
+later runtime edits remain readable as release drift and require new evidence.
+
+The `v0.14.1-bootstrap` kind is a one-release exception approved on 2026-09-27. In addition to the
+ordinary paths above, it permits only `lib/harness_core/compatibility.py`,
+`scripts/release_preflight.py`, `scripts/release_notes.py`, and their three existing test modules.
+It reuses v0.14.0 evidence for unchanged client-facing behavior; it does not call v0.14.1
+byte-identical or newly qualified, and it is invalid for every other version. Roll back a failed
+attempt by removing the reuse declaration and disclosure and leaving the previous tag and evidence
+untouched; do not move or replace either tag.
+
 1. Complete each native acceptance case in [compatibility](compatibility.md). Keep exact runtime,
    client and platform versions, source commit, observations and evidence digests. Resolve failed
    controls or record a deliberately narrower support contract before calling a client qualified.
@@ -34,6 +66,10 @@ change. What the release must carry before it can be tagged is the next section.
    [runbook](qualification-runbook.md) is the mechanics. The same hand comparison is owed once
    per case on its first live round. A Codex target reports `unverified` whatever it observed
    until `--home-confirmed` says its configuration home was compared against a hand run.
+   For v0.14.0 only, the owner approved qualifying the Claude Code CLI on macOS and Linux from
+   complete scripted records while deferring the independent hand comparisons to v0.15.0; the
+   catalog records the resulting case-specific limitations. This exception applies to no other
+   release, runtime or client surface.
    The scripted cases are executed at the `standard` capability class and their observations are
    assessed at `strong`; both classes are recorded in the evidence record and in the round
    record, and a round whose cheap executor would be the only reader of its own evidence is
@@ -114,10 +150,10 @@ change. What the release must carry before it can be tagged is the next section.
 
 Cut `release/v<version>` at the commit the round qualifies and record it in
 `compatibility/freeze.json` as `state: frozen` with that branch and full commit, then run every
-target on that branch so `main` keeps merging without invalidating evidence. `citizen freeze`
+target on that branch so `main` keeps merging without invalidating evidence. `bin/citizen freeze`
 prints the drift between the frozen commit and `origin/main` under the runtime source paths —
 `VERSION`, `bin`, `lib`, `adapters`, `primitives`, `policy`, `templates`, `config.example.json` —
-and `citizen freeze --merge-check <ref>` refuses a merge into the frozen branch that changes any of
+and `bin/citizen freeze --merge-check <ref>` refuses a merge into the frozen branch that changes any of
 them, because such a change costs part of the round again. How much of it is scoped per target: a
 change under one runtime's adapter directory invalidates only that runtime's targets, unless it
 touches a file shared code reads for every runtime, and a change to shared source invalidates them
@@ -175,7 +211,7 @@ The `--check` side of it runs inside `scripts/release_preflight.py`, which warns
 when `gh` is unauthenticated.
 
 `scripts/sync_about.py --apply` writes whatever `product.json` the *current checkout* holds. Run it
-only from a worktree fast-forwarded to `origin/main` (`bin/harness worktree create main-sync <repo>`,
+only from a worktree fast-forwarded to `origin/main` (`bin/citizen worktree create main-sync <repo>`,
 then `git merge --ff-only origin/main`); a stale checkout once reverted the About panel.
 
 ## Rollback
@@ -189,11 +225,11 @@ again.
 
 ## Release status
 
-The 0.14.0 candidate requires fresh native qualification for Claude Code CLI on macOS and
-Linux; until each carries evidence for this source, the preflight blocks publication. 0.13.1,
-the current release, qualifies those two targets. Codex CLI is not in its
+The 0.14.2 release qualifies Claude Code CLI on macOS and Linux from complete scripted
+records; #741's independent hand comparisons were explicitly deferred to v0.15.0 and remain a
+catalog limitation. Codex CLI is not in its
 contract: it is admitted once a scripted qualification round agrees with a hand-driven one, so
 0.11.1 remains the last release qualifying it. The VS Code surfaces and Codex Desktop are unqualified previews. The architecture-viewer
 integration is also a preview for a separately installed implementation, with no bundled viewer
 or distribution-clearance claim. The release is identified by the exact commit carrying the
-immutable `v0.14.0` tag. Never bypass the release preflight.
+immutable `v0.14.2` tag. Never bypass the release preflight.

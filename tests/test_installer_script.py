@@ -76,23 +76,23 @@ class InstallerScriptTests(unittest.TestCase):
         return subprocess.run(["/bin/sh", str(SCRIPT)], capture_output=True, text=True,
                               cwd=str(self.tmp.name), env=self.env(**over))
 
-    def harness(self, *args):
-        return subprocess.run(["python3", str(self.checkout / "bin" / "harness"), *args],
+    def citizen(self, *args):
+        return subprocess.run([str(self.checkout / "bin" / "citizen"), *args],
                               capture_output=True, text=True, cwd=str(self.checkout),
                               env=self.env())
 
     def test_a_fresh_home_is_cloned_configured_and_previewed_without_being_changed(self):
         first = self.run_script()
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        self.assertTrue((self.checkout / "bin" / "harness").exists())
+        self.assertTrue((self.checkout / "bin" / "citizen").exists())
         branch = subprocess.run(["git", "-C", str(self.checkout), "rev-parse", "--abbrev-ref", "HEAD"],
                                 check=True, capture_output=True, text=True).stdout.strip()
         self.assertEqual(branch, "stable")
         config = self.home / ".config" / "agent-harness" / "config.json"
         self.assertTrue(config.is_file())
         self.assertIn("dry run", first.stdout)
-        self.assertIn("bin/harness install", first.stdout)
-        self.assertIn("uninstall", first.stdout)
+        self.assertIn(f"{self.checkout}/bin/citizen install", first.stdout)
+        self.assertIn(f"{self.checkout}/bin/citizen uninstall", first.stdout)
         # The preview is a preview: no rule links, no instruction file, no runtime settings.
         claude = self.home / ".claude"
         self.assertEqual(sorted(p.name for p in claude.iterdir()) if claude.is_dir() else [], [])
@@ -113,10 +113,10 @@ class InstallerScriptTests(unittest.TestCase):
 
     def test_the_checkout_it_leaves_behind_still_syncs_and_uninstalls(self):
         self.assertEqual(self.run_script().returncode, 0)
-        synced = self.harness("sync")
+        synced = self.citizen("sync")
         self.assertEqual(synced.returncode, 0, synced.stdout + synced.stderr)
         self.assertTrue((self.home / ".claude" / "CLAUDE.md").is_symlink())
-        removed = self.harness("uninstall")
+        removed = self.citizen("uninstall")
         self.assertEqual(removed.returncode, 0, removed.stdout + removed.stderr)
         self.assertFalse((self.home / ".claude" / "CLAUDE.md").exists())
         self.assertFalse((self.home / ".claude" / "rules" / "harness").exists())

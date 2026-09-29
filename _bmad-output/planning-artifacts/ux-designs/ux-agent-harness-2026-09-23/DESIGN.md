@@ -27,6 +27,8 @@ sources:
   - ../../research/competitive-configurability-and-selection-models-2026-09-23/research.md
 ---
 
+> Current delivery assignments: [Delivery annotations — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Brand and style
 
 Model Citizen is direct, inspectable and calm. It leads with what a developer can find out or do, and then
@@ -113,3 +115,9 @@ Consistency Conventions):
 - Use visual polish to imply qualification, savings or capability that has not been measured.
 - Use em dashes in published copy.
 - Claim universal compatibility, identical behaviour across runtimes, or being first.
+
+## Delivery annotations — 2026-09-28
+
+Visual identity and component design remain unchanged. Current delivery assignments and later-engine Studio additions follow the roadmap amendment; planned stance-drift/proposal surfaces belong to 0.18. The existing Studio design effort under #961 is preserved.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.

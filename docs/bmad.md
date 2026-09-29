@@ -1,4 +1,4 @@
-# BMad in agent-harness and downstream repositories
+# BMad in Model Citizen and downstream repositories
 
 The harness is framework-agnostic. This page records a pattern that keeps a self-hosted
 planning framework (the [BMad Method](https://github.com/bmad-code-org/BMAD-METHOD), MIT)
@@ -18,7 +18,7 @@ npx --yes bmad-method@"$BMAD_VERSION" install --directory . --modules bmm \
   --document-output-language English --output-folder _bmad-output --shims --yes
 ```
 
-Then run `python3 bin/harness integration check bmad .`. Planning workflows run from the shared checkout;
+Then run `bin/citizen integration check bmad .`. Planning workflows run from the shared checkout;
 implementation still happens in managed worktrees.
 
 The version-control boundary is intentional:
@@ -206,7 +206,7 @@ existed during the original delivery.
 - **Choose the artifact authority explicitly.** In `_bmad/custom/config.toml`, point
   `planning_artifacts`, `implementation_artifacts`, `project_knowledge` and `output_folder` at
   the intended repository using `{project-root}`-relative paths. A separate planning repository
-  can keep a very large private corpus out of every worktree; public projects such as agent-harness
+  can keep a very large private corpus out of every worktree; public projects such as Model Citizen
   can instead commit a sanitized local corpus.
 - **Pin the install.** One command, with versions, in the repo's `AGENTS.md`, for example
   `npx bmad-method@<version> install --directory <repo> --modules <list> --tools claude-code,codex --yes`.
@@ -229,7 +229,7 @@ existed during the original delivery.
 
 ## Spawn confinement is enforced, not requested
 
-The override templates ask each review layer to run itself through `citizen role run`. That is a
+The override templates ask each review layer to run itself through `bin/citizen role run`. That is a
 request in a prompt: a client that paraphrases the brief and names no role used to walk past a
 spawn guard that only read the name the model wrote (#291).
 
@@ -283,7 +283,7 @@ variant. A framework spawn that names no role at all — the "launch a subagent"
 which no override template reaches — is routed to the variant's default band worker and priced
 from that band's row instead, so its class, effort and soft budget come from the posture rather
 than from the recipe. Nothing in the framework's own templates changes. Constrained review roles use
-`citizen role run` with explicit input roots; builders retain their normal
+`bin/citizen role run` with explicit input roots; builders retain their normal
 workflow. See [isolated role workers](role-workers.md). Each review layer is asked to launch only
 once the previous layer's worker has exited, because a worker still running reports no token count
 and a round whose spend is invisible cannot be held under its cap. Running four layers one after
@@ -293,8 +293,8 @@ complete keyed review-layer records so BMad's replacement merge does not discard
 The assigned implementation worktree, framework checkout, artifact root, baseline commit and
 review diff must be separate explicit inputs; run framework scripts from the framework checkout.
 
-Run `citizen integration check bmad <framework-root>` before
-`citizen integration apply bmad <framework-root>`; `citizen bmad check|apply` is kept as an alias
+Run `bin/citizen integration check bmad <framework-root>` before
+`bin/citizen integration apply bmad <framework-root>`; `bin/citizen bmad check|apply` is kept as an alias
 for both. The command reads `policy/integrations/bmad.json` for the template directory, the
 install destination and the skill surface, so the CLI names no framework of its own.
 Check resolves either `.agents/skills` or `.claude/skills`, refuses conflicting mirrors, and
@@ -316,7 +316,7 @@ supported shim installation or an upstream fix before that workflow is qualified
 
 BMad 6.12.0 provides `--shims` on its installer. GDS v0.7.2 still invokes the legacy
 `bmad-review-adversarial-general` and `bmad-review-edge-case-hunter` names; installations
-without their compatibility shims fail `citizen integration check bmad`. Re-run your recorded, version-pinned
+without their compatibility shims fail `bin/citizen integration check bmad`. Re-run your recorded, version-pinned
 installation command with `--shims`, retaining the same modules, tools and module pins. Back up
 the installation first, restore any documented runtime patches and artifact-routing YAMLs,
 then check both skill projections and verify that existing customizations are unchanged.
@@ -347,7 +347,7 @@ the tag:
 BMAD_VERSION=6.12.0
 npx --yes bmad-method@"$BMAD_VERSION" install --directory <framework-root> --modules bmm \
   --tools claude-code,codex --output-folder _bmad-output --shims --yes
-python3 bin/harness integration apply bmad <framework-root>
+bin/citizen integration apply bmad <framework-root>
 # then run the four-layer code review from the shared checkout against an assigned worktree,
 # and confirm each layer ran as an isolated worker rather than a native subagent.
 ```

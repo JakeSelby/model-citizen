@@ -154,7 +154,7 @@ class InitTests(TempHome):
         with unittest.mock.patch("builtins.input", self._answers(*answers)), \
              unittest.mock.patch.object(harness.sys.stdin, "isatty", return_value=True), \
              unittest.mock.patch.object(harness, "_detect_github", return_value=""):
-            with loud():
+            with loud() as out:
                 rc = harness.cmd_init(argparse.Namespace(force=False))
         self.assertEqual(rc, 0)
         cfg = json.loads(harness.config_path().read_text())
@@ -163,6 +163,7 @@ class InitTests(TempHome):
         self.assertEqual(cfg["identity"]["pronouns"], EXAMPLE["identity"]["pronouns"])
         self.assertEqual(cfg["stances"], EXAMPLE["stances"])
         self.assertEqual(harness.placeholder_identity(cfg), [])
+        self.assertIn(f"next: {harness.REPO / 'bin' / 'citizen'} sync", out.getvalue())
         harness.resolve_stances(harness.load_config(env={}))
 
     def test_a_blank_required_answer_is_asked_again(self):

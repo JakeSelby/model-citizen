@@ -8,8 +8,8 @@ what is true of this repository.
 ## For other repositories
 
 - This is the Model Citizen harness. Its checkout is live: a merged change is in effect in the next session.
-- Changes land only through a pull request with its own delivery issue, a green Gate block and CodeRabbit's review
-  worked through. Never push to `main`.
+- Changes land only through a pull request with its own delivery issue, a green Gate block and the review
+  requirements in [working-here](.claude/rules/working-here.md#coderabbit-review-and-merging) satisfied. Never push to `main`.
 - `product.json` here is the single source of the landing copy the sites render; change copy here, not in a site.
 
 Before changing anything here from a session started in another folder, read
