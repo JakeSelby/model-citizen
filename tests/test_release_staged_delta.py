@@ -1,4 +1,5 @@
 """Release validation includes the exact staged paths a pending commit will add."""
+import json
 import subprocess
 import tempfile
 import unittest
@@ -93,6 +94,23 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
         data.pop("qualification_reuse")
         with self.assertRaisesRegex(ValueError, "differs from the staged catalog"):
             compatibility.qualification_reuse(root, data)
+
+    def test_pending_no_reuse_release_requires_matching_index_metadata(self):
+        root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
+        data.pop("qualification_reuse")
+        path = root / "compatibility/catalog.json"
+        path.write_text(json.dumps(data))
+        git("add", "compatibility/catalog.json")
+        self.assertIsNone(compatibility.qualification_reuse(root, data))
+        with self.assertRaisesRegex(ValueError, "differs from the staged catalog"):
+            compatibility.qualification_reuse(root, dict(data, note="unstaged"))
+        git("rm", "--cached", "-f", "compatibility/catalog.json")
+        with self.assertRaisesRegex(ValueError, "staged compatibility catalog is unavailable"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_open_candidate_can_be_read_before_it_has_an_index_entry(self):
+        self.assertIsNone(compatibility.qualification_reuse(
+            self.root, {"harness_version": "1.2.4", "release_state": "candidate"}))
 
     def test_pending_reuse_refuses_version_not_matching_index(self):
         root, data, git = test_compatibility.QualificationReuseTests.fixture(self)

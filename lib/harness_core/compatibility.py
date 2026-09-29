@@ -146,12 +146,16 @@ def qualification_reuse(root, data, target=None, seen=None, depth=0):
         if (target or release_target(root, data) or "HEAD") == "HEAD":
             staged = subprocess.run(["git", "-C", str(root), "show", ":compatibility/catalog.json"],
                                     capture_output=True)
+            # Open candidates may be edited before staging; released HEAD claims must match the index.
+            required = data.get("release_state") == "released"
+            if staged.returncode and required:
+                raise ValueError("staged compatibility catalog is unavailable")
             if staged.returncode == 0:
                 staged_catalog = json.loads(staged.stdout)
                 if not isinstance(staged_catalog, dict):
                     raise ValueError("staged compatibility catalog must be an object")
-                if staged_catalog.get("qualification_reuse") is not None:
-                    raise ValueError("qualification reuse catalog differs from the staged catalog; stage the validated catalog")
+                if (required or staged_catalog.get("qualification_reuse") is not None) and not same_json(data, staged_catalog):
+                    raise ValueError("compatibility catalog differs from the staged catalog; stage the validated catalog")
         return None
     if depth >= MAX_REUSE_DEPTH:
         raise ValueError("qualification reuse chain exceeds " + str(MAX_REUSE_DEPTH) + " releases")
