@@ -220,10 +220,13 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   replay does the same after each tag's set, before the next tag's runs overwrite the streams,
   and writes `detections.jsonl` beside that set's `results.jsonl`; its history row then carries
   `mechanisms`, which detectors fired in the harness arm per task and in how many of its runs,
-  printed in `history.md` under the task lines. `detect --backfill <root>` does it for sets
-  already on disk: it finds every `results.jsonl` under the root, looks for each row's stream in
-  the same directory, a sibling `transcripts` or `raw` directory and their subdirectories, and
-  writes `detections.jsonl` beside it. It reads `results.jsonl` and never writes it.
+  printed in `history.md` under the task lines. The mechanism record keeps each task's total run
+  count, each firing detector's measured-run denominator, and detector errors with their reasons,
+  so an unreadable stream cannot silently disappear from attribution. `detect --backfill <root>`
+  does it for sets already on disk: it finds every `results.jsonl` under the root, looks for each
+  row's stream in the same directory, a sibling `transcripts` or `raw` directory and their
+  subdirectories, and writes `detections.jsonl` beside it. It reads `results.jsonl` and never
+  writes it.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its

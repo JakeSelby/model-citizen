@@ -153,6 +153,15 @@ def missing_rows(identity, reason, registry):
             for d in registry]
 
 
+def path_rows(identity, path, reader, module, registry):
+    """One existing raw path as detector rows; an I/O failure remains an unknown run."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return missing_rows(identity, "unreadable: %s" % type(exc).__name__, registry)
+    return run_rows(identity, text, reader, module, registry)
+
+
 def raw_name(task, arm, rep):
     """The runner's `--raw` file name for one run: `<task>-<arm>-<rep>.json`."""
     return "%s-%s-%s.json" % (task, arm, rep)
@@ -175,8 +184,8 @@ def detect_dir(raw_dir, arms, reader, module):
             continue
         task, arm, rep = parsed
         runs += 1
-        rows.extend(run_rows({"task": task, "arm": arm, "rep": rep, "source": path.name},
-                             path.read_text(encoding="utf-8", errors="replace"), reader, module, registry))
+        rows.extend(path_rows({"task": task, "arm": arm, "rep": rep, "source": path.name},
+                              path, reader, module, registry))
     return rows, runs
 
 
@@ -212,8 +221,7 @@ def detect_rows(rows, raw_dirs, reader, module):
             out.extend(missing_rows(identity, reason, registry))
             continue
         identity["source"] = found[0].name
-        out.extend(run_rows(identity, found[0].read_text(encoding="utf-8", errors="replace"),
-                            reader, module, registry))
+        out.extend(path_rows(identity, found[0], reader, module, registry))
     return out
 
 
@@ -258,30 +266,57 @@ def backfill(root, reader, module):
 
 def mechanisms(detections, arm="harness"):
     """Per task, which detectors fired in `arm` and how often across its reps:
-    `{task: {"runs": runs measured, "fired": {detector: {"runs": runs it fired in, "hits": n}}}}`.
-    A run whose stream could not be read is not a run measured."""
-    runs, fired = {}, {}
+    total runs, each firing detector's measured denominator, and every detector error. Unknown
+    detector rows remain in the total and error counts rather than shrinking a denominator."""
+    runs, measured, fired, errors = {}, {}, {}, {}
     for row in detections:
-        if row.get("arm") != arm or row.get("count") is None:
+        if row.get("arm") != arm:
             continue
-        task = row.get("task")
+        task, detector, rep = row.get("task"), row.get("detector"), row.get("rep")
         runs.setdefault(task, set()).add(row.get("rep"))
+        if row.get("count") is None:
+            reason = str(row.get("error") or "unknown")
+            cell = errors.setdefault(task, {}).setdefault(detector, {"runs": set(), "reasons": {}})
+            cell["runs"].add(rep)
+            cell["reasons"].setdefault(reason, set()).add(rep)
+            continue
+        measured.setdefault(task, {}).setdefault(detector, set()).add(rep)
         if row["count"]:
-            cell = fired.setdefault(task, {}).setdefault(row["detector"], {"runs": 0, "hits": 0})
+            cell = fired.setdefault(task, {}).setdefault(detector, {"runs": 0, "hits": 0})
             cell["runs"] += 1
             cell["hits"] += row["count"]
-    return dict((task, {"runs": len(reps), "fired": fired.get(task, {})}) for task, reps in runs.items())
+    out = {}
+    for task, reps in runs.items():
+        fired_cells = fired.get(task, {})
+        for detector, cell in fired_cells.items():
+            cell["measured_runs"] = len(measured.get(task, {}).get(detector, ()))
+        error_cells = {}
+        for detector, cell in errors.get(task, {}).items():
+            error_cells[detector] = {
+                "runs": len(cell["runs"]),
+                "reasons": dict((reason, len(reason_reps))
+                                for reason, reason_reps in cell["reasons"].items()),
+            }
+        out[task] = {"runs": len(reps), "fired": fired_cells, "errors": error_cells}
+    return out
 
 
 def render_mechanisms(result):
     """The history lines for one row's `mechanisms`, one per task."""
     lines = []
     for task, cell in sorted(result.items(), key=lambda item: str(item[0])):
-        fired = cell.get("fired") or {}
+        fired, errors = cell.get("fired") or {}, cell.get("errors") or {}
         if fired:
-            text = ", ".join("%s in %d of %d run(s), %d hit(s)" % (d, c["runs"], cell["runs"], c["hits"])
+            text = ", ".join("%s in %d of %d measured run(s), %d hit(s)"
+                             % (d, c["runs"], c["measured_runs"], c["hits"])
                              for d, c in sorted(fired.items()))
         else:
-            text = "none in %d run(s)" % cell["runs"]
+            text = "none recorded" + ("" if errors else " across %d run(s)" % cell["runs"])
+        if errors:
+            detail = ", ".join("%s in %d run(s) (%s)" % (
+                detector, error["runs"], ", ".join("%s: %d" % item
+                                                    for item in sorted(error["reasons"].items())))
+                               for detector, error in sorted(errors.items()))
+            text += "; %d total run(s); errors: %s" % (cell["runs"], detail)
         lines.append("    fired in harness arm, %s: %s" % (task or "n/a", text))
     return lines

@@ -72,6 +72,18 @@ class StreamDetectionTests(unittest.TestCase):
             self.assertEqual(len(lone), len(MODULE.DETECTORS))
             self.assertTrue(all(r["count"] is None and "unreadable" in r["error"] for r in lone.values()))
 
+    def test_an_existing_stream_that_cannot_be_read_is_unknown_not_an_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "gate-run-bare-1.json"
+            path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(Path, "read_text", side_effect=PermissionError("denied")):
+                rows, runs = DETECT.detect_dir(tmp, ("bare", "harness"), BENCH.cli_messages, MODULE)
+
+        self.assertEqual(runs, 1)
+        self.assertEqual(len(rows), len(MODULE.DETECTORS))
+        self.assertTrue(all(r["count"] is None and r["error"] == "unreadable: PermissionError"
+                            for r in rows))
+
     def test_the_preflights_are_not_runs(self):
         with tempfile.TemporaryDirectory() as tmp:
             _, rows, _ = self.detect_raw(tmp)
@@ -159,18 +171,22 @@ class MechanismTests(unittest.TestCase):
         base = {"task": "t", "arm": "harness"}
         return [dict(base, rep=1, detector="a/x", count=2), dict(base, rep=1, detector="a/y", count=0),
                 dict(base, rep=2, detector="a/x", count=0), dict(base, rep=2, detector="a/y", count=0),
-                dict(base, rep=3, detector="a/x", count=None), dict(base, arm="bare", rep=1, detector="a/y", count=5),
+                dict(base, rep=3, detector="a/x", count=None, error="boom"),
+                dict(base, arm="bare", rep=1, detector="a/y", count=5),
                 {"task": "quiet", "arm": "harness", "rep": 1, "detector": "a/x", "count": 0}]
 
-    def test_mechanisms_count_the_harness_arms_firing_runs_and_hits_per_task(self):
+    def test_mechanisms_keep_total_and_measured_denominators_and_detector_errors(self):
         self.assertEqual(DETECT.mechanisms(self.rows()),
-                         {"t": {"runs": 2, "fired": {"a/x": {"runs": 1, "hits": 2}}},
-                          "quiet": {"runs": 1, "fired": {}}})
+                         {"t": {"runs": 3,
+                                "fired": {"a/x": {"runs": 1, "measured_runs": 2, "hits": 2}},
+                                "errors": {"a/x": {"runs": 1, "reasons": {"boom": 1}}}},
+                          "quiet": {"runs": 1, "fired": {}, "errors": {}}})
 
-    def test_history_renders_what_fired_per_task(self):
+    def test_history_renders_attribution_denominators_and_errors(self):
         lines = DETECT.render_mechanisms(DETECT.mechanisms(self.rows()))
-        self.assertEqual(lines, ["    fired in harness arm, quiet: none in 1 run(s)",
-                                 "    fired in harness arm, t: a/x in 1 of 2 run(s), 2 hit(s)"])
+        self.assertEqual(lines, ["    fired in harness arm, quiet: none recorded across 1 run(s)",
+                                 "    fired in harness arm, t: a/x in 1 of 2 measured run(s), 2 hit(s); "
+                                 "3 total run(s); errors: a/x in 1 run(s) (boom: 1)"])
 
 
 def raw_replay(raw):
@@ -202,7 +218,8 @@ class ReplayDetectsTests(unittest.TestCase):
             history = BENCH.read_jsonl(Path(tmp) / "history" / "history.jsonl")[-1]
             fired = history["mechanisms"]["demo"]
             self.assertEqual(fired["runs"], 1)
-            self.assertEqual(fired["fired"]["verification/no-verify"], {"runs": 1, "hits": 1})
+            self.assertEqual(fired["fired"]["verification/no-verify"],
+                             {"runs": 1, "measured_runs": 1, "hits": 1})
             text = (Path(tmp) / "history" / "history.md").read_text(encoding="utf-8")
             self.assertIn("fired in harness arm, demo:", text)
 
