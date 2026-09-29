@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 133,
+    "bug": 134,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -7693,6 +7693,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S309.md",
       "parent_bmad_id": "AH-E025",
       "parent_github_number": 958,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B133",
+      "github_number": 993,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/993",
+      "title": "fix(coordination): let a subagent write paths its own session claimed",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B133.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     },
