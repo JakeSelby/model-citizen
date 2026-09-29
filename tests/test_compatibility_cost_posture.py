@@ -47,8 +47,14 @@ class EvidenceScopeTests(unittest.TestCase):
     def setUp(self):
         self.record = json.loads(HISTORICAL.read_text())
         self.client = linked(HISTORICAL, self.record)
-        self.git = patch.object(compatibility.subprocess, "run",
-                                return_value=subprocess.CompletedProcess([], 0))
+        run = compatibility.subprocess.run
+
+        def historical_source(command, **kwargs):
+            if "merge-base" in command or "diff" in command:
+                return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+            return run(command, **kwargs)
+
+        self.git = patch.object(compatibility.subprocess, "run", side_effect=historical_source)
         self.git.start()
         self.addCleanup(self.git.stop)
 
