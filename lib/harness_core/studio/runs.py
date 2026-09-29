@@ -23,7 +23,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from .state import StateError, Store
+from .state import StateError, Store, open_at
 from . import free_suites, run_store, spend_guard, targets
 
 SCHEMA_VERSION = 1
@@ -462,8 +462,8 @@ class RunSupervisor:
     @contextlib.contextmanager
     def lock(self):
         try:
-            descriptor = os.open("supervisor.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                                 0o600, dir_fd=self._state_fd)
+            descriptor = open_at("supervisor.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                0o600, dir_fd=self._state_fd)
         except OSError as exc:
             raise RunError("run lock is missing or unsafe") from exc
         info = os.fstat(descriptor)
@@ -837,8 +837,8 @@ class RunSupervisor:
         directory = self._run_directory(run_id)
         descriptor = -1
         try:
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
-                                 0o600, dir_fd=directory)
+            descriptor = open_at(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                                0o600, dir_fd=directory)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise RunError("run output is not a regular file")

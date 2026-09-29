@@ -21,7 +21,24 @@ STATE_NAME = "instance.json"
 LOCK_NAME = "instance.lock"
 UI_PREFERENCES_NAME = "ui-preferences.json"
 UI_COLOR_SCHEMES = frozenset(("auto", "light", "dark"))
+CREATE_ATTEMPTS = 5
 
+
+
+def open_at(name: str, flags: int, mode: int, dir_fd: int) -> int:
+    """Open a shared name under a directory descriptor, retrying a create that lost a race.
+
+    On macOS, when two threads create the same new name through a directory descriptor at
+    once, the loser can fail with ENOENT although the file now exists. Exclusive creates and
+    plain opens are never retried, and a directory that is really gone still fails.
+    """
+    for attempt in range(CREATE_ATTEMPTS):
+        try:
+            return os.open(name, flags, mode, dir_fd=dir_fd)
+        except FileNotFoundError:
+            if not flags & os.O_CREAT or flags & os.O_EXCL or attempt == CREATE_ATTEMPTS - 1:
+                raise
+    raise AssertionError("unreachable")
 
 class StateError(ValueError):
     """The instance store cannot be trusted or is incompatible."""
@@ -91,7 +108,7 @@ class Store:
         assert self.fd is not None
         flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
         try:
-            handle = os.open(LOCK_NAME, flags, 0o600, dir_fd=self.fd)
+            handle = open_at(LOCK_NAME, flags, 0o600, dir_fd=self.fd)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENXIO):
                 raise StateError("Studio instance lock is not a safe regular file") from exc
