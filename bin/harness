@@ -393,11 +393,13 @@ def load_config(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     return cfg
 
 
-def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str, Any]] = None,
+                   strict: bool = True) -> Dict[str, Any]:
     """Every unit of every kind with its value and source, from `posture.selection`.
 
     `user` is the user configuration when the caller has read it; the resolver reads it
-    otherwise. Strict, because a command that acts on a selection must not act on part of one.
+    otherwise. Commands that act on a selection use strict resolution; callers inspecting the
+    available units may opt out while constructing a repair to an invalid selection.
     """
     env = os.environ if env is None else env
     module = load_posture()
@@ -405,7 +407,7 @@ def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str
         raise SystemExit("this checkout has no selection resolver (policy/hooks/posture.py)")
     try:
         user = (read_json(config_path()) or {}) if user is None else user
-        return module.selection(env, strict=True, config=user, root=REPO)
+        return module.selection(env, strict=strict, config=user, root=REPO)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc))
 
@@ -3718,7 +3720,7 @@ def config_set(key: str, value: Optional[str]) -> int:
                 # resolver already refuses goes in.
                 unset = deepcopy(cfg)
                 unset[parts[0]].pop(parts[1])
-                if parts[1] not in load_selection(env={}, user=unset)[parts[0]]:
+                if parts[1] not in load_selection(env={}, user=unset, strict=False)[parts[0]]:
                     raise SystemExit(f"{parts[0]} has no unit '{parts[1]}'; `citizen selection` lists every unit")
                 load_selection(env={}, user=cfg)
             elif key == "core_switches_acknowledged":
