@@ -965,7 +965,10 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(self.tasks, [])
 
     def test_a_prompt_never_names_its_held_back_check(self):
-        for task in self.tasks:
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        tasks = self.tasks + [entry["task"] for entry in manifest["retired"]]
+        self.assertTrue(tasks, "prompt isolation must inspect at least one task")
+        for task in tasks:
             prompt = BENCH.prompt_of(task)
             for held in task["tests"].get("copy", []) + task["tests"].get("select", []) + ["oracle"]:
                 self.assertNotIn(held, prompt, msg=task["id"])
