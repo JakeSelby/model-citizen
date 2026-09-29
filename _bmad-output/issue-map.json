@@ -10,7 +10,7 @@
     "epic": 27,
     "spike": 19,
     "story": 330,
-    "task": 38
+    "task": 39
   },
   "items": [
     {
@@ -6615,6 +6615,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-T038",
+      "github_number": 867,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/867",
+      "title": "Register the zero-footprint observation recorder behind an opt-in",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T038.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
