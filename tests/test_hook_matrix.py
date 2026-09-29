@@ -8,6 +8,7 @@ that resolves differently fails exactly the cell it moves and names it, and ever
 
 Run: python3 -m unittest discover tests
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -104,11 +105,30 @@ class HookMatrixTests(unittest.TestCase):
     def test_corpus_is_redacted_and_recorded_calls_have_provenance(self):
         home = re.compile(r"/Users/|/home/|[A-Za-z]:\\\\|/root/|/private/var/|/var/folders/")
         recorded = [d for d in HM.calls().values() if "provenance" in d]
-        self.assertEqual({d["payload"]["hook_event_name"] for d in recorded}, set(EVENTS))
+        self.assertEqual({d["payload"]["hook_event_name"] for d in recorded
+                          if d["provenance"]["kind"] == "recorded-tool-data"},
+                         {"PreToolUse", "PostToolUse"})
         for document in recorded:
             self.assertRegex(document["provenance"]["sha256"], r"^[0-9a-f]{64}$")
             self.assertIsInstance(document["provenance"]["record_index"], int)
             self.assertTrue(document["provenance"]["normalization"])
+            provenance = document["provenance"]
+            source = (FIXTURE / provenance["source_excerpt"]).resolve()
+            self.assertTrue(source.is_relative_to(FIXTURE.resolve()))
+            content = source.read_bytes()
+            self.assertEqual(hashlib.sha256(content).hexdigest(), provenance["source_excerpt_sha256"])
+            record = json.loads(content)["records"][provenance["excerpt_index"]]
+            event = document["payload"]["hook_event_name"]
+            if event == "PreToolUse":
+                block = record["message"]["content"][0]
+                self.assertEqual(document["payload"]["tool_name"], block["name"])
+                self.assertEqual(document["payload"]["tool_input"], block["input"])
+            elif event == "PostToolUse":
+                self.assertEqual(document["payload"]["tool_response"]["stdout"],
+                                 record["message"]["content"][0]["content"])
+            else:
+                self.assertEqual(provenance["kind"], "derived-terminal-event")
+                self.assertEqual(record, {"type": "result", "subtype": "success"})
         for name, document in HM.calls().items():
             self.assertEqual(sorted(set(document) - {"files", "git", "provenance"}), ["about", "payload"], name)
             payload = document["payload"]
