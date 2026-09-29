@@ -29,9 +29,13 @@ Which worktree the editor is in comes from the hook payload's `cwd`, except insi
 Claude Code subagent's tool calls carry its parent's `cwd`, the orchestrator's worktree, not the
 worktree the builder works in, so there `cwd` would make a builder's own claim a sibling's. A
 payload that carries `agent_id`, which Claude Code sets only inside a subagent, therefore takes
-the editor's worktree from the target's. What that gives up: a subagent that writes by absolute
-path into a sibling's worktree, under the same session, is not stopped by the sibling's claim.
-A main-thread edit, and a payload without `agent_id`, keep the `cwd` rule.
+the editor's worktree from the target's, and there only the session id, never the pid alone,
+makes a claim its own. What passes, then, is any claim on the target's worktree recorded under the
+payload's session id: the builder's own, a sibling builder's of the same session, and the
+orchestrator's own in its worktree, since parent and subagents share one session id and no recorded
+field tells them apart. A claim another session id left, even one from the same runtime process
+after `/clear`, still overlaps. Only Claude Code's payloads take this rule; a main-thread edit, a
+payload without `agent_id` and every Codex payload keep the `cwd` rule.
 
 What an overlap does is the `coordination.repeat_overlap` variant in the user config. `deny`, the
 default, warns on the first hit on a path and denies the second in the same session; `warn` never
@@ -455,7 +459,7 @@ def overlaps(path, session=None, pid=None, cwd=None, env=None, subagent=False):
 
     Empty outside a repository, for a path outside its worktree, and for the session's own claims.
     Repository and path come from the target; whose claims are the editor's own, from `cwd`, or
-    from the target for a `subagent` (see `editor_root`).
+    for a `subagent` from the target and the session id alone (see the module docstring).
     """
     target = Path(path)
     if not target.is_absolute():
@@ -467,9 +471,11 @@ def overlaps(path, session=None, pid=None, cwd=None, env=None, subagent=False):
     if rel is None:
         return []
     editor = editor_root(cwd, repo["root"], subagent)
+    # Where the target names the editor's worktree, the session id alone makes a claim its own.
+    owner_pid = None if subagent else pid
     found = []
     for item in claims(env):
-        if item.get("repo") != repo["common"] or own(item, session, pid, editor):
+        if item.get("repo") != repo["common"] or own(item, session, owner_pid, editor):
             continue
         for pattern in item["paths"]:
             if isinstance(pattern, str) and matches(pattern, rel):

@@ -52,8 +52,10 @@ def judge(event, intents, env=None):
         return None
     session = str(event.get("session_id") or "")
     pid = intents.runtime_pid(env)
-    # Only a subagent's payload carries `agent_id`, and its `cwd` is its parent's.
-    subagent = bool(event.get("agent_id"))
+    # Only a Claude Code subagent's payload carries `agent_id`, and its `cwd` is its parent's. A
+    # hook run by hand has no coordinator and is Claude Code's; a Codex payload keeps the `cwd` rule.
+    runtime = (os.environ if env is None else env).get("HARNESS_RUNTIME", "claude-code")
+    subagent = runtime == "claude-code" and bool(event.get("agent_id"))
     found = intents.overlaps(path, session or None, pid, event.get("cwd"), env, subagent)
     if not found:
         return None
