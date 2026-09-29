@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "claudeVersion": "2.1.283",
+  "startedAt": "2026-09-29T16:48:37.679Z",
+  "durationSeconds": 6,
+  "costUsd": 0.032029,
+  "partial": false,
+  "suite": {
+    "root": "/work/probe-plugin",
+    "ablation": "with-without",
+    "modelOverride": "haiku",
+    "threshold": 1,
+    "concurrency": 1,
+    "plugins": [
+      {
+        "name": "probe-plugin",
+        "version": "0.0.1",
+        "path": "/work/probe-plugin"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "greets",
+      "dir": "evals/greets",
+      "source": "prose",
+      "promptMarkdown": "Please greet me.",
+      "runsPerCase": 1,
+      "timeoutSeconds": 300,
+      "maxTurns": 3,
+      "graders": [
+        {
+          "name": "says-word",
+          "type": "regex",
+          "weight": 1,
+          "config": {
+            "target": "last_message",
+            "pattern": "PINEAPPLE-HELLO",
+            "flags": "",
+            "match": "contains"
+          }
+        }
+      ],
+      "arms": {
+        "with": [
+          {
+            "score": 1,
+            "passed": true,
+            "turns": 3,
+            "costUsd": 0.0173014,
+            "judgeCostUsd": 0,
+            "durationSeconds": 4,
+            "startedAt": "2026-09-29T16:48:37.697Z",
+            "error": null,
+            "tracePath": "/tmp/eval-with-0/out/trace.jsonl",
+            "skippedPaidGraders": false,
+            "graders": [
+              {
+                "name": "says-word",
+                "passed": true,
+                "weight": 1,
+                "explanation": "matched PINEAPPLE-HELLO",
+                "withOnly": false,
+                "scored": true
+              }
+            ]
+          }
+        ],
+        "without": [
+          {
+            "score": 0,
+            "passed": false,
+            "turns": 1,
+            "costUsd": 0.014727599999999999,
+            "judgeCostUsd": 0,
+            "durationSeconds": 2,
+            "startedAt": "2026-09-29T16:48:41.302Z",
+            "error": null,
+            "tracePath": "/tmp/eval-without-0/out/trace.jsonl",
+            "skippedPaidGraders": false,
+            "graders": [
+              {
+                "name": "says-word",
+                "passed": false,
+                "weight": 1,
+                "explanation": "pattern not found in last_message",
+                "withOnly": false,
+                "scored": true
+              }
+            ]
+          }
+        ]
+      },
+      "aggregates": {
+        "score": 1,
+        "passRate": 1,
+        "scoreWithout": 0,
+        "passRateWithout": 0,
+        "delta": 1
+      }
+    }
+  ],
+  "aggregates": {
+    "casesTotal": 1,
+    "casesPassed": 1,
+    "overallScore": 1,
+    "overallPassRate": 1,
+    "meanDelta": 1
+  }
+}

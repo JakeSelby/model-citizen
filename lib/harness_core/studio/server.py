@@ -42,6 +42,17 @@ STATIC_ASSET_ROUTES = {
     "css": "/assets/{content-hash}.css",
     "js": "/assets/{content-hash}.js",
 }
+PLUGIN_EVAL_REPORT = re.compile(
+    r"^" + re.escape(runs.PLUGIN_EVAL_REPORT_ROUTE)
+    + r"(?P<run_id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+)
+PLUGIN_EVAL_REPORT_PATH = runs.PLUGIN_EVAL_REPORT_ROUTE + "{run_id}"
+# The imported report is third-party HTML with inline script. The sandbox directive gives it an
+# opaque origin, so it can reach neither the Studio session nor the API, and it may load nothing.
+PLUGIN_EVAL_REPORT_CSP = ("sandbox allow-scripts; default-src 'none'; "
+                          "script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                          "img-src data:; font-src data:; base-uri 'none'; "
+                          "form-action 'none'; frame-ancestors 'none'")
 RUN_PROGRESS_MAX_ENTRIES = 128
 RUN_PROGRESS_TERMINAL_TTL_SECONDS = 300
 
@@ -177,6 +188,8 @@ class RouteRegistry:
         exact = self._routes.get((method, path))
         if exact is not None:
             return exact
+        if PLUGIN_EVAL_REPORT.fullmatch(path) is not None:
+            return self._routes.get((method, PLUGIN_EVAL_REPORT_PATH))
         asset = STATIC_ASSET.fullmatch(path)
         if asset is None:
             return None
@@ -925,6 +938,21 @@ def _run_evidence(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _plugin_eval_report(handler: Handler, route: Route) -> None:
+    match = PLUGIN_EVAL_REPORT.fullmatch(urllib.parse.urlsplit(handler.path).path)
+    if match is None:
+        handler._error(404, "not_found")
+        return
+    try:
+        body = handler.server.mutations.call(
+            lambda: handler.server.run_supervisor.plugin_eval_report(match.group("run_id")))
+        route.response_schema.validate(body)
+    except (runs.RunError, ValueError):
+        handler._error(404, "evidence_unavailable")
+        return
+    handler._send(200, body, route.media_type, content_security_policy=PLUGIN_EVAL_REPORT_CSP)
+
+
 def _run_rerun(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("run_id",))
     if request is None:
@@ -1366,6 +1394,8 @@ ROUTES = RouteRegistry((
           _run_case_history, None, "application/json", ("citizen", "runs", "case-history")),
     Route("POST", "/api/runs/evidence", "application/json", RUN_EVIDENCE,
           _run_evidence, None, "application/json", ("citizen", "runs", "evidence")),
+    Route("GET", PLUGIN_EVAL_REPORT_PATH, "text/html; charset=utf-8", HTML,
+          _plugin_eval_report, None, cli_command=("citizen", "runs", "evidence")),
     Route("POST", "/api/runs/rerun", "application/json", RUN_RECORD,
           _run_rerun, None, "application/json", ("citizen", "runs", "rerun")),
     Route("POST", "/api/runs/cancel", "application/json", RUN_RECORD,

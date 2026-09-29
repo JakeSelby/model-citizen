@@ -29,6 +29,9 @@ from . import free_suites, run_store, spend_guard, targets
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
 MAX_OUTPUT_CHUNK = 64 * 1024
+MAX_REPORT_BYTES = 16 * 1024 * 1024
+PLUGIN_EVAL_SOURCE = "plugin-eval"
+PLUGIN_EVAL_REPORT_ROUTE = "/api/runs/plugin-eval-report/"
 ACTIVE = {"admitted", "starting", "running", "cancel_requested"}
 TERMINAL = {"succeeded", "failed", "cancelled", "timed_out", "orphaned", "capped", "limited"}
 STATUSES = ACTIVE | TERMINAL | {"queued"}
@@ -1378,7 +1381,9 @@ class RunSupervisor:
                  "expected_target": dict(target), "expected_argv": list(argv),
                  "expected_cases": list(cases)}, "")
 
-    def _declared_artifact(self, indexed: Mapping[str, Any], artifact: str) -> bytes:
+    def _declared_artifact(self, indexed: Mapping[str, Any], artifact: str,
+                           limit: int = MAX_OUTPUT_CHUNK, read: bool = True) -> bytes:
+        """A declared artifact's bytes; with `read` false, only its bounded availability checks."""
         declared = indexed.get("artifacts")
         if (self.repository is None or not isinstance(declared, list)
                 or not artifact.startswith("imported-")):
@@ -1402,9 +1407,11 @@ class RunSupervisor:
             descriptor = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
             try:
                 info = os.fstat(descriptor)
-                if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_OUTPUT_CHUNK
+                if (not stat.S_ISREG(info.st_mode) or info.st_size > limit
                         or (hasattr(os, "getuid") and info.st_uid != os.getuid())):
                     raise RunError("run evidence is unavailable")
+                if not read:
+                    return b""
                 body = os.pread(descriptor, info.st_size, 0)
             finally:
                 os.close(descriptor)
@@ -1442,18 +1449,44 @@ class RunSupervisor:
                 for name in ("stdout", "stderr", "worker")]
         else:
             declared = indexed.get("artifacts") if isinstance(indexed.get("artifacts"), list) else []
+            report = indexed.get("report") if source_kind == PLUGIN_EVAL_SOURCE else None
             detail["artifacts"] = []
-            for position, _ in enumerate(declared):
+            for position, relative in enumerate(declared):
                 artifact_id = "imported-" + str(position)
+                is_report = report is not None and relative == report
                 try:
-                    self._declared_artifact(indexed, artifact_id)
+                    if is_report:
+                        self._declared_artifact(indexed, artifact_id, MAX_REPORT_BYTES, read=False)
+                    else:
+                        self._declared_artifact(indexed, artifact_id)
                     available = True
                 except RunError:
                     available = False
-                detail["artifacts"].append({"id": artifact_id,
-                                            "label": "Declared artifact " + str(position + 1),
-                                            "available": available})
+                item = {"id": artifact_id,
+                        "label": "Declared artifact " + str(position + 1),
+                        "available": available}
+                if is_report:
+                    item.update({"label": "HTML report", "kind": "html-report",
+                                 "href": PLUGIN_EVAL_REPORT_ROUTE + run_id})
+                elif source_kind == PLUGIN_EVAL_SOURCE and position == 0:
+                    item["label"] = "Result JSON"
+                detail["artifacts"].append(item)
         return detail
+
+    def plugin_eval_report(self, run_id: str) -> bytes:
+        """The original `claude plugin eval` HTML report an imported run declares."""
+        try:
+            indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        report = indexed.get("report")
+        declared = indexed.get("artifacts")
+        if ((indexed.get("source") or {}).get("kind") != PLUGIN_EVAL_SOURCE
+                or not isinstance(report, str) or not isinstance(declared, list)
+                or report not in declared):
+            raise RunError("run evidence is unavailable")
+        return self._declared_artifact(indexed, "imported-" + str(declared.index(report)),
+                                       MAX_REPORT_BYTES)
 
     def case_history(self, case_id: str, **bounds: Any) -> Dict[str, Any]:
         try:
