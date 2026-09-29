@@ -103,6 +103,16 @@ class TranscriptObservationTests(unittest.TestCase):
     def test_an_unknown_symlink_name_is_not_claimed_as_observed(self):
         self.assertEqual(BENCH.installed_checkout_reads(self.message("/tmp/unknown-alias/x.py")), [])
 
+    def test_incomplete_and_timed_out_attempts_preserve_observed_paths(self):
+        stream = json.dumps(self.message("/opt/model-citizen/answer.py")[0]) + '\n{"truncated"'
+        for output in (stream, subprocess.TimeoutExpired("docker", 1, output=stream.encode())):
+            with self.subTest(timeout=isinstance(output, Exception)), tempfile.TemporaryDirectory() as tmp:
+                opts = options(tmp)
+                row = BENCH.run_one(TASK, 1, "harness", opts, Launch([output]))
+                self.assertTrue(row["error"])
+                self.assertIsNone(row["passed"])
+                self.assertEqual(row["installed_checkout_reads"], ["Read:/opt/model-citizen"])
+
 
 class ManifestExclusionTests(unittest.TestCase):
     def test_every_current_task_is_excluded_with_provenance(self):

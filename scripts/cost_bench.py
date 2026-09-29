@@ -599,6 +599,16 @@ def installed_checkout_reads(messages):
     return reads
 
 
+def partial_checkout_reads(stdout):
+    """Retain observed paths even when an interrupted stream has no final cost result."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    try:
+        return installed_checkout_reads(cli_messages(stdout)[0])
+    except ValueError:
+        return []
+
+
 def parse_result(stdout):
     """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
     is no result to read.
@@ -900,10 +910,12 @@ def _attempt(task, rep, arm, opts, launch):
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
                                                            opts["run_cap"], task["max_turns"]),
                               opts, container_name(task["id"], arm, rep), launch)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
+                        installed_checkout_reads=partial_checkout_reads(exc.stdout),
                         wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
+        row["installed_checkout_reads"] = partial_checkout_reads(done.stdout)
         if opts.get("raw"):
             Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
             (Path(opts["raw"]) / ("%s-%s-%d.json" % (task["id"], arm, rep))).write_text(done.stdout or "",
