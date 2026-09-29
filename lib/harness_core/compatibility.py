@@ -482,16 +482,21 @@ def stale_cases(data, record, changed):
 
 def changed_files(root, commit, target, paths, carved):
     """The files under `paths`, and under the carved-back `carved`, that differ between the two
-    commits, or None when git cannot say, which the caller treats as all of them."""
+    commits, including staged paths for a working HEAD, or None when git cannot say."""
     names = set()
     for spec in (paths, carved):
         if not spec:
             continue
-        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames",
-                               commit, target, "--", *spec], capture_output=True, text=True)
-        if done.returncode:
-            return None
-        names.update(line for line in (done.stdout or "").splitlines() if line.strip())
+        commands = [["git", "-C", str(root), "diff", "--name-only", "--no-renames",
+                     commit, target, "--", *spec]]
+        if target == "HEAD":
+            commands.append(["git", "-C", str(root), "diff", "--cached", "--name-only",
+                             "--no-renames", "HEAD", "--", *spec])
+        for command in commands:
+            done = subprocess.run(command, capture_output=True, text=True)
+            if done.returncode:
+                return None
+            names.update(line for line in (done.stdout or "").splitlines() if line.strip())
     return sorted(names)
 
 
