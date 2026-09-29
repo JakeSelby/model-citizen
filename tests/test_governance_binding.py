@@ -419,7 +419,7 @@ class FailClosed(Home):
         self.policy("{not json")
         answer = grader.govern("git status > log.txt", str(self.repo), 1, "execute")
         self.assertEqual(answer[0], "ask")
-        self.assertIn("provider local could not answer", answer[1])
+        self.assertIn("provider local could not be set up", answer[1])
 
     def test_an_unknown_provider_name_asks(self):
         self.configure("no-such-provider")
@@ -439,6 +439,141 @@ class FailClosed(Home):
         answer, reason = self.bash("npm test")
         self.assertEqual(answer, "ask")
         self.assertIn("RuntimeError: provider exploded", reason)
+
+
+class SegmentErrors(Home):
+    """Provider failures retain each segment's identity and do not stop later judgments."""
+
+    def setUp(self):
+        super().setUp()
+        self.configure("local")
+
+    def use(self, provider):
+        original = decision.select_provider
+        decision.select_provider = lambda *args, **kwargs: provider
+        self.addCleanup(setattr, decision, "select_provider", original)
+
+    def details(self):
+        return [json.loads(row["input"]) for row in self.rows()]
+
+    def test_setup_failure_logs_every_governed_segment_with_resolved_fields(self):
+        class BrokenSetup:
+            def policy(self):
+                raise RuntimeError("policy unavailable")
+
+            def decide(self, action, counterparty):
+                raise AssertionError("setup failure must precede judgments")
+
+        self.use(BrokenSetup())
+        answer, reason = self.bash("npm test && git push origin main")
+        self.assertEqual(answer, "ask")
+        self.assertIn("could not be set up", reason)
+        self.assertEqual(self.details(), [
+            {"action": "coding.shell_exec", "counterparty": "repo:alpha/main",
+             "error": "RuntimeError", "grade": 1, "level": None, "outcome": "ask",
+             "provider": "local"},
+            {"action": "coding.git_push", "counterparty": "repo:alpha/main",
+             "error": "RuntimeError", "grade": 2, "level": None, "outcome": "ask",
+             "provider": "local"},
+        ])
+
+    def test_location_failure_keeps_resolved_identity_and_marks_unresolved_suffix_unknown(self):
+        beta = make_repo(self.home / "beta", branch="trunk")
+        original = decision.locate
+
+        def locate(path):
+            if Path(path).resolve() == beta.resolve():
+                raise OSError("repository unavailable")
+            return original(path)
+
+        decision.locate = locate
+        self.addCleanup(setattr, decision, "locate", original)
+        answer, reason = self.bash("npm test && git -C %s push" % beta)
+        self.assertEqual(answer, "ask")
+        self.assertIn("could not be set up", reason)
+        rows = self.details()
+        self.assertEqual([row["action"] for row in rows],
+                         ["coding.shell_exec", "coding.git_push"])
+        self.assertEqual([row["counterparty"] for row in rows], ["repo:alpha/main", None])
+        self.assertEqual([row["grade"] for row in rows], [1, 2])
+        self.assertTrue(all(row["error"] == "OSError" and row["level"] is None
+                            and row["outcome"] == "ask" for row in rows))
+
+    def test_judgment_failure_does_not_skip_a_later_deny(self):
+        calls = []
+
+        class FailsThenDenies:
+            def policy(self):
+                return None
+
+            def decide(self, action, counterparty):
+                calls.append((action.action_class, counterparty))
+                if action.action_class == "coding.shell_exec":
+                    raise RuntimeError("segment unavailable")
+                return decision.Decision("deny", 1, "local", "blocked by policy")
+
+        self.use(FailsThenDenies())
+        answer, reason = self.bash("npm test && git push origin main")
+        self.assertEqual(answer, "deny")
+        self.assertIn("blocked by policy", reason)
+        self.assertEqual(calls, [("coding.shell_exec", "repo:alpha/main"),
+                                 ("coding.git_push", "repo:alpha/main")])
+        self.assertEqual(self.details(), [
+            {"action": "coding.shell_exec", "counterparty": "repo:alpha/main",
+             "error": "RuntimeError", "grade": 1, "level": None, "outcome": "ask",
+             "provider": "local"},
+            {"action": "coding.git_push", "counterparty": "repo:alpha/main", "grade": 2,
+             "level": 1, "outcome": "deny", "provider": "local"},
+        ])
+
+    def test_secondary_policy_setup_failure_logs_only_positive_segments_before_judgment(self):
+        beta = make_repo(self.home / "beta", branch="trunk")
+        self.policy("not json", repo=beta)
+        answer, reason = self.bash("git status && npm test && git -C %s push" % beta)
+        self.assertEqual(answer, "ask")
+        self.assertIn("could not be set up", reason)
+        rows = self.details()
+        self.assertEqual([(r["action"], r["counterparty"], r["grade"]) for r in rows],
+                         [("coding.shell_exec", "repo:alpha/main", 1),
+                          ("coding.git_push", "repo:beta/trunk", 2)])
+        self.assertTrue(all(r["outcome"] == "ask" and r["level"] is None
+                            and r.get("error") for r in rows))
+
+    def test_segment_judgment_error_becomes_approval_refusal_in_auto_mode(self):
+        class BrokenJudgment:
+            def policy(self):
+                return None
+
+            def decide(self, action, counterparty):
+                raise RuntimeError("segment unavailable")
+
+        self.use(BrokenJudgment())
+        answer, reason = self.bash("npm test", mode="auto")
+        self.assertEqual(answer, "deny")
+        self.assertIn("segment unavailable", reason)
+        self.assertIn("approval", reason.lower())
+        self.assertEqual(self.details()[0]["outcome"], "ask")
+
+    def test_later_judgment_failure_does_not_downgrade_an_earlier_deny(self):
+        class DeniesThenFails:
+            def policy(self):
+                return None
+
+            def decide(self, action, counterparty):
+                if action.action_class == "coding.shell_exec":
+                    raise RuntimeError("segment unavailable")
+                return decision.Decision("deny", 1, "local", "blocked by policy")
+
+        self.use(DeniesThenFails())
+        answer, reason = self.bash("git push origin main && npm test")
+        self.assertEqual(answer, "deny")
+        self.assertIn("blocked by policy", reason)
+        details = self.details()
+        self.assertEqual([row["outcome"] for row in details], ["deny", "ask"])
+        self.assertEqual(details[1],
+                         {"action": "coding.shell_exec", "counterparty": "repo:alpha/main",
+                          "error": "RuntimeError", "grade": 1, "level": None,
+                          "outcome": "ask", "provider": "local"})
 
 
 class PolicyWrites(Home):
