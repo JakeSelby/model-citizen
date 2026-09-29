@@ -112,7 +112,8 @@ class PinnedSnapshotTests(unittest.TestCase):
 
     def test_expected_modules_is_the_glob_at_the_task_s_parent_sha(self):
         oracle = BENCH._oracle(REPO, "hook_ids")
-        tasks = BENCH.load_tasks(REPO / BENCH.TASKS)
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        tasks = manifest["tasks"] + [entry["task"] for entry in manifest["retired"]]
         sha = [t for t in tasks if t["id"] == "hook-ids"][0]["parent_sha"]
         listed = subprocess.check_output(
             ["git", "ls-tree", "--name-only", sha, "policy/hooks/"], cwd=str(REPO))

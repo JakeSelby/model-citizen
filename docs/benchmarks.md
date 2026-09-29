@@ -68,7 +68,7 @@ it is run by hand on a release candidate and never in CI. It needs Docker, and
 ```sh
 python3 scripts/cost_bench.py replay --verify-tasks                  # prove every check in a container; calls no model
 python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --dry-run   # the arms and the schedule
-python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 2 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 0 tasks x 2 arms x 2 reps; refuses until #796
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
@@ -152,14 +152,16 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   still reads, with both fields `null`.
 - **Contamination is refused before either arm spends.** While the harness image contains a checkout
   of this repository, every issue task mined from the same repository is refused: commit ancestry
-  cannot prove the files lack a cherry-picked, squashed or equivalent fix. A synthetic task's
-  held-back oracle must also fail on the checkout installed at the image's exact commit. An exposed
-  task is refused before the writable-worktree probe or preflight. During a scored run, any tool
-  call whose input literally names `/opt/model-citizen` fails that attempt as
+  cannot prove the files lack a cherry-picked, squashed or equivalent fix. The synthetic tasks are
+  excluded too: the installed checkout contains their held-back oracle source and its `solve()`
+  reference implementation, while an unrelated oracle failure would not prove the answer absent.
+  An exposed task is refused before the writable-worktree probe or preflight. During a scored run,
+  an observed tool input whose normalized path names `/opt/model-citizen` fails that attempt as
   `installed-checkout-read`; every row records the
   `installed-checkout-oracle-and-transcript-v1` control. The transcript check is evidence for the
-  literal installed path, not a complete filesystem-read audit: an alias or copied file may evade
-  it. Prelaunch exclusion is the primary control. The installed runtime remains intact.
+  paths visible in tool inputs, not a complete filesystem-read audit: an unknown symlink, relative
+  traversal or copied file may evade it. Prelaunch exclusion is the primary control. The installed
+  runtime remains intact.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its
@@ -195,16 +197,18 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
   days, never dollars. The publishable threshold is fixed in the script: the harness costs at most
   85% of bare per passed task while passing no fewer than bare minus one, mean of reps.
-- **What is faked:** single-shot prompts stand in for interactive sessions, 2 of the 2 tasks are
-  synthetic, and a tagged run measures the tag's default configuration rather than a configured
-  one. The arms run on Linux; a macOS arm is not built.
+- **What is faked:** 0 of the 0 tasks are synthetic because no live replay task is currently
+  eligible. The retired synthetic tasks used single-shot prompts in place of interactive sessions,
+  and a tagged run measures the tag's default configuration rather than a configured one. The arms
+  run on Linux; a macOS arm is not built.
 - **A task that cannot be passed honestly leaves the set** and moves to the manifest's `retired`
   list with its reason and date. The five issue-derived tasks left on 2026-09-28 because the
   installed harness checkout can reach their known-good commits. `usage-prices` had already left
   on 2026-09-25 because its held-back tests pin live prices and helper names its prompt never gives.
 
-**Status.** No result from the current two-task set supports a product claim; both tasks are
-synthetic, and #796 owns expansion to an adequately powered task set. The earlier live tier
+**Status.** The current manifest has no eligible replay tasks, so the runner refuses before probes,
+preflight or model calls. #796 owns an adequately powered replacement task set whose answers the
+installed harness cannot carry. The earlier live tier
 produced one result of 1.052 on a four-task set, above
 the 0.85 threshold, so no cost claim is published. Two earlier figures in either direction were
 artifacts of the runner's sandbox and of a test-suite defect, both since fixed. A review on

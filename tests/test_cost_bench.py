@@ -370,7 +370,7 @@ class ReplayCaptureTests(unittest.TestCase):
     def test_a_scored_run_that_reads_the_installed_checkout_fails(self):
         message = call(None, ["Read"])
         message["message"]["content"][0]["input"] = {
-            "file_path": "/opt/model-citizen/policy/hooks/stop-gate.py"}
+            "file_path": "/opt/./model-citizen/policy/hooks/stop-gate.py"}
         with tempfile.TemporaryDirectory() as tmp:
             opts = options(tmp, reps=1)
             rows, _ = BENCH.replay([TASK], opts, Launch([json.dumps([message, result()])] * 2))
@@ -961,24 +961,14 @@ class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.tasks = BENCH.load_tasks(REPO / BENCH.TASKS)
 
-    def test_only_oracle_checked_synthetic_tasks_remain_live(self):
-        kinds = [t["kind"] for t in self.tasks]
-        self.assertEqual((kinds.count("issue"), kinds.count("synthetic")), (0, 2))
-        self.assertEqual(len(kinds), len(set(t["id"] for t in self.tasks)))
-        for task in self.tasks:
-            self.assertRegex(task["parent_sha"], r"^[0-9a-f]{40}$")
-            self.assertIsNone(task["good_sha"])
-            self.assertTrue((REPO / BENCH.ORACLES / (task["tests"]["oracle"] + ".py")).is_file())
+    def test_no_task_remains_live_without_proven_answer_absence(self):
+        self.assertEqual(self.tasks, [])
 
     def test_a_prompt_never_names_its_held_back_check(self):
         for task in self.tasks:
             prompt = BENCH.prompt_of(task)
             for held in task["tests"].get("copy", []) + task["tests"].get("select", []) + ["oracle"]:
                 self.assertNotIn(held, prompt, msg=task["id"])
-
-    def test_the_installed_checkout_does_not_already_pass_a_live_tasks_oracle(self):
-        head = subprocess.check_output(["git", "-C", str(REPO), "rev-parse", "HEAD"]).decode().strip()
-        self.assertEqual(BENCH.contamination_errors(self.tasks, REPO, head), [])
 
     def test_every_retired_issue_fix_is_reachable_from_the_installed_checkout(self):
         manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))

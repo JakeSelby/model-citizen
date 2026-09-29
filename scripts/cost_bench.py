@@ -22,6 +22,7 @@ import itertools
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -430,6 +431,26 @@ def _git(repo, *args):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
 
 
+def _git_required(repo, *args):
+    """A Git command whose failure makes the requested snapshot unsafe."""
+    done = _git(repo, *args)
+    if done.returncode:
+        detail = done.stdout.strip() or "exit %d" % done.returncode
+        raise RuntimeError("git %s failed in %s: %s" % (" ".join(args), repo, detail))
+    return done
+
+
+def _git_is_ancestor(repo, ancestor, descendant):
+    """True/False for ancestry; an operational Git error is neither and fails closed."""
+    done = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    if done.returncode == 0:
+        return True
+    if done.returncode == 1:
+        return False
+    detail = done.stdout.strip() or "exit %d" % done.returncode
+    raise RuntimeError("git ancestry query failed in %s: %s" % (repo, detail))
+
+
 def snapshot(repo, sha, dest):
     """The repository rewound to `sha`, with real history and no way forward to the fix.
 
@@ -440,20 +461,25 @@ def snapshot(repo, sha, dest):
     pruning, so the commit that solved the task is not reachable and not present."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    wanted = _git(repo, "rev-parse", "--verify", "%s^{commit}" % sha).stdout.strip()
+    wanted = _git_required(repo, "rev-parse", "--verify", "%s^{commit}" % sha).stdout.strip()
+    if len(wanted) != 40:
+        raise RuntimeError("git rev-parse returned no full commit for %s" % sha)
     env = scrubbed_env()
-    subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
-                    str(repo), str(dest)], check=True, env=env)
-    _git(dest, "checkout", "--quiet", "-B", SNAPSHOT_BRANCH, sha)
-    for ref in _git(dest, "for-each-ref", "--format=%(refname)").stdout.split():
-        ancestor = ref.startswith("refs/tags/") and not _git(dest, "merge-base", "--is-ancestor",
-                                                             ref, "HEAD").returncode
+    try:
+        subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
+                        str(repo), str(dest)], check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("git clone failed while creating snapshot of %s" % sha) from exc
+    _git_required(dest, "checkout", "--quiet", "-B", SNAPSHOT_BRANCH, wanted)
+    for ref in _git_required(dest, "for-each-ref", "--format=%(refname)").stdout.split():
+        ancestor = ref.startswith("refs/tags/") and _git_is_ancestor(dest, ref, "HEAD")
         if ref != "refs/heads/" + SNAPSHOT_BRANCH and not ancestor:
-            _git(dest, "update-ref", "-d", ref)
-    _git(dest, "remote", "remove", "origin")
-    _git(dest, "reflog", "expire", "--expire=now", "--all")
-    _git(dest, "gc", "--quiet", "--prune=now")
-    if _git(dest, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip() != wanted:
+            _git_required(dest, "update-ref", "-d", ref)
+    _git_required(dest, "remote", "remove", "origin")
+    _git_required(dest, "reflog", "expire", "--expire=now", "--all")
+    _git_required(dest, "gc", "--quiet", "--prune=now")
+    landed = _git_required(dest, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip()
+    if landed != wanted:
         raise RuntimeError("snapshot of %s did not land on that commit" % sha)
     return dest
 
@@ -532,11 +558,11 @@ def stop_hook_counts(messages, streamed):
 
 
 def installed_checkout_reads(messages):
-    """Tool calls whose input names the harness checkout installed in the image.
+    """Observed tool inputs that name the installed checkout or a lexical equivalent.
 
-    The checkout is available only to the harness arm, so a scored task that consults it has seen
-    evidence unavailable to bare even when the task's completed output is not already there. Keep
-    the record to the tool and root rather than copying arbitrary command text into the ledger.
+    This catches canonical paths and spellings such as `/opt/./model-citizen`; it cannot identify
+    an unknown pre-existing symlink or a copied file. Keep the record to the tool and root rather
+    than copying arbitrary command text into the ledger.
     """
     reads = []
 
@@ -550,12 +576,20 @@ def installed_checkout_reads(messages):
             for item in value:
                 yield from strings(item)
 
+    def installed_path(value):
+        for match in re.finditer(r"/(?:[^\s\"'`;|&<>()])+", value):
+            candidate = match.group(0).rstrip(".,:")
+            normal = posixpath.normpath(candidate)
+            if normal == INSTALLED_CHECKOUT or normal.startswith(INSTALLED_CHECKOUT + "/"):
+                return True
+        return False
+
     for message in messages:
         body = message.get("message") if isinstance(message, dict) else None
         for block in (body or {}).get("content") or []:
             if not isinstance(block, dict) or block.get("type") != "tool_use":
                 continue
-            if any(INSTALLED_CHECKOUT in value for value in strings(block.get("input") or {})):
+            if any(installed_path(value) for value in strings(block.get("input") or {})):
                 reads.append("%s:%s" % (str(block.get("name") or "unknown"), INSTALLED_CHECKOUT))
     return reads
 
@@ -776,24 +810,26 @@ def contamination_errors(tasks, repo, harness_commit, tmp=None):
 
     An issue task mined from this repository is refused while the installed image contains this
     repository: ancestry cannot rule out a cherry-pick, squash or equivalent implementation in
-    its files. Synthetic tasks have no good commit, so their held-back oracle is applied to the
-    installed tree: a pass means the requested output is already present. This check is local and
-    deterministic, and therefore runs before the first model call.
+    its files. A same-repository synthetic task is refused too: an arbitrary oracle failure does
+    not prove the answer absent, and its installed oracle source can expose `solve`. This check is
+    local and deterministic, and therefore runs before the first model call.
     """
     parent = Path(tempfile.mkdtemp(prefix="cost-contamination-", dir=tmp))
     try:
         errors = []
-        synthetic = [task for task in tasks if task["kind"] == "synthetic"]
-        checkout = snapshot(repo, harness_commit, parent / "checkout") if synthetic else None
+        checkout = snapshot(repo, harness_commit, parent / "checkout") if tasks else None
         for task in tasks:
             if task["kind"] == "issue":
                 errors.append("%s: same-repository issue task cannot prove its fixed files are "
                               "absent from the installed checkout" % task["id"])
                 continue
-            oracle_errors = _oracle(repo, task["tests"]["oracle"]).check(checkout)
-            if not oracle_errors:
-                errors.append("%s: held-back oracle already passes in the installed checkout"
-                              % task["id"])
+            oracle_path = checkout / ORACLES / (task["tests"]["oracle"] + ".py")
+            if oracle_path.is_file():
+                errors.append("%s: installed checkout exposes the held-back oracle source and "
+                              "its reference solution" % task["id"])
+            else:
+                errors.append("%s: answer absence cannot be established for this same-repository "
+                              "synthetic task" % task["id"])
         return errors
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
@@ -973,6 +1009,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
+    if not tasks:
+        raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     check_contamination = opts.get("contamination_checker", contamination_errors)
@@ -1277,6 +1315,8 @@ def cmd_replay(args):
     tasks = load_tasks(args.tasks)
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
+    if not tasks:
+        raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")

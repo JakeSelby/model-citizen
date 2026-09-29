@@ -211,16 +211,18 @@ check, as the replay's hidden checks are, the item is marked not applicable with
 ### 9. A contamination check
 
 **What it is:** evidence that neither arm could see the answer, and that the two arms had the same
-access.
+access. When absence cannot be established, the task is excluded rather than counted.
 
 **Satisfied by:** a record that the reference solutions were unreachable from inside a trial (no
-later history in the task checkout, no known-good commit or already-passing oracle in the harness
-arm's installed checkout, no network path to the solution), that scored transcripts name no read
-from the installed checkout, that both arms had identical web and network access, and the task
+later history in the task checkout, no known-good commit or readable held-back oracle implementation
+in the harness arm's installed checkout, no network path to the solution), that scored transcripts
+contain no observed tool-input path to the installed checkout, that both arms had identical web and
+network access, and the task
 dates beside the model's stated training cutoff. The installed-checkout check runs before any model
-call; a detected literal-root transcript read fails that attempt. This transcript check is not a
-complete filesystem-read audit because aliases and copies can hide the source path, so it supports
-rather than replaces prelaunch exclusion. SM-2 records why this item exists:
+call; a detected canonical or lexically equivalent installed-root path fails that attempt. This
+transcript check observes tool inputs only and is not a complete filesystem-read audit because
+unknown symlinks, relative traversal and copies can hide the source path, so it supports rather
+than replaces prelaunch exclusion. SM-2 records why this item exists:
 
 > The 23 Sep eight-task runs were unscored and ran with unequal web access between the arms, so they
 > are not a result.

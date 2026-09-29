@@ -1,41 +1,6 @@
 {
   "schema_version": 1,
-  "tasks": [
-    {
-      "id": "hook-inventory",
-      "kind": "synthetic",
-      "source": "written for this benchmark: many-file read and summarize",
-      "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
-      "good_sha": null,
-      "max_turns": 60,
-      "prompt": [
-        "Read every Python module in `policy/hooks/` and write `hook-inventory.json` at the repository root.",
-        "",
-        "It is one JSON object keyed by file name, for example `stop-gate.py`, with one entry per module and no other keys. Each value is an object with two fields: `summary`, exactly the first line of the module's docstring, and `top_level_functions`, the number of functions defined at module level, not counting methods or nested functions.",
-        "",
-        "Change no other file."
-      ],
-      "tests": {
-        "oracle": "hook_inventory"
-      }
-    },
-    {
-      "id": "hook-ids",
-      "kind": "synthetic",
-      "source": "written for this benchmark: multi-module mechanical edit",
-      "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
-      "good_sha": null,
-      "max_turns": 60,
-      "prompt": [
-        "Give every Python module in `policy/hooks/` a module-level constant `HOOK_ID` whose value is that file's name without the `.py` extension, for example `HOOK_ID = \"stop-gate\"` in `stop-gate.py`.",
-        "",
-        "Put it after the module's docstring and imports. Every module must still compile and behave as before. Add exactly one such constant per module, touch no other file, and do not commit."
-      ],
-      "tests": {
-        "oracle": "hook_ids"
-      }
-    }
-  ],
+  "tasks": [],
   "retired": [
     {
       "id": "usage-prices",
@@ -306,6 +271,50 @@
           "pythonpath": [
             "lib"
           ]
+        }
+      }
+    },
+    {
+      "id": "hook-inventory",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs this repository under /opt/model-citizen, including the held-back oracle source whose solve() function is a readable reference implementation. An oracle failure on the installed tree would not prove that answer absent. The whole task remains here as provenance; #796 owns replacement workloads whose answers the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "hook-inventory",
+        "kind": "synthetic",
+        "source": "written for this benchmark: many-file read and summarize",
+        "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
+        "good_sha": null,
+        "max_turns": 60,
+        "prompt": [
+          "Read every Python module in `policy/hooks/` and write `hook-inventory.json` at the repository root.",
+          "",
+          "It is one JSON object keyed by file name, for example `stop-gate.py`, with one entry per module and no other keys. Each value is an object with two fields: `summary`, exactly the first line of the module's docstring, and `top_level_functions`, the number of functions defined at module level, not counting methods or nested functions.",
+          "",
+          "Change no other file."
+        ],
+        "tests": {
+          "oracle": "hook_inventory"
+        }
+      }
+    },
+    {
+      "id": "hook-ids",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs this repository under /opt/model-citizen, including the held-back oracle source whose solve() function is a readable reference implementation. An oracle failure on the installed tree would not prove that answer absent. The whole task remains here as provenance; #796 owns replacement workloads whose answers the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "hook-ids",
+        "kind": "synthetic",
+        "source": "written for this benchmark: multi-module mechanical edit",
+        "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
+        "good_sha": null,
+        "max_turns": 60,
+        "prompt": [
+          "Give every Python module in `policy/hooks/` a module-level constant `HOOK_ID` whose value is that file's name without the `.py` extension, for example `HOOK_ID = \"stop-gate\"` in `stop-gate.py`.",
+          "",
+          "Put it after the module's docstring and imports. Every module must still compile and behave as before. Add exactly one such constant per module, touch no other file, and do not commit."
+        ],
+        "tests": {
+          "oracle": "hook_ids"
         }
       }
     }
