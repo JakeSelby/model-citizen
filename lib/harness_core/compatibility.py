@@ -487,16 +487,12 @@ def changed_files(root, commit, target, paths, carved):
     for spec in (paths, carved):
         if not spec:
             continue
-        commands = [["git", "-C", str(root), "diff", "--name-only", "--no-renames",
-                     commit, target, "--", *spec]]
-        if target == "HEAD":
-            commands.append(["git", "-C", str(root), "diff", "--cached", "--name-only",
-                             "--no-renames", "HEAD", "--", *spec])
-        for command in commands:
-            done = subprocess.run(command, capture_output=True, text=True)
-            if done.returncode:
-                return None
-            names.update(line for line in (done.stdout or "").splitlines() if line.strip())
+        revisions = ["--cached", commit] if target == "HEAD" else [commit, target]
+        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames",
+                               *revisions, "--", *spec], capture_output=True, text=True)
+        if done.returncode:
+            return None
+        names.update(line for line in (done.stdout or "").splitlines() if line.strip())
     return sorted(names)
 
 

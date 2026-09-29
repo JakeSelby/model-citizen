@@ -54,14 +54,27 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
             "1.2.3",
         )
 
-    def test_working_head_fails_closed_when_either_git_query_fails(self):
+    def test_staged_revert_removes_path_from_pending_release_delta(self):
+        path = self.root / "runtime.py"
+        path.write_text("prior\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "prior")
+        prior = self.git("rev-parse", "HEAD")
+        path.write_text("changed\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "runtime change")
+        path.write_text("prior\n")
+        self.git("add", ".")
+        self.assertEqual(compatibility.changed_files(self.root, prior, "HEAD", ["."], []), [])
+
+    def test_working_head_fails_closed_when_either_path_query_fails(self):
         failed = subprocess.CompletedProcess([], 1, stdout="", stderr="failed")
         passed = subprocess.CompletedProcess([], 0, stdout="VERSION\n", stderr="")
 
         with patch.object(compatibility.subprocess, "run", return_value=failed):
-            self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], []))
+            self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], ["docs"]))
         with patch.object(compatibility.subprocess, "run", side_effect=[passed, failed]):
-            self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], []))
+            self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], ["docs"]))
 
 
 if __name__ == "__main__":
