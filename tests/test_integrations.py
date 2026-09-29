@@ -201,6 +201,7 @@ print(json.dumps({"contract_version": 1, "request_id": r["request_id"],
         children[-1].wait.assert_called_once_with()
 
         operations.clear()
+        children.clear()
         timed_out = "open"
         with patch.object(api.subprocess, "Popen", side_effect=launch), \
                 patch.object(api.time, "monotonic", side_effect=[0, 0, 1]):
@@ -208,6 +209,8 @@ print(json.dumps({"contract_version": 1, "request_id": r["request_id"],
                 api.viewer(self.root, self.cfg, self.root / "sessions", "open", timeout=0.2)
         self.assertTrue(error.exception.indeterminate)
         self.assertEqual(operations, ["describe", "open"])
+        children[0].kill.assert_not_called()
+        children[0].wait.assert_not_called()
         children[-1].kill.assert_called_once_with()
         children[-1].wait.assert_called_once_with()
         records = list((self.root / "sessions").glob("*.json"))
