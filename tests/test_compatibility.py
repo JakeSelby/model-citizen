@@ -53,7 +53,9 @@ class CompatibilityTests(unittest.TestCase):
             data["release_state"] = "candidate"
             data.pop("qualification_source_commit", None)
             data.pop("qualification_reuse", None)
-            data["clients"][0]["status"] = "qualified"
+            client = next(row for row in data["clients"] if row["id"] == "claude-code-cli-macos")
+            client["status"] = "qualified"
+            client["evidence"] = []
             path.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "missing acceptance"):
                 compatibility.catalog(root)
