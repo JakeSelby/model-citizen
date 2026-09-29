@@ -23,6 +23,21 @@ class LiteralDocumentationWrites(Home):
                     self.assertIsNone(answer, reason)
                     self.assertNotIn("level 1", reason)
 
+    def test_tab_stripping_quoted_heredoc_keeps_body_literal_and_destinations_guarded(self):
+        for delimiter in ("'EOF'", '\"EOF\"'):
+            command = "cat > /tmp/example.md <<-" + delimiter + "\n\t.config/agent-harness/config.json\n\tEOF"
+            with self.subTest(delimiter=delimiter):
+                self.assertTrue(grader.literal_text_command(command))
+                answer, reason = self.bash(command)
+                self.assertIsNone(answer, reason)
+                actual = command.replace("/tmp/example.md", "~/.config/agent-harness/config.json")
+                self.assertEqual(self.bash(actual)[0], "ask")
+                trailing = command + "\necho x > ~/.config/agent-harness/config.json"
+                self.assertFalse(grader.literal_text_command(trailing))
+                self.assertEqual(self.bash(trailing)[0], "ask")
+                ordinary = command.replace("<<-", "<<")
+                self.assertFalse(grader.literal_text_command(ordinary))
+
     def test_actual_configuration_writes_remain_protected(self):
         target = "~/.config/agent-harness/config.json"
         for command in ("echo '{}' > " + target, "tee " + target,

@@ -1392,12 +1392,13 @@ def unresolved(operand):
 
 
 def _plain_words(line, redirects=False):
-    """([(word, quoted, marks)], the quoted delimiter of the line's one here-document or None)
-    for one line of shell. `marks` holds, per character of the word, whether it sat inside
+    """Return words with quote marks, the quoted heredoc delimiter, and whether it strips tabs.
+
+    `marks` holds, per character of the word, whether it sat inside
     quotes, and `quoted` is True only when every character did. None for anything but plain
     words: a backslash, a `$` or backtick outside single quotes, an unquoted operator other than
-    one `<<` opening a word before a quoted delimiter, or an unclosed quote."""
-    words, delimiter = [], None
+    one `<<` or `<<-` opening a word before a quoted delimiter, or an unclosed quote."""
+    words, delimiter, strip_tabs = [], None, False
     word, marks, started, quote, i, n = [], [], False, None, 0, len(line)
     while i < n:
         c = line[i]
@@ -1415,7 +1416,8 @@ def _plain_words(line, redirects=False):
                 words.append(("".join(word), all(marks), marks))
             word, marks, started = [], [], False
         elif line.startswith("<<", i) and not started and delimiter is None:
-            rest = line[i + 2:].lstrip(" \t")
+            strip_tabs = line.startswith("<<-", i)
+            rest = line[i + (3 if strip_tabs else 2):].lstrip(" \t")
             close = rest.find(rest[0], 1) if rest and rest[0] in "'\"" else -1
             if close < 0 or not HEREDOC_DELIMITER_RE.match(rest[1:close]):
                 return None
@@ -1448,7 +1450,7 @@ def _plain_words(line, redirects=False):
         return None
     if started:
         words.append(("".join(word), all(marks), marks))
-    return words, delimiter
+    return words, delimiter, strip_tabs
 
 
 def _names_policy(text):
@@ -1473,12 +1475,14 @@ def gh_text_only(command, names=_names_policy):
     parsed = _plain_words(lines[0])
     if parsed is None:
         return False
-    words, delimiter = parsed
+    words, delimiter, strip_tabs = parsed
     if len(words) < 3 or words[0][:2] != ("gh", False) or any(w[1] for w in words[:3]):
         return False
     if (words[1][0], words[2][0]) not in GH_TEXT_SUBCOMMANDS:
         return False
     tail = lines[1:]
+    if strip_tabs:
+        tail = [line.lstrip("\t") for line in tail]
     if delimiter is not None:
         if delimiter not in tail:
             return False
@@ -1517,7 +1521,7 @@ def literal_text_command(command):
     parsed = _plain_words(lines[0], redirects=True)
     if parsed is None:
         return False
-    words, delimiter = parsed
+    words, delimiter, strip_tabs = parsed
     if not words or words[0][1] or words[0][0] not in ("cat", "printf", "echo", "tee"):
         return False
     if words[0][0] == "printf":
@@ -1533,6 +1537,8 @@ def literal_text_command(command):
         if not args or args[0].startswith("-") or "%" in re.sub(r"%%|%s", "", args[0]):
             return False
     tail = lines[1:]
+    if strip_tabs:
+        tail = [line.lstrip("\t") for line in tail]
     if delimiter is not None:
         if delimiter not in tail:
             return False
