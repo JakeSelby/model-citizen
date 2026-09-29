@@ -508,16 +508,12 @@ def pair_differences(bare, harness):
     return out
 
 
-PAIR_LINES = 40
-
-
 def admit_pair(bare, harness):
     """SystemExit listing every difference `pair_differences` finds; None when there is none."""
     lines = pair_differences(bare, harness)
     if lines:
-        shown = lines[:PAIR_LINES] + (["... and %d more" % (len(lines) - PAIR_LINES)] if len(lines) > PAIR_LINES else [])
         raise SystemExit("replay-arms: refusing the pair bare and %s: they differ by more than the harness:\n  %s"
-                         % (harness.get("label") or "harness", "\n  ".join(shown)))
+                         % (harness.get("label") or "harness", "\n  ".join(lines)))
 
 
 # --- Egress: an internal network whose one way out is the allowlist proxy ----------------------

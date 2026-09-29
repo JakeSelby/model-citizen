@@ -110,6 +110,18 @@ class PairParityTests(unittest.TestCase):
         harness["manifest"]["entries"].append({"path": "home:.gitconfig", "kind": "file", "sha256": "2"})
         self.assertIn("differs outside the harness component: home:.gitconfig (sha256)", self.refusal(bare, harness))
 
+    def test_a_pair_refusal_prints_every_difference(self):
+        bare, harness = self.pair()
+        for number in range(45):
+            harness["manifest"]["entries"].append(
+                {"path": "home:.outside-%02d" % number, "kind": "file", "sha256": "2"}
+            )
+
+        refusal = self.refusal(bare, harness)
+
+        for number in range(45):
+            self.assertIn("home:.outside-%02d" % number, refusal)
+
     def test_a_different_base_cli_or_effort_is_refused(self):
         for key, value in (("base_image", "other@sha256:1"), ("claude_code_version", "2.0"), ("effort", "low")):
             bare, harness = self.pair()
