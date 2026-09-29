@@ -86,7 +86,7 @@ def attempts(rows):
         if cost is not None and (not math.isfinite(cost) or cost < 0):
             raise ValueError("row %d has a non-finite or negative cost_usd" % index)
         out.append({"task": row["task"], "arm": row["arm"], "trial": trial,
-                    "passed": passed, "cost": cost,
+                    "passed": passed, "cost": cost, "error": error,
                     "long": task_long})
     return out
 
@@ -249,7 +249,7 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES):
         cost, passes, n = totals[arm]
         low, high = wilson(passes, n)
         arms[arm] = {"attempts": n, "passes": passes,
-                     "errors": sum(1 for r in rows if r["arm"] == arm and r.get("error")),
+                     "errors": sum(1 for a in atts if a["arm"] == arm and a["error"]),
                      "cost_usd": None if cost is None else round(cost, 6),
                      "cost_of_pass": None if cost_of_pass(cost, passes) is None else round(cost / passes, 6),
                      "mean_cost_per_attempt": None if cost is None else round(cost / n, 6),

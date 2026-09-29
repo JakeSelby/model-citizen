@@ -385,6 +385,13 @@ class RederivationTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid trial id"):
                     STATS.attempts([dict(base, rep=trial)])
 
+    def test_a_one_shot_iterable_keeps_validated_error_counts(self):
+        rows = rows_for({"a": {"bare": [(None, 1), (True, 1)],
+                              "harness": [(True, 0.5), (True, 0.5)]}})
+        expected = STATS.analyse(rows, resamples=20)
+        self.assertEqual(expected["arms"]["bare"]["errors"], 1)
+        self.assertEqual(STATS.analyse(iter(rows), resamples=20), expected)
+
     def test_saved_status_fields_must_be_typed_and_consistent(self):
         base = {"task": "a", "arm": "bare", "rep": 1, "error": False, "passed": True,
                 "outcome": "pass", "cost_usd": 1.0, "task_long": False}
