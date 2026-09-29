@@ -25,6 +25,14 @@ made from, by the same session id or the same runtime process. Subagents share b
 parent's session id and its pid, so neither alone tells two sibling builders apart; the worktree
 does, which is why it is required.
 
+Which worktree the editor is in comes from the hook payload's `cwd`, except inside a subagent. A
+Claude Code subagent's tool calls carry its parent's `cwd`, the orchestrator's worktree, not the
+worktree the builder works in, so there `cwd` would make a builder's own claim a sibling's. A
+payload that carries `agent_id`, which Claude Code sets only inside a subagent, therefore takes
+the editor's worktree from the target's. What that gives up: a subagent that writes by absolute
+path into a sibling's worktree, under the same session, is not stopped by the sibling's claim.
+A main-thread edit, and a payload without `agent_id`, keep the `cwd` rule.
+
 What an overlap does is the `coordination.repeat_overlap` variant in the user config. `deny`, the
 default, warns on the first hit on a path and denies the second in the same session; `warn` never
 denies; anything the harness cannot read or honour warns, because a setting nobody can read must
@@ -429,23 +437,25 @@ def own(item, session, pid, root):
         pid is not None and item.get("pid") == pid)
 
 
-def editor_root(cwd, target_root):
+def editor_root(cwd, target_root, subagent=False):
     """The worktree the editor runs in: the one holding `cwd`, or None outside a checkout.
 
-    Only when no `cwd` is known does the target's worktree stand in. An absolute path can reach
-    into a sibling's worktree, so the target never decides whose claim is the editor's own.
+    The target's worktree stands in when no `cwd` is known, and for a `subagent`, whose `cwd` is
+    its parent's. Otherwise an absolute path can reach into a sibling's worktree, so the target
+    does not decide whose claim is the editor's own.
     """
-    if not cwd:
+    if subagent or not cwd:
         return target_root
     repo = repository(str(cwd))
     return repo["root"] if repo else None
 
 
-def overlaps(path, session=None, pid=None, cwd=None, env=None):
+def overlaps(path, session=None, pid=None, cwd=None, env=None, subagent=False):
     """Live siblings' claims covering `path`: a list of `(claim, pattern, rel)`.
 
     Empty outside a repository, for a path outside its worktree, and for the session's own claims.
-    Repository and path come from the target; whose claims are the editor's own, from `cwd`.
+    Repository and path come from the target; whose claims are the editor's own, from `cwd`, or
+    from the target for a `subagent` (see `editor_root`).
     """
     target = Path(path)
     if not target.is_absolute():
@@ -456,7 +466,7 @@ def overlaps(path, session=None, pid=None, cwd=None, env=None):
     rel = relative(target, repo["root"])
     if rel is None:
         return []
-    editor = editor_root(cwd, repo["root"])
+    editor = editor_root(cwd, repo["root"], subagent)
     found = []
     for item in claims(env):
         if item.get("repo") != repo["common"] or own(item, session, pid, editor):
