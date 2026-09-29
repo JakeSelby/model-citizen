@@ -473,7 +473,7 @@ development_status:
   ah-b112-lock-the-intent-overlap-counter-s-read-modify: done
   ah-b113-test-worker-context-budget-rewrites-a-tracked: done
   ah-b114-the-governance-config-set-check-gates-commands: done
-  ah-b115-a-heredoc-that-only-names-the-user-config-path: backlog
+  ah-b115-a-heredoc-that-only-names-the-user-config-path: ready-for-dev
   ah-b116-git-c-with-or-a-variable-resolves-a-push-to-an: backlog
   ah-b120-directed-bmad-prompt-paths-can-evade-spawn: done
   ah-b121-fix-skills-sh-discovery-for-five-invalid-skill: done
