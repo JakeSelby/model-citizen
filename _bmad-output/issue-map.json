@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 125,
-    "chore": 96,
+    "chore": 98,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -6797,6 +6797,19 @@
       "parent_bmad_id": "AH-E020",
       "parent_github_number": 875,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C097",
+      "github_number": 913,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
+      "title": "docs/usage.md's decision point table leaves out framework-spawn",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C097.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

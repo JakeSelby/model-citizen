@@ -537,6 +537,7 @@ development_status:
   ah-c093-publish-v0-14-2-with-the-claude-directory-bundle: done
   ah-c094-rescope-the-delivery-roadmap-around-measured-and: ready-for-dev
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
+  ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
