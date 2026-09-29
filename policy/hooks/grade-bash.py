@@ -1639,7 +1639,7 @@ def main():
     if confirmed:
         return
     variant, label = stance()
-    threshold = THRESHOLDS.get(variant, THRESHOLDS[DEFAULT_STANCE])
+    threshold = THRESHOLDS.get(variant, THRESHOLDS[STRICTEST])
     grade, verb, target, family = grade_text(command, payload.get("cwd") or "")
     if grade == 0:
         return
