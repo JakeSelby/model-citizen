@@ -483,6 +483,7 @@ development_status:
   ah-b125-qualification-provision-runs-its-git-calls-under: ready-for-dev
   ah-b126-grade-bash-falls-back-to-its-most-permissive: ready-for-dev
   ah-b127-config-set-refuses-a-switch-that-repairs-a: done
+  ah-b128-three-timing-tests-fail-under-a-loaded-full: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -541,7 +542,7 @@ development_status:
   ah-c093-publish-v0-14-2-with-the-claude-directory-bundle: done
   ah-c094-rescope-the-delivery-roadmap-around-measured-and: ready-for-dev
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
-  ah-c100-resolve-canonical-plugin-workflow-findings-from: backlog
+  ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
