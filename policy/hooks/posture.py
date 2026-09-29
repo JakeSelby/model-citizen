@@ -42,6 +42,9 @@ SESSION_TTL_DAYS = 14
 SESSION_ID_MAX = 128
 # How stale a record may get before a spawn that read it moves its mtime out of the sweep's way.
 SESSION_REFRESH_SECONDS = 86400
+DELEGATION_READS_KEY = "delegation_read_files"
+DELEGATION_FIRED_KEY = "delegation_nudge_fired"
+DELEGATION_READS_MAX = 64
 # The transcript attachment a session writes when the set of types it resolves changes, and how
 # much of the transcript's tail is read to find one. A reload is announced in the turn it is
 # noticed, so it is at the end of the file, and a bounded read keeps a spawn hook's cost flat.
@@ -337,6 +340,47 @@ def note_once(session_id, key, env=None):
     if key in seen:
         return False
     return write_session_record(session_id, dict(record, notified=sorted(seen + [key])), env)
+
+
+def delegation_read(session_id, paths, threshold, env=None):
+    """`(fired now, distinct count)` after atomically adding read paths to session state.
+
+    A separate exclusive lock keeps concurrent PostToolUse hooks from both firing. Contention
+    drops one observation rather than waiting in the native hook's deadline; a later read can
+    still cross the threshold. Paths are bounded because this record is session memory, not a log.
+    """
+    path = session_record_path(session_id, env)
+    if path is None or not (_number(threshold, 3, DELEGATION_READS_MAX, integer=True)):
+        return False, 0
+    wanted = {value for value in paths if isinstance(value, str) and value}
+    if not wanted:
+        return False, 0
+    lock = path.with_name(path.name + ".delegation.lock")
+    descriptor = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(str(path.parent), 0o700)
+        descriptor = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        record = read_session_record(session_id, env) or {}
+        seen = record.get(DELEGATION_READS_KEY)
+        seen = {value for value in seen if isinstance(value, str)} if isinstance(seen, list) else set()
+        seen.update(wanted)
+        seen = set(sorted(seen)[-DELEGATION_READS_MAX:])
+        fired = record.get(DELEGATION_FIRED_KEY) is True
+        fire_now = not fired and len(seen) >= threshold
+        updated = dict(record, **{DELEGATION_READS_KEY: sorted(seen),
+                                 DELEGATION_FIRED_KEY: fired or fire_now,
+                                 "at": int(time.time())})
+        return (fire_now, len(seen)) if write_session_record(session_id, updated, env) else (False, 0)
+    except OSError:
+        return False, 0
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+                os.unlink(str(lock))
+            except OSError:
+                pass
 
 
 def prune_session_records(keep=None, days=SESSION_TTL_DAYS, env=None):
@@ -649,6 +693,43 @@ def sidecar_path(variant, roots):
         if real == base or base in real.parents:
             return path
     return None
+
+
+def delegation_nudge(variant, config=None, strict=False, root=None, env=None):
+    """The selected delegation variant's bounded read nudge, or None when it defines none."""
+    if not _identifier(variant):
+        return None
+    if config is None:
+        config = _user_config(os.environ if env is None else env, strict)
+    path = None
+    for source in stance_roots(config, root):
+        candidate = source / "delegation" / (variant + ".json")
+        if not candidate.is_file():
+            continue
+        try:
+            real, base = candidate.resolve(), source.resolve()
+        except OSError:
+            continue
+        if real == base or base in real.parents:
+            path = candidate
+            break
+    if path is None:
+        return None
+    warnings = []
+    data = _load_sidecar(path, strict, warnings)
+    if data is None:
+        return None
+    allowed = {"schema_version", "threshold", "message"}
+    valid = (set(data) <= allowed and data.get("schema_version") == SIDECAR_SCHEMA_VERSION
+             and _number(data.get("threshold"), 3, DELEGATION_READS_MAX, integer=True)
+             and isinstance(data.get("message"), str)
+             and 0 < len(data["message"].strip()) <= 500)
+    if not valid:
+        if strict:
+            raise ValueError(str(path) + " is not a usable delegation nudge sidecar")
+        return None
+    return {"threshold": data["threshold"], "message": data["message"].strip(),
+            "source": str(path)}
 
 
 def _load_sidecar(path, strict, warnings):

@@ -36,6 +36,14 @@ DENIED_MAX = 32
 FINGERPRINT_MAX = 2000
 PREFIX_MATCH = 400
 SIMILARITY = 0.85
+# Bash reads count only when their operands are unambiguous file names. These programs either
+# take file operands directly or have a small option grammar handled below; broader tools such
+# as grep and find can name patterns, directories or programs, so they stay out of the signal.
+DELEGATION_FILE_READERS = {"cat"}
+DELEGATION_SIZED_READERS = {"head", "tail"}
+DELEGATION_SIMPLE_FLAGS = re.compile(r"^-[A-Za-z]+$")
+DELEGATION_DYNAMIC_PATH = re.compile(r"[$`*?\[\]{}\\]")
+DELEGATION_OPERATOR = re.compile(r"^\d*[<>&|]+$")
 
 
 def load(name):
@@ -169,6 +177,121 @@ def selected(name, fallback):
     if _SELECTIONS:
         return (_SELECTIONS[-1].get("stances") or {}).get(name, fallback)
     return load("posture").selected(name, fallback)
+
+
+def _read_path(value, cwd, env=None):
+    """A lexical file identity for one explicit operand, or None when shell state decides it."""
+    if not isinstance(value, str) or not value or value == "-" or value.startswith("-"):
+        return None
+    if DELEGATION_DYNAMIC_PATH.search(value) or value.startswith("~") and not value.startswith("~/"):
+        return None
+    env = os.environ if env is None else env
+    if value.startswith("~/"):
+        base = env.get("HOME")
+        if not isinstance(base, str) or not os.path.isabs(base):
+            return None
+        value = os.path.join(base, value[2:])
+    elif not os.path.isabs(value):
+        if not isinstance(cwd, str) or not os.path.isabs(cwd):
+            return None
+        value = os.path.join(cwd, value)
+    return os.path.normpath(value)
+
+
+def _bash_read_operands(tokens):
+    """Explicit file operands from one conservative, already read-only simple command."""
+    if not tokens or any(token in (";", "&&", "||", "|", "|&", "&", "(", ")")
+                         or DELEGATION_OPERATOR.match(token) for token in tokens):
+        return []
+    if any("=" in token.split("/", 1)[0] for token in tokens[:-1]):
+        return []
+    program = tokens[0].rsplit("/", 1)[-1]
+    args = list(tokens[1:])
+    files = []
+    if program in DELEGATION_FILE_READERS or program == "wc":
+        options = True
+        for arg in args:
+            if options and arg == "--":
+                options = False
+            elif options and DELEGATION_SIMPLE_FLAGS.match(arg):
+                continue
+            else:
+                options = False
+                files.append(arg)
+    elif program in DELEGATION_SIZED_READERS:
+        index = 0
+        while index < len(args):
+            arg = args[index]
+            if arg == "--":
+                files.extend(args[index + 1:])
+                break
+            if arg in ("-n", "-c", "--lines", "--bytes"):
+                if index + 1 >= len(args) or not args[index + 1].lstrip("+-").isdigit():
+                    return []
+                index += 2
+                continue
+            if re.match(r"^-[0-9]+$", arg) or DELEGATION_SIMPLE_FLAGS.match(arg):
+                index += 1
+                continue
+            files.extend(args[index:])
+            break
+    elif program == "sed":
+        if not args or args[0] != "-n" or len(args) < 3:
+            return []
+        files = args[2:]
+    else:
+        return []
+    return files
+
+
+def delegation_read_paths(event):
+    """Distinct explicit files successfully read by this Read or Bash event."""
+    response = event.get("tool_response")
+    if isinstance(response, dict) and (response.get("is_error") is True
+                                      or response.get("exit_code", response.get("exitCode", 0)) not in (0, None)):
+        return []
+    cwd = event.get("cwd") or ""
+    tool = event.get("tool_name")
+    if tool == "Read":
+        values = [(event.get("tool_input") or {}).get("file_path")]
+    elif tool == "Bash":
+        command = (event.get("tool_input") or {}).get("command")
+        if not isinstance(command, str) or "$" in command or "`" in command or "\n" in command:
+            return []
+        try:
+            grader = load("grade-bash")
+            if grader.ro is None or grader.grade_text(command, cwd)[0] != 0:
+                return []
+            values = _bash_read_operands(grader.ro.tokenize(command))
+        except Exception:
+            return []
+    else:
+        return []
+    paths = [_read_path(value, cwd) for value in values]
+    return sorted({path for path in paths if path})
+
+
+def delegation_nudge_context(runtime, event):
+    """One stance-owned nudge when this session first reaches its distinct-read threshold."""
+    try:
+        variant = selected("delegation", "tiered")
+        if variant == "off":
+            return None
+        posture = load("posture")
+        settings = posture.delegation_nudge(variant, strict=False)
+        paths = delegation_read_paths(event)
+        if settings is None or not paths:
+            return None
+        fired, count = posture.delegation_read(event.get("session_id"), paths,
+                                               settings["threshold"])
+        if not fired:
+            return None
+        log = decisions()
+        if log is not None:
+            log.record("delegation-nudge", "nudge", str(count) + " distinct files", event, runtime)
+        return settings["message"]
+    except Exception:
+        return None
 
 
 def investigating(runtime, event):
@@ -923,6 +1046,10 @@ def _dispatch(runtime, payload):
         contexts = []
         if tool == "Bash" and enabled("grade-bash"):
             log_bash_outcome(runtime, event)
+        if tool in ("Read", "Bash"):
+            nudge = delegation_nudge_context(runtime, event)
+            if nudge:
+                contexts.append(nudge)
         if selected("plan-ceremony", "review-card") == "review-card":
             for path in patch_paths(event):
                 result = invoke("validate-plan-card", dict(event, tool_input={"file_path": path},

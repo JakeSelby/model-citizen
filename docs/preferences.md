@@ -327,7 +327,12 @@ inherits no voice, so its brief has to carry the output shape itself.
 boundaries where they stop holding are in the `delegation-tiering` skill, not here. The
 `tier-agent-spawns` hook enforces the chosen variant on spawns that name no agent definition:
 routed to the cost variant's default band worker under `tiered`, untouched under
-`session-model`, a prompt under `off`.
+`session-model`, a prompt under `off`. Under `tiered`, three distinct successful file reads in a
+session add one PostToolUse nudge to move the remaining bounded gathering into `worker-a`; the
+variant sidecar owns both that threshold and the message. Simple proven-read-only Bash file
+operands count with native Read calls. Dynamic shell paths and commands whose operands are not
+unambiguous do not. Variants without a nudge sidecar, including `session-model` and `off`, stay
+silent.
 
 **Band workers.** `worker-a`, `worker-b` and `worker-c` are the three roles the A/B/C bands
 render into, and they exist for one reason: the `Agent` tool takes no effort, so only an agent

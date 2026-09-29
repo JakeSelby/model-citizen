@@ -249,7 +249,7 @@ development_status:
   ah-s255-replay-stored-transcripts-through-the-rule: backlog
   ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: backlog
-  ah-s258-nudge-delegation-from-the-existing-detector: backlog
+  ah-s258-nudge-delegation-from-the-existing-detector: ready-for-dev
   ah-s259-per-rule-cost-attribution-across-the-whole: backlog
 
   ah-e014-qualify-a-release-in-one-round-and-let-its: in-progress
