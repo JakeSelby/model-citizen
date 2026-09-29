@@ -62,7 +62,7 @@ from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix
-from harness_core import intents
+from harness_core import intents, observation
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
 from harness_core import rule_coverage
@@ -390,6 +390,10 @@ def load_config(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             cfg.setdefault("vscode", {})["manage"] = value not in ("0", "false", "no")
         elif key == "HARNESS_MANAGE_CODEX":
             cfg.setdefault("codex", {})["manage"] = value not in ("0", "false", "no")
+    try:
+        observation.enabled(cfg)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     return cfg
 
 
@@ -1593,7 +1597,7 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
                 personal.write_text(rendered, encoding="utf-8")
 
         # Claude settings.
-        template = runtime_template()
+        template = runtime_template(cfg)
         settings_file = cd / "settings.json"
         live = read_json(settings_file) or {}
         mtime = settings_file.stat().st_mtime if settings_file.exists() else None
@@ -1685,7 +1689,8 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
                                              else UNMANAGED))
         hook_file = codex_dir() / "hooks.json"
         hook_live = read_json(hook_file) or {}
-        hook_template = lifecycle.registration(REPO, "codex")
+        hook_template = observation.with_observation(
+            lifecycle.registration(REPO, "codex"), REPO, "codex", cfg)
         hook_merged = deepcopy(hook_live)
         hook_merged.setdefault("hooks", {})
         for event, entries in hook_template["hooks"].items():
@@ -1747,10 +1752,10 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
     return 0
 
 
-def runtime_template():
+def runtime_template(cfg=None):
     template = read_json(REPO / "claude" / "settings.template.json") or {}
     template["hooks"] = lifecycle.registration(REPO, "claude-code")["hooks"]
-    return template
+    return observation.with_observation(template, REPO, "claude-code", cfg or {})
 
 
 def _diff_lines() -> List[str]:
@@ -1770,7 +1775,7 @@ def _diff_lines() -> List[str]:
             lines.append(f"broken link {p}{origin}")
     defaults = user_defaults_env()
     cfg = load_config(defaults)
-    template = runtime_template()
+    template = runtime_template(cfg)
     applied = read_json(applied_path()) or {}
     live = read_json(claude_dir() / "settings.json") or {}
     live_p = claude_projection(live, template, installed=installed_output_style())
@@ -3580,7 +3585,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 BOOL_KEYS = ["vscode.manage", "claude.manage", "codex.manage", "permissions_bypass_acknowledged",
-             "core_switches_acknowledged"]
+             "core_switches_acknowledged", "observation.enabled"]
 
 
 def coerce_config_value(key: str, value: str) -> Any:
