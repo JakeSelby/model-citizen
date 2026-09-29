@@ -583,9 +583,10 @@ class HookTests(unittest.TestCase):
                 self.assertEqual(out.stdout.strip(), "")
                 self.assertEqual(out.returncode, 0)
 
-    def test_an_unknown_stance_falls_back_to_execute(self):
-        self.assertEqual(run("gh pr create --fill", "made-up", "default"), (None, None))
-        self.assertEqual(run("rm -rf /", "made-up", "default")[0], "ask")
+    def test_an_unknown_stance_uses_the_strictest_threshold(self):
+        for command in ("touch notes.md", "gh pr create --fill", "rm -rf /"):
+            with self.subTest(command=command):
+                self.assertEqual(run(command, "made-up", "default")[0], "ask")
 
 
     def test_a_marker_that_is_not_leading_confirms_nothing(self):
