@@ -5349,8 +5349,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
         if cost is None:
             unpriced += 1
             acc[7] += 1
-        counted = sum(v for v in (row.get(name) for name in RATE_FIELDS)
-                      if isinstance(v, int) and not isinstance(v, bool) and v > 0)
+        counted = sum(v for v in (usage_count(row.get(name)) for name in RATE_FIELDS)
+                      if v is not None)
         if measured:
             dedup_raw += ratio * counted
             dedup_counted += counted

@@ -203,6 +203,17 @@ class JsonReportTests(unittest.TestCase):
                 self.assertEqual(output, "")
                 self.assertIn("--stance", error)
 
+    def test_dedup_weights_use_the_same_normalized_counts_as_totals(self):
+        for grouping in ("repo", "model", "profile"):
+            with self.subTest(grouping=grouping):
+                rows = [session(input="100", output=0, cache_read=0, cache_write=0,
+                                raw_vs_deduped=2.0),
+                        session(input=100, output=0, cache_read=0, cache_write=0,
+                                raw_vs_deduped=1.0)]
+                report = self.document(rows, by=grouping)
+                self.assertEqual(report["totals"]["tokens"]["input"], 200)
+                self.assertEqual(report["raw_vs_deduped"]["ratio"], 1.5)
+
     def test_empty_windows_are_valid_json(self):
         for values in ({}, {"by": "role"}, {"by": "provider"}, {"by": "prefix"},
                        {"rules": True}):
