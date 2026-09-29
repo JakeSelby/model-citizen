@@ -542,9 +542,10 @@ def _activity(handler: Handler, route: Route) -> None:
 
 
 def _runs_catalog(handler: Handler, route: Route) -> None:
+    # A read that discovers tests in a subprocess for seconds; on the serial mutation executor
+    # it would hold every queued history refetch past the two-second live-update contract.
     try:
-        payload = handler.server.mutations.call(
-            lambda: handler.server.run_supervisor.catalog(handler.server.repo_root))
+        payload = handler.server.run_supervisor.catalog(handler.server.repo_root)
     except runs.RunError:
         handler._error(503, "run_catalog_unavailable")
         return

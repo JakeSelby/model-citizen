@@ -5,6 +5,7 @@ import sys
 import unittest
 
 import test_studio_overview_browser as overview_support
+from harness_core.studio import live_updates
 
 
 class StudioRunHistoryBrowserTests(unittest.TestCase):
@@ -30,19 +31,32 @@ class StudioRunHistoryBrowserTests(unittest.TestCase):
         text = self.devtools.evaluate("document.querySelector('.run-history').textContent")
         self.assertIn("Run history", text)
         self.assertIn("Minimum cost", text)
+        history_loads = ("performance.getEntriesByType('resource')"
+                         ".filter(item => item.name.endsWith('/api/runs/history')).length")
+        # Count only once the first page and any refetch from the connect-time live snapshot
+        # have landed: the count must hold across a full watcher poll, so neither is read as
+        # the refresh under test.
+        self._wait(history_loads + " > 0", "Initial history page did not load")
+        before = self.devtools.evaluate(history_loads)
+        for _ in range(10):
+            time.sleep(live_updates.POLL_SECONDS + 0.2)
+            settled = self.devtools.evaluate(history_loads)
+            if settled == before:
+                break
+            before = settled
+        else:
+            self.fail("History kept refetching without a change")
         self.devtools.evaluate("document.querySelector('.run-history input').focus()")
-        before = self.devtools.evaluate(
-            "performance.getEntriesByType('resource').filter(item => item.name.endsWith('/api/runs/history')).length")
         refreshed = subprocess.run(
             [sys.executable, str(overview_support.browser_support.CLI),
              "runs", "reindex", "--json"], env=self.env, capture_output=True,
             text=True, timeout=45)
         self.assertEqual(refreshed.returncode, 0, refreshed.stderr)
         started = time.monotonic()
-        self._wait(
-            "performance.getEntriesByType('resource').filter(item => item.name.endsWith('/api/runs/history')).length > %d" % before,
-            "Runs live event did not refresh history", attempts=60)
-        self.assertLess(time.monotonic() - started, 3.1)
+        self._wait(history_loads + " > %d" % before,
+                   "Runs live event did not refresh history", attempts=60)
+        # AH-S289: a CLI change shows in an open Studio within two seconds.
+        self.assertLess(time.monotonic() - started, 2.0)
         self.assertTrue(self.devtools.evaluate(
             "document.activeElement === document.querySelector('.run-history input')"))
         for width in (320, 390):
