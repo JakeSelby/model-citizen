@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
+import delegation_verdict  # noqa: E402  whether the delegation stance fired, per task (#429)
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -99,6 +100,9 @@ INHERITED = "inherited"
 CONFIG_GLOBS = ("CLAUDE.md", "CLAUDE.personal.md", "rules/**/*.md", "skills/*/SKILL.md",
                 "agents/*.md", "output-styles/*.md")
 SPAWN_TOOLS = ("Task", "Agent")
+# Absorbable calls and Workflow launches, one definition each: `delegation_verdict`.
+GATHER_TOOLS = delegation_verdict.GATHER_TOOLS
+WORKFLOW_TOOLS = delegation_verdict.WORKFLOW_TOOLS
 # The loaded surface: the CLI's own `init` event, counted. Each list's length becomes the row's
 # `init_<key>`, so two runs of one arm can be compared on what their sessions loaded.
 SURFACE_KEYS = ("skills", "agents", "slash_commands", "tools", "mcp_servers", "memory_paths")
@@ -107,8 +111,9 @@ SURFACE_HASH_FIELDS = tuple(field + "_sha256" for field in SURFACE_FIELDS)
 SURFACE_SOURCE = "cli-init"
 SURFACE_SOURCE_FIELD = "init_surface_source"
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
-STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "stop_hooks",
-                 "hook_blocks", "cache_miss_ratio", "installed_checkout_reads",
+STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "spawn_offered",
+                 "gather_calls", "absorbed_calls", "workflow_launches", "stop_hooks", "hook_blocks",
+                 "cache_miss_ratio", "installed_checkout_reads",
                  "observed_effort", SURFACE_SOURCE_FIELD) \
                 + SURFACE_FIELDS + SURFACE_HASH_FIELDS
 INSTALLED_CHECKOUT = "/opt/model-citizen"
@@ -635,6 +640,17 @@ def loaded_surface(messages):
     return surface, effort if isinstance(effort, str) and effort else None
 
 
+def spawn_offered(messages):
+    """Whether the first `system`/`init` event offered a spawn tool; None when there is no such
+    event or its `tools` is not a list. False means the session could not have spawned at all."""
+    init = next((m for m in messages if isinstance(m, dict) and m.get("type") == "system"
+                 and m.get("subtype") == "init"), None)
+    tools = init.get("tools") if init is not None else None
+    if not isinstance(tools, list):
+        return None
+    return any(isinstance(name, str) and name in SPAWN_TOOLS for name in tools)
+
+
 def surface_of(row):
     """A row's observed surface, or None when its stream carried no `init` event."""
     if row.get(SURFACE_SOURCE_FIELD) != SURFACE_SOURCE:
@@ -655,16 +671,21 @@ def _stream_diagnostics(messages, streamed):
     surface, effort = loaded_surface(messages)
     stops, blocks = stop_hook_counts(messages, streamed)
     first_turns, seen, first_write, first_context, tools = [], set(), None, None, {}
+    assistant, gather, absorbed = False, 0, 0
     cache = {"cache_read": 0, "cache_write": 0, "turns": 0, "known": True}
     for message in messages:
         if not isinstance(message, dict) or message.get("type") != "assistant":
             continue
+        assistant = True
         thread = message.get("parent_tool_use_id")
         body = message.get("message") or {}
         for block in body.get("content") or []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "")
                 tools[name] = tools.get(name, 0) + 1
+                if name in GATHER_TOOLS:
+                    gather += 1
+                    absorbed += thread is not None
         if not isinstance(body.get("usage"), dict):
             continue
         if first_write is None:
@@ -682,9 +703,14 @@ def _stream_diagnostics(messages, streamed):
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
+    # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
+    count = lambda value: value if assistant else None
     return {"first_turns": first_turns, "first_call_cache_write": first_write,
             "first_call_context": first_context, "tool_counts": tools,
-            "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
+            "spawns": count(sum(tools.get(name, 0) for name in SPAWN_TOOLS)),
+            "spawn_offered": spawn_offered(messages), "gather_calls": count(gather),
+            "absorbed_calls": count(absorbed),
+            "workflow_launches": count(sum(tools.get(name, 0) for name in WORKFLOW_TOOLS)), "stop_hooks": stops,
             "hook_blocks": blocks, "cache_miss_ratio": run_miss_ratio(cache),
             "installed_checkout_reads": installed_checkout_reads(messages),
             "observed_effort": effort, **surface}
@@ -709,6 +735,11 @@ def parse_result(stdout):
     `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
     total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
     by name, and `spawns` is the subagent share of it.
+
+    `spawn_offered` is whether the `init` event listed a spawn tool. `gather_calls` counts
+    `GATHER_TOOLS` calls in every thread, `absorbed_calls` those made inside a subagent's thread,
+    and `workflow_launches` the `Workflow` calls, which are not spawns (`delegation_verdict`).
+    With no assistant message the four counts are None, never zero; `tool_counts` stays `{}`.
 
     `stop_hooks` and `hook_blocks` are how often the Stop hook ran and how often it refused the
     stop. Hook lifecycle events carry them, and the CLI emits those only under
@@ -968,6 +999,7 @@ def _attempt(task, rep, arm, opts, launch):
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, first_call_context=None, tool_counts={}, spawns=None,
+               spawn_offered=None, gather_calls=None, absorbed_calls=None, workflow_launches=None,
                stop_hooks=None, hook_blocks=None, cache_miss_ratio=None, effort=effort, observed_effort=None,
                init_surface_source=None, installed_checkout_reads=[],
                contamination_control=CONTAMINATION_CONTROL,
@@ -1265,11 +1297,13 @@ def verdict(summary):
     return ratio, "passed" if ratio <= THRESHOLD else "failed"
 
 
-def history_row(rows, series):
+def history_row(rows, series, break_even=delegation_verdict.BREAK_EVEN_CALLS):
     """One line for `history.jsonl`: a harness version against bare on the same day and model.
 
     It carries the per-task breakdown as well as the aggregate, because one task moving is the
-    usual shape of a regression and the aggregate alone cannot tell that from a broad one."""
+    usual shape of a regression and the aggregate alone cannot tell that from a broad one. Its
+    `delegation` key is the per-task firing verdict (`delegation_verdict.report`), an adherence
+    reading beside SM-2 rather than part of it; a reader of older lines finds no such key."""
     first = rows[0]
     reported, normalised = summarise(rows), summarise(rows, "cost_normalised_usd")
     ratio, status = verdict(reported)
@@ -1281,7 +1315,8 @@ def history_row(rows, series):
             "change_note": first.get("change_note", ""), "per_task": per_task(rows),
             "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
             "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
-            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows),
+            "delegation": delegation_verdict.report(rows, break_even)}
 
 
 def sm2(rows, seed=replay_stats.SEED, resamples=replay_stats.RESAMPLES):
@@ -1362,6 +1397,11 @@ def render_history(rows):
                          % (task or "n/a", usd(cell.get("bare")), usd(cell.get("harness")),
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
+        block = r.get("delegation")
+        if block:
+            lines.append("    delegation: " + delegation_verdict.heading(block))
+            for task, cell in sorted((block.get("tasks") or {}).items()):
+                lines.append("    delegation: " + delegation_verdict.task_line(task, cell))
     return "\n".join(lines) + "\n"
 
 
@@ -1371,13 +1411,15 @@ def _span(interval):
 
 
 def cmd_summarise(args):
-    """SM-2's report from a saved `results.jsonl` alone; calls no model."""
+    """SM-2's report from a saved `results.jsonl` alone, then the delegation verdict per task
+    (`delegation_verdict`), which SM-2's analysis never reads; calls no model."""
     path = Path(args.results).expanduser()
     path = path / RESULTS if path.is_dir() else path
     if not path.is_file():
         raise SystemExit("cost-bench: %s does not exist" % path)
     try:
-        result = replay_stats.analyse(read_jsonl(path), args.seed, args.resamples)
+        rows = read_jsonl(path)
+        result = replay_stats.analyse(rows, args.seed, args.resamples)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
@@ -1388,8 +1430,9 @@ def cmd_summarise(args):
         if same_file:
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
-                     else replay_stats.render(result))
+    delegation = delegation_verdict.report(rows, args.break_even)
+    sys.stdout.write(json.dumps(dict(result, delegation=delegation), indent=2, sort_keys=True) + "\n"
+                     if args.json else replay_stats.render(result) + delegation_verdict.render(delegation))
     return 0
 
 
@@ -1597,7 +1640,8 @@ def replay_tag(tag, args, common, harness):
     elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
         home_dir.mkdir(parents=True, exist_ok=True)
-        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series))
+        break_even = getattr(args, "break_even", delegation_verdict.BREAK_EVEN_CALLS)
+        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series, break_even))
         (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
         print(json.dumps(kept[-1], indent=2))
     else:
@@ -1672,6 +1716,9 @@ def main(argv=None):
                      "history row so several buckets can share a day and a commit")
     run.add_argument("--predicted-ratio", type=float, help="the ratio the plan predicts for this bucket; "
                      "stored beside the measured one so a miss is visible in the file")
+    run.add_argument("--break-even", type=float, default=delegation_verdict.BREAK_EVEN_CALLS,
+                     help="absorbed calls above which a task should delegate, for the history row's "
+                     "delegation verdict; default FR-34's %(default)s, hypothetical")
     run.add_argument("--history-dir", help="directory for history.jsonl and history.md; "
                      "default benchmarks/")
     run.add_argument("--change-note", default="", help="what changed since the last run of this "
@@ -1711,6 +1758,9 @@ def main(argv=None):
     summ.add_argument("--seed", type=int, default=replay_stats.SEED, help="the bootstrap's seed")
     summ.add_argument("--resamples", type=int, default=replay_stats.RESAMPLES, help="bootstrap resamples")
     summ.add_argument("--json", action="store_true", help="print the result as JSON")
+    summ.add_argument("--break-even", type=float, default=delegation_verdict.BREAK_EVEN_CALLS,
+                      help="absorbed calls above which a task should delegate; default FR-34's "
+                      "%(default)s, hypothetical")
     summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
