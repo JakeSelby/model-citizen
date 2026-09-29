@@ -271,7 +271,7 @@ flowchart TB
   - The architecture viewer predates the contract (it lives in `lib/harness_core/upstream_viewer.py`
     and `integrations/architecture-viewer/`). It moves to a descriptor when its mailbox adapter lands.
 
-### AD-11: Local ledgers are the system of record, and grow compatibly [PARTIAL: schema version planned under #636]
+### AD-11: Local ledgers are the system of record, and grow compatibly [ADOPTED]
 
 - **Binds:** FR-11, FR-23 to FR-27, FR-66; usage, pricing, the decision log, export.
 - **Prevents:**
@@ -468,7 +468,7 @@ flowchart TB
     - the configuration values that reach the model or the hooks;
     - the harness version.
 
-### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PLANNED: v0.14.0, #482]
+### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PARTIAL: opt-in registration #867 and replay surface record #482 remain]
 
 - **Binds:** FR-11, FR-23, FR-27, FR-56, FR-58; the observation layer, the ledgers, the decision log and
   every benchmark arm.
@@ -636,3 +636,11 @@ flowchart LR
 Composition and calibrated-judge delivery previously marked 0.16 is now 0.17; field/Codex/context work previously marked 0.17 is now 0.18; independent Studio work previously marked 0.18 is now 0.16, after Measured lands. AD IDs, shared authority, evidence labels and native-source ownership remain unchanged. This changes scheduling only: no new architectural invariant, result format or implementation is introduced. Pending Studio design decisions remain owned by #962 and are not imported from its feature branch by this roadmap change.
 
 See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
+
+## Status amendment — 2026-09-28
+
+AD-11 is adopted: usage and decision rows carry `schema_version`, and their readers apply
+`FIELD_FOLDS` (delivered in #835). AD-23 is partial: the observation entry point (#864),
+profile fingerprints (#861), and adherence recording (#883) have shipped. Opt-in recorder
+registration (#867) and replay-row surface records (#482) remain open. These status corrections
+leave the recorded decisions and their original rationale unchanged.
