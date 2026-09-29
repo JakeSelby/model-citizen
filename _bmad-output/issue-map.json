@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 329,
+    "story": 330,
     "task": 39
   },
   "items": [
@@ -6836,6 +6836,19 @@
       "parent_bmad_id": "AH-E020",
       "parent_github_number": 875,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S329",
+      "github_number": 909,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/909",
+      "title": "Add a --json output to citizen usage",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S329.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
