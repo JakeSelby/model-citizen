@@ -400,6 +400,20 @@ class DecisionRollupTests(unittest.TestCase):
         self.assertEqual(out["reference"]["unknown"],
                          [{"task": "demo", "rep": 1, "reason": "unknown: docker cp exit 1"}])
 
+    def test_a_malformed_saved_decision_line_reads_as_unknown_and_the_report_completes(self):
+        rows = [attempt("bare"), attempt("reference"), attempt("treatment")]
+        with tempfile.TemporaryDirectory() as tmp:
+            PAIR.decisions_file(tmp, "demo", "reference", 1).write_text("", encoding="utf-8")
+            PAIR.decisions_file(tmp, "demo", "treatment", 1).write_text(
+                json.dumps(decision("s1")) + "\n{not json\n", encoding="utf-8")
+            decisions = PAIR.read_decisions(tmp, rows)
+        self.assertNotIn(("demo", "treatment", 1), decisions)
+        result = PAIR.summarise(rows, decisions, PRICES, resamples=50, pricing=PRICING)
+        treatment = result["arms"]["treatment"]
+        self.assertEqual(treatment["decisions"]["unknown"],
+                         [{"task": "demo", "rep": 1, "reason": "the saved decision rows are missing"}])
+        self.assertIsNone(treatment["cost_of_pass_with_decisions"])
+
     def test_latency_is_reported_as_a_share_and_never_added_to_wall_time(self):
         rows = [attempt("bare"), attempt("reference"), attempt("treatment", wall=100.0)]
         decisions = {("demo", "treatment", 1): [decision("s1", ms=5000.0)], ("demo", "reference", 1): []}

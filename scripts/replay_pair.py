@@ -242,7 +242,7 @@ def decisions_file(directory, task, arm, rep):
 
 def read_decisions(directory, rows):
     """`{(task, arm, rep): [decision rows]}` for every harness-arm row whose ledger was read. A row
-    whose saved file is missing is left out, and the roll-up names it unknown."""
+    whose saved file is missing or holds a malformed line is left out, and the roll-up names it unknown."""
     out = {}
     for row in rows:
         if row.get("arm") not in HARNESS_ARMS or row.get("decision_ledger") != LEDGER_READ:
@@ -252,8 +252,11 @@ def read_decisions(directory, rows):
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
-        out[(row.get("task"), row.get("arm"), row.get("rep"))] = [
-            json.loads(line) for line in text.splitlines() if line.strip()]
+        try:
+            parsed = [json.loads(line) for line in text.splitlines() if line.strip()]
+        except ValueError:
+            continue
+        out[(row.get("task"), row.get("arm"), row.get("rep"))] = parsed
     return out
 
 
