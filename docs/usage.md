@@ -860,6 +860,26 @@ as a perfectly held prefix, which is the opposite of what the row knows. On a ru
 report writes, cached reads against zero writes are not unknown but the best case there is: a day
 that served its whole prefix. The footer counts the unknown sessions separately.
 
+### Which calls rebuilt the prefix
+
+`bin/citizen usage --by rebuild --days 30` reads local Claude Code main-session transcripts and
+attributes each prompt-cache rebuild to its first matching observed cause: model switches,
+compaction, idle expiry, client-version changes, transcript events, slash commands or an
+unexplained remainder. A call is a rebuild when its cache read is at least 20,000 tokens short of
+the preceding call's input, cache read and cache write total. The report shows both all sessions
+and long sessions with at least 200 calls, with breaks, rewritten tokens, known spend share and
+cost per break.
+
+This report reads transcripts directly; it does not add a hook or write per-call data to the usage
+ledger. Main-session files reached through more than one path are read once. Subagent, role-worker
+and Codex sessions are excluded. Unpriced models, malformed lines, unreadable files, duplicate
+requests, valid untimed records and calls outside the window are counted explicitly instead of
+being treated as zero.
+
+Attribution depends on Claude Code transcript markers represented by fixtures from client versions
+2.0.0 through 2.0.21. If a client changes or removes a marker, the break remains in the report as
+`unexplained`; the report does not infer a cause that the transcript did not record.
+
 ## Rule telemetry
 
 The engine underneath — the event schema, the shell decomposition, the registry and the six

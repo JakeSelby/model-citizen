@@ -15,7 +15,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen upgrade [--dry-run]
     citizen uninstall
     citizen lint    [PATH]
-    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan]
+    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix|rebuild] [--stance NAME] [--rescan]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
@@ -61,7 +61,7 @@ from harness_core import reconcile, lifecycle, tasks, compatibility, workers, in
 from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
-from harness_core import codex_client, keychain, collisions, importer, cache_prefix
+from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
 from harness_core import intents
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -5067,8 +5067,18 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
         return 2
+    if by == "rebuild" and (rules_mode or stance):
+        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules and --stance "
+              "do not apply", file=sys.stderr)
+        return 2
     if rules_mode and by == "day":
         by = "rule"
+    if by == "rebuild":
+        # This view reads the request stream itself, so each invocation is already a rescan.
+        # It does not need or mutate the coarser session ledger.
+        cutoff = time.time() - max(args.days, 0) * 86400
+        return rebuilds.report(claude_projects_root(), cutoff, args.days,
+                               load_prices(load_config()), pricing, say)
     if getattr(args, "rescan", False):
         hook = REPO / "claude" / "hooks" / "usage-log.py"
         out = subprocess.run([sys.executable, str(hook), "--rescan", str(args.days)], capture_output=True, text=True)
@@ -5720,7 +5730,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "profile"],
+                                    "provider", "prefix", "rebuild", "profile"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")

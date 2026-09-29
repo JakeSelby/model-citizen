@@ -1,0 +1,22 @@
+{
+  "api-error": "after an API error",
+  "compaction": "compaction",
+  "date-change": "date changed",
+  "effort-change": "effort change",
+  "idle-five-minute-ttl": "idle over 5m on 5m TTL",
+  "idle-no-event": "idle 5-60 min, no event",
+  "idle-one-hour": "idle over 1h (TTL expiry)",
+  "instructions-reloaded": "instructions or environment reloaded",
+  "model-switch-after-model": "model switch after /model",
+  "model-switch-no-command": "model switch, no /model",
+  "output-style": "output style changed",
+  "permissions-change": "auto mode or permissions change",
+  "plan-mode": "plan mode enter or exit",
+  "remote-session": "remote session change",
+  "session-reload": "session reloaded (mode marker)",
+  "slash-command": "slash command /clear",
+  "system-prompt": "system prompt rebuilt",
+  "tools-agents-skills": "tool, agent or skill list changed",
+  "unexplained": "unexplained",
+  "version-change": "Claude Code version changed (restart)"
+}
