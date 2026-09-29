@@ -22,9 +22,18 @@ the launch instead: the script sent inline, the file at `scriptPath`, or a named
 `.claude/workflows/` in the working directory or the home directory. A script that names a
 constrained role as a quoted `agentType`, carries a `harness-role:` marker for one, or computes
 `agentType` beside a string literal naming one is refused with the same instruction, and so is a
-script file longer than the 1 MiB the guard reads; `delegation: off` refuses every launch. Each launch is a `workflow-launch` row in the decision log. The guard
-cannot route a script's other agents to a band, and a built-in workflow or a resumed run carries
-no script for it to read.
+script file longer than the 1 MiB the guard reads; `delegation: off` refuses every launch.
+
+The guard cannot route a script's other agents to a band, so it reads the `model` and `effort`
+their calls name. Under `delegation: tiered`, where a model maps to a class through the adapter's
+model table, a literal model of the `frontier` class is refused, the one cost refusal a hook
+makes. Anything else above the active cost variant's ceiling (the strongest class and the highest
+effort any of its rows grants, never `frontier` and never above `high`) is let through, and the
+row reads `over-ceiling`: an effort such as `xhigh` or `max`, or a class above a custom variant's
+strongest. A computed value, a shorthand property, a model the table does not hold or an effort
+outside `low` to `max` cannot be judged, so the launch goes ahead and its row reads `unresolved`.
+Each launch is one `workflow-launch` row in the decision log. A built-in
+workflow or a resumed run carries no script for the guard to read.
 
 ## Run and inspect
 

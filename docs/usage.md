@@ -505,7 +505,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `framework-spawn` | `deny`, when a framework descriptor maps a spawn to a constrained role | not labelled yet |
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
 | `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
-| `workflow-launch` | `allow` or `deny`, on every `Workflow` tool launch | not labelled yet |
+| `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a

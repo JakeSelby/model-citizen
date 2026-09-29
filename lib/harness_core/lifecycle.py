@@ -422,14 +422,142 @@ def workflow_role_in(script):
     return None
 
 
+# A script's `agent(prompt, {model?, effort?, ...})` call picks class and effort itself, and the
+# call cannot be rewritten, so the launch reads what it names against the cost variant (#915).
+# The runtime's own effort ladder, weakest first, runs past the harness's `catalog.EFFORTS`.
+WORKFLOW_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+WORKFLOW_OPTION = re.compile(r"\b(model|effort)\b")
+# A key or an assignment, never a comparison or an arrow parameter; the value is a whole literal
+# exactly as `WORKFLOW_AGENT_VALUE` reads one, else the expression the runtime will evaluate.
+WORKFLOW_OPTION_KEY = re.compile(r"""['"]?\s*(?::|=(?![=>]))\s*""")
+WORKFLOW_OPTION_LITERAL = re.compile(r"""(['"`])([^'"`\\\n]*)\1(?=\s*(?:[,;)\]}]|$))""", re.M)
+WORKFLOW_OPTION_SHORTHAND = re.compile(r"""[{,]\s*$""")
+WORKFLOW_OPTION_SHORTHAND_END = re.compile(r"""\s*[,}]""")
+# The stances' own ceiling, and the answer when the cost table cannot be read: never `frontier`,
+# effort never above `high` (`primitives/stances/delegation/tiered.md`).
+WORKFLOW_CEILING = ("strong", "high")
+
+
+def workflow_options(script):
+    """`(named, unresolved)`: each `(option, literal)` a workflow script names for `model` or
+    `effort`, and each option whose value is an expression this read cannot evaluate.
+
+    Read as `workflow_role` reads a script, as written and with its escapes decoded. A mention
+    that is neither a key, an assignment nor a shorthand property is prose and says nothing.
+    """
+    named, unresolved = [], []
+    if not isinstance(script, str):
+        return named, unresolved
+    readings = [script]
+    decoded = workflow_literal(script, keep_quoting=True)
+    if decoded != script:
+        readings.append(decoded)
+    for text in readings:
+        for mention in WORKFLOW_OPTION.finditer(text):
+            option = mention.group(1)
+            key = WORKFLOW_OPTION_KEY.match(text, mention.end())
+            if key is not None:
+                literal = WORKFLOW_OPTION_LITERAL.match(text, key.end())
+                if literal is not None and "${" not in literal.group(2):
+                    entry = (option, literal.group(2))
+                    if entry not in named:
+                        named.append(entry)
+                    continue
+                expression = text[key.end():key.end() + 40].split("\n", 1)[0].strip()
+                entry = (option, expression or "(empty)")
+            elif WORKFLOW_OPTION_SHORTHAND.search(text, 0, mention.start()) \
+                    and WORKFLOW_OPTION_SHORTHAND_END.match(text, mention.end()):
+                entry = (option, option + " (shorthand)")
+            else:
+                continue
+            if entry not in unresolved:
+                unresolved.append(entry)
+    return named, unresolved
+
+
+def workflow_ceiling(runtime):
+    """`(variant, class, effort, models, classes_apply)` a workflow script's agents are held to.
+
+    The ceiling is the strongest class and the highest effort any row of the active cost variant
+    grants a spawn, never past `WORKFLOW_CEILING`; `models` is the adapter's `{class: model}`.
+    A class is only judged under `delegation: tiered`, where the variant's classes apply, as
+    `tier-agent-spawns` only moves a model there. A table that cannot be read is the stances'
+    own ceiling, never an open one.
+    """
+    variant = selected("cost", "balanced")
+    classes_apply = selected("delegation", "tiered") == "tiered"
+    strongest, highest = WORKFLOW_CEILING
+    try:
+        posture = load("posture")
+        models = posture.tier_models(runtime) or posture.tier_models()
+        stances = dict(posture.DEFAULT_STANCES, cost=variant,
+                       delegation=selected("delegation", "tiered"))
+        table = posture.table_for(stances, posture._user_config(os.environ, False), strict=False)
+        rows = [row for row in (table.get("rows") or {}).values() if isinstance(row, dict)]
+    except Exception:
+        return variant, strongest, highest, {}, classes_apply
+    from . import catalog
+    granted = [c for c in (row.get("class") for row in rows) if c in catalog.TIER_CLASSES[1:]]
+    if granted:
+        strongest = min(granted, key=catalog.TIER_CLASSES.index)
+    efforts = [e for e in (row.get("effort") for row in rows) if e in catalog.EFFORTS]
+    if efforts:
+        highest = max(efforts, key=WORKFLOW_EFFORTS.index)
+    return variant, strongest, highest, models, classes_apply
+
+
+def workflow_limits(runtime, script):
+    """`(refusal, over, unresolved)` for the `model` and `effort` a workflow script names.
+
+    Per AD-14 a cost hook refuses only an undeclared `frontier` request, so `refusal` is a
+    sentence only for a literal model of the `frontier` class under `delegation: tiered`, else
+    None. What exceeds the cost variant's ceiling otherwise (an effort above its highest, a
+    lighter class still above its strongest) is listed in `over`, logged and never refused.
+    `unresolved` lists what cannot be judged statically: an expression, a model name the
+    adapter's class table does not hold, an effort the runtime's ladder does not. See
+    `workflow_ceiling` for the ceiling.
+    """
+    named, unresolved = workflow_options(script)
+    if not named and not unresolved:
+        return None, [], []
+    from . import catalog
+    _, strongest, highest, models, classes_apply = workflow_ceiling(runtime)
+    over, unknown = [], [option + " " + value for option, value in unresolved]
+    for option, value in named:
+        low = value.strip().lower()
+        if option == "effort":
+            if low not in WORKFLOW_EFFORTS:
+                unknown.append("effort `" + value + "`")
+            elif WORKFLOW_EFFORTS.index(low) > WORKFLOW_EFFORTS.index(highest):
+                over.append("effort `" + value + "`")
+            continue
+        tier = next((name for name, model in models.items()
+                     if isinstance(model, str) and model and model.lower() in low), None)
+        if tier is None:
+            unknown.append("model `" + value + "`")
+        elif not classes_apply:
+            continue
+        elif tier == catalog.TIER_CLASSES[0]:
+            return ("This workflow script names model `" + value + "` in agent(), the `" + tier
+                    + "` class, which no spawn may request under `delegation: tiered`, and a "
+                    "script's agent() calls run in session, past every spawn guard; name `"
+                    + models.get(strongest, strongest) + "` or a lighter model, or leave model "
+                    "unset."), over, unknown
+        elif catalog.TIER_CLASSES.index(tier) < catalog.TIER_CLASSES.index(strongest):
+            over.append("model `" + value + "`")
+    return None, over, unknown
+
+
 def workflow_results(runtime, event):
     """The answers to a `Workflow` launch, with its decision row written.
 
     Every launch is a row, allowed ones included, because a launch is a batch of spawns no other
     row accounts for. The row's input is the script as judged, or the tool input when the script
-    could not be read.
+    could not be read. A launch that is let through answers `over-ceiling` when a script's `model`
+    or `effort` exceeds the cost variant's ceiling, else `unresolved` when one cannot be judged,
+    else `allow`; see `workflow_limits`.
     """
-    results = []
+    results, over, unresolved = [], [], []
     script = workflow_script(event)
     if script is WORKFLOW_TOO_LARGE:
         results.append({"hookSpecificOutput": {"permissionDecision": "deny",
@@ -446,6 +574,11 @@ def workflow_results(runtime, event):
             results.append(role_deny(runtime, named[0], named[1],
                                      "This workflow script " + named[2] + ", and a script's "
                                      "agent() calls run in session, past every spawn guard."))
+        else:
+            refusal, over, unresolved = workflow_limits(runtime, script)
+            if refusal is not None:
+                results.append({"hookSpecificOutput": {"permissionDecision": "deny",
+                                                       "permissionDecisionReason": refusal}})
     if not results and enabled("allow-readonly-bash") and investigating(runtime, event) \
             and plan_allowed_tool("Workflow"):
         results.append({"hookSpecificOutput": {"permissionDecision": "allow",
@@ -455,7 +588,9 @@ def workflow_results(runtime, event):
     if module is not None:
         denied = any(r["hookSpecificOutput"].get("permissionDecision") == "deny" for r in results)
         text = script if isinstance(script, str) else json.dumps(event.get("tool_input") or {}, sort_keys=True)
-        module.record(WORKFLOW_POINT, "deny" if denied else "allow", text, event, runtime)
+        answer = ("deny" if denied else "over-ceiling" if over
+                  else "unresolved" if unresolved else "allow")
+        module.record(WORKFLOW_POINT, answer, text, event, runtime)
     return results
 
 
