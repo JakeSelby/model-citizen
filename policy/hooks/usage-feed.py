@@ -1325,11 +1325,29 @@ def row_for(table, agent_type):
         return None
 
 
+def workflow_agent(path):
+    """Whether a subagent transcript is a Workflow-tool agent's, by `usage-log.py`'s own rule.
+
+    Such an agent is launched by the tool, not spawned: no spawn hook routed it and no brief
+    stated it a budget, so `usage.jsonl` records it `unconfined` with both budgets null. The feed
+    leaves it unbudgeted for the same reason, whatever role name its type happens to carry, so
+    the live line and `citizen usage --by role` agree about the same agent. It is asked at stop
+    time of the path the event was handed, before `redact` can blank one outside this home, and
+    the answer is journalled as `workflow`. A ledger that will not import answers no.
+    """
+    module = sibling("usage-log")
+    try:
+        return bool(module is not None and path and module.workflow_of(path))
+    except Exception:
+        return False
+
+
 def stop_line(table, nudges, record):
     agent_id = record.get("id")
     round_number = record.get("round")
+    row = None if record.get("workflow") is True else row_for(table, record.get("type"))
     return agent_line(agent_name(record.get("type")), record.get("output"),
-                      record.get("tool_calls"), row_for(table, record.get("type")), nudges,
+                      record.get("tool_calls"), row, nudges,
                       bool(record.get("partial")), bool(record.get("so_far")),
                       bool(record.get("not_yet")),
                       agent_id if isinstance(agent_id, str) else None,
@@ -1415,6 +1433,8 @@ def on_subagent_event(payload, env, kind):
         path = payload.get("agent_transcript_path") or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)
         record["path"] = redact(path, env)
+        if workflow_agent(path):
+            record["workflow"] = True
         totals = agent_totals(path)
         if totals is not None:
             record["type"] = agent_name(payload.get("agent_type"), totals["agent_type"])
