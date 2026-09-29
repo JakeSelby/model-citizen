@@ -92,10 +92,13 @@ Task manifest sha256: %s
     def _arm(self, arm):
         inputs = {"base_image": "base@sha256:" + "1" * 64, "claude_code_version": "2.0.0"}
         harness = {"ref": "v0.15.0", "commit": self.run_commit} if arm == "harness" else None
-        declaration = EVIDENCE.replay_arms.declaration(arm, inputs, harness=harness)
-        manifest = {"schema": 1, "roots": ({"harness": "/opt/model-citizen"} if harness else {}),
+        # The arm pins the design's effort, and its image bakes no effort override (schema 2).
+        declaration = EVIDENCE.replay_arms.declaration(arm, inputs, harness=harness, effort="high")
+        lister = EVIDENCE.replay_arms.arm_manifest
+        manifest = {"schema": lister.SCHEMA, "roots": ({"harness": "/opt/model-citizen"} if harness else {}),
                     "excluded": {}, "normalised": [], "claude_code_version": "2.0.0",
                     "cli_packages": ["@anthropic-ai/claude-code" + "@2.0.0"],
+                    "environment": {lister.EFFORT_ENV: None},
                     "harness_commit": self.run_commit if harness else None,
                     "summary": {key: [] for key in
                                 ("settings", "hooks", "rules", "skills", "agents", "plugins",
