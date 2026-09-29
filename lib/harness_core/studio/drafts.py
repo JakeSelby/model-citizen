@@ -204,12 +204,35 @@ def _registered_worktrees(repo: Path) -> Iterable[Path]:
             yield path.resolve()
 
 
-def find(repo: Path, name: str) -> Tuple[Path, Dict[str, Any]]:
+def _vanished(worktree: Path) -> bool:
+    return not (worktree / ".git").exists()
+
+
+def _draft_worktrees(repo: Path) -> Iterable[Path]:
+    """Yield registered worktrees holding draft state, skipping any removed mid-scan.
+
+    Other sessions add and remove worktrees of a shared repository at any time, so one listed a
+    moment ago can be gone before its git directory resolves; only that failure is skipped.
+    """
     for worktree in _registered_worktrees(repo):
-        state_path = _paths(worktree)["state"]
-        if not state_path.is_file():
-            continue
-        state = _read_state(worktree)
+        try:
+            is_draft = _paths(worktree)["state"].is_file()
+        except DraftError:
+            if _vanished(worktree):
+                continue
+            raise
+        if is_draft:
+            yield worktree
+
+
+def find(repo: Path, name: str) -> Tuple[Path, Dict[str, Any]]:
+    for worktree in _draft_worktrees(repo):
+        try:
+            state = _read_state(worktree)
+        except DraftError:
+            if _vanished(worktree):
+                continue
+            raise
         if state.get("name") == name or state.get("draft_id") == name:
             return worktree, state
     raise DraftError("not-found", "draft does not exist: " + name)
@@ -247,9 +270,12 @@ def describe(repo: Path, worktree: Path, state: Optional[Dict[str, Any]] = None)
 
 def list_drafts(repo: Path) -> List[Dict[str, Any]]:
     drafts: List[Dict[str, Any]] = []
-    for worktree in _registered_worktrees(repo):
-        if _paths(worktree)["state"].is_file():
+    for worktree in _draft_worktrees(repo):
+        try:
             drafts.append(describe(repo, worktree))
+        except DraftError:
+            if not _vanished(worktree):
+                raise
     return sorted(drafts, key=lambda item: (item["name"], item["draft_id"]))
 
 

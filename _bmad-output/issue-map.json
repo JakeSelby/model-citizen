@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 135,
+    "bug": 137,
     "chore": 94,
     "decision": 14,
     "epic": 27,
@@ -7964,6 +7964,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B134.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B136",
+      "github_number": 1108,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1108",
+      "title": "Studio draft lookup fails when another session removes a worktree mid-scan",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B136.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

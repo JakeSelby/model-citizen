@@ -334,6 +334,30 @@ class DraftTests(unittest.TestCase):
         self.assertEqual([item["name"] for item in drafts.list_drafts(self.repo)], ["tone-down"])
         self.assertEqual(drafts.find(self.repo, "tone-down")[1]["draft_id"], created["draft_id"])
 
+    def test_worktree_removed_after_listing_does_not_break_draft_lookup(self):
+        created = self.create()
+        vanished = self.root / "worktrees" / "removed-by-another-session"
+        real = drafts._registered_worktrees
+
+        def listing(repo):
+            yield vanished
+            yield from real(repo)
+
+        with mock.patch.object(drafts, "_registered_worktrees", side_effect=listing):
+            self.assertEqual(drafts.find(self.repo, "tone-down")[1]["draft_id"], created["draft_id"])
+            self.assertEqual([item["name"] for item in drafts.list_drafts(self.repo)], ["tone-down"])
+
+    def test_git_failure_in_a_present_worktree_still_raises_during_lookup(self):
+        self.create()
+        present = self.root / "worktrees" / "present-but-broken"
+        present.mkdir(parents=True)
+        (present / ".git").write_text("gitdir: /nonexistent\n", encoding="utf-8")
+
+        with mock.patch.object(drafts, "_registered_worktrees", return_value=[present]):
+            with self.assertRaises(drafts.DraftError) as raised:
+                drafts.find(self.repo, "tone-down")
+        self.assertEqual(raised.exception.code, "git-failed")
+
     def test_discard_refuses_external_commit_and_branch_move_race(self):
         created = self.create()
         path = Path(created["path"])
