@@ -477,6 +477,28 @@ class SegmentErrors(Home):
              "provider": "local"},
         ])
 
+    def test_location_failure_keeps_resolved_identity_and_marks_unresolved_suffix_unknown(self):
+        beta = make_repo(self.home / "beta", branch="trunk")
+        original = decision.locate
+
+        def locate(path):
+            if Path(path).resolve() == beta.resolve():
+                raise OSError("repository unavailable")
+            return original(path)
+
+        decision.locate = locate
+        self.addCleanup(setattr, decision, "locate", original)
+        answer, reason = self.bash("npm test && git -C %s push" % beta)
+        self.assertEqual(answer, "ask")
+        self.assertIn("could not be set up", reason)
+        rows = self.details()
+        self.assertEqual([row["action"] for row in rows],
+                         ["coding.shell_exec", "coding.git_push"])
+        self.assertEqual([row["counterparty"] for row in rows], ["repo:alpha/main", None])
+        self.assertEqual([row["grade"] for row in rows], [1, 2])
+        self.assertTrue(all(row["error"] == "OSError" and row["level"] is None
+                            and row["outcome"] == "ask" for row in rows))
+
     def test_judgment_failure_does_not_skip_a_later_deny(self):
         calls = []
 
