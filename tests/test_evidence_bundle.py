@@ -1,5 +1,6 @@
 import copy
 import hashlib
+import shutil
 import importlib.util
 import json
 import os
@@ -53,6 +54,10 @@ Use the registered SM-2 rule.
 
 Task manifest: benchmarks/tasks/proof.json
 Task manifest sha256: %s
+
+## Deviation log
+
+- 2026-01-01: none yet
 """ % task_sha
         (self.repo / "benchmarks/preregistrations/2026-01-01-proof.md").write_text(plan)
         stamp = dict(os.environ, GIT_AUTHOR_DATE="2026-01-01T12:00:00Z",
@@ -140,7 +145,8 @@ Task manifest sha256: %s
                            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
                            "cache_write_1h": 0, "passed": passed, "error": False,
                            "outcome": "pass" if passed else "fail", "task_long": task == "beta",
-                           "init_surface_source": "cli-init", "observed_effort": None}
+                           "init_surface_source": "cli-init", "observed_effort": None,
+                           "observed_model": "claude-sonnet-5"}
                     for field in EVIDENCE.SURFACE_FIELDS:
                         row[field] = 1 if arm == "harness" else 0
                     for field in EVIDENCE.SURFACE_HASH_FIELDS:
@@ -303,7 +309,7 @@ Task manifest sha256: %s
         index = self._index()
         rows = self.root / index["artifacts"]["rows"]["path"]
         values = [json.loads(line) for line in rows.read_text().splitlines()]
-        values[0]["model"] = "unknown-model"
+        values[0]["observed_model"] = "unknown-model"
         rows.write_text("".join(json.dumps(row) + "\n" for row in values))
         index["artifacts"]["rows"]["sha256"] = self._sha(rows)
         self._save_index(index)
@@ -437,14 +443,6 @@ Task manifest sha256: %s
         self.assertTrue(result["ok"], result["errors"])
         self.assertFalse(marker.exists())
 
-    def test_repository_git_helper_is_refused_without_execution(self):
-        marker = self.root / "repository-helper-ran"
-        run("git", "config", "core.fsmonitor", "touch %s" % marker, cwd=self.repo)
-        result = EVIDENCE.verify(self.root)
-        self.assertFalse(result["ok"])
-        self.assertIn("executable helper", result["errors"][0])
-        self.assertFalse(marker.exists())
-
     def test_malformed_nested_records_fail_without_a_traceback(self):
         index = self._index()
         arm_ref = index["artifacts"]["arms"][0]
@@ -500,6 +498,252 @@ Task manifest sha256: %s
         self._save_index(index)
         self.assertTrue(any("bytes differ" in error for error in EVIDENCE.verify(self.root)["errors"]))
 
+
+    # Rebuilding the history lets a test change the committed plan or sign the plan commit while
+    # every other part of the fixture stays the valid bundle.
+    def _rebuild_bundle(self):
+        shutil.rmtree(str(self.root / "artifacts"))
+        (self.root / "bundle.json").unlink()
+        self._build()
+
+    def _commit_plan_amendment(self, suffix):
+        plan = self.repo / "benchmarks/preregistrations/2026-01-01-proof.md"
+        plan.write_text(plan.read_text() + suffix)
+        stamp = dict(os.environ, GIT_AUTHOR_DATE="2026-01-02T13:00:00Z",
+                     GIT_COMMITTER_DATE="2026-01-02T13:00:00Z")
+        run("git", "commit", "-qam", "amend plan", cwd=self.repo, env=stamp)
+        self.run_commit = run("git", "rev-parse", "HEAD", cwd=self.repo)
+        self._rebuild_bundle()
+
+    def _write_object(self, kind, body):
+        return subprocess.run(["git", "hash-object", "-t", kind, "-w", "--stdin"], cwd=str(self.repo),
+                              input=body, stdout=subprocess.PIPE, check=True).stdout.decode().strip()
+
+    def _sign_plan_commit(self):
+        plan = subprocess.run(["git", "cat-file", "commit", self.plan_commit], cwd=str(self.repo),
+                              stdout=subprocess.PIPE, check=True).stdout
+        headers, message = plan.split(b"\n\n", 1)
+        signature = (b"gpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n"
+                     b" -----END PGP SIGNATURE-----")
+        signed = self._write_object("commit", headers + b"\n" + signature + b"\n\n" + message)
+        child = subprocess.run(["git", "cat-file", "commit", self.run_commit], cwd=str(self.repo),
+                               stdout=subprocess.PIPE, check=True).stdout
+        child = child.replace(b"parent " + self.plan_commit.encode(), b"parent " + signed.encode())
+        self.plan_commit, self.run_commit = signed, self._write_object("commit", child)
+        run("git", "update-ref", "HEAD", self.run_commit, cwd=self.repo)
+        self._rebuild_bundle()
+
+    def test_signed_plan_commit_never_runs_a_repository_signature_helper(self):
+        marker = self.root / "gpg-helper-ran"
+        helper = self.root / "gpg-helper.sh"
+        helper.write_text("#!/bin/sh\ntouch %s\n" % marker)
+        helper.chmod(0o755)
+        self._sign_plan_commit()
+        for key in ("gpg.program", "gpg.ssh.program", "gpg.x509.program"):
+            run("git", "config", key, str(helper), cwd=self.repo)
+        run("git", "config", "log.showSignature", "true", cwd=self.repo)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(marker.exists())
+        self.assertTrue(result["ok"], result["errors"])
+
+    def test_repository_configuration_is_never_read(self):
+        marker = self.root / "repository-helper-ran"
+        included = self.root / "included-config"
+        included.write_text("[core]\n\tfsmonitor = touch %s\n" % marker)
+        for key, value in (("core.fsmonitor", "touch %s" % marker), ("core.hooksPath", str(self.root)),
+                           ("include.path", str(included)), ("core.commitGraph", "true"),
+                           ("core.pager", "touch %s" % marker)):
+            run("git", "config", key, value, cwd=self.repo)
+        result = EVIDENCE.verify(self.root)
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertFalse(marker.exists())
+
+    def test_commondir_redirection_to_another_repository_is_refused(self):
+        outside = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(outside))
+        shutil.copytree(str(self.repo / ".git"), str(outside / ".git"))
+        (self.repo / ".git/commondir").write_text(str(outside / ".git") + "\n")
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertIn("reaches outside the bundle", result["errors"][0])
+
+    def test_gitdir_file_alternates_and_symlinked_objects_are_refused(self):
+        git_dir = self.repo / ".git"
+        moved = self.root / "moved-git"
+
+        def gitdir_file():
+            git_dir.rename(moved)
+            git_dir.write_text("gitdir: %s\n" % moved)
+
+        def restore_gitdir():
+            git_dir.unlink()
+            moved.rename(git_dir)
+
+        def alternates():
+            (git_dir / "objects/info").mkdir(exist_ok=True)
+            (git_dir / "objects/info/alternates").write_text(str(moved) + "\n")
+
+        def symlinked_objects():
+            (git_dir / "objects").rename(moved)
+            (git_dir / "objects").symlink_to(moved)
+
+        def restore_objects():
+            (git_dir / "objects").unlink()
+            moved.rename(git_dir / "objects")
+
+        cases = ((gitdir_file, restore_gitdir, "self-contained"),
+                 (alternates, lambda: (git_dir / "objects/info/alternates").unlink(), "outside the bundle"),
+                 (symlinked_objects, restore_objects, "no local object store"))
+        for change, restore, phrase in cases:
+            with self.subTest(phrase=phrase):
+                change()
+                result = EVIDENCE.verify(self.root)
+                restore()
+                self.assertFalse(result["ok"])
+                self.assertIn(phrase, result["errors"][0])
+        self.assertTrue(EVIDENCE.verify(self.root)["ok"])
+
+    def test_run_commit_is_never_passed_to_git_as_an_option(self):
+        # Git would append ":<path>" to the value, so the directories that would receive the
+        # written file exist; the verifier must never hand Git the value at all.
+        written = str(self.root / "git-wrote-this")
+        targets = [Path(written + ":" + relative) for relative in
+                   ("benchmarks/tasks/proof.json", "benchmarks/preregistrations/2026-01-01-proof.md")]
+        for target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        index = self._index()
+        index["repository"]["run_commit"] = "--output=" + written
+        self._save_index(index)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["checks"]["1"])
+        self.assertEqual([], [str(target) for target in targets if target.exists()])
+
+    def test_fields_appended_to_the_registered_plan_are_refused(self):
+        self._commit_plan_amendment("## Hypotheses\n- **Primary:** a different hypothesis\n")
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["checks"]["1"])
+        self.assertTrue(any("appended outside a deviation log" in error or
+                            "not a dated deviation-log entry" in error
+                            for error in result["errors"]), result["errors"])
+
+    def test_dated_deviation_entries_appended_after_registration_verify(self):
+        self._commit_plan_amendment("- 2026-01-02: trial cap raised; touches no figure\n"
+                                    "  because the first build timed out\n")
+        result = EVIDENCE.verify(self.root)
+        self.assertTrue(result["ok"], result["errors"])
+
+    def test_plan_amendment_rules(self):
+        logged = b"## Run\n- **Question:** q\n\n## Deviation log\n\n- 2026-01-01: none yet\n"
+        unlogged = b"## Run\n- **Question:** q\n"
+        cases = (
+            (logged, logged, None),
+            (logged, logged + b"- 2026-01-05: changed cap\n  continued\n", None),
+            (logged, logged + b"## Decision rule\nnew\n", "not a dated"),
+            (logged, logged + b"- **Primary:** new\n", "not a dated"),
+            (logged, logged + b"\n", "not a dated"),
+            (logged, logged.replace(b"q\n", b"x\n"), "edited"),
+            (unlogged, unlogged + b"- 2026-01-05: late\n", "outside a deviation log"),
+            (logged.rstrip(b"\n"), logged + b"- 2026-01-05: e\n", "own line"),
+        )
+        for registered, bundled, phrase in cases:
+            with self.subTest(bundled=bundled):
+                problem = EVIDENCE._plan_amendment_problem(registered, bundled)
+                if phrase is None:
+                    self.assertIsNone(problem)
+                else:
+                    self.assertIn(phrase, problem or "")
+
+    def test_synonymous_effort_and_surface_claims_need_observations(self):
+        def drop_init(row):
+            if row["arm"] == "harness":
+                row["init_surface_source"] = None
+        for claim, phrase in (("Observed ratio at matched reasoning level", "reasoning effort"),
+                              ("Observed ratio with extended thinking", "reasoning effort")):
+            with self.subTest(claim=claim):
+                self._set_card_claim(claim)
+                result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["cards"][0]["verify_status"])
+                self.assertTrue(any(phrase in error for error in result["errors"]), result["errors"])
+        self._mutate_rows(drop_init)
+        for claim in ("Observed ratio with the same skills loaded", "A like-for-like ratio"):
+            with self.subTest(claim=claim):
+                self._set_card_claim(claim)
+                result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["cards"][0]["verify_status"])
+                self.assertTrue(any("loaded runtime surface" in error for error in result["errors"]),
+                                result["errors"])
+
+    def test_parity_claim_compares_bare_against_harness(self):
+        self._set_card_claim("Observed ratio at surface parity")
+        result = EVIDENCE.verify(self.root)
+        self.assertEqual({"status": "differs"}, result["derived"]["surface_parity"])
+        self.assertFalse(result["cards"][0]["verify_status"])
+        self.assertTrue(any("parity the arms' observed surfaces do not show" in error
+                            for error in result["errors"]), result["errors"])
+
+        def same_surface(row):
+            for field in EVIDENCE.SURFACE_FIELDS:
+                row[field] = 0
+            for field in EVIDENCE.SURFACE_HASH_FIELDS:
+                row[field] = hashlib.sha256(field.encode()).hexdigest()
+        self._mutate_rows(same_surface)
+        result = EVIDENCE.verify(self.root)
+        self.assertEqual({"status": "equal"}, result["derived"]["surface_parity"])
+        self.assertTrue(result["ok"], result["errors"])
+
+    def test_requested_model_must_match_design_and_observed_model_counts_fallback(self):
+        self._mutate_rows(lambda row: row.update(model="claude-opus-5"))
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["checks"]["3"])
+        self.assertTrue(any("model differs from the design" in error for error in result["errors"]))
+        self._mutate_rows(lambda row: row.update(model="claude-sonnet-5", observed_model=None))
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["checks"]["3"])
+        self.assertTrue(any("no observed model" in error for error in result["errors"]))
+        first = {}
+
+        def fall_back(row):
+            row["observed_model"] = "claude-sonnet-5"
+            if not first:
+                first["row"] = True
+                row["observed_model"] = "claude-haiku-4-5"
+        self._mutate_rows(fall_back)
+        result = EVIDENCE.verify(self.root)
+        self.assertEqual(1, result["derived"]["fallback"]["trials"])
+        self.assertEqual(0.05, result["derived"]["fallback"]["rate"])
+
+    def test_nested_non_object_values_fail_their_items_without_a_traceback(self):
+        original_index = self._index()
+        audits_path = self.root / original_index["artifacts"]["audits"]["path"]
+        original_audits = json.loads(audits_path.read_text())
+        prices_path = self.root / original_index["artifacts"]["prices"]["path"]
+        original_prices = prices_path.read_bytes()
+        cases = (
+            (8, lambda index, audits: audits.update(judge=[])),
+            (11, lambda index, audits: audits["field_checks"].update(sample_ratio=[])),
+            (8, lambda index, audits: index["items"].update({"8": "not-applicable"})),
+        )
+        for item, mutate in cases:
+            with self.subTest(item=item):
+                index, audits = copy.deepcopy(original_index), copy.deepcopy(original_audits)
+                mutate(index, audits)
+                self._write_json(audits_path, audits)
+                index["artifacts"]["audits"]["sha256"] = self._sha(audits_path)
+                self._save_index(index)
+                result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["checks"][str(item)], result["errors"])
+        self._write_json(audits_path, original_audits)
+        prices = json.loads(original_prices)
+        prices["models"][sorted(prices["models"])[0]] = []
+        prices_path.write_text(json.dumps(prices))
+        index = copy.deepcopy(original_index)
+        index["artifacts"]["audits"]["sha256"] = self._sha(audits_path)
+        index["artifacts"]["prices"]["sha256"] = self._sha(prices_path)
+        self._save_index(index)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("is not an object" in error or "malformed" in error
+                            for error in result["errors"]), result["errors"])
 
 if __name__ == "__main__":
     unittest.main()

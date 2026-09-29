@@ -11,8 +11,10 @@ import json
 import math
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -31,11 +33,20 @@ SURFACE_FIELDS = tuple("init_" + name for name in
 SURFACE_HASH_FIELDS = tuple(name + "_sha256" for name in SURFACE_FIELDS)
 # A card whose claim text speaks to reasoning effort or the loaded runtime surface verifies only
 # when the rows observed that fact for every attempt of both arms; a request is not an observation.
+# Recognition is mechanical and deliberately broad, so a synonym fails closed rather than slipping by.
 OBSERVATION_CLAIMS = (
-    ("effort", re.compile(r"\beffort\b", re.IGNORECASE)),
-    ("surface", re.compile(r"\b(?:surface|parity)\b|\bloaded (?:skills|agents|tools|commands|"
-                           r"mcp servers|memory)\b", re.IGNORECASE)),
+    ("effort", re.compile(r"\b(?:effort|reasoning|thinking)\b", re.IGNORECASE)),
+    ("surface", re.compile(r"\b(?:surface|parity|loaded|skills|agents|tools|slash commands|"
+                           r"mcp servers|memory paths|like[- ]for[- ]like|apples[- ]to[- ]apples)\b",
+                           re.IGNORECASE)),
 )
+# A claim of parity is about the two arms together: it needs their observed surfaces to be equal,
+# not merely each arm to be stable across its own attempts.
+PARITY_CLAIM = re.compile(
+    r"\bparity\b|\blike[- ]for[- ]like\b|\bapples[- ]to[- ]apples\b"
+    r"|\b(?:same|identical|matched|matching|equal|equivalent) (?:loaded |runtime )*"
+    r"(?:surfaces?|setups?|config(?:uration)?s?|tools|skills|agents|environments?)\b",
+    re.IGNORECASE)
 ARTIFACT_KEYS = ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report",
                  "arms", "trajectories")
 INDEX_KEYS = ("schema_version", "bundle_id", "repository", "artifacts", "design", "statistics",
@@ -146,34 +157,75 @@ def _load_pricing():
 PRICING = _load_pricing()
 
 
-def _git_env():
+def _git_env(git):
     env = dict((key, value) for key, value in os.environ.items() if not key.startswith("GIT_"))
-    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
-               GIT_CONFIG_NOSYSTEM="1", GIT_EXTERNAL_DIFF="", GIT_PAGER="cat", PAGER="cat",
-               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
+    env.update(GIT_DIR=git["dir"], GIT_OBJECT_DIRECTORY=git["objects"],
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+               GIT_CONFIG_NOSYSTEM="1", GIT_NO_REPLACE_OBJECTS="1", GIT_PAGER="cat", PAGER="cat",
+               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0", GIT_ATTR_NOSYSTEM="1")
     return env
 
 
-def _git(repo, *args):
-    command = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-               "-c", "diff.external=", "-c", "pager.show=false", "-C", str(repo)] + list(args)
-    try:
-        done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              universal_newlines=True, env=_git_env(), timeout=30)
-    except subprocess.TimeoutExpired:
-        return 124, ""
-    return done.returncode, done.stdout.strip()
+# The bundled repository is read only through its object store. Git runs against a fresh, empty
+# Git directory whose configuration is fixed here, so no configuration, hook, graft, replace ref,
+# shallow file or commit-graph shipped in the bundle is ever read; a blocklist of dangerous keys
+# would have to anticipate every future helper, while this reads none of them.
+GIT_OVERRIDES = ("core.commitGraph=false", "core.fsmonitor=false", "core.hooksPath=" + os.devnull,
+                 "log.showSignature=false", "gpg.program=false", "gpg.ssh.program=false",
+                 "gpg.x509.program=false", "core.pager=cat", "diff.external=")
+GIT_CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n"
 
 
-def _git_bytes(repo, *args):
-    command = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
-               "-c", "diff.external=", "-c", "pager.show=false", "-C", str(repo)] + list(args)
+class _IsolatedGit(object):
+    """A throwaway Git directory that borrows only the bundle's object store."""
+
+    def __init__(self, repo):
+        self.repo = repo
+
+    def __enter__(self):
+        self.dir = tempfile.mkdtemp(prefix="evidence-git-")
+        os.mkdir(os.path.join(self.dir, "refs"))
+        with open(os.path.join(self.dir, "HEAD"), "w") as handle:
+            handle.write("ref: refs/heads/evidence\n")
+        with open(os.path.join(self.dir, "config"), "w") as handle:
+            handle.write(GIT_CONFIG)
+        return {"dir": self.dir, "objects": str(Path(self.repo) / ".git" / "objects")}
+
+    def __exit__(self, *exc):
+        shutil.rmtree(self.dir, ignore_errors=True)
+        return False
+
+
+def _git_bytes(git, *args):
+    command = ["git", "--no-replace-objects"]
+    for override in GIT_OVERRIDES:
+        command += ["-c", override]
+    command += list(args)
     try:
         done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                              env=_git_env(), timeout=30)
+                              stdin=subprocess.DEVNULL, env=_git_env(git), timeout=30,
+                              cwd=git["dir"])
     except subprocess.TimeoutExpired:
         return 124, b""
     return done.returncode, done.stdout
+
+
+def _git(git, *args):
+    code, output = _git_bytes(git, *args)
+    return code, output.decode("utf-8", errors="replace").strip()
+
+
+def _committer_time(git, commit):
+    """The committer timestamp, parsed from the raw commit so no signature is ever checked."""
+    code, body = _git_bytes(git, "cat-file", "commit", commit)
+    if code:
+        return None
+    for line in body.split(b"\n\n", 1)[0].split(b"\n"):
+        if line.startswith(b"committer "):
+            parts = line.split()
+            if len(parts) >= 2 and parts[-2].isdigit():
+                return int(parts[-2])
+    return None
 
 
 def _time(value, label):
@@ -202,6 +254,24 @@ def _jsonl(data, label):
     return rows
 
 
+def _repository_objects(repo):
+    """Refuse a bundled repository whose objects could come from anywhere but the bundle."""
+    git_dir = repo / ".git"
+    if git_dir.is_symlink() or not git_dir.is_dir():
+        raise StrictJSONError("repository is not a self-contained Git checkout; a gitdir file "
+                              "or linked worktree reaches outside the bundle")
+    objects = git_dir / "objects"
+    if objects.is_symlink() or not objects.is_dir():
+        raise StrictJSONError("repository has no local object store")
+    # commondir moves objects and refs to another repository; alternates borrow its objects.
+    redirections = [git_dir / "commondir", objects / "info" / "alternates",
+                    objects / "info" / "http-alternates"]
+    if any(os.path.lexists(str(path)) for path in redirections) \
+            or any(path.is_symlink() for path in git_dir.rglob("*")):
+        raise StrictJSONError("repository Git data reaches outside the bundle")
+    return objects
+
+
 def load_bundle(directory):
     """Load and hash every declared artifact, rejecting traversal, symlinks and loose JSON."""
     root = Path(directory).resolve()
@@ -215,22 +285,7 @@ def load_bundle(directory):
         raise StrictJSONError("bundle_id is empty")
     _keys(index["repository"], ("path", "name", "run_commit"), "repository")
     repo = _safe_path(root, index["repository"]["path"], "repository", directory=True)
-    git_dir = repo / ".git"
-    if not git_dir.is_dir():
-        raise StrictJSONError("repository is not a self-contained Git checkout")
-    if any((git_dir / "objects/info").glob("*alternates")) \
-            or any(path.is_symlink() for path in git_dir.rglob("*")):
-        raise StrictJSONError("repository Git data reaches outside the bundle")
-    executable_keys = ("fsmonitor=", "hookspath=", "external=", "textconv=", "helper=",
-                       "sshcommand=", "pager=")
-    for config_path in git_dir.glob("config*"):
-        if not config_path.is_file():
-            continue
-        compact_config = "".join(config_path.read_text(encoding="utf-8").lower().split())
-        if "[include" in compact_config:
-            raise StrictJSONError("repository Git config includes external configuration")
-        if any(key in compact_config for key in executable_keys):
-            raise StrictJSONError("repository Git config declares an executable helper")
+    _repository_objects(repo)
     artifacts = index["artifacts"]
     _keys(artifacts, ARTIFACT_KEYS, "artifacts")
     loaded = {"root": root, "index": index, "repository": repo, "raw": {}}
@@ -249,6 +304,42 @@ def load_bundle(directory):
         (_read_ref(root, ref, "trajectory %d" % number, ("task", "arm", "trial")), ref)
         for number, ref in enumerate(artifacts["trajectories"], 1)]
     return loaded
+
+
+DEVIATION_LOG = "## Deviation log"
+DEVIATION_ENTRY = re.compile(r"^- \d{4}-\d{2}-\d{2}: \S")
+
+
+def _plan_amendment_problem(registered, bundled):
+    """None when ``bundled`` is the registered plan plus dated deviation-log entries only.
+
+    The template freezes everything above the deviation log after the first trial, so bytes
+    appended to the registered plan are admitted only as new dated entries at the end of a
+    deviation log the registered plan already ended with; a new heading or field is refused.
+    """
+    if bundled == registered:
+        return None
+    if not bundled.startswith(registered):
+        return "the registered text was edited"
+    try:
+        registered_text = registered.decode("utf-8")
+        appended = bundled[len(registered):].decode("utf-8")
+    except UnicodeError:
+        return "the plan is not UTF-8"
+    headings = [line.strip() for line in registered_text.splitlines() if line.startswith("## ")]
+    if not headings or headings[-1] != DEVIATION_LOG:
+        return "text was appended outside a deviation log"
+    if registered_text and not registered_text.endswith("\n"):
+        return "an appended entry does not start on its own line"
+    entries = 0
+    for line in appended.splitlines():
+        if not line.strip():
+            continue
+        if DEVIATION_ENTRY.match(line):
+            entries += 1
+        elif not (line.startswith("  ") and entries):
+            return "appended text is not a dated deviation-log entry"
+    return None if entries else "appended text is not a dated deviation-log entry"
 
 
 def _error(errors, item, message):
@@ -406,13 +497,24 @@ def _manifest_without_treatment(manifest, treatment):
 
 def verify(directory):
     """Re-derive a bundle. All failures are returned; no bundled command is executed."""
-    errors, checks, derived, cards = [], {}, {}, []
     try:
         bundle = load_bundle(directory)
     except (OSError, UnicodeError, StrictJSONError) as exc:
         return {"ok": False, "bundle_id": None, "derived": {}, "cards": [], "checks": {},
                 "errors": [str(exc)], "unknown": []}
-    index, repo, raw = bundle["index"], bundle["repository"], bundle["raw"]
+    try:
+        with _IsolatedGit(bundle["repository"]) as git:
+            return _verify_loaded(bundle, git)
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError, OSError) as exc:
+        # A shape the numbered checks did not anticipate is still a failed bundle, never a crash.
+        return {"ok": False, "bundle_id": bundle["index"].get("bundle_id"), "derived": {},
+                "cards": [], "checks": {}, "unknown": [],
+                "errors": ["bundle is malformed: %s: %s" % (type(exc).__name__, exc)]}
+
+
+def _verify_loaded(bundle, git):
+    errors, checks, derived, cards = [], {}, {}, []
+    index, repo, raw = bundle["index"], git, bundle["raw"]
     bundle_id = index["bundle_id"]
     items = index["items"]
     if not isinstance(items, dict) or set(items) != {str(n) for n in range(1, 13)}:
@@ -443,6 +545,9 @@ def verify(directory):
         _error(errors, 4, "price artifact has no supported dated model table")
     else:
         for model, entry in sorted(price_doc["models"].items()):
+            if not isinstance(entry, dict):
+                _error(errors, 4, "price entry %s is not an object" % model)
+                continue
             rate = PRICING.usable_rate(entry)
             try:
                 datetime.date.fromisoformat(entry.get("as_of", ""))
@@ -530,8 +635,12 @@ def verify(directory):
                               ("effort", design.get("effort")),
                               ("task_order_seed", design.get("task_order_seed")),
                               ("bootstrap_seed", design.get("bootstrap_seed"))):
-            if field != "model" and row.get(field) != wanted:
+            if row.get(field) != wanted:
                 _error(errors, 3, "row %d %s differs from the design" % (number, field))
+        # `model` is the request; `observed_model` is what the trial's own transcript reports,
+        # and only it can reveal a fallback.
+        if not isinstance(row.get("observed_model"), str) or not row["observed_model"]:
+            _error(errors, 3, "row %d has no observed model from its transcript" % number)
         if row.get("evidence") != experiment_protocol.PREREGISTERED:
             _error(errors, 1, "row %d is not pre-registered" % number)
         if row.get("pre_registration") != plan_ref.get("git_path") \
@@ -600,6 +709,12 @@ def verify(directory):
             "effort": dict({"pinned": design.get("effort"),
                             "status": "verified" if effort_known else "unknown"}, **effort),
         }
+    observed = [derived["runtime_surface"][arm]["surface"] for arm in ARMS]
+    if any(derived["runtime_surface"][arm]["status"] != "verified" for arm in ARMS):
+        parity = "unknown"
+    else:
+        parity = "equal" if observed[0] == observed[1] else "differs"
+    derived["surface_parity"] = {"status": parity}
 
     for ref, label in ((plan_ref, "plan"), (task_ref, "tasks")):
         if not isinstance(ref.get("git_path"), str) or not ref["git_path"]:
@@ -613,15 +728,19 @@ def verify(directory):
         code, ancestor = _git(repo, "merge-base", "--is-ancestor", plan_commit, run_commit)
         if code:
             _error(errors, 1, "plan commit is not an ancestor of the run commit")
-        code, stamp = _git(repo, "show", "-s", "--format=%ct", plan_commit)
-        if code or not stamp.isdigit() or int(stamp) >= min(starts):
+        stamp = _committer_time(repo, plan_commit)
+        if stamp is None or stamp >= min(starts):
             _error(errors, 1, "plan commit postdates the first trial")
-        code, registered = _git_bytes(repo, "show", "%s:%s" % (plan_commit, plan_ref.get("git_path")))
-        if code or not raw["plan"][1].startswith(registered):
-            _error(errors, 1, "bundle plan does not preserve its registered commit")
+        code, registered = _git_bytes(repo, "cat-file", "blob",
+                                      "%s:%s" % (plan_commit, plan_ref.get("git_path")))
+        problem = "registered plan is unreadable" if code \
+            else _plan_amendment_problem(registered, raw["plan"][1])
+        if problem:
+            _error(errors, 1, "bundle plan does not preserve its registered commit: " + problem)
     for ref, data, item in ((plan_ref, raw["plan"][1], 1), (task_ref, raw["tasks"][1], 2)):
-        if isinstance(run_commit, str) and isinstance(ref.get("git_path"), str):
-            code, held = _git_bytes(repo, "show", "%s:%s" % (run_commit, ref["git_path"]))
+        # A full sha is required before the value reaches Git, so it can never read as an option.
+        if _full_sha(run_commit) and isinstance(ref.get("git_path"), str):
+            code, held = _git_bytes(repo, "cat-file", "blob", "%s:%s" % (run_commit, ref["git_path"]))
             if code or held != data:
                 _error(errors, item, "%s bytes differ from the run commit" % ref.get("git_path"))
     if task_ref.get("git_path") not in plan_text or task_ref.get("sha256") not in plan_text:
@@ -698,8 +817,12 @@ def verify(directory):
     fallback = 0
     priced_rows = []
     for number, row in enumerate(rows, 1):
-        fallback += row.get("model") != design.get("model")
-        recalculated, reason = _token_cost(row, price_table)
+        observed_model = row.get("observed_model")
+        fallback += isinstance(observed_model, str) and observed_model != design.get("model")
+        # A fallback trial is priced at the model that actually ran.
+        recalculated, reason = _token_cost(
+            dict(row, model=observed_model) if isinstance(observed_model, str) and observed_model
+            else row, price_table)
         if reason and row.get("error_kind") != "timeout":
             if reason.startswith("model"):
                 recalculated = None
@@ -762,7 +885,9 @@ def verify(directory):
         _error(errors, 7, "trajectories do not exactly cover planned attempts")
 
     judge = audits.get("judge", {})
+    judge = judge if isinstance(judge, dict) else {}
     item8 = items.get("8", {})
+    item8 = item8 if isinstance(item8, dict) else {}
     if item8.get("status") == "not-applicable":
         if judge.get("kind") != "deterministic" or not _not_applicable(item8, "deterministic"):
             _error(errors, 8, "judge agreement is N/A only for deterministic outcomes")
@@ -784,6 +909,7 @@ def verify(directory):
     field = audits.get("field_checks", {})
     field = field if isinstance(field, dict) else {}
     stated_ratio = field.get("sample_ratio", {})
+    stated_ratio = stated_ratio if isinstance(stated_ratio, dict) else {}
     if stated_ratio.get("planned") != planned or stated_ratio.get("completed") != derived["sample_ratio"]["counts"] \
             or stated_ratio.get("p_value") != derived["sample_ratio"]["p_value"]:
         _error(errors, 11, "sample-ratio check does not match planned and completed attempts")
@@ -834,7 +960,9 @@ def verify(directory):
                 _keys(part, ("pointer", "value"), "card %s" % name)
                 if _pointer(derived, part["pointer"]) != part["value"]:
                     raise ValueError("card %s differs from the derived value" % name)
-            claim = card["claim"] if isinstance(card["claim"], str) else ""
+            if not isinstance(card["claim"], str) or not card["claim"]:
+                raise ValueError("card claim is not a nonempty string")
+            claim = card["claim"]
             for fact, pattern in OBSERVATION_CLAIMS:
                 key = "effort" if fact == "effort" else None
                 statuses = [(derived["runtime_surface"][arm][key]["status"] if key
@@ -842,6 +970,9 @@ def verify(directory):
                 if pattern.search(claim) and statuses != ["verified"] * len(ARMS):
                     raise ValueError("claim describes %s the rows did not observe for every attempt"
                                      % ("reasoning effort" if key else "the loaded runtime surface"))
+            if PARITY_CLAIM.search(claim) and derived["surface_parity"]["status"] != "equal":
+                raise ValueError("claim asserts parity the arms' observed surfaces do not show (%s)"
+                                 % derived["surface_parity"]["status"])
         except (StrictJSONError, ValueError) as exc:
             verified = False
             _error(errors, 10, "evidence card %d: %s" % (number, exc))

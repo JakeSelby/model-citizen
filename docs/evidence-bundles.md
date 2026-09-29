@@ -25,10 +25,15 @@ Schema version 1 has these top-level fields:
 
 The loader rejects unknown or missing index keys, duplicate JSON keys, non-finite JSON numbers,
 absolute paths, `.` or `..` segments, symlinks, containment escapes, missing artifacts, and digest
-mismatches. The bundled repository is used only by fixed-argument Git reads. Its committed task and
-plan bytes must match the bundle, and the registered plan commit and captured merge receipt must
-precede every trial and be ancestors of the run commit. A receipt is retained provenance, not a
-cryptographic attestation from GitHub.
+mismatches. The bundled repository must hold its own object store: a `gitdir:` file, `commondir`,
+object alternates or any symlink under `.git` is refused. Git reads only that object store, from a
+fresh Git directory with a fixed configuration, so the bundle's own configuration, hooks, signature
+helpers, grafts, replace refs and commit-graph are never read, and a commit reaches Git only as a
+full sha. Its committed task and plan bytes must match the bundle, and the registered plan commit and
+captured merge receipt must precede every trial and be ancestors of the run commit. The bundled plan
+may differ from the registered one only by dated `- YYYY-MM-DD: ...` entries appended to a
+`## Deviation log` the registered plan already ended with; any other appended text fails item 1. A
+receipt is retained provenance, not a cryptographic attestation from GitHub.
 
 The verifier re-prices every trial from the bundled dated price table and saved token counts. An
 unknown model or incomplete token record leaves cost unknown and fails the pricing check; it is
@@ -37,15 +42,20 @@ attempts remain in the intention-to-treat population. The verifier calls `replay
 paired SM-2 result and derives per-task summaries, Pareto status, fallback rate, planned-attempt
 completion, sample-ratio diagnostics, and descriptive ICC/design effects.
 
-Pinned runtime inputs and observed runtime facts remain separate. Every evidence-eligible row must
+Pinned runtime inputs and observed runtime facts remain separate. A row's `model` is the request
+and must equal the pinned model; its `observed_model` is what the trial's transcript reports, is
+required, prices the trial, and counts a fallback when it differs from the pin. Every evidence-eligible row must
 carry the CLI init event's loaded-surface counts and content hashes; a missing init event stays
 `unknown` and fails item 3 rather than counting as a stable surface. Requested effort is the pin,
 and a row's requested `effort` must equal it. `observed_effort: null` explicitly means the headless client did
 not report an observation; it is retained as unknown, never filled from the request, and a row with
 no `observed_effort` field fails item 3. A non-null observation must equal the pin. The result's
 `unknown` list, and the command's text output, name each arm whose effort or loaded surface was not
-observed on every planned attempt, and an evidence card whose claim mentions effort, parity or the
-loaded surface fails unless both arms observed that fact on every attempt.
+observed on every planned attempt, and an evidence card whose claim mentions effort, reasoning,
+thinking, the loaded surface or its parts fails unless both arms observed that fact on every
+attempt. A claim of parity, such as `parity`, `like-for-like` or `the same skills`, also needs the
+two arms' observed surfaces to be equal; `surface_parity` in the result records `equal`, `differs`
+or `unknown`.
 
 ICC uses the one-way random-effects single-measure estimator ICC(1,1) from Shrout and Fleiss,
 computed separately for pass outcome and cost in each arm, with task as the cluster and the actual
@@ -62,17 +72,19 @@ section must all be present, whatever the result shows.
 
 Run `citizen evidence verify BUNDLE` for a short verdict, or add `--json` for the complete derived
 record. Success exits zero; a malformed, incomplete or contradicted bundle exits one and names each
-failed check. The command reads only local bundle and Git-object data and disables or refuses Git
-configuration that can launch helpers. It never calls a model or network service.
+failed check. The command reads only local bundle and Git-object data, never the bundled repository's Git
+configuration. It never calls a model or network service.
 
 `product.json` may bind a measured claim through its top-level `evidence_cards` list. Each entry
 names the claim's exact JSON-pointer `field`, exact `text`, repository-relative `bundle`, and card
 `id`. The landing-copy check runs that bundle's verifier again on every pull request, whether or not
 `product.json` changed, and ignores every saved success flag.
-A cheaper claim additionally needs a supported SM-2 result; a numeric cheaper magnitude must fit
-inside the ratio interval.
+A cost claim (cheaper, savings, less expensive, reduces, lowers, cuts or halves cost) additionally
+needs a supported SM-2 result with a ratio interval wholly below 1, and every percentage in it must
+fit inside that interval. A pass-rate improvement needs a pass-rate difference interval wholly above
+zero, and every percentage in it, read as points, must fit under the interval's lower bound. A
+speed or multiplier claim (faster, quicker, `2x`) is refused: the verifier derives no estimand for it.
 
-Claim recognition is deliberately mechanical, not a promise of semantic review. It covers
-`cheaper`, saving/saved, faster, explicit cost-reduction or pass-rate-improvement phrases, and any
-percentage. Rewording can fall outside that vocabulary, so review still owns claims the recognizer
+Claim recognition is deliberately mechanical, not a promise of semantic review. It covers those
+phrases, any percentage written with `%` or `percent`, and any multiplier. Rewording can fall outside that vocabulary, so review still owns claims the recognizer
 cannot classify. A recognized claim with no exact binding fails closed, as does an unused binding.

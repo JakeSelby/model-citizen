@@ -15,12 +15,19 @@ CAPABILITY_ROOTS = ('bin/', 'lib/', 'adapters/', 'primitives/', 'policy/')
 PRODUCT = 'product.json'
 ESCAPE = re.compile(r'^\s*Landing copy:\s*(.+?)\s*$', re.MULTILINE)
 MINIMUM_REASON = 20
-MEASURED = re.compile(
-    r'\b(?:cheaper|savings?|saved|faster|reduces? cost|lowers? cost|improves? (?:pass|success) rate)\b'
-    r'|\b\d+(?:\.\d+)?%\b', re.IGNORECASE)
-MAGNITUDE = re.compile(
-    r'\b(?:at least )?(\d+(?:\.\d+)?)% cheaper\b'
-    r'|\bcheaper by (?:at least )?(\d+(?:\.\d+)?)%', re.IGNORECASE)
+# A percentage is a number followed by `%` or `percent`; `\b` cannot follow `%`, so the end is
+# a lookahead instead. A multiplier such as `2x` or `3×` is a measured magnitude too.
+PERCENT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:%|percent\b)', re.IGNORECASE)
+MULTIPLIER = r'\b\d+(?:\.\d+)?(?:x|\s*×)(?![\w])'
+COST = re.compile(
+    r'\b(?:cheaper|less expensive|savings?|saved|saves|(?:reduces?|lowers?|cuts?|halves)'
+    r' (?:the )?(?:cost|spend|bill)s?)\b', re.IGNORECASE)
+PASS_RATE = re.compile(
+    r'\b(?:improves?|raises?|increases?|boosts?|higher) (?:the )?(?:pass|success) rates?\b',
+    re.IGNORECASE)
+SPEED = re.compile(r'\b(?:faster|quicker|speeds? up|less time)\b', re.IGNORECASE)
+MEASURED = re.compile('|'.join((COST.pattern, PASS_RATE.pattern, SPEED.pattern,
+                                PERCENT.pattern, MULTIPLIER)), re.IGNORECASE)
 
 FAILURE = (
     'A pull request that adds or changes a user-visible capability updates {product} in the same '
@@ -60,6 +67,41 @@ def _verify_bundle(path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.verify(path)
+
+
+def _check_direction(field, text, derived):
+    """Refuse a directional claim the paired SM-2 result does not support, at every magnitude."""
+    sm2 = derived.get('sm2') if isinstance(derived, dict) else None
+    sm2 = sm2 if isinstance(sm2, dict) else {}
+    amounts = [float(match.group(1)) for match in PERCENT.finditer(text)]
+    if SPEED.search(text):
+        raise ValueError('speed claim at {} has no re-derived time estimand to support it'.format(field))
+    if re.search(MULTIPLIER, text, re.IGNORECASE):
+        raise ValueError('multiplier claim at {} has no re-derived estimand to support it'.format(field))
+    if COST.search(text):
+        if sm2.get('verdict') != 'supported' or not sm2.get('claim'):
+            raise ValueError('cost claim at {} is not supported by SM-2'.format(field))
+        interval = sm2.get('ratio_interval')
+        upper = interval[1] if isinstance(interval, list) and len(interval) == 2 else None
+        if not isinstance(upper, (int, float)) or upper >= 1:
+            raise ValueError('cost claim at {} has no ratio interval wholly below 1'.format(field))
+        for amount in amounts:
+            if upper > 1 - amount / 100:
+                raise ValueError('cost magnitude {}% at {} exceeds the SM-2 interval'.format(
+                    _format(amount), field))
+    if PASS_RATE.search(text):
+        interval = sm2.get('difference_interval')
+        lower = interval[0] if isinstance(interval, list) and len(interval) == 2 else None
+        if not isinstance(lower, (int, float)) or lower <= 0:
+            raise ValueError('pass-rate claim at {} has no difference interval wholly above 0'.format(field))
+        for amount in amounts:
+            if lower < amount / 100:
+                raise ValueError('pass-rate magnitude {}% at {} exceeds the SM-2 interval'.format(
+                    _format(amount), field))
+
+
+def _format(amount):
+    return ('%f' % amount).rstrip('0').rstrip('.')
 
 
 def validate_product_claims(root=Path(__file__).resolve().parents[2]):
@@ -109,18 +151,7 @@ def validate_product_claims(root=Path(__file__).resolve().parents[2]):
         if len(matches) != 1 or matches[0].get('verify_status') is not True \
                 or matches[0].get('claim') != text:
             raise ValueError('measured claim at {} has no exact verified evidence card'.format(field))
-        if re.search(r'\bcheaper\b', text, re.IGNORECASE):
-            sm2 = result.get('derived', {}).get('sm2', {})
-            if sm2.get('verdict') != 'supported' or not sm2.get('claim'):
-                raise ValueError('cheaper claim at {} is not supported by SM-2'.format(field))
-            magnitude = MAGNITUDE.search(text)
-            interval = sm2.get('ratio_interval')
-            amount = next((value for value in magnitude.groups() if value is not None), None) \
-                if magnitude else None
-            if magnitude and (not isinstance(interval, list) or len(interval) != 2
-                              or interval[1] is None
-                              or interval[1] > 1 - float(amount) / 100):
-                raise ValueError('cheaper magnitude at {} exceeds the SM-2 interval'.format(field))
+        _check_direction(field, text, result.get('derived', {}))
     return 'Landing copy claims verified: {} measured claim(s).'.format(len(measured))
 
 

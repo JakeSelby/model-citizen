@@ -97,7 +97,7 @@ grouped by repository and by the preference variant you had selected at the time
 - [Hit rate per rule](docs/usage.md): bin/citizen usage --rules lists each loaded rule as measured, dark or unmeasured and how often it fired, by repo or stance; --by profile splits spend by profile.
 - [Cache prefix held](docs/usage.md): bin/citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.
 - [What is detected](claude/hooks/rule-detectors.py): Nineteen deterministic detectors read the transcript: whole-file reads, unverified pushes, secrets in a write, banned openers, non-conventional commits.
-- [Evidence before claims](docs/evidence-bundles.md): citizen evidence verify re-derives a bundle's figures and cards offline, and landing copy refuses mechanically recognized measured claims without one.
+- [Caught in the act](docs/field-scan.md): The instrument has already caught two of this repository's own shipped features doing nothing. Both are filed as issues, not hidden.
 - [Exports where you already look](docs/telemetry.md): The same ledger exports over OTLP, off by default, to Langfuse, Phoenix or Opik, adding the one thing they cannot see: which rule fired.
 
 ### Your preferences, as switches

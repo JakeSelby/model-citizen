@@ -179,9 +179,9 @@
           "doc": "claude/hooks/rule-detectors.py"
         },
         {
-          "name": "Evidence before claims",
-          "line": "citizen evidence verify re-derives a bundle's figures and cards offline, and landing copy refuses mechanically recognized measured claims without one.",
-          "doc": "docs/evidence-bundles.md"
+          "name": "Caught in the act",
+          "line": "The instrument has already caught two of this repository's own shipped features doing nothing. Both are filed as issues, not hidden.",
+          "doc": "docs/field-scan.md"
         },
         {
           "name": "Exports where you already look",
@@ -228,7 +228,6 @@
       ]
     }
   ],
-  "evidence_cards": [],
   "on_the_way": [
     {
       "title": "Measured against bare",
