@@ -50,7 +50,11 @@ COUNT_FIELDS = ("spawns", "gather_calls", "absorbed_calls", "workflow_launches")
 
 
 def _value(row, field):
-    """A count field's value, or None when the row does not carry a number for it."""
+    """A count field's value, or None when the row does not carry a number for it. A run with a
+    spawn call the stream never shows launching, neither a result nor any message in its thread,
+    has unknown spawns: counting it could credit a launch that never happened."""
+    if field == "spawns" and row.get("unconfirmed_spawns"):
+        return None
     value = row.get(field)
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 

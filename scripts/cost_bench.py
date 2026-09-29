@@ -115,7 +115,8 @@ SURFACE_HASH_FIELDS = tuple(field + "_sha256" for field in SURFACE_FIELDS)
 SURFACE_SOURCE = "cli-init"
 SURFACE_SOURCE_FIELD = "init_surface_source"
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
-STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "spawn_offered",
+STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns",
+                 "unconfirmed_spawns", "spawn_offered",
                  "gather_calls", "absorbed_calls", "workflow_launches", "stop_hooks", "hook_blocks",
                  "cache_miss_ratio", "installed_checkout_reads",
                  "observed_effort", SURFACE_SOURCE_FIELD) \
@@ -792,25 +793,29 @@ def spawn_offered(messages):
     return any(isinstance(name, str) and name in SPAWN_TOOLS for name in tools)
 
 
-def failed_tool_uses(messages):
-    """The ids of tool calls whose `tool_result` is an error: denied, hook-blocked or failed."""
-    failed = set()
+def tool_results(messages):
+    """(ids of tool calls whose `tool_result` succeeded, ids whose result is an error: denied,
+    hook-blocked or failed). A call with neither has no result in the stream."""
+    succeeded, failed = set(), set()
     for message in messages:
         content = (message.get("message") or {}).get("content") if isinstance(message, dict) else None
         for block in content if isinstance(content, list) else []:
-            if (isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error")
+            if (isinstance(block, dict) and block.get("type") == "tool_result"
                     and isinstance(block.get("tool_use_id"), str)):
-                failed.add(block["tool_use_id"])
-    return failed
+                (failed if block.get("is_error") else succeeded).add(block["tool_use_id"])
+    return succeeded, failed
 
 
-def counted_spawns(calls, failed):
-    """The spawn calls that count, from `calls`, every spawn-tool call as (id, thread), and the
-    threads those spawns started.
+def counted_spawns(calls, succeeded, failed, active):
+    """(the spawn calls that count, the threads those spawns started, whether the count is
+    unconfirmed), from `calls`, every spawn-tool call as (id, thread).
 
-    A spawn counts when its result is not an error and it was made on the main thread or inside a
-    thread that a counted spawn started; one made inside a `Workflow` agent's thread does not. A
-    call with no id counts where it sits but names no thread."""
+    A spawn counts when the stream shows it launched, by a non-error result or by messages in the
+    thread it started (`active`), without an error result, and it was made on the main thread or
+    inside a thread that a counted spawn started; one made inside a `Workflow` agent's thread does
+    not. A call on such a thread with no id, or with neither a result nor any thread activity, may
+    or may not have launched: it still counts in `spawns`, as before, and is also counted as
+    unconfirmed so the delegation verdict can read that run's spawns as unknown."""
     counted, threads, grew = [], set(), True
     while grew:
         grew = False
@@ -821,7 +826,9 @@ def counted_spawns(calls, failed):
             if use_id is not None:
                 threads.add(use_id)
             grew = True
-    return [calls[index] for index in counted], threads
+    shown = succeeded | active
+    unconfirmed = sum(1 for index in counted if calls[index][0] not in shown)
+    return [calls[index] for index in counted], threads, unconfirmed
 
 
 def surface_of(row):
@@ -879,10 +886,13 @@ def _stream_diagnostics(messages, streamed):
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
     # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
     count = lambda value: value if assistant else None
-    spawned, spawn_thread_ids = counted_spawns(spawn_calls, failed_tool_uses(messages))
+    active = {m.get("parent_tool_use_id") for m in messages
+              if isinstance(m, dict) and isinstance(m.get("parent_tool_use_id"), str)}
+    succeeded, failed = tool_results(messages)
+    spawned, spawn_thread_ids, unconfirmed = counted_spawns(spawn_calls, succeeded, failed, active)
     return {"first_turns": first_turns, "first_call_cache_write": first_write,
             "first_call_context": first_context, "tool_counts": tools,
-            "spawns": count(len(spawned)),
+            "spawns": count(len(spawned)), "unconfirmed_spawns": count(unconfirmed),
             "spawn_offered": spawn_offered(messages), "gather_calls": count(len(gathers)),
             "absorbed_calls": count(sum(1 for thread in gathers if thread in spawn_thread_ids)),
             "workflow_launches": count(sum(tools.get(name, 0) for name in WORKFLOW_TOOLS)), "stop_hooks": stops,

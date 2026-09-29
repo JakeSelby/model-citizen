@@ -106,6 +106,14 @@ class GatherCountTests(unittest.TestCase):
         said = VERDICT.verdict(cell([EIGHTEEN_READS] * 4, [denied] * 4))
         self.assertEqual(said["verdict"], "missed-above-break-even")
 
+    def test_a_spawn_with_no_result_is_unconfirmed_never_a_spawn(self):
+        """Regression: an `Agent` call with no `tool_result` in the stream counted as a launched spawn."""
+        unanswered = stream(init(), say(None, ["Agent"]), say(None, ["Read"] * 18, 10))
+        self.assertEqual(BENCH.parse_result(unanswered)["unconfirmed_spawns"], 1)
+        said = VERDICT.verdict(cell([EIGHTEEN_READS] * 4, [unanswered] * 4))
+        self.assertNotEqual(said["verdict"], "fired")
+        self.assertEqual(said["verdict"], "unknown")
+
     def test_a_spawn_inside_a_workflow_thread_is_not_the_run_s_spawn(self):
         """Regression: any thread with a parent counted, so a Workflow agent calling `Agent` made a spawning run."""
         output = stream(init(), say(None, ["Workflow"]), say("toolu_0", ["Read", "Agent"], 10),
