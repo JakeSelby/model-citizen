@@ -5301,8 +5301,11 @@ def cmd_usage(args: argparse.Namespace) -> int:
         if sliced and days_map:
             # The run is counted on the day the session ended, once; its tokens are counted on
             # the days they were spent. So the run column still counts sessions rather than
-            # session-days, and TOTAL runs stays the number of sessions in the window.
-            if ended >= cutoff:
+            # session-days, and TOTAL runs stays the number of sessions in the window. The
+            # window is read by day, as the slices are: a session that ended on the cutoff's
+            # day but before its hour has tokens in that day's slice, so it is a run of that
+            # day too, and `unpriced` agrees with the totals' `unpriced_runs`.
+            if ended[:10] >= cutoff_day:
                 groups.setdefault(ended[:10], usage_accumulator())[0] += 1
                 if cost is None:
                     unpriced += 1

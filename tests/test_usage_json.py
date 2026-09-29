@@ -243,6 +243,21 @@ class JsonReportTests(unittest.TestCase):
         self.assertEqual(cells[1:3], ["2", "10"])
         self.assertIn("unpriced: 2 run(s)", text)
 
+    def test_a_session_ending_before_the_cutoff_hour_is_a_run_of_its_day(self):
+        pinned = 1773144000  # a one-day window from here starts 2026-03-09T12:00:00Z
+        self.assertEqual(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(pinned)),
+                         "2026-03-10T12:00:00Z")
+        early = session(models=["unknown"], started="2026-03-09T06:00:00Z",
+                        ended="2026-03-09T07:00:00Z",
+                        days={"2026-03-09": {"input": 10, "output": 20,
+                                             "cache_read": 60, "cache_write": 10}})
+        with mock.patch.object(harness.time, "time", return_value=pinned):
+            data = self.document([early], days=1)
+        self.assertEqual([group["name"] for group in data["groups"]], ["2026-03-09"])
+        total = data["totals"]
+        self.assertEqual((total["runs"], total["unpriced_runs"], data["unpriced"]), (1, 1, 1))
+        self.assertIsNone(total["usd"])
+
     def test_provider_latency_reports_coverage_and_ignores_nonfinite_values(self):
         def call(ms, **extra):
             row = {"kind": harness.decision_ledger.KIND, "ended": NOW, "point": "grade",
