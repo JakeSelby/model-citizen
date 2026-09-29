@@ -70,6 +70,33 @@ class CompactionPrecedenceTests(unittest.TestCase):
                         found = rd.run(SESSION, {"cost": name}, strict=True)
                         self.assertEqual(COMPACT in found, name == "restricted")
 
+    def test_broken_selection_skips_only_compaction_and_records_error(self):
+        events = SESSION + [{"kind": "assistant_text", "turn": 3, "text": "a", "model": "a"},
+                            {"kind": "assistant_text", "turn": 4, "text": "b", "model": "b"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = Path(tmp) / ".config" / "agent-harness" / "config.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text("{malformed")
+            with patch.dict(os.environ, {"HOME": tmp, "HARNESS_HOME": tmp}):
+                errors = []
+                found = rd.run(events, {"cost": "balanced"}, errors=errors)
+                self.assertNotIn(COMPACT, found)
+                self.assertIn("cache-hygiene/model-switch", found)
+                self.assertEqual(errors, [{"detector": COMPACT, "error": "JSONDecodeError"}])
+                with self.assertRaises(json.JSONDecodeError):
+                    rd.run(events, {"cost": "balanced"}, strict=True)
+                custom = Path(tmp) / "custom"
+                cost = custom / "stances" / "cost"
+                cost.mkdir(parents=True)
+                (cost / "broken.md").write_text("# Broken\n")
+                (cost / "broken.json").write_text("{malformed")
+                cfg.write_text(json.dumps({"primitive_roots": [str(custom)]}))
+                errors = []
+                found = rd.run(events, {"cost": "broken"}, errors=errors)
+                self.assertNotIn(COMPACT, found)
+                self.assertIn("cache-hygiene/model-switch", found)
+                self.assertEqual([e["detector"] for e in errors], [COMPACT])
+
     def test_a_compaction_under_max_is_not_counted_as_a_miss(self):
         self.assertNotIn(COMPACT, rd.run(SESSION, {"cost": "max"}, strict=True))
 

@@ -562,4 +562,21 @@ def run(events, stances=None, strict=False, errors=None, extra=()):
     registry = Registry(_REGISTRY)
     for detector in extra:
         registry.add(detector)
+    compact = registry.get("cache-hygiene/compact")
+    if compact is not None and compact.gate is compaction_required:
+        # The engine catches detector failures, but not gate failures. Resolve this file-backed
+        # gate once here so an unreadable custom selection costs only its own measurement.
+        try:
+            enabled = compact.enabled(stances)
+        except Exception as exc:
+            if strict:
+                raise
+            if errors is not None:
+                errors.append({"detector": compact.id, "error": type(exc).__name__})
+            enabled = False
+        if enabled:
+            registry.add(Detector(compact.id, compact.rule, compact.event, compact.fn,
+                                  examples=compact.examples))
+        else:
+            registry.remove(compact.id)
     return _run(events, stances, registry=registry, strict=strict, errors=errors)
