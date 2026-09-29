@@ -12,9 +12,9 @@ Behaviour:
     into: 0 read-only (`allow-readonly-bash.command_ok` proves it), 1 local write, 2
     remote-mutating, 3 irreversible. An unknown command grades 1, never 3: a false low grade is
     the missed prompt native gives today, and the corpus grows from each miss.
-  - The text is normalised before anything else — backslash continuations joined, quoted heredoc
-    bodies and comments dropped — so a `#` comment or a here-document cannot hide the verb or
-    break the parse with an unbalanced quote or backtick. When the text still does not parse, the
+  - The text is normalised before anything else — backslash continuations joined where bash
+    joins them, quoted heredoc bodies and comments dropped — so a `#` comment or a here-document
+    cannot hide the verb or break the parse with an unbalanced quote or backtick. When the text still does not parse, the
     raw text is scanned for grade-3 verb families rather than graded 1: an unparseable command
     that says `--force` or `rm -rf` is irreversible whatever the rest of it is.
   - `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` and command-substitution bodies grade 3 when
@@ -316,12 +316,128 @@ def normalize(cmd):
     joined, then comments are dropped, so nothing can hide a verb behind a `#`, inside a body,
     or behind a line continuation. A body is data to the shell; only a client that interprets
     it — a SQL client — is graded on its contents."""
+    texts, bodies = _readings(cmd)
+    return texts[0], bodies
+
+
+def _readings(cmd):
+    """([shell text, …], here-document bodies): one reading, or two when `_join_continuations`
+    cannot place a backslash-newline with certainty — its own, then every pair removed, as the
+    hook read continuations before it modelled quoting. A caller grades the worse reading and
+    takes no directory from either."""
     text = cmd.replace("\r\n", "\n").replace("\r", "\n")
     text, bodies = _split_heredocs(text)
-    # A shell removes the pair before tokenization: `-\\\nC` is one `-C` option, not two
-    # words. Replacing it with whitespace would let a split spelling hide a governed option.
-    text = re.sub(r"\\\n", "", text)
-    return _strip_comments(text), bodies
+    joined, certain = _join_continuations(text)
+    texts = [joined] if certain else [joined, text.replace("\\\n", "")]
+    return [_strip_comments(each) for each in texts], bodies
+
+
+WORD_START = set(" \t\n;&|()<>") | {"$(", "<(", ">("}
+CASE_WORD_RE = re.compile(r"(?:^|[\s;&|(])case(?:\s|$)")
+
+
+def _join_continuations(text):
+    """(text without the backslash-newlines bash removes, whether each one was placed for sure).
+
+    Bash removes the pair unquoted, in double quotes, in `${…}`, in `$(…)` and throughout a
+    backtick body, whose quotes it does not read. It keeps the pair in single quotes, in ANSI-C
+    `$'…'` quotes, where `\\'` is an escaped quote, and in a comment, which a `#` opens at the
+    start of an unquoted word and the newline ends. Double quotes do not reach into a `$(…)`:
+    its quotes are its own. What bash versions read differently — a comment or `case` inside a
+    substitution, quotes inside `${…}` — or a construct left open is not certain, nor is a `$`,
+    `<` or `>` whose next character sits behind a continuation."""
+    if "\\\n" not in text:
+        return text, True
+    out, stack, certain, i, n = [], [["top"]], True, 0, len(text)
+    while i < n:
+        frame = stack[-1]
+        state = frame[0]
+        char = text[i]
+        if state in ("single", "comment"):
+            if (state == "single" and char == "'") or (state == "comment" and char == "\n"):
+                stack.pop()
+            out.append(char)
+            i += 1
+            continue
+        if state == "ansi":
+            if char == "\\" and i + 1 < n:
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if char == "'":
+                stack.pop()
+            out.append(char)
+            i += 1
+            continue
+        if char == "\\" and i + 1 < n:
+            if text[i + 1] != "\n":
+                out.append(text[i:i + 2])
+            i += 2
+            continue
+        if state == "backtick":
+            if char == "`":
+                stack.pop()
+            out.append(char)
+            i += 1
+            continue
+        opener = text[i:i + 2]
+        if char in "$<>" and text[i + 1:i + 3] == "\\\n":
+            certain = False
+        if opener == "$(" or (state not in ("double", "brace") and opener in ("<(", ">(")):
+            stack.append(["sub", 0, len(out) + 2])
+            out.append(opener)
+            i += 2
+            continue
+        if opener == "${":
+            stack.append(["brace"])
+            out.append(opener)
+            i += 2
+            continue
+        if char == "`":
+            stack.append(["backtick"])
+            out.append(char)
+            i += 1
+            continue
+        if state == "double":
+            if char == '"':
+                stack.pop()
+            out.append(char)
+            i += 1
+            continue
+        if state == "brace":
+            if char == "}":
+                stack.pop()
+            elif char in "'\"":
+                certain = False
+            out.append(char)
+            i += 1
+            continue
+        # Unquoted: the top level or the body of a substitution.
+        if opener in ("$'", '$"'):
+            stack.append(["ansi" if opener == "$'" else "double"])
+            out.append(opener)
+            i += 2
+            continue
+        if char in "'\"":
+            stack.append(["single" if char == "'" else "double"])
+        elif char == "#" and (not out or out[-1] in WORD_START):
+            if state == "sub":
+                certain = False
+            stack.append(["comment"])
+        elif state == "sub" and char == "(":
+            frame[1] += 1
+        elif state == "sub" and char == ")":
+            if frame[1]:
+                frame[1] -= 1
+            else:
+                if CASE_WORD_RE.search("".join(out)[frame[2]:]):
+                    certain = False
+                stack.pop()
+        out.append(char)
+        i += 1
+    if any(frame[0] != "comment" for frame in stack[1:]):
+        certain = False
+    return "".join(out), certain
 
 
 def _scan(text):
@@ -914,7 +1030,15 @@ def _grade_text(cmd, cwd, depth):
         return 0, None, None, None
     if depth >= MAX_DEPTH:
         return _scan(cmd)
-    text, bodies = normalize(cmd)
+    texts, bodies = _readings(cmd)
+    if len(texts) > 1:
+        # A continuation the lexer cannot place: the worse reading, and never read-only.
+        return max([_grade_reading(text, bodies, cwd, depth) for text in texts]
+                   + [_scan(cmd), (1, "", "", "opaque")], key=lambda h: h[0])
+    return _grade_reading(texts[0], bodies, cwd, depth)
+
+
+def _grade_reading(text, bodies, cwd, depth):
     stripped, inners = _extract_subs(text)
     best = (0, None, None, None)
     for inner in inners:
@@ -1055,11 +1179,12 @@ SAFE_VARIABLE_WORD_RE = re.compile(
 _UNSAFE_OPERANDS = object()
 # Assigning these names invokes shell semantics or changes later word expansion. Their values
 # cannot be treated as inert path strings, and an IFS change makes every later unquoted value
-# dependent on runtime splitting.
+# dependent on runtime splitting. `getopts` owns `OPTIND` and `OPTARG`; the variable it names
+# is set by running a command, which already ends static assignment in `_assignment_contexts`.
 SHELL_SPECIAL_ASSIGNMENTS = {
     "BASHPID", "BASHOPTS", "DIRSTACK", "EPOCHREALTIME", "EPOCHSECONDS", "EUID",
-    "FUNCNAME", "GROUPS", "IFS", "LINENO", "PIPESTATUS", "PPID", "RANDOM", "SECONDS",
-    "SHELLOPTS", "UID",
+    "FUNCNAME", "GROUPS", "IFS", "LINENO", "OPTARG", "OPTIND", "PIPESTATUS", "PPID", "RANDOM",
+    "SECONDS", "SHELLOPTS", "UID",
 }
 
 
@@ -1361,27 +1486,29 @@ def is_policy_file(path):
 
 
 def _git_dir(args, cwd, variables=None):
-    """(the directory a git command runs in, after each `-C <dir>`, and its subcommand). The
-    directory is None when a `-C` is not a literal path, or `--git-dir` or `--work-tree` points
-    the command at a repository its directory does not name."""
-    i = 0
+    """(the directory a git command runs in, after each `-C <dir>`, its subcommand, and the `-C`
+    operand as written when that is what left the directory unknown). The directory is None when
+    a `-C` is not a literal path, or `--git-dir` or `--work-tree` points the command at a
+    repository its directory does not name."""
+    i, cause = 0, None
     while i < len(args):
         a = args[i]
         if a.startswith(("--git-dir=", "--work-tree=")):
-            cwd = None
+            cwd, cause = None, None
         if a in GIT_VALUE_GLOBALS and i + 1 < len(args):
             if a == "-C":
                 operand = _static_operand(args[i + 1], variables)
                 cwd = _static_dir(operand, cwd) if operand is not None else None
+                cause = args[i + 1] if cwd is None else None
             elif a in ("--git-dir", "--work-tree"):
-                cwd = None
+                cwd, cause = None, None
             i += 2
             continue
         if a.startswith("-"):
             i += 1
             continue
         break
-    return cwd, (args[i] if i < len(args) else "")
+    return cwd, (args[i] if i < len(args) else ""), cause
 
 
 def _written(prog, args, targets, cwd):
@@ -1401,11 +1528,13 @@ def _written(prog, args, targets, cwd):
     return out
 
 
-def _governed(tokens, cwd, depth, variables=None):
+def _governed(tokens, cwd, depth, variables=None, causes=None):
     """[(action class, grade, directory, paths written)] for one simple command.
 
     Wrappers, runners, `sudo` and a shell's `-c` text are looked through, as the grader looks
-    through them, and the inner command is governed at the higher of the two grades."""
+    through them, and the inner command is governed at the higher of the two grades. Each push
+    found appends to `causes` the `git -C` operand that left its directory unknown, or None, so
+    the list pairs one to one, in order, with the push entries returned."""
     grade, verb, _target, family = grade_tokens(list(tokens), cwd or "", depth)
     body, targets = _redirects(list(tokens))
     while body and ASSIGN_RE.match(body[0]):
@@ -1441,13 +1570,15 @@ def _governed(tokens, cwd, depth, variables=None):
             inner = ("text", " ".join(args))
     if inner is not None and inner[1]:
         if inner[0] == "tokens":
-            found = _governed(inner[1], cwd, depth + 1, variables)
+            found = _governed(inner[1], cwd, depth + 1, variables, causes)
         else:
-            found = governed_text(inner[1], cwd, depth + 1)
+            found = governed_text(inner[1], cwd, depth + 1, causes=causes)
         if found:
             return [(c, max(g, grade), d, w + written) for c, g, d, w in found]
     if prog == "git":
-        where, sub = _git_dir(args, cwd, variables)
+        where, sub, cause = _git_dir(args, cwd, variables)
+        if sub == "push" and causes is not None:
+            causes.append(cause)
         return [({"push": PUSH, "commit": COMMIT}.get(sub, SHELL), grade, where, written)]
     if prog == "gh" and ops[:2] == ["pr", "merge"]:
         return [(MERGE, grade, cwd, written)]
@@ -1456,7 +1587,7 @@ def _governed(tokens, cwd, depth, variables=None):
     return [(SHELL, grade, cwd, written)]
 
 
-def governed_text(cmd, cwd, depth=0, isolated=False):
+def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
     """[(action class, grade, directory, paths written)] for every simple command in `cmd`, in
     execution order, or None when the text does not decompose.
 
@@ -1466,10 +1597,33 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
     `govern` names `repo:unknown/local`, from the first change that cannot be known without
     running the line: a `cd` or `pushd` to anything but a literal path, `popd`, and any `cd` in a
     subshell, a substitution, a pipeline or a background job, where it does not carry over. A
-    pipeline after a `cd` starts in that `cd`'s directory, as `_confined` places it."""
+    pipeline after a `cd` starts in that `cd`'s directory, as `_confined` places it.
+
+    A line with a continuation the lexer cannot place is walked in each reading `_readings`
+    gives, and every directory is None: which repository it reaches is not known. When neither
+    reading decomposes, the line is one entry at an unknown directory, a push at grade 2 when a
+    chunk of it names `git` and `push`, as `_scan` reads text it cannot decompose. `causes` is
+    filled as `_governed` describes."""
     if depth >= MAX_DEPTH:
         return None
-    text, _bodies = normalize(cmd)
+    texts, _bodies = _readings(cmd)
+    if len(texts) == 1:
+        return _walk(texts[0], cwd, depth, isolated, causes)
+    found = []
+    for text in texts:
+        found.extend(_walk(text, cwd, depth, isolated, causes) or [])
+    if not found:
+        pushes = any("git" in chunk and "push" in chunk
+                     for text in texts for chunk in SCAN_SPLIT.split(text.lower()))
+        if pushes and causes is not None:
+            causes.append(None)
+        # A push is remote-mutating, grade 2, whether or not the line decomposes.
+        found = [(PUSH if pushes else SHELL, max(2 if pushes else 1, _scan(cmd)[0]), None, [])]
+    return [(action, grade, None, written) for action, grade, _where, written in found]
+
+
+def _walk(text, cwd, depth, isolated, causes):
+    """`governed_text` for one normalized reading."""
     stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
     if parts is None:
@@ -1485,7 +1639,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
     def substitutions(count, where):
         for _ in range(min(count, len(queue))):
             inner = queue.pop(0)
-            found.extend(governed_text(inner, where, depth + 1, isolated=True)
+            found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes)
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     here = cwd
@@ -1512,73 +1666,17 @@ def governed_text(cmd, cwd, depth=0, isolated=False):
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue
-        found.extend(_governed(tokens, here, depth, variables))
+        found.extend(_governed(tokens, here, depth, variables, causes))
     substitutions(len(queue), None)  # any the segments did not account for: fail closed
     return found
 
 
-def _unresolved_git_c_operands(command, cwd, depth=0):
-    """One unresolved operand or None per governed `git push`, in execution order."""
-    if depth >= MAX_DEPTH:
-        return []
-    text, _bodies = normalize(command)
-    stripped, inners = _extract_subs(text)
-    parts = segments(stripped) if stripped is not None else None
-    if parts is None:
-        return []
-    contexts = _assignment_contexts(stripped, parts)
-    unresolved, queue = [], list(inners)
-    for tokens, variables in zip(parts, contexts):
-        for _ in range(min(sum(token.count(PLACEHOLDER) for token in tokens), len(queue))):
-            unresolved.extend(_unresolved_git_c_operands(queue.pop(0), cwd, depth + 1))
-        body, _targets = _redirects(list(tokens))
-        while body and ASSIGN_RE.match(body[0]):
-            body = body[1:]
-        # Shell expansion happens before these transparent wrappers run.
-        while body and body[0].rpartition("/")[2] in WRAPPERS:
-            prog, args = body[0].rpartition("/")[2], body[1:]
-            rest = strip_options(args, WRAPPERS[prog])
-            while rest and ASSIGN_RE.match(rest[0]):
-                rest = rest[1:]
-            body = rest[1:] if prog == "timeout" and rest else rest
-        if not body:
-            continue
-        prog = body[0].rpartition("/")[2]
-        if prog in SHELLS:
-            for index, arg in enumerate(body[1:]):
-                if DASH_C_RE.match(arg) and index + 2 < len(body):
-                    unresolved.extend(_unresolved_git_c_operands(body[index + 2], cwd, depth + 1))
-                    break
-            continue
-        if prog == "eval" and len(body) > 1:
-            unresolved.extend(_unresolved_git_c_operands(" ".join(body[1:]), cwd, depth + 1))
-            continue
-        if prog != "git":
-            continue
-        args, where, cause, i = body[1:], cwd, None, 0
-        while i < len(args):
-            arg = args[i]
-            if arg in GIT_VALUE_GLOBALS and i + 1 < len(args):
-                if arg == "-C":
-                    raw = args[i + 1]
-                    operand = _static_operand(raw, variables)
-                    where = _static_dir(operand, where) if operand is not None else None
-                    cause = raw if where is None else None
-                elif arg in ("--git-dir", "--work-tree"):
-                    where, cause = None, None
-                i += 2
-                continue
-            if arg.startswith(("--git-dir=", "--work-tree=")):
-                where, cause = None, None
-            if not arg.startswith("-"):
-                break
-            i += 1
-        subcommand = args[i] if i < len(args) else ""
-        if subcommand == "push":
-            unresolved.append(cause)
-    for inner in queue:
-        unresolved.extend(_unresolved_git_c_operands(inner, cwd, depth + 1))
-    return unresolved
+def _unresolved_git_c_operands(command, cwd):
+    """One unresolved `git -C` operand or None per governed `git push`, in execution order: the
+    `causes` of the same walk `govern` reads, so wrappers are looked through exactly as there."""
+    causes = []
+    governed_text(command, cwd, causes=causes)
+    return causes
 
 
 _LEDGER = []
@@ -1765,14 +1863,11 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
     if name == NO_PROVIDER or not grade:
         return None
     cwd = cwd or os.getcwd()
+    unresolved_git_c = []
     try:
-        found = governed_text(command, cwd)
+        found = governed_text(command, cwd, causes=unresolved_git_c)
     except Exception:
-        found = None
-    try:
-        unresolved_git_c = _unresolved_git_c_operands(command, cwd)
-    except Exception:
-        unresolved_git_c = []
+        found, unresolved_git_c = None, []
     walked = found is not None
     if not found or max(entry[1] for entry in found) <= 0:
         # The grader graded the line above 0 yet no segment carries that grade: govern the whole
@@ -1798,10 +1893,11 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
         if callable(load):
             load()
         for action_class, level_grade, where, _written_paths in found:
-            if level_grade <= 0:
-                continue
+            # Popped for every push, graded or not, so each operand stays with its own push.
             unresolved_operand = (unresolved_git_c.pop(0)
                                   if action_class == PUSH and unresolved_git_c else None)
+            if level_grade <= 0:
+                continue
             if where is None:
                 # A directory the walk could not know: no pair names this counterparty, so the
                 # class default governs, read from the policies the hook's own directory sees.
