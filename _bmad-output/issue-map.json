@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 132,
+    "bug": 133,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -6836,6 +6836,19 @@
       "parent_bmad_id": "AH-E020",
       "parent_github_number": 875,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B132",
+      "github_number": 908,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/908",
+      "title": "usage-feed prices a Workflow-tool agent against the soft budget of the role it is named for",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B132.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
