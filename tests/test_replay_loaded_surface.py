@@ -6,6 +6,7 @@ import copy
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -65,6 +66,36 @@ class LoadedSurfaceTests(unittest.TestCase):
         parsed = BENCH.parse_result(stream(event, result()))
         self.assertIsNone(parsed["init_agents"])
         self.assertEqual(parsed["init_skills"], 2)
+
+    def test_diagnostics_survive_without_a_priced_final_result(self):
+        partial = stream(init(slash=81, effort="high"), first_call())
+        parsed = BENCH.parse_diagnostics(partial)
+        self.assertEqual((parsed["init_slash_commands"], parsed["observed_effort"]), (81, "high"))
+        self.assertEqual(parsed["first_call_context"], 145)
+        with self.assertRaises(ValueError):
+            BENCH.parse_result(partial)
+
+    def test_partial_and_timed_out_rows_keep_their_observed_surface(self):
+        partial = stream(init(slash=81, effort="high"), first_call())
+        timed_out = subprocess.TimeoutExpired(
+            "claude", 1, output=stream(init(slash=82, effort="high"), first_call()))
+        with tempfile.TemporaryDirectory() as tmp:
+            rows, _ = BENCH.replay([TASK], options(tmp, reps=1), Launch([partial, timed_out]))
+        self.assertEqual([row["error"] for row in rows], [True, True])
+        self.assertEqual([row["init_slash_commands"] for row in rows], [81, 82])
+        self.assertEqual([row["observed_effort"] for row in rows], ["high", "high"])
+
+    def test_a_timed_out_stream_with_surface_drift_stops_the_set(self):
+        timed_out = subprocess.TimeoutExpired(
+            "claude", 1, output=stream(init(slash=84, effort="high"), first_call()))
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "results.jsonl"
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], options(tmp), Launch([run(), run(), timed_out]), out=out)
+            rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[-1]["error_kind"], "timeout")
+        self.assertIn("init_slash_commands: 75 -> 84", str(caught.exception))
 
     def test_first_call_context_is_the_first_calls_whole_input(self):
         """The warmth-invariant prefix: input + cache write + cache read of the first call."""

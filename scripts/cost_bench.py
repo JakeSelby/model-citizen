@@ -584,39 +584,10 @@ def surface_drift(first, now):
             if first.get(field) != now.get(field)]
 
 
-def parse_result(stdout):
-    """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
-    is no result to read.
-
-    With `--verbose` the output is every message, which also gives each thread's first turn; without
-    it the output is the result alone and the cache-normalised cost cannot be computed.
-
-    `first_call_cache_write` is the standing prefix: the cache write of the first assistant message
-    carrying a usage block, which is what the session paid to put its instruction layer in the
-    cache, as against the run's total writes. `first_call_context` is that message's whole input,
-    `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
-    total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
-    by name, and `spawns` is the subagent share of it.
-
-    `stop_hooks` and `hook_blocks` are how often the Stop hook ran and how often it refused the
-    stop. Hook lifecycle events carry them, and the CLI emits those only under
-    `--include-hook-events`, which works only with `--output-format=stream-json`; for output kept
-    in the older single-document form both are None, never zero. See `stop_hook_counts`.
-
-    The `init_*` counts and `observed_effort` come from the `init` event (`loaded_surface`)."""
-    messages, streamed = cli_messages(stdout)
+def _stream_diagnostics(messages, streamed):
+    """Fields observable before a stream's final result, including a partial or timed-out run."""
     surface, effort = loaded_surface(messages)
     stops, blocks = stop_hook_counts(messages, streamed)
-    results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
-    if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
-        raise ValueError("the CLI returned no result with total_cost_usd")
-    result = results[-1]
-    per_model = [u for u in (result.get("modelUsage") or {}).values() if isinstance(u, dict)]
-    if per_model:  # includes subagents, which the top-level usage block may not
-        tokens = {kind: sum(int(u.get(key) or 0) for u in per_model)
-                  for kind, key in zip(TOKEN_KINDS, MODEL_USAGE_KEYS)}
-    else:
-        tokens = {kind: int((result.get("usage") or {}).get(kind) or 0) for kind in TOKEN_KINDS}
     first_turns, seen, first_write, first_context, tools = [], set(), None, None, {}
     cache = {"cache_read": 0, "cache_write": 0, "turns": 0, "known": True}
     for message in messages:
@@ -637,7 +608,7 @@ def parse_result(stdout):
         for field, key in (("cache_read", "cache_read_input_tokens"),
                            ("cache_write", "cache_creation_input_tokens")):
             if key not in body["usage"]:
-                cache["known"] = False  # one silent turn and the run's total is not its spend
+                cache["known"] = False
             cache[field] += int(body["usage"].get(key) or 0)
         cache["turns"] += 1
         if thread in seen:
@@ -645,13 +616,54 @@ def parse_result(stdout):
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
+    return {"first_turns": first_turns, "first_call_cache_write": first_write,
+            "first_call_context": first_context, "tool_counts": tools,
+            "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
+            "hook_blocks": blocks, "cache_miss_ratio": run_miss_ratio(cache),
+            "observed_effort": effort, **surface}
+
+
+def parse_diagnostics(stdout):
+    """Diagnostic fields present in any readable CLI stream, whether or not it finished."""
+    messages, streamed = cli_messages(stdout)
+    return _stream_diagnostics(messages, streamed)
+
+
+def parse_result(stdout):
+    """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
+    is no priced final result to read.
+
+    With `--verbose` the output is every message, which also gives each thread's first turn; without
+    it the output is the result alone and the cache-normalised cost cannot be computed.
+
+    `first_call_cache_write` is the standing prefix: the cache write of the first assistant message
+    carrying a usage block, which is what the session paid to put its instruction layer in the
+    cache, as against the run's total writes. `first_call_context` is that message's whole input,
+    `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
+    total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
+    by name, and `spawns` is the subagent share of it.
+
+    `stop_hooks` and `hook_blocks` are how often the Stop hook ran and how often it refused the
+    stop. Hook lifecycle events carry them, and the CLI emits those only under
+    `--include-hook-events`, which works only with `--output-format=stream-json`; for output kept
+    in the older single-document form both are None, never zero. See `stop_hook_counts`.
+
+    The `init_*` counts and `observed_effort` come from the `init` event (`loaded_surface`)."""
+    messages, streamed = cli_messages(stdout)
+    diagnostics = _stream_diagnostics(messages, streamed)
+    results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
+    if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
+        raise ValueError("the CLI returned no result with total_cost_usd")
+    result = results[-1]
+    per_model = [u for u in (result.get("modelUsage") or {}).values() if isinstance(u, dict)]
+    if per_model:  # includes subagents, which the top-level usage block may not
+        tokens = {kind: sum(int(u.get(key) or 0) for u in per_model)
+                  for kind, key in zip(TOKEN_KINDS, MODEL_USAGE_KEYS)}
+    else:
+        tokens = {kind: int((result.get("usage") or {}).get(kind) or 0) for kind in TOKEN_KINDS}
     return {"cost_usd": float(result["total_cost_usd"]), "tokens": tokens,
             "turns": int(result.get("num_turns") or 0), "is_error": bool(result.get("is_error")),
-            "subtype": str(result.get("subtype") or ""), "first_turns": first_turns,
-            "first_call_cache_write": first_write, "first_call_context": first_context, "tool_counts": tools,
-            "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
-            "hook_blocks": blocks,
-            "cache_miss_ratio": run_miss_ratio(cache), "observed_effort": effort, **surface}
+            "subtype": str(result.get("subtype") or ""), **diagnostics}
 
 
 def run_miss_ratio(cache):
@@ -839,6 +851,18 @@ def run_one(task, rep, arm, opts, launch=subprocess.run):
     return dict(row, outcome="pass" if row["passed"] and not row["error"] else "fail")
 
 
+def _partial_diagnostics(row, stdout):
+    """Copy what a readable stream established even when its priced result never arrived."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    try:
+        parsed = parse_diagnostics(stdout)
+    except ValueError:
+        return row
+    row.update({field: parsed[field] for field in STREAM_FIELDS})
+    return row
+
+
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
@@ -863,7 +887,10 @@ def _attempt(task, rep, arm, opts, launch):
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
                                                            opts["run_cap"], task["max_turns"], effort),
                               opts, container_name(task["id"], arm, rep), launch)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
+            partial = getattr(exc, "stdout", None)
+            partial = partial if partial is not None else getattr(exc, "output", None)
+            _partial_diagnostics(row, partial)
             return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
                         wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
@@ -874,6 +901,7 @@ def _attempt(task, rep, arm, opts, launch):
         try:
             parsed = parse_result(done.stdout)
         except ValueError as exc:
+            _partial_diagnostics(row, done.stdout)
             return dict(row, error=True, error_kind="exit %s: %s" % (done.returncode, exc))
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),

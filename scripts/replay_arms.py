@@ -334,8 +334,7 @@ def _has_intact_records(record):
 # and trust commands write into a fresh profile. Other entries are links into the checkout.
 HARNESS_ROOT = "/opt/model-citizen"
 HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md",
-                  "home:.codex/config.toml", "home:.codex/hooks.json",
-                  "home:.codex/AGENTS.personal.md",
+                  "home:.codex/AGENTS.md", "home:.codex/config.toml", "home:.codex/hooks.json",
                   "home:.config/agent-harness/trusted.txt",
                   "home:.local/state/agent-harness/manifest.json",
                   "home:.local/state/agent-harness/applied.json")
@@ -391,27 +390,40 @@ def _inside(path, root):
     return path == root or path.startswith(root.rstrip("/") + "/")
 
 
+def _is_harness_write(entry):
+    """A regular file a fresh sync renders, excluding personal input files it only reads."""
+    if not isinstance(entry, dict) or entry.get("kind") != "file":
+        return False
+    path = entry.get("path")
+    return path in HARNESS_WRITES or bool(isinstance(path, str) and (
+        re.fullmatch(r"home:\.codex/agents/[^/]+\.toml", path)
+        or re.fullmatch(r"home:\.agents/skills/harness-[^/]+/SKILL\.md", path)))
+
+
 def _configuration_is_declared(record):
     """Every setting, hook, rule, skill, agent, plugin and instruction file in the manifest comes
     from a declared component: the bare arm has none, and the harness arm's are links into its
     declared checkout or the files its sync writes. Anything else was inherited."""
-    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     harness = bool(decl.get("harness"))
-    listed = manifest.get("entries") or []
+    listed = manifest.get("entries") if isinstance(manifest.get("entries"), list) else []
+    listed = [entry for entry in listed if isinstance(entry, dict)]
     entries = {e.get("path"): e for e in listed}
     expected = arm_manifest.summary(listed)
     actual = manifest.get("summary") or {}
     normalised = dict((kind, sorted(actual.get(kind) or [])) for kind in expected)
     if normalised != expected or set(actual) - set(expected):
         return "the manifest summary does not match its entries"
+    problems = []
     for kind, paths in sorted((manifest.get("summary") or {}).items()):
         for path in paths:
             entry = entries.get(path) or {}
-            if harness and (entry.get("kind") == "dir" or path in HARNESS_WRITES
+            if harness and (entry.get("kind") == "dir" or _is_harness_write(entry)
                             or (entry.get("kind") == "link" and _inside(entry.get("target", ""), HARNESS_ROOT))):
                 continue
-            return "%s entry %s is not in the declaration" % (kind, path)
-    return None
+            problems.append("%s entry %s is not in the declaration" % (kind, path))
+    return "; ".join(problems) or None
 
 
 def host_paths(base=None, home=None):
@@ -458,9 +470,10 @@ def _no_host_path(record):
 
     Manifest roots are paths inside the isolated image, not inputs from the host. Mounts and
     environment are refused at launch by `run_command`."""
-    manifest = record.get("manifest") or {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     strings = _strings(record.get("declaration") or {})
-    strings += [e["target"] for e in manifest.get("entries") or [] if e.get("kind") == "link" and e.get("target")]
+    strings += [e["target"] for e in manifest.get("entries") or []
+                if isinstance(e, dict) and e.get("kind") == "link" and e.get("target")]
     return host_path_reason(strings=strings)
 
 
@@ -479,12 +492,15 @@ def _is_preregistered_or_exploratory(record):
 def _pins_its_effort(record):
     """The arm declares the reasoning effort it launches at, and nothing it is given by value can
     override that: the effort variable outranks `--effort`."""
-    effort = (record.get("declaration") or {}).get("effort")
+    declaration = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    effort = declaration.get("effort")
     if effort not in EFFORT_LEVELS:
         return "no reasoning effort pinned in its declaration (got %r)" % (effort,)
     if EFFORT_ENV in ARM_ENV:
         return "%s is set for every arm and would override --effort" % EFFORT_ENV
-    baked = ((record.get("manifest") or {}).get("environment") or {}).get(EFFORT_ENV)
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
+    environment = manifest.get("environment") if isinstance(manifest.get("environment"), dict) else {}
+    baked = environment.get(EFFORT_ENV)
     if baked:
         return "the image bakes %s=%r, which would override --effort" % (EFFORT_ENV, baked)
     return None
@@ -513,10 +529,10 @@ MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
 
 def _treatment_paths(manifest):
     """Exact manifest paths attributable to the harness, plus only their directory parents."""
-    entries = manifest.get("entries") or []
+    entries = [entry for entry in manifest.get("entries") or [] if isinstance(entry, dict)]
     paths = {entry.get("path") for entry in entries
              if (entry.get("path") or "").startswith("harness:")
-             or (entry.get("kind") == "file" and entry.get("path") in HARNESS_WRITES)
+             or _is_harness_write(entry)
              or (entry.get("kind") == "link" and _inside(entry.get("target") or "", HARNESS_ROOT))}
     leaves = set(paths)
     for entry in entries:
