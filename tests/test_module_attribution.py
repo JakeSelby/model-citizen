@@ -204,12 +204,14 @@ class DecisionRowTests(Home):
     def test_every_answer_kind_names_the_owning_hook(self):
         # A route, allow, deny, ask and injected context (brief-guard's rewrite of a brief). Role
         # confinement runs with every hook off, so its points name no hook.
-        cases = [("tier-agent-spawns", "worker-a"), ("workflow-launch", "allow"), ("evasion-deny", "deny"),
+        cases = [("tier-agent-spawns", "worker-a"), ("delegation-nudge", "nudge"),
+                 ("workflow-launch", "allow"), ("evasion-deny", "deny"),
                  ("grade-bash", "ask"), ("brief-guard", "cap")]
         for point, answer in cases:
             decisions.record(point, answer, "text", {"session_id": "s-1"}, target=self.target)
         self.assertEqual([r["module"] for r in self.rows()],
-                         ["hooks/tier-agent-spawns", None, None, "hooks/grade-bash", "hooks/brief-guard"])
+                         ["hooks/tier-agent-spawns", "hooks/tier-agent-spawns", None, None,
+                          "hooks/grade-bash", "hooks/brief-guard"])
 
     def test_an_outcome_and_a_sampled_allow_name_it_too(self):
         identity = decisions.record("stop-gate", "blocked", "t", {"session_id": "s-1"}, target=self.target)
