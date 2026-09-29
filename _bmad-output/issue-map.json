@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 132,
-    "chore": 98,
+    "chore": 101,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -3728,7 +3728,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S253.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8097,6 +8097,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C100",
+      "github_number": 1058,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1058",
+      "title": "Resolve canonical plugin workflow findings from directory review",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C100.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

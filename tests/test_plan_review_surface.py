@@ -165,7 +165,7 @@ class WorkflowTextTests(unittest.TestCase):
         body = flat(BUILD)
         self.assertIn("Work from the plan path or the issue number you were given", body)
         self.assertIn("Never search for a plan", body)
-        self.assertIn("With neither a path nor an issue, ask for one", body)
+        self.assertIn("With neither path nor issue, ask for one", body)
         self.assertNotIn("newest", body)
 
     def test_the_builder_is_what_commits_the_plan_file(self):

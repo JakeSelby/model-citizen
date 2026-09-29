@@ -4,7 +4,7 @@
 
 The agent that built the thing has already decided the thing is good — it chose every value in it.
 It also carries the whole build conversation, so it scores its own reasoning rather than the
-pixels. A judge with **no build context** sees only the two images.
+pixels. A judge with **no build context** sees the captures and verifiable gate evidence.
 
 Spawn the **`design-judge` agent** with the image paths, the surface type and the target path — a
 fresh one every round; never fork it and never reuse the previous judge.
@@ -16,6 +16,9 @@ Absolute paths, all of them, every round:
 - The locked target
 - The current capture
 - **The previous round's capture and verdict**, if any
+- Evidence for non-visual hard gates: measured contrast, keyboard checks, token/source audit,
+  runtime measurements and asset license/provenance records as applicable. Include the tested
+  revision, commands and results; missing evidence leaves that gate unverified and blocks exit.
 
 The prior-verdict handoff is what makes regressions visible. Without it the judge cannot tell
 improvement from drift, and scores wander.
