@@ -15,5 +15,11 @@ rows contain event identifiers and a profile fingerprint, never prompt or tool b
 For ordinary sessions, rows go to the local `observation.jsonl` ledger beside the other local
 usage ledgers. Recorder failures go to `observation.errors.jsonl` and do not block the session.
 
+Live cost replays are separate. Both benchmark arms contain the same observer bytes and native
+hook registration. The runner mounts only that tag's new `observations/` output directory and
+routes each preflight and scored session to its own JSONL file there. It records the real row and
+error counts on the result; missing or errored collection invalidates that attempt. These files
+never use or append to the ordinary local ledger.
+
 To remove only the recorder registrations, set `observation.enabled` to `false` and sync again.
 Your own hooks remain. Uninstall also removes the managed recorder registrations.

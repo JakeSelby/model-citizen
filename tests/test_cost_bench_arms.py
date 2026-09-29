@@ -99,7 +99,9 @@ class DeclarationTests(unittest.TestCase):
     def test_each_arm_declares_exactly_its_components(self):
         bare = ARMS.declaration("bare", INPUTS)
         harness = ARMS.declaration("harness", INPUTS, {"ref": "v1", "commit": COMMIT})
-        self.assertEqual([c["name"] for c in bare["components"]], ["base-image", "@anthropic-ai/claude-code"])
+        self.assertEqual([c["name"] for c in bare["components"]],
+                         ["base-image", "@anthropic-ai/claude-code", "model-citizen-observer"])
+        self.assertEqual(bare["components"][-1]["version"], "sha256:" + ARMS.file_sha(ARMS.OBSERVER_SOURCE))
         self.assertIsNone(bare["harness"])
         self.assertEqual(harness["components"][-1], {"name": "model-citizen", "version": "v1", "commit": COMMIT})
         self.assertEqual(harness["harness"], {"ref": "v1", "commit": COMMIT})
@@ -158,7 +160,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(record["paths"]["declaration"]).read_text(encoding="utf-8")), decl)
             self.assertEqual([p.name for p in Path(tmp).iterdir()], ["out"])  # the context is gone
 
-    def test_the_bare_arm_is_built_from_an_empty_context(self):
+    def test_the_bare_arm_context_holds_no_harness_checkout(self):
         docker, cloned = Docker(), []
         with tempfile.TemporaryDirectory() as tmp:
             ARMS.build_arm(ARMS.declaration("bare", INPUTS), tmp, fake_snapshot(cloned), docker, tmp=tmp)
@@ -295,11 +297,18 @@ class AdmissionSeamTests(unittest.TestCase):
         declaration = {"schema": ARMS.SCHEMA, "arm": "bare", "base_image": "base@sha256:0",
                        "claude_code_version": "1.0", "harness": None,
                        "components": [{"name": "base-image", "version": "base@sha256:0"},
-                                      {"name": "@anthropic-ai/claude-code", "version": "1.0"}],
+                                      {"name": "@anthropic-ai/claude-code", "version": "1.0"},
+                                      {"name": "model-citizen-observer",
+                                       "version": "sha256:" + ARMS.file_sha(ARMS.OBSERVER_SOURCE)}],
                        "effort": "high"}
+        observer_sha = ARMS.file_sha(ARMS.OBSERVER_SOURCE)
         manifest = {"schema": LISTER.SCHEMA, "claude_code_version": "1.0",
                     "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"], "harness_commit": None,
-                    "roots": {"home": "/home/agent"}, "summary": {}, "entries": [],
+                    "roots": {"home": "/home/agent", "observer": "/opt/model-citizen-observer"},
+                    "summary": LISTER.summary([{"path": "observer:observe.py", "kind": "file",
+                                                 "sha256": observer_sha}]),
+                    "entries": [{"path": "observer:observe.py", "kind": "file",
+                                  "sha256": observer_sha}],
                     "environment": {ARMS.EFFORT_ENV: None}}
         self.record = {"label": "bare", "image": "i", "image_id": "sha256:1",
                        "declaration_sha256": ARMS.digest(declaration),

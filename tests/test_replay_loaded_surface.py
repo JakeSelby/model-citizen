@@ -112,7 +112,8 @@ class PairParityTests(unittest.TestCase):
     def test_a_pair_differing_by_the_harness_alone_is_admitted(self):
         bare, harness = self.pair()
         shared = {"path": "home:.bashrc", "kind": "file", "sha256": "1", "size": 3, "mode": "0644"}
-        bare["manifest"]["entries"] = [shared]
+        observer = next(e for e in bare["manifest"]["entries"] if e["path"] == "observer:observe.py")
+        bare["manifest"]["entries"] = [observer, shared]
         harness["manifest"]["entries"] += [shared, {"path": "home:.config", "kind": "dir", "mode": "0755"},
                                            {"path": "home:.config/agent-harness", "kind": "dir"},
                                            {"path": "home:.config/agent-harness/trusted.txt", "kind": "file"},
