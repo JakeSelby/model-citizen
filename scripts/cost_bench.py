@@ -22,6 +22,7 @@ import itertools
 import json
 import os
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -100,7 +101,9 @@ CONFIG_GLOBS = ("CLAUDE.md", "CLAUDE.personal.md", "rules/**/*.md", "skills/*/SK
 SPAWN_TOOLS = ("Task", "Agent")
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
 STREAM_FIELDS = ("first_call_cache_write", "tool_counts", "spawns", "stop_hooks", "hook_blocks",
-                 "cache_miss_ratio")
+                 "cache_miss_ratio", "installed_checkout_reads")
+INSTALLED_CHECKOUT = "/opt/model-citizen"
+CONTAMINATION_CONTROL = "installed-checkout-oracle-and-transcript-v1"
 RESULTS = "results.jsonl"
 ENRICHED = "results.enriched.jsonl"
 
@@ -433,6 +436,26 @@ def _git(repo, *args):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
 
 
+def _git_required(repo, *args):
+    """A Git command whose failure makes the requested snapshot unsafe."""
+    done = _git(repo, *args)
+    if done.returncode:
+        detail = done.stdout.strip() or "exit %d" % done.returncode
+        raise RuntimeError("git %s failed in %s: %s" % (" ".join(args), repo, detail))
+    return done
+
+
+def _git_is_ancestor(repo, ancestor, descendant):
+    """True/False for ancestry; an operational Git error is neither and fails closed."""
+    done = _git(repo, "merge-base", "--is-ancestor", ancestor, descendant)
+    if done.returncode == 0:
+        return True
+    if done.returncode == 1:
+        return False
+    detail = done.stdout.strip() or "exit %d" % done.returncode
+    raise RuntimeError("git ancestry query failed in %s: %s" % (repo, detail))
+
+
 def snapshot(repo, sha, dest):
     """The repository rewound to `sha`, with real history and no way forward to the fix.
 
@@ -443,20 +466,25 @@ def snapshot(repo, sha, dest):
     pruning, so the commit that solved the task is not reachable and not present."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    wanted = _git(repo, "rev-parse", "--verify", "%s^{commit}" % sha).stdout.strip()
+    wanted = _git_required(repo, "rev-parse", "--verify", "%s^{commit}" % sha).stdout.strip()
+    if len(wanted) != 40:
+        raise RuntimeError("git rev-parse returned no full commit for %s" % sha)
     env = scrubbed_env()
-    subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
-                    str(repo), str(dest)], check=True, env=env)
-    _git(dest, "checkout", "--quiet", "-B", SNAPSHOT_BRANCH, sha)
-    for ref in _git(dest, "for-each-ref", "--format=%(refname)").stdout.split():
-        ancestor = ref.startswith("refs/tags/") and not _git(dest, "merge-base", "--is-ancestor",
-                                                             ref, "HEAD").returncode
+    try:
+        subprocess.run(["git", "clone", "--quiet", "--local", "--no-hardlinks", "--no-checkout",
+                        str(repo), str(dest)], check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("git clone failed while creating snapshot of %s" % sha) from exc
+    _git_required(dest, "checkout", "--quiet", "-B", SNAPSHOT_BRANCH, wanted)
+    for ref in _git_required(dest, "for-each-ref", "--format=%(refname)").stdout.split():
+        ancestor = ref.startswith("refs/tags/") and _git_is_ancestor(dest, ref, "HEAD")
         if ref != "refs/heads/" + SNAPSHOT_BRANCH and not ancestor:
-            _git(dest, "update-ref", "-d", ref)
-    _git(dest, "remote", "remove", "origin")
-    _git(dest, "reflog", "expire", "--expire=now", "--all")
-    _git(dest, "gc", "--quiet", "--prune=now")
-    if _git(dest, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip() != wanted:
+            _git_required(dest, "update-ref", "-d", ref)
+    _git_required(dest, "remote", "remove", "origin")
+    _git_required(dest, "reflog", "expire", "--expire=now", "--all")
+    _git_required(dest, "gc", "--quiet", "--prune=now")
+    landed = _git_required(dest, "rev-parse", "--verify", "--quiet", "HEAD").stdout.strip()
+    if landed != wanted:
         raise RuntimeError("snapshot of %s did not land on that commit" % sha)
     return dest
 
@@ -534,6 +562,53 @@ def stop_hook_counts(messages, streamed):
     return len(stops), sum(1 for m in stops if _hook_blocked(m))
 
 
+def installed_checkout_reads(messages):
+    """Observed tool inputs that name the installed checkout or a lexical equivalent.
+
+    This catches canonical paths and spellings such as `/opt/./model-citizen`; it cannot identify
+    an unknown pre-existing symlink or a copied file. Keep the record to the tool and root rather
+    than copying arbitrary command text into the ledger.
+    """
+    reads = []
+
+    def strings(value):
+        if isinstance(value, str):
+            yield value
+        elif isinstance(value, dict):
+            for item in value.values():
+                yield from strings(item)
+        elif isinstance(value, list):
+            for item in value:
+                yield from strings(item)
+
+    def installed_path(value):
+        for match in re.finditer(r"/(?:[^\s\"'`;|&<>()])+", value):
+            candidate = match.group(0).rstrip(".,:")
+            normal = posixpath.normpath(candidate)
+            if normal == INSTALLED_CHECKOUT or normal.startswith(INSTALLED_CHECKOUT + "/"):
+                return True
+        return False
+
+    for message in messages:
+        body = message.get("message") if isinstance(message, dict) else None
+        for block in (body or {}).get("content") or []:
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            if any(installed_path(value) for value in strings(block.get("input") or {})):
+                reads.append("%s:%s" % (str(block.get("name") or "unknown"), INSTALLED_CHECKOUT))
+    return reads
+
+
+def partial_checkout_reads(stdout):
+    """Retain observed paths even when an interrupted stream has no final cost result."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    try:
+        return installed_checkout_reads(cli_messages(stdout)[0])
+    except ValueError:
+        return []
+
+
 def parse_result(stdout):
     """Cost, tokens, turns and the diagnostic fields, from the CLI's output. ValueError when there
     is no result to read.
@@ -552,6 +627,7 @@ def parse_result(stdout):
     in the older single-document form both are None, never zero. See `stop_hook_counts`."""
     messages, streamed = cli_messages(stdout)
     stops, blocks = stop_hook_counts(messages, streamed)
+    checkout_reads = installed_checkout_reads(messages)
     results = [m for m in messages if isinstance(m, dict) and m.get("type") == "result"]
     if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
         raise ValueError("the CLI returned no result with total_cost_usd")
@@ -594,7 +670,8 @@ def parse_result(stdout):
             "first_call_cache_write": first_write, "tool_counts": tools,
             "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
             "hook_blocks": blocks,
-            "cache_miss_ratio": run_miss_ratio(cache)}
+            "cache_miss_ratio": run_miss_ratio(cache),
+            "installed_checkout_reads": checkout_reads}
 
 
 def run_miss_ratio(cache):
@@ -743,6 +820,36 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
     return errors
 
 
+def contamination_errors(tasks, repo, harness_commit, tmp=None):
+    """Tasks whose answer is present in the checkout installed in the harness image.
+
+    An issue task mined from this repository is refused while the installed image contains this
+    repository: ancestry cannot rule out a cherry-pick, squash or equivalent implementation in
+    its files. A same-repository synthetic task is refused too: an arbitrary oracle failure does
+    not prove the answer absent, and its installed oracle source can expose `solve`. This check is
+    local and deterministic, and therefore runs before the first model call.
+    """
+    parent = Path(tempfile.mkdtemp(prefix="cost-contamination-", dir=tmp))
+    try:
+        errors = []
+        checkout = snapshot(repo, harness_commit, parent / "checkout") if tasks else None
+        for task in tasks:
+            if task["kind"] == "issue":
+                errors.append("%s: same-repository issue task cannot prove its fixed files are "
+                              "absent from the installed checkout" % task["id"])
+                continue
+            oracle_path = checkout / ORACLES / (task["tests"]["oracle"] + ".py")
+            if oracle_path.is_file():
+                errors.append("%s: installed checkout exposes the held-back oracle source and "
+                              "its reference solution" % task["id"])
+            else:
+                errors.append("%s: answer absence cannot be established for this same-repository "
+                              "synthetic task" % task["id"])
+        return errors
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
 def schedule(tasks, reps):
     """Arms interleaved inside each task and rep, the leading arm alternating so neither always
     runs on the other's warm cache."""
@@ -789,7 +896,8 @@ def _attempt(task, rep, arm, opts, launch):
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, tool_counts={}, spawns=None, stop_hooks=None, hook_blocks=None,
-               cache_miss_ratio=None,
+               cache_miss_ratio=None, installed_checkout_reads=[],
+               contamination_control=CONTAMINATION_CONTROL,
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
                profile_fingerprint=arm_profile(arm, env, opts),
                context_attribution=arm_attribution(arm, env, opts),
@@ -802,10 +910,12 @@ def _attempt(task, rep, arm, opts, launch):
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
                                                            opts["run_cap"], task["max_turns"]),
                               opts, container_name(task["id"], arm, rep), launch)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as exc:
             return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
+                        installed_checkout_reads=partial_checkout_reads(exc.stdout),
                         wall_seconds=round(time.time() - started, 1))
         row["wall_seconds"] = round(time.time() - started, 1)
+        row["installed_checkout_reads"] = partial_checkout_reads(done.stdout)
         if opts.get("raw"):
             Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
             (Path(opts["raw"]) / ("%s-%s-%d.json" % (task["id"], arm, rep))).write_text(done.stdout or "",
@@ -817,6 +927,8 @@ def _attempt(task, rep, arm, opts, launch):
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),
                    **{field: parsed[field] for field in STREAM_FIELDS})
+        if parsed["installed_checkout_reads"]:
+            return dict(row, error=True, error_kind="installed-checkout-read")
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
@@ -922,6 +1034,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
+    if not tasks:
+        raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if out is None:
         return _replay(tasks, opts, launch, None)
     try:
@@ -935,6 +1049,14 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
 def _replay(tasks, opts, launch, sink):
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
+    check_contamination = opts.get("contamination_checker", contamination_errors)
+    contaminated = check_contamination(tasks, opts["repo"],
+                                       opts["arms"]["harness"]["harness_commit"], opts.get("tmp"))
+    if contaminated:
+        for error in contaminated:
+            print("cost-bench: contamination: %s" % error, file=sys.stderr)
+        print("cost-bench: refusing the replay before any model call", file=sys.stderr)
+        raise SystemExit(2)
     probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
     if not opts.get("skip_preflight"):
@@ -1274,6 +1396,8 @@ def cmd_replay(args):
     tasks = load_tasks(args.tasks)
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
+    if not tasks:
+        raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
