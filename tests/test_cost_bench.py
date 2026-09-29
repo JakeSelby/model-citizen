@@ -197,14 +197,19 @@ SECRET = "sk-ant-oat01-never-on-a-command-line"
 def arm_manifest(decl):
     """The manifest a build of `decl` lists when it holds exactly what it declares."""
     commit = (decl["harness"] or {}).get("commit")
-    entries = [{"path": "home:.claude/rules/harness", "kind": "link",
-                "target": "/opt/model-citizen/claude/rules"}] if commit else []
-    roots = dict({"home": "/home/agent"}, **({"harness": "/opt/model-citizen"} if commit else {}))
+    observer_sha = BENCH.arms.file_sha(BENCH.arms.OBSERVER_SOURCE)
+    entries = [{"path": "observer:observe.py", "kind": "file", "mode": "0644", "size": 1,
+                "sha256": observer_sha}]
+    if commit:
+        entries.append({"path": "home:.claude/rules/harness", "kind": "link",
+                        "target": "/opt/model-citizen/claude/rules"})
+    roots = dict({"home": "/home/agent", "observer": "/opt/model-citizen-observer"},
+                 **({"harness": "/opt/model-citizen"} if commit else {}))
     return {"schema": BENCH.arms.arm_manifest.SCHEMA,
             "claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
             "cli_packages": ["@anthropic-ai/claude-code@" + decl["claude_code_version"]],
             "environment": {BENCH.arms.EFFORT_ENV: None},
-            "summary": {"rules": [e["path"] for e in entries]}, "entries": entries}
+            "summary": BENCH.arms.arm_manifest.summary(entries), "entries": entries}
 
 
 def arm_record(arm, ref="v9.9.9"):
@@ -212,9 +217,13 @@ def arm_record(arm, ref="v9.9.9"):
     harness = {"ref": ref, "commit": "c" * 40} if arm == "harness" else None
     decl = {"schema": 1, "arm": arm, "base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.0",
             "harness": harness, "components": [{"name": "base-image", "version": "base@sha256:" + "0" * 64},
-                                               {"name": "@anthropic-ai/claude-code", "version": "1.0"}]
+                                               {"name": "@anthropic-ai/claude-code", "version": "1.0"},
+                                               {"name": "model-citizen-observer",
+                                                "version": "sha256:" + BENCH.arms.file_sha(
+                                                    BENCH.arms.OBSERVER_SOURCE)}]
             + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else []),
-            "effort": "high"}
+            "effort": "high",
+            "observer_settings_sha256": BENCH.arms.digest(BENCH.arms.observer_settings())}
     manifest = arm_manifest(decl)
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
@@ -268,8 +277,9 @@ class ReplayArmTests(unittest.TestCase):
         for flag, value in (("--model", "claude-test"), ("--output-format", "stream-json"),
                             ("--max-budget-usd", "2"), ("--permission-mode", "bypassPermissions")):
             self.assertEqual(command[command.index(flag) + 1], value)
-        self.assertEqual(json.loads(command[command.index("--settings") + 1]),
-                         {"permissions": {"deny": ["WebFetch", "WebSearch"]}})
+        settings = json.loads(command[command.index("--settings") + 1])
+        self.assertEqual(settings["permissions"], {"deny": ["WebFetch", "WebSearch"]})
+        self.assertEqual(sorted(settings["hooks"]), sorted(BENCH.observation.events("claude-code")))
 
     def test_a_run_is_a_fresh_container_with_the_snapshot_its_only_mount(self):
         """#428: no arm reads the host's home. The run is `docker run --rm` of the arm's image on
