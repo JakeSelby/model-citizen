@@ -12,3 +12,5 @@ measurement gets its own record, and the two are read in order.
   open, nothing run yet. Framed while trimming the standing context (#430).
 - [2026-09-22 — in-run budget nudge for a running subagent](2026-09-22-in-run-budget-nudge.md):
   do not build. Measured on one machine's ledger (#322).
+- [2026-09-29 — reaching the Studio from a phone without leaving loopback](2026-09-29-studio-phone-access.md):
+  dropped from v0.18.0. No transport kept every check and bootstrapped a phone (#1003).
