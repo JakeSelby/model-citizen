@@ -484,6 +484,7 @@ development_status:
   ah-b126-grade-bash-falls-back-to-its-most-permissive: ready-for-dev
   ah-b127-config-set-refuses-a-switch-that-repairs-a: done
   ah-b128-three-timing-tests-fail-under-a-loaded-full: ready-for-dev
+  ah-b130-the-installation-case-skips-the-role-list-on: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -543,6 +544,7 @@ development_status:
   ah-c094-rescope-the-delivery-roadmap-around-measured-and: ready-for-dev
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-c096-remove-the-changelog-lint-s-unreleased-exemption: ready-for-dev
+  ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
