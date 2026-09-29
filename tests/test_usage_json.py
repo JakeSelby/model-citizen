@@ -203,6 +203,97 @@ class JsonReportTests(unittest.TestCase):
                 self.assertEqual(output, "")
                 self.assertIn("--stance", error)
 
+    def test_dedup_weights_use_the_same_normalized_counts_as_totals(self):
+        for grouping in ("repo", "model", "profile"):
+            with self.subTest(grouping=grouping):
+                rows = [session(input="100", output=0, cache_read=0, cache_write=0,
+                                raw_vs_deduped=2.0),
+                        session(input=100, output=0, cache_read=0, cache_write=0,
+                                raw_vs_deduped=1.0)]
+                report = self.document(rows, by=grouping)
+                self.assertEqual(report["totals"]["tokens"]["input"], 200)
+                self.assertEqual(report["raw_vs_deduped"]["ratio"], 1.5)
+
+    def test_multiday_session_counts_once_per_group_and_once_in_total(self):
+        yesterday = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+        slice_ = {"input": None, "output": 5, "cache_read": None, "cache_write": 0}
+        long_run = session(models=["unknown"], input=None, cache_read=None,
+                           days={yesterday: dict(slice_), NOW[:10]: dict(slice_)})
+        short_run = session(session_id="s-2", models=["unknown"], output=None)
+        data = self.document([long_run, short_run])
+        groups = {group["name"]: group for group in data["groups"]}
+        self.assertEqual(set(groups), {yesterday, NOW[:10]})
+        self.assertEqual(groups[yesterday]["unpriced_runs"], 1)
+        self.assertEqual(groups[yesterday]["unknown_token_runs"],
+                         {"input": 1, "output": 0, "cache_read": 1, "cache_write": 0})
+        self.assertEqual(groups[NOW[:10]]["unpriced_runs"], 2)
+        self.assertEqual(groups[NOW[:10]]["unknown_token_runs"],
+                         {"input": 1, "output": 1, "cache_read": 1, "cache_write": 0})
+        total = data["totals"]
+        self.assertEqual((total["runs"], total["unpriced_runs"], data["unpriced"]), (2, 2, 2))
+        self.assertEqual(total["unknown_token_runs"],
+                         {"input": 1, "output": 1, "cache_read": 1, "cache_write": 0})
+        self.assertEqual(total["tokens"]["output"], None)
+        self.assertEqual(groups[yesterday]["tokens"]["output"], 5)
+        self.assertIsNone(total["usd"])
+
+        code, text, err = self.report([long_run, short_run], json=False)
+        self.assertEqual((code, err), (0, ""))
+        cells = next(line for line in text.splitlines() if line.startswith("TOTAL")).split()
+        self.assertEqual(cells[1:3], ["2", "10"])
+        self.assertIn("unpriced: 2 run(s)", text)
+
+    def test_a_session_ending_before_the_cutoff_hour_is_a_run_of_its_day(self):
+        pinned = 1773144000  # a one-day window from here starts 2026-03-09T12:00:00Z
+        self.assertEqual(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(pinned)),
+                         "2026-03-10T12:00:00Z")
+        early = session(models=["unknown"], started="2026-03-09T06:00:00Z",
+                        ended="2026-03-09T07:00:00Z",
+                        days={"2026-03-09": {"input": 10, "output": 20,
+                                             "cache_read": 60, "cache_write": 10}})
+        with mock.patch.object(harness.time, "time", return_value=pinned):
+            data = self.document([early], days=1)
+        self.assertEqual([group["name"] for group in data["groups"]], ["2026-03-09"])
+        total = data["totals"]
+        self.assertEqual((total["runs"], total["unpriced_runs"], data["unpriced"]), (1, 1, 1))
+        self.assertIsNone(total["usd"])
+
+    def test_provider_latency_reports_coverage_and_ignores_nonfinite_values(self):
+        def call(ms, **extra):
+            row = {"kind": harness.decision_ledger.KIND, "ended": NOW, "point": "grade",
+                   "mode": "shadow", "status": "ok", "input": 5}
+            if ms is not None:
+                row["ms"] = ms
+            row.update(extra)
+            return row
+
+        mixed = self.document([call(100), call(300), call(None), call("slow")],
+                              by="provider")["groups"][0]
+        self.assertEqual((mixed["calls"], mixed["latency_calls"],
+                          mixed["unknown_latency_calls"]), (4, 2, 2))
+        self.assertEqual(mixed["latency_ms"]["p50"], harness.percentile([100.0, 300.0], 0.5))
+
+        nonfinite = self.document([call(float("nan")), call(float("inf")),
+                                   call(float("-inf")), call(200)],
+                                  by="provider")
+        group = nonfinite["groups"][0]
+        self.assertEqual((group["calls"], group["latency_calls"],
+                          group["unknown_latency_calls"]), (4, 1, 3))
+        self.assertEqual(group["latency_ms"], {"p50": 200.0, "p90": 200.0})
+        self.assertNotIn("NaN", json.dumps(nonfinite))
+        self.assertNotIn("Infinity", json.dumps(nonfinite))
+
+        none = self.document([call(None)], by="provider")["groups"][0]
+        self.assertEqual((none["latency_calls"], none["unknown_latency_calls"]), (0, 1))
+        self.assertEqual(none["latency_ms"], {"p50": None, "p90": None})
+
+        code, text, err = self.report([call(float("inf")), call(200)], by="provider",
+                                      json=False)
+        self.assertEqual((code, err), (0, ""))
+        header = text.splitlines()[0].split()
+        self.assertEqual(header[-4:], ["ms", "p50", "ms", "p90"])
+        self.assertEqual(text.splitlines()[2].split()[-2:], ["200", "200"])
+
     def test_empty_windows_are_valid_json(self):
         for values in ({}, {"by": "role"}, {"by": "provider"}, {"by": "prefix"},
                        {"rules": True}):

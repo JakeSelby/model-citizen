@@ -4937,7 +4937,10 @@ def provider_report(rows: List[Dict[str, Any]], days: int,
         inputs = [usage_count(row.get("input")) for row in group]
         known_inputs = [value for value in inputs if value is not None]
         unpriced += sum(1 for cost in costs if cost is None)
-        latency = sorted(float(r["ms"]) for r in group if isinstance(r.get("ms"), (int, float)))
+        # A NaN or infinite duration is no measurement, and a bool is no duration at all.
+        latency = sorted(float(r["ms"]) for r in group
+                         if isinstance(r.get("ms"), (int, float))
+                         and not isinstance(r.get("ms"), bool) and math.isfinite(r["ms"]))
         groups.append({
             "point": key[0], "mode": key[1], "calls": len(group),
             "statuses": {name: sum(1 for row in group if row.get("status") == name)
@@ -4949,6 +4952,8 @@ def provider_report(rows: List[Dict[str, Any]], days: int,
             else sum(cost for cost in costs if cost is not None),
             "_usd": sum(cost for cost in costs if cost is not None),
             "unpriced_calls": sum(1 for cost in costs if cost is None),
+            "latency_calls": len(latency),
+            "unknown_latency_calls": len(group) - len(latency),
             "latency_ms": {"p50": percentile(latency, 0.5) if latency else None,
                            "p90": percentile(latency, 0.9) if latency else None},
         })
@@ -5251,6 +5256,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
     delegated: List[Dict[str, Any]] = []
     unknown_metrics = set()
     unpriced = 0
+    # TOTAL's run-level counters, kept apart from the groups': a multi-day session is in one
+    # day group per slice, so summing the groups would count it once per day it spent on.
+    total_unpriced = 0
+    total_unknown = {name: 0 for name in RATE_FIELDS}
     # The measured inflation of the counted totals, weighted by the deduplicated tokens each
     # run contributed to them, so the footer figure is the window's raw sum over its counted
     # sum and a long session moves it more than a short one. A run whose row carries no
@@ -5312,8 +5321,11 @@ def cmd_usage(args: argparse.Namespace) -> int:
         if sliced and days_map:
             # The run is counted on the day the session ended, once; its tokens are counted on
             # the days they were spent. So the run column still counts sessions rather than
-            # session-days, and TOTAL runs stays the number of sessions in the window.
-            if ended >= cutoff:
+            # session-days, and TOTAL runs stays the number of sessions in the window. The
+            # window is read by day, as the slices are: a session that ended on the cutoff's
+            # day but before its hour has tokens in that day's slice, so it is a run of that
+            # day too, and `unpriced` agrees with the totals' `unpriced_runs`.
+            if ended[:10] >= cutoff_day:
                 groups.setdefault(ended[:10], usage_accumulator())[0] += 1
                 if cost is None:
                     unpriced += 1
@@ -5327,9 +5339,12 @@ def cmd_usage(args: argparse.Namespace) -> int:
             # long one it is an allocation and not a measurement, and a day whose tokens were
             # spent on a dearer model carries less than it cost.
             spent = sum(max(usage_count(row.get(name)) or 0, 0) for name in RATE_FIELDS)
+            in_window = False
+            missing = set()
             for date, slice_ in days_map.items():
                 if date < cutoff_day or not isinstance(slice_, dict):
                     continue
+                in_window = True
                 acc = groups.setdefault(date, usage_accumulator())
                 if cost is None:
                     acc[7] += 1
@@ -5338,6 +5353,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
                     value = usage_count(slice_.get(name))
                     if value is None:
                         acc[6][name] += 1
+                        missing.add(name)
                         unknown_metrics.add(name)
                         value = 0
                     acc[i + 1] += value
@@ -5347,6 +5363,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
                     dedup_counted += share
                 if cost is not None and spent:
                     acc[5] += cost * share / spent
+            if in_window and cost is None:
+                total_unpriced += 1
+            for name in missing:
+                total_unknown[name] += 1
             continue
         if by == "repo":
             key = row.get("repo") or "(no repo)"
@@ -5369,8 +5389,9 @@ def cmd_usage(args: argparse.Namespace) -> int:
         if cost is None:
             unpriced += 1
             acc[7] += 1
-        counted = sum(v for v in (row.get(name) for name in RATE_FIELDS)
-                      if isinstance(v, int) and not isinstance(v, bool) and v > 0)
+            total_unpriced += 1
+        counted = sum(v for v in (usage_count(row.get(name)) for name in RATE_FIELDS)
+                      if v is not None)
         if measured:
             dedup_raw += ratio * counted
             dedup_counted += counted
@@ -5384,6 +5405,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
             if value is None:
                 unknown_metrics.add(name)
                 acc[6][name] += 1
+                total_unknown[name] += 1
             else:
                 acc[i + 1] += value
     if by == "role":
@@ -5418,10 +5440,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
         acc = groups[key]
         for index in range(6):
             total[index] += acc[index]
-        for name in RATE_FIELDS:
-            total[6][name] += acc[6][name]
-        total[7] += acc[7]
         group_records.append(record_for(key, acc))
+    total[6], total[7] = total_unknown, total_unpriced
     total_record = record_for("TOTAL", total)
     dedup = {"ratio": dedup_raw / dedup_counted if dedup_counted else None,
              "runs": dedup_runs, "unknown_runs": dedup_unknown}
