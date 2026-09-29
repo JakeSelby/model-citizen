@@ -1743,6 +1743,8 @@ def cmd_summarise(args):
 def summarise_pair(rows, path, args):
     """A pair's report (`replay_pair.summarise`), priced from this checkout's price table and its
     saved decision rows. Exit 1 when the post-run parity refuses the pair."""
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws a two-arm result; a pair's Pareto view is in its report")
     prices_path = ROOT / "policy" / "prices.json"
     table = json.loads(prices_path.read_text(encoding="utf-8")).get("models", {})
     try:
@@ -1753,8 +1755,6 @@ def summarise_pair(rows, path, args):
     stamped = {r.get("prices_sha256") for r in rows} - {None}
     result["prices_sha256"] = replay_pair.sha256(prices_path)
     result["price_table_changed"] = bool(stamped) and stamped != {result["prices_sha256"]}
-    if args.plot:
-        raise SystemExit("cost-bench: --plot draws a two-arm result; a pair's Pareto view is in its report")
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
                      else replay_pair.render(result) + ("price table: changed since the run; decision calls "
                                                         "are priced at today's rates\n"

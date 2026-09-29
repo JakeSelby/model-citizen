@@ -458,6 +458,17 @@ class PairSummaryTests(unittest.TestCase):
         for phrase in ("    Cost-of-Pass: workers", "    wall time", "re-spawns at a stronger class", "    decision calls"):
             self.assertEqual(text.count(phrase), 3, phrase)
 
+    def test_plot_is_refused_before_any_pair_analysis_runs(self):
+        def analyse(*args, **kwargs):
+            raise AssertionError("summarised before refusing --plot")
+        original, BENCH.replay_pair.summarise = BENCH.replay_pair.summarise, analyse
+        try:
+            with self.assertRaises(SystemExit) as refused:
+                BENCH.summarise_pair(pair_rows(1, 1), Path("rows.jsonl"), types.SimpleNamespace(plot=True))
+        finally:
+            BENCH.replay_pair.summarise = original
+        self.assertIn("--plot draws a two-arm result", str(refused.exception))
+
     def test_an_unknown_respawn_count_is_unknown_not_zero(self):
         rows = pair_rows(1, 1)
         rows[1]["respawns_up"] = None
