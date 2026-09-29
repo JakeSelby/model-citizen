@@ -91,10 +91,15 @@ class SessionHookTests(unittest.TestCase):
         d.mkdir(exist_ok=True)
         (d / "progress.md").write_text(text, encoding="utf-8")
 
-    def run_hook(self, cwd=None):
+    def run_hook(self, cwd=None, controlled_budget=False):
         cwd = str(cwd or self.repo)
         payload = json.dumps({"hook_event_name": "SessionStart", "source": "startup", "cwd": cwd})
-        return subprocess.run([sys.executable, str(HOOK)], input=payload, cwd=cwd,
+        command = [sys.executable, str(HOOK)]
+        if controlled_budget:
+            command = [sys.executable, "-c",
+                       "import runpy, sys; ns = runpy.run_path(sys.argv[1]); "
+                       "ns['main'].__globals__['remaining'] = lambda cap: 30; ns['main']()", str(HOOK)]
+        return subprocess.run(command, input=payload, cwd=cwd,
                               env=self.env(), capture_output=True, text=True, timeout=30)
 
     def context(self, out):
@@ -119,7 +124,7 @@ class SessionHookTests(unittest.TestCase):
 
     def test_framework_check_does_not_install_configuration(self):
         self.framework()
-        self.assertIn("BMad Method integration check", self.text(self.run_hook()))
+        self.assertIn("BMad Method integration check", self.text(self.run_hook(controlled_budget=True)))
         for name in ("bmad-build", "bmad-build-auto", "bmad-code-review"):
             self.assertFalse((self.repo / "_bmad" / "custom" / f"{name}.user.toml").exists())
 
