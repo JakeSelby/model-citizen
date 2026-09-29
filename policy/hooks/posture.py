@@ -437,18 +437,26 @@ def delegation_read(session_id, paths, threshold, env=None):
     def update(record):
         seen = record.get(DELEGATION_READS_KEY)
         seen = {value for value in seen if isinstance(value, str)} if isinstance(seen, list) else set()
+        # A session that has fired, or a read it has already counted, cannot change the answer,
+        # so it returns without a write rather than rewriting the record on every later read.
+        if record.get(DELEGATION_FIRED_KEY) is True or wanted <= seen:
+            result.append((False, len(seen)))
+            return None
         seen.update(wanted)
         seen = set(sorted(seen)[-DELEGATION_READS_MAX:])
-        fired = record.get(DELEGATION_FIRED_KEY) is True
-        fire_now = not fired and len(seen) >= threshold
+        fire_now = len(seen) >= threshold
         updated = dict(record, **{DELEGATION_READS_KEY: sorted(seen),
-                                 DELEGATION_FIRED_KEY: fired or fire_now,
+                                 DELEGATION_FIRED_KEY: fire_now,
                                  "at": int(time.time())})
         result.append((fire_now, len(seen)))
         return updated
 
     written = update_session_record(session_id, update, env)
-    return result[0] if written and result else (False, 0)
+    if not result:
+        return False, 0
+    fire_now, count = result[0]
+    # Firing is transactional: a nudge that could not be recorded is not reported as fired.
+    return (fire_now, count) if written or not fire_now else (False, 0)
 
 
 def _prune_locked(record, lock, cutoff):

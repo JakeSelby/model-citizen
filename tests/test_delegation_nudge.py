@@ -153,6 +153,25 @@ class DelegationNudgeTests(unittest.TestCase):
         self.assertEqual(record["agents"], ["worker-a"])
         self.assertEqual(record[posture.DELEGATION_READS_KEY], ["/one"])
 
+    def test_reads_after_firing_or_already_counted_do_not_rewrite_the_record(self):
+        posture = load_posture()
+        self.assertEqual(posture.delegation_read("settled", ["/one", "/two"], 3), (False, 2))
+        writes = []
+        original = posture._write_session_record
+
+        def counting(path, record):
+            writes.append(path)
+            return original(path, record)
+
+        with patch.object(posture, "_write_session_record", counting):
+            self.assertEqual(posture.delegation_read("settled", ["/two"], 3), (False, 2))
+            self.assertEqual(writes, [])
+            self.assertEqual(posture.delegation_read("settled", ["/three"], 3), (True, 3))
+            self.assertEqual(len(writes), 1)
+            self.assertEqual(posture.delegation_read("settled", ["/four"], 3), (False, 3))
+            self.assertEqual(len(writes), 1)
+        self.assertTrue(posture.read_session_record("settled")[posture.DELEGATION_FIRED_KEY])
+
     def test_concurrent_threshold_crossing_fires_at_most_once(self):
         posture = load_posture()
         self.assertEqual(posture.delegation_read("concurrent", ["/one", "/two"], 3),
