@@ -168,8 +168,8 @@ def bootstrap(cells, tasks, seed=SEED, resamples=RESAMPLES):
     """(ratio interval, difference interval, undefined ratio resamples) over `tasks`.
 
     Each resample draws len(tasks) tasks with replacement and pools both arms over the same
-    draws, which is the pairing. A resample in which only the bare arm passed sorts below valid
-    ratios; one in which the harness arm passed nothing sorts above them. An interval reaching
+    draws, which is the pairing. A resample in which only the harness arm passed sorts below valid
+    ratios; one in which only the bare arm passed sorts above them. An interval reaching
     either sentinel has that bound undefined rather than invented. The ratio interval is None
     when any cost is unreadable."""
     if type(resamples) is not int or resamples < 2:
@@ -206,9 +206,9 @@ def decide(ratio, ratio_ci, diff_ci, long_ci=None, has_long=False):
     """(verdict, reason, claim). SM-2's rule: supported only when the ratio's interval lies wholly
     below 1.0 and the difference's lower bound is above -DELTA. Not supported when the data rule
     that out, with the ratio's interval wholly at or above 1.0 or the difference's wholly below
-    -DELTA; inconclusive otherwise. A saving claim needs support, and the long-task subset's
-    interval wholly below 1.0, and a marked long-task subset whose interval also lies wholly below
-    1.0; "at least 15% cheaper" needs the ratio's upper bound at or below MAGNITUDE."""
+    -DELTA; inconclusive otherwise. A saving claim needs support and a marked long-task subset
+    whose interval lies wholly below 1.0; "at least 15% cheaper" needs the ratio's upper bound at
+    or below MAGNITUDE."""
     if diff_ci[1] < -DELTA:
         return NOT_SUPPORTED, "the pass-rate difference lies wholly below -%g" % DELTA, None
     if ratio_ci and ratio_ci[0] is not None and ratio_ci[0] >= 1.0:

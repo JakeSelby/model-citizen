@@ -95,9 +95,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   stamped with the version and commit of the ref that ran; the bare image is built once. Every ref
   resolves before anything is built, so a typo costs nothing, and `--spend-cap` applies to each
   tag's schedule on its own.
-- **The defaults size one full set.** `--reps` is five trials per task and arm, SM-2's minimum.
-  `--spend-cap` defaults to 140.50 USD: 7 tasks x 5 trials x 2 arms at the 2 USD per-run cap, plus
-  each arm's 0.25 USD preflight, so a full default set launches every run.
+- **The defaults nominally size one full set.** `--reps` is five trials per task and arm, SM-2's
+  minimum. `--spend-cap` defaults to 140.50 USD: 7 tasks x 5 trials x 2 arms at the 2 USD per-run
+  cap, plus each arm's 0.25 USD preflight. The per-run cap is soft, so an overrun can exhaust that
+  total before the last trial. The runner stops before the next launch, records a partial set and
+  publishes no history row or claim.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
   Dockerfile and the lister. The manifest is every file, link and directory under the image user's
