@@ -6826,6 +6826,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B127",
+      "github_number": 919,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/919",
+      "title": "config set refuses a switch that repairs a selection the resolver already refuses",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B127.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B130",
       "github_number": 923,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/923",
