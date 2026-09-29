@@ -1425,6 +1425,8 @@ def _plain_words(line, redirects=False):
                 return None
             continue
         elif redirects and c in "<>":
+            if i + 1 < n and line[i + 1] in "<>|&!" and not (c == ">" and line[i + 1] == ">"):
+                return None
             if started:
                 words.append(("".join(word), all(marks), marks))
             word, marks, started = [], [], False
@@ -1433,7 +1435,7 @@ def _plain_words(line, redirects=False):
                 operator += c
                 i += 1
             words.append((operator, False, [False] * len(operator)))
-        elif redirects and c == "#":
+        elif redirects and c in "#{}*?[]!~":
             return None
         elif c in ";&|<>()":
             return None
@@ -1518,6 +1520,8 @@ def literal_text_command(command):
     words, delimiter = parsed
     if not words or words[0][1] or words[0][0] not in ("cat", "printf", "echo", "tee"):
         return False
+    if words[0][0] == "printf" and (len(words) < 2 or words[1][0].startswith("-")):
+        return False  # printf -v can evaluate an array subscript instead of emitting data.
     tail = lines[1:]
     if delimiter is not None:
         if delimiter not in tail:

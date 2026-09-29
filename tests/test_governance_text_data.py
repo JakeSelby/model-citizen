@@ -53,9 +53,28 @@ class LiteralDocumentationWrites(Home):
             "printf '%s' '" + target + "' | bash",
             "echo \"$(touch " + target + ")\" > /tmp/x",
             "cat > /tmp/x # <<'EOF'\necho x > " + target + "\nEOF",
+            "printf -v 'x[$(cp /tmp/p ~/.config/agent-harness/config.json)]' %s x",
+            "tee /tmp/{one,two} <<'EOF'\n" + target + "\nEOF",
+            "echo '" + target + "' >! /tmp/x",
+            "echo '" + target + "' >| /tmp/x",
+            "cat 1<> /tmp/x <<'EOF'\n" + target + "\nEOF",
+            "echo '" + target + "' &>> /tmp/x",
         ]
         for command in commands:
             with self.subTest(command=command):
                 self.assertFalse(grader.literal_text_command(command))
                 answer, reason = self.bash(command)
                 self.assertIn(answer, ("ask", "deny"))
+
+    def test_alternate_writes_and_utility_expansion_reach_the_configuration_guard(self):
+        target = "~/.config/agent-harness/config.json"
+        commands = ["printf -v 'x[$(cp /tmp/p " + target + ")]' %s x",
+                    "tee " + target + "{,.bak} </dev/null",
+                    "echo x >! " + target, "echo '{}' >| " + target,
+                    "cat /tmp/payload 1<> " + target, "echo x &>> " + target]
+        for command in commands:
+            with self.subTest(command=command):
+                answer, reason = self.bash(command)
+                self.assertEqual(answer, "ask", reason)
+                self.assertIn("level 1", reason)
+                self.assertIn("configuration", reason)
