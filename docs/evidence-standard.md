@@ -211,21 +211,25 @@ check, as the replay's hidden checks are, the item is marked not applicable with
 ### 9. A contamination check
 
 **What it is:** evidence that neither arm could see the answer, and that the two arms had the same
-access.
+access. When absence cannot be established, the task is excluded rather than counted.
 
 **Satisfied by:** a record that the reference solutions were unreachable from inside a trial (no
-later history in the checkout, no network path to the solution), that both arms had identical web
-and network access, and the task dates beside the model's stated training cutoff. SM-2 records why
-this item exists:
+later history in the task checkout, no known-good commit or readable held-back oracle implementation
+in the harness arm's installed checkout, no network path to the solution), that scored transcripts
+contain no observed tool-input path to the installed checkout, that both arms had identical web and
+network access, and the task
+dates beside the model's stated training cutoff. The installed-checkout check runs before any model
+call; a detected canonical or lexically equivalent installed-root path fails that attempt. This
+transcript check observes tool inputs only and is not a complete filesystem-read audit because
+unknown symlinks, relative traversal and copies can hide the source path, so it supports rather
+than replaces prelaunch exclusion. SM-2 records why this item exists:
 
 > The 23 Sep eight-task runs were unscored and ran with unequal web access between the arms, so they
 > are not a result.
 
-**Open risk:** the harness arm's image holds this repository's checkout at the harness ref under
-test, and that ref can postdate a task's fix. For a task taken from this repository's own history,
-the reference solution may then be readable inside the harness arm, so a run on such tasks does not
-satisfy this item until the checkout the arm holds is shown to exclude every task's fix, or the
-proof set names the exposure per task.
+Tasks exposed through the installed checkout are excluded with their full task and reason retained
+in `benchmarks/tasks.json`. The runner repeats the control at the exact harness commit, so an older
+tag or a later task-manifest change fails closed instead of relying on the retirement record.
 
 ### 10. Estimand labels
 
