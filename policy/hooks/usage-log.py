@@ -617,6 +617,17 @@ def note_model(counts, name, order):
     counts[name] = (hits + 1, order)
 
 
+def workflow_of(path):
+    """The Workflow run a subagent transcript belongs to, `wf_<id>`, or None for a spawned agent.
+
+    The Workflow tool writes its agents one directory deeper, under `subagents/workflows/wf_<id>/`;
+    the parent directory's name is the whole test. The usage feed classifies its live lines with
+    this same function, so the ledger and the feed cannot disagree about which agent is which.
+    """
+    name = Path(str(path)).parent.name if path else ""
+    return name if name.startswith("wf_") else None
+
+
 def _agent_row(path, shared=None, budget=None, max_bytes=None, version=None, links=None,
                raw=None):
     """One `kind: "subagent"` row from one `agent-<id>.jsonl`, or None when it holds no turn.
@@ -728,7 +739,7 @@ def _agent_row(path, shared=None, budget=None, max_bytes=None, version=None, lin
         # Nothing readable, whether the file held no turn or the budget stopped before one:
         # the caller records that as spend unknown rather than as zero.
         return None
-    workflow = path.parent.name if path.parent.name.startswith("wf_") else None
+    workflow = workflow_of(path)
     row = {"kind": "subagent", "runtime": "claude-code", "harness_version": version,
            "session_id": "", "repo": "",
            "agent_id": path.stem[len("agent-"):],
