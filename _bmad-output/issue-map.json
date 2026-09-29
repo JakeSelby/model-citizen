@@ -6813,6 +6813,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B128",
+      "github_number": 910,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/910",
+      "title": "Three timing tests fail under a loaded full-suite run and pass alone",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B128.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B125",
       "github_number": 917,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/917",
