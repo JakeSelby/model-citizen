@@ -34,7 +34,9 @@ class StudioSecurityFixture(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(os.path.realpath(self.tmp.name)) / "home"
         self.home.mkdir()
-        self.env = dict(os.environ, HOME=str(self.home), HARNESS_HOME=str(self.home),
+        # The suite's isolation layer sets HARNESS_QUIET, which would silence --json output.
+        base = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+        self.env = dict(base, HOME=str(self.home), HARNESS_HOME=str(self.home),
                         PYTHONDONTWRITEBYTECODE="1")
         done = subprocess.run(
             [sys.executable, str(CLI), "studio", "--detach", "--no-open", "--json"],
