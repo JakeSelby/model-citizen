@@ -17,10 +17,6 @@ IGNORED = ("README.md",)
 ROOTS = ("bin/", "lib/", "adapters/", "primitives/", "policy/", "docs/", "scripts/")
 MINIMUM_REASON_WORDS = 3
 BASE = "origin/main"
-# The last release whose entries are written into `## [Unreleased]` by hand. Until the base
-# branch's CHANGELOG.md carries this version's section, a branch that edits Unreleased is exempt
-# from the fragment rule; the release pull request that folds it is therefore the cut-over.
-LAST_HAND_WRITTEN = "0.13.0"
 
 
 def parse_name(name):
@@ -141,46 +137,6 @@ def branch_changes(root, base=BASE):
     return fork, changed, added
 
 
-def unreleased_span(text):
-    """1-based (first, last) line numbers of the `## [Unreleased]` section body, or None."""
-    lines = (text or "").splitlines()
-    start = next((i for i, line in enumerate(lines) if line.startswith("## [Unreleased]")), None)
-    if start is None:
-        return None
-    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## [")), len(lines))
-    return start + 1, end
-
-
-def _overlaps(span, first, count):
-    if span is None:
-        return False
-    last = first + max(count, 1) - 1
-    return first <= span[1] and last >= span[0]
-
-
-def touches_unreleased(root, fork):
-    """Whether the branch's CHANGELOG.md diff lands in Unreleased, on either side of the diff,
-    so an entry added there and a release folding it out both count."""
-    diff = _git(root, "diff", "-U0", fork, "--", "CHANGELOG.md")
-    if not diff:
-        return False
-    before = unreleased_span(_git(root, "show", "%s:CHANGELOG.md" % fork))
-    path = Path(root) / "CHANGELOG.md"
-    after = unreleased_span(path.read_text(encoding="utf-8") if path.is_file() else "")
-    for match in re.finditer(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", diff, re.MULTILINE):
-        old_first, old_count, new_first, new_count = match.groups()
-        if (_overlaps(before, int(old_first), int(old_count or 1)) or
-                _overlaps(after, int(new_first), int(new_count or 1))):
-            return True
-    return False
-
-
-def hand_written_release_open(root, fork):
-    """True until the base branch's CHANGELOG.md has a section for LAST_HAND_WRITTEN."""
-    base = _git(root, "show", "%s:CHANGELOG.md" % fork) or ""
-    return not re.search(r"^## \[%s\]" % re.escape(LAST_HAND_WRITTEN), base, re.MULTILINE)
-
-
 VERSION_HEADING = re.compile(r"^## \[([0-9][^\]]*)\]", re.MULTILINE)
 
 
@@ -237,8 +193,6 @@ def findings(root, notes=None):
                 hits.append("changelog: waiver %s must give a reason of at least %d words"
                             % (path, MINIMUM_REASON_WORDS))
         if new:
-            return hits
-        if hand_written_release_open(root, fork) and touches_unreleased(root, fork):
             return hits
         if assembles_release(root, fork):
             return hits
