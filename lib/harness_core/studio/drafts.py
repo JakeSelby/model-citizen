@@ -204,12 +204,32 @@ def _registered_worktrees(repo: Path) -> Iterable[Path]:
             yield path.resolve()
 
 
+def _state_path(worktree: Path) -> Optional[Path]:
+    """Return a registered worktree's draft state path, or None once it has no checkout.
+
+    Every checkout of the repository shares one worktree list, so another process can remove or
+    still be creating an unrelated worktree between the listing and this probe. That worktree is
+    no draft to find; only a checkout that still exists and cannot be read is an error.
+    """
+    try:
+        return _paths(worktree)["state"]
+    except DraftError:
+        if not (worktree / ".git").exists():
+            return None
+        raise
+
+
 def find(repo: Path, name: str) -> Tuple[Path, Dict[str, Any]]:
     for worktree in _registered_worktrees(repo):
-        state_path = _paths(worktree)["state"]
-        if not state_path.is_file():
+        state_path = _state_path(worktree)
+        if state_path is None or not state_path.is_file():
             continue
-        state = _read_state(worktree)
+        try:
+            state = _read_state(worktree)
+        except DraftError:
+            if (worktree / ".git").exists():
+                raise
+            continue
         if state.get("name") == name or state.get("draft_id") == name:
             return worktree, state
     raise DraftError("not-found", "draft does not exist: " + name)
@@ -248,8 +268,14 @@ def describe(repo: Path, worktree: Path, state: Optional[Dict[str, Any]] = None)
 def list_drafts(repo: Path) -> List[Dict[str, Any]]:
     drafts: List[Dict[str, Any]] = []
     for worktree in _registered_worktrees(repo):
-        if _paths(worktree)["state"].is_file():
+        state_path = _state_path(worktree)
+        if state_path is None or not state_path.is_file():
+            continue
+        try:
             drafts.append(describe(repo, worktree))
+        except DraftError:
+            if (worktree / ".git").exists():
+                raise
     return sorted(drafts, key=lambda item: (item["name"], item["draft_id"]))
 
 
