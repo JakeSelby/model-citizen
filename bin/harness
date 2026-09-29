@@ -5206,9 +5206,11 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
         return 2
-    if by == "rebuild" and (rules_mode or stance):
-        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules and --stance "
-              "do not apply", file=sys.stderr)
+    if by == "rebuild" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # The report reads transcripts on every run, so a ledger rescan would be accepted and
+        # ignored; it is refused like the other options that do not apply.
+        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules, --stance "
+              "and --rescan do not apply", file=sys.stderr)
         return 2
     if stance and by != "stance":
         print("usage --stance applies only to --by stance", file=sys.stderr)

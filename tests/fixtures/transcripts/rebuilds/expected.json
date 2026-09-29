@@ -14,6 +14,7 @@
   "plan-mode": "plan mode enter or exit",
   "remote-session": "remote session change",
   "session-reload": "session reloaded (mode marker)",
+  "several-signals": "compaction",
   "slash-command": "slash command /clear",
   "system-prompt": "system prompt rebuilt",
   "tools-agents-skills": "tool, agent or skill list changed",

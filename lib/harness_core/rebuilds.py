@@ -4,9 +4,10 @@
 module answers which individual request rebuilt the prefix and what happened between it and the
 previous request. It is retrospective and read-only: no hook, event or ledger row is added.
 
-The transcript markers are Claude Code internals observed on versions 2.0.0 through 2.0.21.
-Unknown or removed markers remain `unexplained`; malformed input and unpriced models are counted
-apart rather than turned into zeroes.
+The transcript markers are Claude Code internals; the fixtures that pin them are synthetic
+transcripts stamped with client version 2.0.20. Unknown or removed markers remain `unexplained`;
+malformed input and unpriced models are counted apart rather than turned into zeroes, and a
+cause with any unpriced break has no dollar figure or share at all.
 """
 import collections
 import datetime
@@ -92,7 +93,9 @@ def cause(events, gap, previous_model, model, five_minute_share, previous_versio
         return "idle over 1h (TTL expiry)"
     if previous_version and version and previous_version != version:
         return "Claude Code version changed (restart)"
-    if gap is not None and gap >= 300 and five_minute_share > 0.5:
+    # An unknown tier split (None) cannot show a five-minute TTL; such a gap falls through to
+    # the events and then to "idle 5-60 min, no event", which the evidence still supports.
+    if gap is not None and gap >= 300 and five_minute_share is not None and five_minute_share > 0.5:
         return "idle over 5m on 5m TTL"
     for label, markers in EVENT_CAUSES:
         if any(marker in names for marker in markers):
@@ -125,14 +128,24 @@ def call_from(entry, events):
     creation = usage.get("cache_creation")
     if creation is not None and not isinstance(creation, dict):
         return None, "malformed cache creation tiers"
-    one_hour = _count((creation or {}).get("ephemeral_1h_input_tokens", 0))
-    if one_hour is None or one_hour > values["cache_write"]:
-        return None, "malformed cache creation tiers"
-    values.update(cache_write_1h=one_hour, cache_write_5m=values["cache_write"] - one_hour)
+    if creation is None or "ephemeral_1h_input_tokens" not in creation:
+        # No split reported: the tiers are unknown, not zero, so neither is read as measured.
+        values.update(cache_write_1h=None, cache_write_5m=None)
+    else:
+        one_hour = _count(creation.get("ephemeral_1h_input_tokens"))
+        if one_hour is None or one_hour > values["cache_write"]:
+            return None, "malformed cache creation tiers"
+        values.update(cache_write_1h=one_hour, cache_write_5m=values["cache_write"] - one_hour)
     return dict(values, id=str(identity), timestamp=stamp,
                 model=message.get("model") if isinstance(message.get("model"), str) else "",
                 version=entry.get("version") if isinstance(entry.get("version"), str) else "",
                 events=tuple(events)), None
+
+
+def _synthetic(entry):
+    message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+    model = message.get("model")
+    return isinstance(model, str) and model.startswith("<")
 
 
 def transcript_paths(projects):
@@ -174,6 +187,12 @@ def read_calls(path, cutoff):
             if entry.get("isSidechain"):
                 counts["sidechain_lines"] += 1
                 continue
+            if entry.get("type") == "assistant" and _synthetic(entry):
+                # A client-generated turn (`<synthetic>`) is no API request: it neither sent nor
+                # read a prefix, so the next real call is compared with the last real one and
+                # inherits every marker recorded since.
+                counts["synthetic_lines"] += 1
+                continue
             if entry.get("type") == "assistant":
                 call, reason = call_from(entry, events)
                 if call is None:
@@ -212,11 +231,12 @@ def _break_cost(call, rewritten, table, pricing):
     if rate is None:
         return None
     writes = call["cache_write"]
-    one_hour = round(rewritten * call["cache_write_1h"] / writes) if writes else 0
-    five_minute = rewritten - one_hour
-    write = pricing.tokens_cost({"input": 0, "output": 0, "cache_read": 0,
-                                 "cache_write": rewritten, "cache_write_5m": five_minute,
-                                 "cache_write_1h": one_hour}, rate)
+    tokens = {"input": 0, "output": 0, "cache_read": 0, "cache_write": rewritten}
+    if call["cache_write_1h"] is not None:
+        one_hour = round(rewritten * call["cache_write_1h"] / writes) if writes else 0
+        tokens.update(cache_write_5m=rewritten - one_hour, cache_write_1h=one_hour)
+    # With no split, `tokens_cost` charges the whole write at the base rate, as it does ledger rows.
+    write = pricing.tokens_cost(tokens, rate)
     read = pricing.tokens_cost({"input": 0, "output": 0, "cache_read": rewritten,
                                 "cache_write": 0}, rate)
     return write - read
@@ -252,7 +272,10 @@ def analyse(projects, cutoff, days, table, pricing):
                 continue
             rewritten = min(shortfall, call["cache_write"])
             writes = call["cache_write"]
-            five_share = call["cache_write_5m"] / writes if writes else 0.0
+            if call["cache_write_5m"] is None:
+                five_share = None
+            else:
+                five_share = call["cache_write_5m"] / writes if writes else 0.0
             gap = call["timestamp"] - previous["timestamp"]
             label = cause(call["events"], gap, previous["model"], call["model"], five_share,
                           previous["version"], call["version"])
@@ -271,13 +294,16 @@ def analyse(projects, cutoff, days, table, pricing):
     for name, scope in scopes.items():
         spend = scope.pop("priced_spend_usd")
         causes = []
-        for label, bucket in sorted(scope.pop("causes").items(),
-                                    key=lambda item: (-item[1]["excess_usd"], item[0])):
-            bucket = dict(bucket, cause=label,
-                          known_spend_share=(bucket["excess_usd"] / spend if spend else None),
-                          cost_per_break=(None if bucket["unpriced_breaks"] else
-                                          bucket["excess_usd"] / bucket["breaks"]))
-            causes.append(bucket)
+        for label, bucket in scope.pop("causes").items():
+            # One unpriced break makes the cause's dollars unknown: a partial sum would read as
+            # a measured figure, and an all-unpriced cause would read as $0.
+            known = not bucket["unpriced_breaks"]
+            excess = bucket["excess_usd"] if known else None
+            causes.append(dict(bucket, cause=label, excess_usd=excess,
+                               known_spend_share=(excess / spend if known and spend else None),
+                               cost_per_break=(excess / bucket["breaks"] if known else None)))
+        causes.sort(key=lambda row: (row["excess_usd"] is None, -(row["excess_usd"] or 0.0),
+                                     row["cause"]))
         result["scopes"][name] = dict(scope, priced_spend_usd=spend, causes=causes,
                                       unknown_breaks=sum(row["breaks"] for row in causes
                                                          if row["cause"] == "unexplained"))
@@ -292,30 +318,28 @@ def render(result):
         label = "long sessions (200+ calls)" if name == "long" else "all sessions"
         lines.append("[%s] %d session(s), $%.2f known priced spend" %
                      (label, scope["sessions"], scope["priced_spend_usd"]))
-        head = "{:<42}{:>8}{:>14}{:>14}{:>13}".format(
-            "cause", "breaks", "rewritten", "known spend", "cost/break")
+        head = "{:<42}{:>8}{:>14}{:>14}{:>13}{:>10}".format(
+            "cause", "breaks", "rewritten", "known spend", "cost/break", "unpriced")
         lines.extend((head, "-" * len(head)))
         for row in scope["causes"]:
-            share = "unknown" if row["known_spend_share"] is None else "{:.1%}".format(
-                row["known_spend_share"])
-            each = "unpriced" if row["cost_per_break"] is None else "${:.2f}".format(
-                row["cost_per_break"])
-            lines.append("{:<42}{:>8,}{:>14,}{:>14}{:>13}".format(
-                row["cause"][:42], row["breaks"], row["rewritten_tokens"], share, each))
+            if row["unpriced_breaks"]:
+                share = each = "unpriced"
+            else:
+                share = "-" if row["known_spend_share"] is None else "{:.1%}".format(
+                    row["known_spend_share"])
+                each = "${:.2f}".format(row["cost_per_break"])
+            lines.append("{:<42}{:>8,}{:>14,}{:>14}{:>13}{:>10,}".format(
+                row["cause"][:42], row["breaks"], row["rewritten_tokens"], share, each,
+                row["unpriced_breaks"]))
         lines.append("unpriced: %d call(s), %d break(s); unexplained: %d break(s)" %
                      (scope["unpriced_calls"], scope["unpriced_breaks"], scope["unknown_breaks"]))
     files = result["files"]
     lines.append("input: %d file(s) read once, %d duplicate path(s), %d malformed line(s), "
-                 "%d untimed line(s), %d unreadable file(s), %d outside-window line(s)" %
+                 "%d untimed line(s), %d unreadable file(s), %d outside-window line(s), "
+                 "%d synthetic turn(s)" %
                  (files.get("files_read", 0), files.get("duplicate_paths", 0),
                   files.get("malformed_lines", 0), files.get("untimed_lines", 0),
-                  files.get("unreadable_files", 0), files.get("outside_window", 0)))
+                  files.get("unreadable_files", 0), files.get("outside_window", 0),
+                  files.get("synthetic_lines", 0)))
     return lines
 
-
-def report(projects, cutoff, days, table, pricing, say):
-    """Print the rebuild table through the caller's normal output path."""
-    result = analyse(projects, cutoff, days, table, pricing)
-    for line in render(result):
-        say(line)
-    return 0
