@@ -25,6 +25,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen draft list|diff|rebase|discard [NAME] [--json]
     citizen draft settings schema|read|preview|save [OPTIONS] [--json]
     citizen draft selection read|preview|save [OPTIONS] [--json]
+    citizen draft module read|preview|save [OPTIONS] [--json]
     citizen worktree create NAME [REPO] [--branch BRANCH] [--base BASE] [--no-fetch]
     citizen worktree audit [REPO]
     citizen worktree remove NAME [REPO] [--merged] [--also-clear NAME]
@@ -59,6 +60,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -79,6 +81,7 @@ from harness_core import studio
 from harness_core.studio import activity as studio_activity
 from harness_core.studio import settings as studio_settings
 from harness_core.studio import selection_editing as studio_selection_editing
+from harness_core.studio import module_editing as studio_module_editing
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -1241,6 +1244,49 @@ def render_codex_agents(stances: Dict[str, Path], personal: Optional[str],
     if personal:
         parts += ["---", "<!-- AGENTS.personal.md -->", personal.rstrip(), ""]
     return "\n".join(parts)
+
+
+def render_claude_context(stances: Dict[str, Path], personal: Optional[str],
+                          externals: Sequence[Dict[str, Any]] = (),
+                          off_rules: Iterable[str] = ()) -> str:
+    """The complete always-loaded Claude text produced by the sync inputs."""
+    off_rules = set(off_rules)
+    parts = []
+    instructions = REPO / "claude" / "CLAUDE.md"
+    if instructions.is_file():
+        parts.append(instructions.read_text(encoding="utf-8").rstrip())
+    parts.extend(rule.read_text(encoding="utf-8").rstrip()
+                 for rule in sorted((REPO / "claude" / "rules").glob("*.md"))
+                 if rule.stem not in off_rules)
+    parts.extend(rule.read_text(encoding="utf-8").rstrip()
+                 for entry in externals for rule in entry["rules"])
+    parts.extend(path.read_text(encoding="utf-8").rstrip()
+                 for _name, path in sorted(stances.items()))
+    if personal:
+        parts.append(personal.rstrip())
+    return "\n".join(parts) + ("\n" if parts else "")
+
+
+def render_runtime_contexts(cfg: Dict[str, Any]) -> Dict[str, str]:
+    """Render the two final resident-context aggregates from one effective selection."""
+    posture_module = load_posture()
+    if posture_module is None:
+        raise SystemExit("this checkout has no selection resolver (policy/hooks/posture.py)")
+    selected = posture_module.selection({}, strict=True, config=cfg, root=REPO)
+    effective = deepcopy(cfg)
+    effective["stances"] = {name: value for name, value in selected["stances"].items()
+                            if value is not None}
+    stances = resolve_stances(effective)
+    off = switched_off(selected)
+    externals, _warnings = external_primitive_roots(effective)
+    for entry in externals:
+        entry["rules"] = [rule for rule in entry["rules"] if rule.stem not in off["rules"]]
+        entry["skills"] = [skill for skill in entry["skills"] if skill.name not in off["skills"]]
+    personal = render_personal(effective, None)
+    return {
+        "claude-code": render_claude_context(stances, personal, externals, off["rules"]),
+        "codex": render_codex_agents(stances, personal, externals, off["rules"]),
+    }
 
 
 def codex_wanted(cfg: Dict[str, Any], reviewer: Optional[codex_client.Reviewer] = None,
@@ -2536,6 +2582,186 @@ def _cmd_uninstall_unlocked(args: argparse.Namespace) -> int:
     return 2 if store.conflicts else 0
 
 
+def _markdown_links(text: str) -> Iterable[Tuple[int, str, str]]:
+    """Yield line, source spelling and destination for Markdown links outside code."""
+    def container_content(line: str) -> str:
+        content = line
+        consumed_list = False
+        while True:
+            quote = re.match(r"^ {0,3}>[ \t]?", content)
+            if quote:
+                content = content[quote.end():]
+                continue
+            if not consumed_list:
+                item = re.match(r"^ {0,3}(?:[-+*]|[0-9]{1,9}[.)])[ \t]+", content)
+                if item:
+                    consumed_list = True
+                    content = content[item.end():]
+                    continue
+            return content
+
+    masked = list(text)
+    offset = 0
+    fence = None
+    for line in text.splitlines(keepends=True):
+        nested = container_content(line)
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})", nested)
+        in_code = fence is not None
+        if marker:
+            token = marker.group(1)
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1]:
+                fence = None
+            in_code = True
+        if in_code or ((nested.startswith("    ") or nested.startswith("\t")) and nested.strip()):
+            for index in range(offset, offset + len(line)):
+                if masked[index] != "\n":
+                    masked[index] = " "
+        offset += len(line)
+    clean = "".join(masked)
+    masked = list(clean)
+    cursor = 0
+    while cursor < len(clean):
+        if clean[cursor] != "`" or (cursor and clean[cursor - 1] == "\\"):
+            cursor += 1
+            continue
+        width = 1
+        while cursor + width < len(clean) and clean[cursor + width] == "`":
+            width += 1
+        closing = clean.find("`" * width, cursor + width)
+        if closing < 0:
+            break
+        for index in range(cursor, closing + width):
+            if masked[index] != "\n":
+                masked[index] = " "
+        cursor = closing + width
+    clean = "".join(masked)
+
+    definitions: Dict[str, str] = {}
+    definition_ranges = []
+    definition = re.compile(
+        r"(?m)^ {0,3}\[([^\]\n]+)\]:[ \t]*(?:\n[ \t]+)?(<(?:\\.|[^>])+>|(?:\\.|[^\s])+)",
+    )
+    for match in definition.finditer(clean):
+        label = " ".join(match.group(1).split()).casefold()
+        value = match.group(2)
+        definitions.setdefault(label, value[1:-1] if value.startswith("<") else value)
+        definition_ranges.append((match.start(), match.end()))
+    masked = list(clean)
+    for start, end in definition_ranges:
+        for position in range(start, end):
+            if masked[position] != "\n":
+                masked[position] = " "
+    clean = "".join(masked)
+
+    def escaped(position: int) -> bool:
+        count = 0
+        position -= 1
+        while position >= 0 and clean[position] == "\\":
+            count += 1
+            position -= 1
+        return bool(count % 2)
+
+    def close_bracket(opening: int) -> int:
+        depth, position = 1, opening + 1
+        while position < len(clean):
+            if clean[position] == "\\":
+                position += 2
+                continue
+            if clean[position] == "[":
+                depth += 1
+            elif clean[position] == "]":
+                depth -= 1
+                if depth == 0:
+                    return position
+            position += 1
+        return -1
+
+    index = 0
+    while index < len(clean):
+        opening = clean.find("[", index)
+        if opening < 0:
+            return
+        if escaped(opening):
+            index = opening + 1
+            continue
+        closing = close_bracket(opening)
+        if closing < 0:
+            return
+        if opening and clean[opening - 1] == "!":
+            position = closing + 1
+            if position < len(clean) and clean[position] == "[":
+                reference_end = close_bracket(position)
+                index = reference_end + 1 if reference_end >= 0 else position + 1
+            elif position < len(clean) and clean[position] == "(":
+                depth = 1
+                position += 1
+                while position < len(clean) and depth:
+                    if clean[position] == "\\":
+                        position += 2
+                        continue
+                    if clean[position] == "(":
+                        depth += 1
+                    elif clean[position] == ")":
+                        depth -= 1
+                    position += 1
+                index = position
+            else:
+                index = closing + 1
+            continue
+        label = clean[opening + 1:closing]
+        position = closing + 1
+        destination = ""
+        end = position
+        if position < len(clean) and clean[position] == "(":
+            position += 1
+            while position < len(clean) and clean[position].isspace():
+                position += 1
+            start = position
+            if position < len(clean) and clean[position] == "<":
+                position += 1
+                start = position
+                while position < len(clean) and (clean[position] != ">" or escaped(position)):
+                    position += 1
+                destination, end = clean[start:position], position + 1
+            else:
+                depth = 0
+                while position < len(clean):
+                    char = clean[position]
+                    if char == "\\" and position + 1 < len(clean):
+                        position += 2
+                        continue
+                    if char == "(":
+                        depth += 1
+                    elif char == ")":
+                        if depth == 0:
+                            break
+                        depth -= 1
+                    elif char.isspace() and depth == 0:
+                        break
+                    position += 1
+                destination, end = clean[start:position], position
+        else:
+            reference = " ".join(label.split()).casefold()
+            if position < len(clean) and clean[position] == "[":
+                ref_end = close_bracket(position)
+                if ref_end >= 0:
+                    named = clean[position + 1:ref_end]
+                    reference = " ".join((named or label).split()).casefold()
+                    end = ref_end + 1
+            destination = definitions.get(reference, "")
+        if destination:
+            destination = re.sub(r"\\(.)", r"\1", destination)
+            yield text.count("\n", 0, opening) + 1, destination, destination
+        index = max(end, closing + 1)
+
+
+def markdown_link_destinations(text: str) -> Iterable[Tuple[str, str]]:
+    for _line, target, destination in _markdown_links(text):
+        yield target, destination
+
+
 def lint_files(root: Path, files: List[Path], terms: Optional[Tuple[List[str], List[str]]] = None) -> List[str]:
     """Lint the given files (paths under root). No file is exempt, including this one."""
     hits: List[str] = []
@@ -2585,6 +2811,32 @@ def lint_files(root: Path, files: List[Path], terms: Optional[Tuple[List[str], L
             if check_retired and n not in released:
                 for label in retired_names.line_findings(line):
                     hits.append(f"{rel}:{n}: retired-name: the old project {label}")
+        module_markdown = (path.name == "SKILL.md" or "stances" in rel.parts
+                           or (len(rel.parts) > 1 and rel.parts[-2] == "rules"))
+        if path.suffix.lower() == ".md" and module_markdown:
+            for n, target, destination in _markdown_links(text):
+                local = destination.strip()
+                try:
+                    parsed = urllib.parse.urlsplit(local)
+                except ValueError:
+                    hits.append(f"{rel}:{n}: broken local link {target}")
+                    continue
+                if (not local or parsed.scheme or local.startswith(("#", "//"))
+                        or "{" in local or "}" in local):
+                    continue
+                local = urllib.parse.unquote(parsed.path)
+                if not local:
+                    continue
+                if "\x00" in local:
+                    hits.append(f"{rel}:{n}: broken local link {target}")
+                    continue
+                candidate = (path.parent / local).resolve()
+                try:
+                    candidate.relative_to(root.resolve())
+                except (OSError, ValueError):
+                    continue
+                if not candidate.exists():
+                    hits.append(f"{rel}:{n}: broken local link {target}")
     return hits
 
 
@@ -2612,15 +2864,18 @@ def check_detectors(root: Path) -> List[str]:
     return hits
 
 
-def check_collisions(root: Path) -> List[str]:
+def check_collisions(root: Path, config: Optional[Dict[str, Any]] = None) -> List[str]:
     """Fail when one skill, agent or command name is defined in two primitive roots.
 
     The runtimes pick a winner silently; `harness_core.collisions` says why that is refused.
     """
-    try:
-        cfg = load_config()
-    except Exception:
-        cfg = {}
+    if config is None:
+        try:
+            cfg = load_config()
+        except Exception:
+            cfg = {}
+    else:
+        cfg = config
     return collisions.findings(root, cfg)
 
 
@@ -2735,7 +2990,8 @@ def est_tokens(chars: int) -> int:
     return int(round(chars / CHARS_PER_TOKEN))
 
 
-def always_loaded_groups(root: Path) -> List[Tuple[str, int, int]]:
+def always_loaded_groups(root: Path,
+                         config: Optional[Dict[str, Any]] = None) -> List[Tuple[str, int, int]]:
     """Everything loaded on every turn, as [(group, lines, chars)].
 
     The stance total is the worst case — the longest variant of each dimension — so the caps hold
@@ -2766,6 +3022,31 @@ def always_loaded_groups(root: Path) -> List[Tuple[str, int, int]]:
             worst = max(variants, key=lambda p: (_line_count(p), p.name))
             lines, chars = size(worst)
             groups.append((f"claude/stances/{d.name}/ (longest: {worst.name})", lines, chars))
+    seen = {(root / "primitives").resolve()}
+    configured = config.get("primitive_roots", []) if isinstance(config, dict) else []
+    if isinstance(configured, list):
+        for index, value in enumerate(configured):
+            if not isinstance(value, str) or not Path(value).expanduser().is_absolute():
+                continue
+            source = Path(value).expanduser().resolve()
+            if source in seen or not source.is_dir():
+                continue
+            seen.add(source)
+            rules = sorted((source / "rules").glob("*.md")) if (source / "rules").is_dir() else []
+            if rules:
+                sizes = [size(path) for path in rules if path.is_file()]
+                groups.append((f"primitive root {index + 1}/rules/ ({len(sizes)} files)",
+                               sum(item[0] for item in sizes), sum(item[1] for item in sizes)))
+            stance_root = source / "stances"
+            if stance_root.is_dir():
+                for dimension in sorted(path for path in stance_root.iterdir() if path.is_dir()):
+                    variants = sorted(path for path in dimension.glob("*.md") if path.is_file())
+                    if not variants:
+                        continue
+                    worst = max(variants, key=lambda path: (_line_count(path), path.name))
+                    lines, chars = size(worst)
+                    groups.append((f"primitive root {index + 1}/stances/{dimension.name}/ "
+                                   f"(longest: {worst.name})", lines, chars))
     return groups
 
 
@@ -2789,21 +3070,23 @@ def effective_always_loaded_lines(root: Path, selection: Dict[str, Any]) -> int:
     return total
 
 
-def always_loaded_lines(root: Path) -> Tuple[int, List[Tuple[str, int]]]:
+def always_loaded_lines(root: Path,
+                        config: Optional[Dict[str, Any]] = None) -> Tuple[int, List[Tuple[str, int]]]:
     """Line counts of the always-loaded set, as (total, [(group, lines)])."""
-    groups = always_loaded_groups(root)
+    groups = always_loaded_groups(root, config)
     return sum(g[1] for g in groups), [(name, lines) for name, lines, _ in groups]
 
 
-def always_loaded_tokens(root: Path) -> Tuple[int, List[Tuple[str, int]]]:
+def always_loaded_tokens(root: Path,
+                         config: Optional[Dict[str, Any]] = None) -> Tuple[int, List[Tuple[str, int]]]:
     """Estimated token counts of the always-loaded set, as (total, [(group, tokens)])."""
-    groups = always_loaded_groups(root)
+    groups = always_loaded_groups(root, config)
     return est_tokens(sum(g[2] for g in groups)), [(name, est_tokens(chars)) for name, _, chars in groups]
 
 
-def context_summary(root: Path) -> str:
+def context_summary(root: Path, config: Optional[Dict[str, Any]] = None) -> str:
     """One line for `harness lint` naming both measures and both caps, pass or fail."""
-    groups = always_loaded_groups(root)
+    groups = always_loaded_groups(root, config)
     lines = sum(g[1] for g in groups)
     tokens = est_tokens(sum(g[2] for g in groups))
     return (f"context: always-loaded is ~{tokens} tokens of {ALWAYS_LOADED_TOKEN_CAP} "
@@ -2812,9 +3095,9 @@ def context_summary(root: Path) -> str:
             f"benchmarks/static.json counts a wider set)")
 
 
-def check_context_cap(root: Path) -> List[str]:
+def check_context_cap(root: Path, config: Optional[Dict[str, Any]] = None) -> List[str]:
     """Fail when always-loaded context exceeds either cap, printing the breakdown."""
-    groups = always_loaded_groups(root)
+    groups = always_loaded_groups(root, config)
     if not groups:
         return []
     lines = sum(g[1] for g in groups)
@@ -2852,7 +3135,11 @@ def cmd_lint(args: argparse.Namespace) -> int:
     else:
         hits = lint_tree(root)
         scope = str(root)
-    hits = hits + check_context_cap(root) + check_cost_sidecars(root) + check_stance_constraints(root)
+    try:
+        lint_config = load_config()
+    except Exception:
+        lint_config = {}
+    hits = hits + check_context_cap(root, lint_config) + check_cost_sidecars(root) + check_stance_constraints(root)
     hits += check_collisions(root)
     notes: List[str] = []
     # Fragments are this repository's release process, so the rule uses projection drift's guard.
@@ -2863,8 +3150,8 @@ def cmd_lint(args: argparse.Namespace) -> int:
                  for name in primitive_catalog.projection_drift(root)]
     for h in hits + notes:
         say(h)
-    if not getattr(args, "staged", False) and always_loaded_groups(root):
-        say(context_summary(root))
+    if not getattr(args, "staged", False) and always_loaded_groups(root, lint_config):
+        say(context_summary(root, lint_config))
     everywhere, _ = load_lint_terms()
     note = "" if everywhere else " (no personal lint-terms file; shapes and secrets only)"
     say(f"lint: {len(hits)} finding(s) in {scope}{note}")
@@ -3492,7 +3779,9 @@ def _draft_remove_worktree(repo: Path, dest: Path, branch: str, revision: str) -
 
 def cmd_draft(args: argparse.Namespace) -> int:
     """Expose the same draft domain operations used by Studio."""
-    repo = git_root(str(REPO))
+    # Draft configuration and managed roots are relative to the installed checkout that owns
+    # this CLI, not the shared Git common directory behind a linked worktree.
+    repo = REPO.resolve()
     try:
         if args.action == "settings":
             if args.settings_action == "schema":
@@ -3518,6 +3807,29 @@ def cmd_draft(args: argparse.Namespace) -> int:
                     repo, args.name, args.base_revision, args.idempotency_key,
                     integrations.read_json(args.changes),
                 )
+        elif args.action == "module":
+            if args.module_action == "read":
+                result = studio_module_editing.read(repo, args.name, args.module)
+            else:
+                try:
+                    with Path(args.content).open("rb") as stream:
+                        raw_content = stream.read(studio_module_editing.MAX_SOURCE_BYTES + 1)
+                    if len(raw_content) > studio_module_editing.MAX_SOURCE_BYTES:
+                        raise studio_module_editing.ModuleEditError(
+                            "module-too-large", "module content exceeds the editor size limit",
+                        )
+                    content = raw_content.decode("utf-8")
+                except (OSError, UnicodeDecodeError) as exc:
+                    raise studio_module_editing.ModuleEditError(
+                        "module-encoding", "module content must be readable UTF-8: " + str(exc),
+                    ) from exc
+                if args.module_action == "preview":
+                    result = studio_module_editing.preview(repo, args.name, args.module, content)
+                else:
+                    result = studio_module_editing.save(
+                        repo, args.name, args.module, args.base_revision, args.source_digest,
+                        args.idempotency_key, content,
+                    )
         elif args.action == "create":
             result: Any = studio.drafts.create(
                 repo, args.name, args.base, config_path(),
@@ -3531,13 +3843,14 @@ def cmd_draft(args: argparse.Namespace) -> int:
             result = studio.drafts.rebase(repo, args.name)
         else:
             result = studio.drafts.discard(repo, args.name, _draft_remove_worktree)
-    except (studio.drafts.DraftError, integrations.IntegrationError) as exc:
-        if args.json or args.action in ("settings", "selection"):
+    except (studio.drafts.DraftError, studio_module_editing.ModuleEditError,
+            integrations.IntegrationError) as exc:
+        if args.json or args.action in ("settings", "selection", "module"):
             say(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
         else:
             say("draft: " + str(exc))
         return 1
-    if args.json or args.action in ("settings", "selection"):
+    if args.json or args.action in ("settings", "selection", "module"):
         say(json.dumps(result, sort_keys=True))
     elif args.action == "list":
         for item in result["drafts"]:
@@ -6242,6 +6555,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                                 help="JSON object of path-keyed changes")
     selection_save.add_argument("--json", action="store_true")
     selection_save.set_defaults(func=cmd_draft)
+    module_parser = draft_sub.add_parser("module", help="read, preview, and save draft module text")
+    module_sub = module_parser.add_subparsers(dest="module_action", required=True)
+    module_read = module_sub.add_parser("read", help="read editable draft module text")
+    module_read.add_argument("name")
+    module_read.add_argument("module", nargs="?", default="")
+    module_read.add_argument("--json", action="store_true")
+    module_read.set_defaults(func=cmd_draft)
+    module_preview = module_sub.add_parser("preview", help="preview draft module text")
+    module_preview.add_argument("name")
+    module_preview.add_argument("module")
+    module_preview.add_argument("--content", required=True, metavar="FILE")
+    module_preview.add_argument("--json", action="store_true")
+    module_preview.set_defaults(func=cmd_draft)
+    module_save = module_sub.add_parser("save", help="checkpoint clean draft module text")
+    module_save.add_argument("name")
+    module_save.add_argument("module")
+    module_save.add_argument("--base-revision", required=True)
+    module_save.add_argument("--source-digest", required=True)
+    module_save.add_argument("--idempotency-key", required=True)
+    module_save.add_argument("--content", required=True, metavar="FILE")
+    module_save.add_argument("--json", action="store_true")
+    module_save.set_defaults(func=cmd_draft)
 
     p = sub.add_parser("remote-control", help="keep a Claude Code Remote Control server running per configured folder (macOS)")
     rc_sub = p.add_subparsers(dest="action", required=True)

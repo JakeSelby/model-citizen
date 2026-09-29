@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,8 @@ CLI = REPO / "bin" / "harness"
 sys.path.insert(0, str(REPO / "lib"))
 
 from harness_core.studio import auth  # noqa: E402
+from harness_core.studio import drafts  # noqa: E402
+from harness_core.studio import module_editing  # noqa: E402
 from harness_core.studio import server  # noqa: E402
 from harness_core.studio import state_root  # noqa: E402
 from harness_core.studio.state import Store  # noqa: E402
@@ -214,6 +217,113 @@ class HttpBoundaryTests(StudioSecurityFixture):
         oversized = dict(accepted, **{"Content-Length": str(auth.MAX_JSON_BYTES + 1)})
         refused, _headers, _payload = self.request("POST", "/api/session", oversized, b"")
         self.assertEqual(refused, 413)
+
+    def test_module_editor_routes_require_session_origin_csrf_and_json(self):
+        body = json.dumps({"draft": "missing", "module": ""}).encode("utf-8")
+        anonymous, _headers, _payload = self.request(
+            "POST", "/api/configure/module/read",
+            {"Content-Type": "application/json", "Content-Length": str(len(body))}, body,
+        )
+        self.assertEqual(anonymous, 401)
+        _issued, status, bootstrap_headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        cookie = self.cookie(bootstrap_headers)
+        session_status, _headers, session_body = self.request(
+            "GET", "/api/session", {"Cookie": cookie},
+        )
+        self.assertEqual(session_status, 200)
+        session = json.loads(session_body)
+        base = {"Cookie": cookie, "Content-Type": "application/json",
+                "Content-Length": str(len(body)), "Origin": self.record["url"].rstrip("/")}
+        refused, _headers, _payload = self.request(
+            "POST", "/api/configure/module/read", base, body,
+        )
+        self.assertEqual(refused, 403)
+        accepted = dict(base, **{"X-Studio-CSRF": session["csrf_token"]})
+        ok, _headers, payload = self.request(
+            "POST", "/api/configure/module/read", accepted, body,
+        )
+        self.assertEqual(ok, 200)
+        self.assertEqual(json.loads(payload)["status"], "unavailable")
+
+    def test_module_transport_admits_exact_source_limit_and_domain_refuses_over_limit(self):
+        _issued, status, bootstrap_headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        cookie = self.cookie(bootstrap_headers)
+        session_status, _headers, session_body = self.request(
+            "GET", "/api/session", {"Cookie": cookie},
+        )
+        self.assertEqual(session_status, 200)
+        csrf = json.loads(session_body)["csrf_token"]
+        headers = {"Cookie": cookie, "Content-Type": "application/json",
+                   "Origin": self.record["url"].rstrip("/"), "X-Studio-CSRF": csrf}
+        for size, expected in (
+            (module_editing.MAX_SOURCE_BYTES, "not-found"),
+            (module_editing.MAX_SOURCE_BYTES + 1, "module-too-large"),
+        ):
+            body = json.dumps({
+                "draft": "missing", "module": "root-1:rules:sample", "content": "\0" * size,
+            }).encode("utf-8")
+            self.assertGreater(len(body), auth.MAX_JSON_BYTES)
+            request_headers = dict(headers, **{"Content-Length": str(len(body))})
+            received, _response_headers, payload = self.request(
+                "POST", "/api/configure/module/preview", request_headers, body,
+            )
+            self.assertEqual(received, 200)
+            self.assertEqual(json.loads(payload)["error_code"], expected)
+
+    def test_module_read_and_preview_responses_never_expose_internal_paths(self):
+        config_path = self.home / ".config" / "agent-harness" / "config.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config = json.loads((REPO / "config.example.json").read_text(encoding="utf-8"))
+        config["primitive_roots"] = [str(REPO / "developer-primitives")]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        name = "security-module-route-" + uuid.uuid4().hex[:8]
+        created = subprocess.run(
+            [sys.executable, str(CLI), "draft", "create", name, "--json"],
+            env=self.env, capture_output=True, text=True, timeout=30, check=True,
+        )
+        initial = json.loads(created.stdout)
+        drafts.checkpoint(
+            REPO, name, initial["revision"], "route-module",
+            files={"developer-primitives/rules/route-module.md": b"# Route module\n"},
+            check_command=[sys.executable, "-c", "raise SystemExit(0)"],
+        )
+        self.addCleanup(lambda: subprocess.run(
+            [sys.executable, str(CLI), "draft", "discard", name, "--json"],
+            env=self.env, capture_output=True, text=True, timeout=15,
+        ))
+        _issued, status, bootstrap_headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        cookie = self.cookie(bootstrap_headers)
+        session_status, _headers, session_body = self.request(
+            "GET", "/api/session", {"Cookie": cookie},
+        )
+        self.assertEqual(session_status, 200)
+        headers = {
+            "Cookie": cookie, "Content-Type": "application/json",
+            "Origin": self.record["url"].rstrip("/"),
+            "X-Studio-CSRF": json.loads(session_body)["csrf_token"],
+        }
+        responses = []
+        for route, request in (
+            ("read", {"draft": name, "module": "root-1:rules:route-module"}),
+            ("preview", {"draft": name, "module": "root-1:rules:route-module",
+                         "content": "# Route module\n\nCandidate.\n"}),
+        ):
+            body = json.dumps(request).encode()
+            code, _response_headers, payload = self.request(
+                "POST", "/api/configure/module/" + route,
+                dict(headers, **{"Content-Length": str(len(body))}), body,
+            )
+            self.assertEqual(code, 200)
+            responses.append(payload.decode())
+        joined = "\n".join(responses)
+        worktree, _state = drafts.find(REPO, name)
+        self.assertNotIn(str(worktree), joined)
+        self.assertNotIn("developer-primitives/rules/route-module.md", joined)
+        self.assertNotIn("studio-module-preview-", joined)
+        self.assertNotIn('"_relative"', joined)
 
     def test_control_routes_require_their_distinct_bearer_credential(self):
         refused_bearer = "Bearer " + "not-the-control-" + "credential"

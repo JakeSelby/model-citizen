@@ -23,8 +23,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (activity, auth, free_suites, live_updates, module_library, native_acceptance, replay,
-               runs, selection, selection_editing, settings, targets)
+from . import (activity, auth, free_suites, live_updates, module_editing, module_library,
+               native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -71,6 +71,7 @@ def _startup_trace(stage: str) -> None:
 
 
 MAX_STATIC_ASSET_BYTES = 8 * 1024 * 1024
+MAX_MODULE_JSON_BYTES = module_editing.MAX_SOURCE_BYTES * 6 + 16 * 1024
 STYLE_NONCE_MARKER = b"__STUDIO_STYLE_NONCE__"
 
 
@@ -348,7 +349,11 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get_content_type() != route.request_media_type:
                 self._error(415, "unsupported_media_type")
                 return
-            length = _content_length(self, auth.MAX_JSON_BYTES)
+            maximum = (MAX_MODULE_JSON_BYTES
+                       if route.path in ("/api/configure/module/preview",
+                                         "/api/configure/module/save")
+                       else auth.MAX_JSON_BYTES)
+            length = _content_length(self, maximum)
             if length is None:
                 self._error(413, "request_refused")
                 return
@@ -1182,6 +1187,56 @@ def _draft_selection_save(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _draft_module_read(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "module"))
+    if request is None:
+        return
+    if any(not isinstance(value, str) for value in (request["draft"], request["module"])) \
+            or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: module_editing.read(
+        handler.server.repo_root, request["draft"], request["module"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_module_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "module", "content"))
+    if request is None:
+        return
+    if any(not isinstance(request[name], str) or not request[name]
+           for name in ("draft", "module")) or not isinstance(request["content"], str):
+        handler._error(400, "invalid_request")
+        return
+    payload = module_editing.preview(
+        handler.server.repo_root, request["draft"], request["module"], request["content"],
+    )
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_module_save(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, (
+        "draft", "module", "base_revision", "source_digest", "idempotency_key", "content",
+    ))
+    if request is None:
+        return
+    if any(not isinstance(request[name], str) or not request[name]
+           for name in ("draft", "module", "base_revision", "source_digest", "idempotency_key")) \
+            or not isinstance(request["content"], str):
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: module_editing.save(
+        handler.server.repo_root, request["draft"], request["module"],
+        request["base_revision"], request["source_digest"], request["idempotency_key"],
+        request["content"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1251,6 +1306,26 @@ DRAFT_SELECTION_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"),
                                                             ("applied", "array")))
 DRAFT_SELECTION_SAVE = ResponseSchema("json-object", DRAFT_SELECTION_PREVIEW.fields +
                                        (("saved", "boolean"), ("result", "object-or-null")))
+MODULE_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
+                                              ("draft", "object"), ("modules", "array"),
+                                              ("module", "object-or-null"), ("content", "string"),
+                                              ("source_digest", "string"),
+                                              ("nothing_applied", "boolean"),
+                                              ("error_code", "string")))
+MODULE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error", "string"),
+                                                 ("error_code", "string"),
+                                                 ("base_revision", "string"),
+                                                 ("source_digest", "string"),
+                                                 ("content_digest", "string"),
+                                                 ("unchanged", "boolean"),
+                                                 ("module", "object-or-null"),
+                                                 ("diagnostics", "array"),
+                                                 ("budgets", "array"),
+                                                 ("projections", "array"),
+                                                 ("nothing_applied", "boolean")))
+MODULE_SAVE = ResponseSchema("json-object", MODULE_PREVIEW.fields +
+                              (("saved", "boolean"), ("result", "object-or-null"),
+                               ("saved_lint", "array")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1376,6 +1451,12 @@ ROUTES = RouteRegistry((
           _draft_selection_preview, None, "application/json", selection_editing.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/selection/save", "application/json", DRAFT_SELECTION_SAVE,
           _draft_selection_save, None, "application/json", selection_editing.CLI_COMMANDS["save"]),
+    Route("POST", "/api/configure/module/read", "application/json", MODULE_READ,
+          _draft_module_read, None, "application/json", module_editing.CLI_COMMANDS["read"]),
+    Route("POST", "/api/configure/module/preview", "application/json", MODULE_PREVIEW,
+          _draft_module_preview, None, "application/json", module_editing.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/module/save", "application/json", MODULE_SAVE,
+          _draft_module_save, None, "application/json", module_editing.CLI_COMMANDS["save"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

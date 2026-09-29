@@ -6,6 +6,9 @@ import importlib.machinery
 import importlib.util
 import os
 import shlex
+import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -19,6 +22,7 @@ CLI_COMMANDS = {
 }
 RUNTIMES = (("claude-code", "Claude Code"), ("codex", "Codex"))
 _HARNESS_MODULES: Dict[str, Any] = {}
+_EPHEMERAL_IMPORT_LOCK = threading.RLock()
 
 
 class SelectionError(ValueError):
@@ -37,6 +41,54 @@ def _harness_module(root: Path):
         spec.loader.exec_module(module)
         _HARNESS_MODULES[key] = module
     return _HARNESS_MODULES[key]
+
+
+def discard_ephemeral_modules(root: Path) -> None:
+    """Forget modules loaded for a disposable preview checkout."""
+    resolved = Path(root).resolve()
+    for cache in (_HARNESS_MODULES, catalog._POSTURE_MODULES):
+        for key in list(cache):
+            try:
+                matches = Path(key).resolve() == resolved
+            except OSError:
+                matches = key == str(root)
+            if matches:
+                cache.pop(key, None)
+
+
+@contextmanager
+def ephemeral_harness_module(root: Path):
+    """Load one disposable checkout without retaining its imports or search paths."""
+    root = Path(root).resolve()
+    with _EPHEMERAL_IMPORT_LOCK:
+        prior_path = list(sys.path)
+        resident = {name: module for name, module in sys.modules.items()
+                    if name == "harness_core" or name.startswith("harness_core.")}
+        for name in resident:
+            sys.modules.pop(name, None)
+        prior_modules = set(sys.modules)
+        sys.path.insert(0, str(root / "lib"))
+        try:
+            yield _harness_module(root)
+        finally:
+            discard_ephemeral_modules(root)
+            for name, module in list(sys.modules.items()):
+                source = getattr(module, "__file__", None)
+                if name in prior_modules or name in resident or not source:
+                    continue
+                try:
+                    Path(source).resolve().relative_to(root)
+                except (OSError, ValueError):
+                    continue
+                sys.modules.pop(name, None)
+            sys.modules.update(resident)
+            sys.path[:] = prior_path
+            for path in list(sys.path_importer_cache):
+                try:
+                    Path(path).resolve().relative_to(root)
+                except (OSError, ValueError):
+                    continue
+                sys.path_importer_cache.pop(path, None)
 
 
 def _path(value: object) -> str:

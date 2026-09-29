@@ -29,6 +29,13 @@ BROWSER_SUITES = {
         "test_failed_save_keeps_loaded_identity_and_allows_explicit_retry",
         "test_redacted_malformed_reference_has_a_working_clear_action",
     ),
+    "test_studio_module_editor_browser.py": (
+        "test_secret_line_refuses_keyboard_save_and_reflows_at_320px",
+        "test_lost_save_retries_canonically_and_creates_one_checkpoint",
+        "test_source_conflict_preserves_the_buffer_and_writes_nothing",
+        "test_late_preview_and_save_responses_cannot_update_a_switched_module",
+        "test_late_preview_cannot_update_a_switched_draft",
+    ),
 }
 
 

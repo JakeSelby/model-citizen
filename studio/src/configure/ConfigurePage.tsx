@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
 import { CommandChip } from "../components/StudioKit";
 import { DraftSelectionEditor } from "./DraftSelectionEditor";
+import { ModuleEditor } from "./ModuleEditor";
 import { SelectionPanel } from "../selection/SelectionPanel";
 import {
   AUTOSAVE_DELAY_MS, errorMap, fieldEnabled, hydrateValues, parseJsonObject,
@@ -295,6 +296,10 @@ export function ConfigurePage() {
 
       {loadedDraft && baseRevision && (
         <DraftSelectionEditor draft={loadedDraft} revision={baseRevision} onRevision={setBaseRevision} />
+      )}
+
+      {loadedDraft && baseRevision && (
+        <ModuleEditor draft={loadedDraft} revision={baseRevision} onRevision={setBaseRevision} />
       )}
 
       <GovernedSyncReview />
