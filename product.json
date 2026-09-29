@@ -165,7 +165,7 @@
         },
         {
           "name": "Hit rate per rule",
-          "line": "citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.",
+          "line": "citizen usage --rules lists each loaded rule as measured, dark or unmeasured and how often it fired, by repo or stance; --by profile splits spend by profile.",
           "doc": "docs/usage.md"
         },
         {
