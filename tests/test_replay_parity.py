@@ -123,7 +123,9 @@ class WebAccessTests(unittest.TestCase):
         self.assertEqual(networks, [opts["network"]] * 2)
 
     def test_the_deny_is_the_same_whatever_the_arm(self):
-        self.assertEqual(BENCH.ARM_SETTINGS, {"permissions": {"deny": list(BENCH.NO_WEB)}})
+        self.assertEqual(BENCH.ARM_SETTINGS["permissions"], {"deny": list(BENCH.NO_WEB)})
+        self.assertEqual(sorted(BENCH.ARM_SETTINGS["hooks"]),
+                         sorted(BENCH.observation.events("claude-code")))
         self.assertEqual(BENCH.arm_command("claude", "m", "p")[-1], json.dumps(BENCH.ARM_SETTINGS))
 
 

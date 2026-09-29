@@ -9,16 +9,16 @@
 # agent client, and the manifest's `cli_packages` shows what is left. Git trusts /work, where the
 # runner mounts a snapshot made by whichever user runs it; the file this writes is in the manifest.
 #
-#   bare     the base image plus Claude Code, and nothing else
+#   bare     the base image, Claude Code and the shared observation-only recorder
 #   harness  the bare stage plus this repository at one commit, synced for the agent user
 #
-# The build context is a directory the runner makes for one build: empty for the bare arm, and a
-# `harness/` clone of the one commit for the harness arm. Nothing comes from the checkout the
-# runner is started in, and nothing from the host's home directory.
+# The build context carries the declared observer in both arms and a `harness/` clone of the one
+# commit only for the harness arm. Nothing comes from the host's home directory.
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS bare
 ARG CLAUDE_CODE_VERSION
 USER agent
+COPY --chown=agent:agent observer /opt/model-citizen-observer
 RUN test -n "${CLAUDE_CODE_VERSION}" \
     && npm uninstall -g @openai/codex \
     && npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \

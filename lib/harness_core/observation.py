@@ -7,6 +7,7 @@ entry points cannot disagree on events. Nothing here routes through the dispatch
 import json
 import shlex
 import shutil
+from copy import deepcopy
 from pathlib import Path
 
 from harness_core import lifecycle, observer
@@ -16,6 +17,23 @@ TIMEOUT = 5
 # The runtime file each bare install writes its registration into.
 SETTINGS_FILE = {"claude-code": "settings.json", "codex": "hooks.json"}
 ENTRY = "observe.py"
+
+
+def enabled(config):
+    """Observation is an explicit boolean opt-in, never a truthy string."""
+    block = config.get("observation", {})
+    if not isinstance(block, dict) or type(block.get("enabled", False)) is not bool:
+        raise ValueError("observation.enabled must be true or false")
+    return block.get("enabled", False)
+
+
+def with_observation(base, root, runtime, config):
+    """Add the separate recorder only for an opted-in install."""
+    result = deepcopy(base)
+    if enabled(config):
+        for event, entries in registration(root, runtime)["hooks"].items():
+            result.setdefault("hooks", {}).setdefault(event, []).extend(entries)
+    return result
 
 
 def events(runtime):

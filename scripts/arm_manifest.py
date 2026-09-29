@@ -11,6 +11,7 @@ compared entry by entry:
 - `home`: the agent user's whole home directory, less `EXCLUDED`: caches whose contents are
   download and log records, not configuration.
 - `managed`: Claude Code's system-wide managed settings directory, when the image has one.
+- `observer`: the shared observation-only recorder installed identically in both arms.
 - `harness`: the harness checkout the harness arm was synced from, less its `.git` directory,
   whose pack layout differs between two clones of one commit. The commit itself is recorded.
 - `cli_packages`: every global npm package by name and version, which is where agent clients live.
@@ -29,7 +30,8 @@ import subprocess
 import sys
 
 HOME = os.environ.get("HOME") or "/home/agent"
-ROOTS = (("home", HOME), ("managed", "/etc/claude-code"), ("harness", "/opt/model-citizen"))
+ROOTS = (("home", HOME), ("managed", "/etc/claude-code"),
+         ("observer", "/opt/model-citizen-observer"), ("harness", "/opt/model-citizen"))
 # Relative to the home directory: npm's download cache and its per-command logs, and the tool
 # caches the base image leaves (corepack). Neither holds anything a session loads.
 EXCLUDED = {"home": (".npm", ".cache"), "harness": (".git",)}
