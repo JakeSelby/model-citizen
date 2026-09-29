@@ -21,6 +21,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from harness_core.studio import drafts, selection_editing, server  # noqa: E402
 
+import draft_support  # noqa: E402
+
 loader = importlib.machinery.SourceFileLoader(
     "harness_studio_selection_editing_test", str(ROOT / "bin" / "harness"),
 )
@@ -116,12 +118,7 @@ class SelectionEditingTests(unittest.TestCase):
                 self.assertEqual(reloaded["draft"]["revision"], later["result"]["revision"])
                 self.assertEqual(reloaded["config"]["rules"]["conciseness"], "off")
             finally:
-                discarded = subprocess.run(
-                    [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name,
-                     "--json"],
-                    cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
-                )
-                self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+                draft_support.discard_draft(self, name, environment)
 
     def test_dependency_refusal_is_the_cli_refusal_and_checkpoints_nothing(self):
         config = json.loads(json.dumps(self.config))
@@ -278,13 +275,7 @@ class SelectionEditingTests(unittest.TestCase):
                 self.assertIs(reloaded["config"]["core_switches_acknowledged"], True)
                 self.assertNotEqual(reloaded["draft"]["revision"], revision)
             finally:
-                discarded = subprocess.run(
-                    [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name,
-                     "--json"],
-                    cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
-                )
-                self.assertEqual(discarded.returncode, 0,
-                                 discarded.stderr or discarded.stdout)
+                draft_support.discard_draft(self, name, environment)
 
     def test_noop_change_returns_unchanged_without_checkpointing(self):
         changes = {"stances.voice": self.config["stances"]["voice"]}
