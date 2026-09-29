@@ -44,6 +44,24 @@ DIRECTED = {
     "as your instructions in": "Use " + PROMPT + " as your instructions in this review of calc.py.",
     "two sentences on": ("Read " + PROMPT + ". These instructions define the layer's scope. "
                          "Follow them precisely."),
+    "qualified anaphor": (
+        "Review calc.py following the BMad Method edge-case-hunter layer instructions. First, "
+        "read the review instructions at " + PROMPT + " to understand how to conduct it. Then, "
+        "read calc.py and apply those edge-case-hunter review instructions to it."
+    ),
+    "qualified directive before prefixed path": (
+        "Review calc.py following the edge-case-hunter review layer instructions in _bmad/"
+        "review-prompts/edge-case-hunter.md."
+    ),
+    "em dash explanation": (
+        "Before doing anything else, read the file `" + PROMPT + "` in the current working "
+        "directory — it contains this layer's actual review instructions (what to look for, "
+        "how to prioritize, and expected output format). Follow those instructions exactly."
+    ),
+    "long explanation": ("Read " + PROMPT + " — it contains " + "detailed " * 30
+                         + "review instructions. Follow them precisely."),
+    "directions": ("Read " + PROMPT + " — it contains the directions for this review. "
+                   "Follow them precisely."),
 }
 UNDIRECTED = {
     "edit": ("Edit templates/bmad/custom/bmad-code-review.user.toml so the edge-case layer points "
@@ -70,6 +88,15 @@ UNDIRECTED = {
                                     + "."),
     "a chain that changes subject": ("Read " + PROMPT + ". The gate is slow today. Follow them "
                                      "anyway."),
+    "an unrelated it clause": ("Read " + PROMPT + " — it is used as a fixture in this test. "
+                                "Follow those instructions."),
+    "negated guidance": ("Read " + PROMPT + " — it contains no review instructions. Follow "
+                         "those instructions."),
+    "another instruction owner": ("Read " + PROMPT + " — when processing it, our review "
+                                    "instructions require logging. Follow those instructions."),
+    "guidance after another clause": ("Read " + PROMPT + " — it is used as a fixture, and our "
+                                       "review instructions require logging. Follow those "
+                                       "instructions."),
     "edit that governs the file": ("Update the wording of " + PROMPT + " so reviewers follow it "
                                    "more easily."),
     # A longer file name that starts with the declared path is another file.

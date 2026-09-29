@@ -15,7 +15,7 @@
 #   HARNESS_INSTALL_NO_APPS       pass --no-apps to the dry run
 #   HARNESS_HOME                  the harness's own config/state home, for fixtures
 #
-# Anything after `sh -s --` is passed through to `harness install --dry-run`.
+# Anything after `sh -s --` is passed through to `bin/citizen install --dry-run`.
 set -eu
 
 REPO_URL="${HARNESS_REPO_URL:-https://github.com/JakeSelby/model-citizen.git}"
@@ -63,7 +63,7 @@ if [ -f "$CONFIG" ]; then
     echo "==> keeping the configuration already at $CONFIG"
 else
     echo "==> writing a default configuration"
-    python3 "$CHECKOUT/bin/harness" init --yes ||
+    "$CHECKOUT/bin/citizen" init --yes ||
         fail "init: could not write $CONFIG"
 fi
 
@@ -77,17 +77,17 @@ if [ -n "${HARNESS_INSTALL_NO_APPS:-}" ]; then
 fi
 echo "==> previewing the install (nothing is written)"
 # shellcheck disable=SC2086
-python3 "$CHECKOUT/bin/harness" install --dry-run $FLAGS "$@" ||
-    fail "preview: \`harness install --dry-run\` failed; nothing has been changed"
+"$CHECKOUT/bin/citizen" install --dry-run $FLAGS "$@" ||
+    fail "preview: \`$CHECKOUT/bin/citizen install --dry-run\` failed; nothing has been changed"
 
 cat <<EOF
 
-agent-harness is checked out at $CHECKOUT and configured. Nothing is installed yet.
+Model Citizen is checked out at $CHECKOUT and configured. Nothing is installed yet.
 
-  review   $CHECKOUT/bin/harness sync --dry-run
-  install  $CHECKOUT/bin/harness install
-  undo     $CHECKOUT/bin/harness uninstall
+  review   $CHECKOUT/bin/citizen sync --dry-run
+  install  $CHECKOUT/bin/citizen install
+  undo     $CHECKOUT/bin/citizen uninstall
 
-Set who you are and what you prefer with \`harness config set\`; the fields still at their
+Set who you are and what you prefer with \`$CHECKOUT/bin/citizen config set\`; the fields still at their
 example value are listed above.
 EOF

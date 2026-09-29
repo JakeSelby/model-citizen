@@ -20,6 +20,8 @@ companions:
   - ../../ux-designs/ux-agent-harness-2026-09-23/EXPERIENCE.md
 ---
 
+> Current delivery assignments: [Delivery annotations — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Architecture Spine: Model Citizen
 
 ## Design Paradigm
@@ -628,3 +630,9 @@ flowchart LR
 - **Capability-level qualification.** Qualification stays per target until it is decided before 1.0.
 - **A 3.9 syntax check on each pull request.** It stays a gap until CI adds the matrix. It is listed
   under the operational envelope.
+
+## Delivery annotations — 2026-09-28
+
+Composition and calibrated-judge delivery previously marked 0.16 is now 0.17; field/Codex/context work previously marked 0.17 is now 0.18; independent Studio work previously marked 0.18 is now 0.16, after Measured lands. AD IDs, shared authority, evidence labels and native-source ownership remain unchanged. This changes scheduling only: no new architectural invariant, result format or implementation is introduced. Pending Studio design decisions remain owned by #962 and are not imported from its feature branch by this roadmap change.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.

@@ -1,18 +1,75 @@
-# Evidence standard for published results
+# Evidence standard
+
+Model Citizen is a diagnostic tool: every claim it makes, about an agent or about itself, is only as
+good as the experiment behind it. So every benchmark, pilot, replay, A/B, ad hoc eval, or test of
+cost, efficacy or a change to the system follows the experiment protocol below, as a controlled
+experiment in fresh containerized installs. This applies to an ad hoc eval in a session as much as
+to a release.
 
 A published result is a claim about what the harness does, measured against Claude Code with no
-harness at all. This page lists the twelve things every published proof set carries, and for each
-one what satisfies it. A proof set that misses an item makes no claim on that item's ground. An item
+harness at all. After the protocol, this page lists the twelve things every published proof set
+carries, and for each one what satisfies it. A proof set that misses an item makes no claim on that item's ground. An item
 that genuinely does not apply is marked not applicable with its reason; a blank is a miss.
 
 The cost comparison is defined by SM-2 in the product requirements. Where SM-2 defines a term, this
 page quotes it rather than restating it, and the quotation governs. The replay that produces the rows
 is described in [cost benchmarks](benchmarks.md). Individual spikes follow the lighter record in
-[spikes](spikes/README.md); this standard is for results that are published as claims.
+[spikes](spikes/README.md) for what they write down, but a spike that measures cost, efficacy or a
+change to the system runs under the protocol or is labelled exploratory.
+
+## The experiment protocol
+
+An arm contains exactly its named components and nothing else: "Model Citizen only" against "Model
+Citizen plus Superpowers" means those two installs and no other layer, profile or host state.
+Containers are mandatory. Nothing runs from a host profile, a live checkout or a disposable home: a
+temporary `HOME` on the host is still the host.
+
+1. **Question and hypothesis first.** Before any run: the question, the hypothesis, the primary
+   metric, the decision rule and the sample size, pre-registered from the
+   [pre-registration template](pre-registration-template.md) and committed with a date. A run with
+   no pre-registration is exploratory and is never cited as evidence.
+2. **A controlled environment.** Each arm is a fresh container built from pinned inputs: base image
+   digest, CLI version, harness tag or commit, and every added component with its version. Nothing
+   comes from the host: no host `HOME`, profile, environment, hooks or settings, and network egress
+   only to the model API.
+3. **Exactly the named components.** Each arm declares its components; the build writes a manifest
+   of every installed file, plugin, hook, rule and setting, hashed, and the run refuses to start
+   unless the manifest equals the declaration.
+4. **One variable at a time.** Arms differ only in the declared treatment. Model, effort, CLI
+   version, prompts, task set and snapshots, tool permissions, budget caps, price table and run
+   window are held constant and recorded. A multi-factor design (two-by-two, factorial) declares
+   every factor.
+5. **Controls.** A bare arm with no harness, and a pinned baseline tag, in every comparison.
+6. **Randomization and counterbalancing.** Arm and task order come from a recorded seed, with trials
+   interleaved so time-of-day and API drift fall on both arms.
+7. **Replication and power.** Five or more trials per task and arm, or the pre-registered power
+   analysis if larger; intervals as SM-2 defines them; no claim from a single run.
+8. **Blind scoring.** Deterministic checks where possible; a judge sees no arm label, and a judged
+   metric needs its measured agreement (Cohen's kappa) against human labels before it counts.
+9. **Idempotent and reproducible.** Rebuilding an arm from its recorded inputs yields the same
+   manifest; every row records the digests, seeds, versions and command lines needed to replay it;
+   raw outputs are kept and results are append-only.
+10. **Intention to treat.** Every attempt counts, crashes and timeouts as failures with their cost;
+    no post-hoc exclusion; a departure from the pre-registration is reported as a deviation.
+11. **Report whatever it shows.** Results publish with their intervals and a "what we do not claim"
+    section; null and negative results are results.
+
+A check that cannot meet the protocol is labelled exploratory and is never cited as evidence, in a
+result, a release note, a pull request or a decision. The eval entry points enforce this.
+`scripts/cost_bench.py replay` refuses to start without `--pre-registration <path>`, a committed,
+dated plan with its required fields filled, unless it is given `--exploratory`, in which case every
+row it writes is labelled exploratory and it writes no history row. Each arm is a container image
+built from pinned inputs, and the replay refuses to launch one whose manifest differs from its
+declaration, which holds settings, hooks, rules, skills, agents, plugins or instruction files no
+declared component supplies, or which names your home directory, your profile or the checkout the
+run was started from in its recorded inputs, a mount or a variable. [Cost benchmarks](benchmarks.md)
+describes the arms, their manifests and `arms check`, which builds each arm twice and compares the
+manifests.
 
 ## How a proof set is checked
 
 - Every item below is present, or marked not applicable with a reason this page allows.
+- The run met every point of the protocol above, and the rows record how.
 - The pre-registration (item 1) was committed before the first trial, and the history shows it.
 - Every published figure can be re-derived from the proof set's own rows without calling a model.
 
@@ -87,8 +144,9 @@ the date and time the trial started, the container image digest, and every seed 
 such as task order and the bootstrap. Model sampling is not seedable, so the record says so rather than
 implying it is. The fallback rate is the share of trials that ran on a model other than the pinned one,
 read from each trial's own transcript; those trials stay in the rows and are counted, never dropped.
-A run without a container states that, and names the machine, the operating system and the sandbox
-settings instead.
+Every trial ran in a container, as protocol point 2 requires, and records the image digest, the
+harness tag or commit and the arm's manifest hash; a trial without one is exploratory and is not
+part of a proof set.
 
 ### 4. A dated price table
 
@@ -163,6 +221,12 @@ this item exists:
 > The 23 Sep eight-task runs were unscored and ran with unequal web access between the arms, so they
 > are not a result.
 
+**Open risk:** the harness arm's image holds this repository's checkout at the harness ref under
+test, and that ref can postdate a task's fix. For a task taken from this repository's own history,
+the reference solution may then be readable inside the harness arm, so a run on such tasks does not
+satisfy this item until the checkout the arm holds is shown to exclude every task's fix, or the
+proof set names the exposure per task.
+
 ### 10. Estimand labels
 
 **What it is:** each figure says which effect it estimates.
@@ -182,6 +246,8 @@ this item exists:
 ### 11. Field checks
 
 **What it is:** checks that matter once a comparison runs on real sessions rather than a replay.
+Real sessions run on a host rather than in the protocol's containers, so such a comparison is
+exploratory and supports no claim; these checks still describe it.
 
 **Satisfied by:**
 

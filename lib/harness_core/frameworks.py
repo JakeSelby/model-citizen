@@ -275,15 +275,16 @@ DIRECTIVE = re.compile(
     r"|abid(?:e|ing) by|carry(?:ing)? out|according to|as (?:instructed|directed|specified|"
     r"described|set out|laid out) (?:in|by)|per (?:the|those|these|its|that|this|their)\b"
     r"|your (?:\w+ ){0,2}(?:instructions|methodology|guidelines|checklist|rubric|procedure))\b")
-LEAD_GAP = 6
+LEAD_GAP = 8
 CLAUSE_BREAK = re.compile(r"[,:()]|\b(?:and|then|but|or|while|after|before)\b")
 # The directive after the file, later in its sentence or in the next one, which counts only when
 # it points back at the file: "read <path> and follow it", not "read <path> and use it as a
 # fixture".
 DIRECTIVE_BACK = re.compile(
     r"\b(?:(?:follow(?:ing)?|apply(?:ing)?|obey(?:ing)?) (?:it|them|that file|this file"
-    r"|those instructions|these instructions|its instructions|the instructions)"
-    r"|use (?:those|these|its|the) instructions|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
+    r"|(?:those|these|its|the) (?:[\w-]+ ){0,3}instructions)"
+    r"|use (?:those|these|its|the) (?:[\w-]+ ){0,3}instructions"
+    r"|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
 # Work on the file rather than work under it, when the verb governs the file the way a directive
 # does: "update <path>", or "update it" after it. "Update your findings" edits something else.
 # Negated ("do not edit it") is still a directive.
@@ -315,7 +316,17 @@ def _governs(pattern, before):
 # A directive in a later sentence still points back at the file while each sentence between keeps
 # talking about it: "Read <path>. These instructions define the layer. Follow them precisely."
 FOLLOW_REACH = 3
-ANAPHOR = re.compile(r"\b(?:(?:these|those|its|the) instructions|(?:that|this|the) file)\b")
+ANAPHOR = re.compile(
+    r"\b(?:(?:these|those|its|the) (?:[\w-]+ ){0,3}instructions|(?:that|this|the) file)\b")
+# An explanatory clause can start with a bare pronoun after an em dash: "read <path> — it
+# contains the review instructions". `it` alone is too weak to carry the file forward, so require
+# the pronoun to govern instruction-like guidance in the same clause.
+PRONOUN_FILE = re.compile(
+    r"\bit\s+(?:contains?|holds?|carries?|defines?|provides?|has|is|serves? as)\b")
+GUIDANCE = re.compile(
+    r"\b(?:instructions|methodology|guidelines|checklist|rubric|procedure|directions|rules|criteria"
+    r"|requirements|prompt)\b")
+GUIDANCE_NEGATION = re.compile(r"\b(?:no|not|never|without)\b")
 # A trailing "the instructions" followed by where they live names its own file, not this one.
 OWN_TARGET = re.compile(r"\s+(?:in|at|from|of|under|inside)\b")
 # The declared path ends where a longer file name would go on: `<path>.bak` is another file.
@@ -325,6 +336,16 @@ PATH_END = r"(?![\w/-]|\.\w)"
 def _points_back(after):
     """Whether `after` holds an unnegated directive aimed back at the file before it."""
     return any(not _names_its_own(found, after) for found in _unnegated(DIRECTIVE_BACK, after))
+
+
+def _pronoun_guidance(text):
+    """Whether a bare `it` still describes the named file as guidance in this clause."""
+    for subject in PRONOUN_FILE.finditer(text):
+        for guidance in GUIDANCE.finditer(text, subject.end()):
+            gap = text[subject.end():guidance.start()]
+            if not CLAUSE_BREAK.search(gap) and not GUIDANCE_NEGATION.search(gap):
+                return True
+    return False
 
 
 def _names_its_own(found, after):
@@ -350,7 +371,7 @@ def _directed(value, text):
         for following in sentences[index + 1:index + 1 + FOLLOW_REACH]:
             if _points_back(following) and not _unnegated(EDIT_BACK, following):
                 return True
-            if not ANAPHOR.search(following):
+            if not (ANAPHOR.search(following) or _pronoun_guidance(following)):
                 break
     return False
 

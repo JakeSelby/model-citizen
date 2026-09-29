@@ -23,6 +23,13 @@ The issue carries the summary, discussion and acceptance evidence; this file car
 This work item was authored as part of the repository's committed BMad planning system.
 <!-- bmad-sync:end -->
 
+## Delivery amendment — 2026-09-28 (#1061)
+
+Current delivery: **v0.17.0**. Earlier milestone references below are historical and superseded by [the roadmap amendment](../planning-artifacts/roadmap-2026-09-28.md). Capability status is unchanged.
+
+Scheduled first in v0.17.0 Composable, before #800/#558/#1018. At implementation, replace the historical disposable-host-profile experiment with the current containerized evidence protocol and licensing checks. This planning update runs no experiment.
+
+
 ## Question
 
 Does a headless superpowers session finish a pinned task beside the harness, or does it stall at its
