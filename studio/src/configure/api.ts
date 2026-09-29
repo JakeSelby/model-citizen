@@ -1,4 +1,5 @@
 import type { ConfigureSchema, ValidationError } from "./model";
+import type { ModuleProjection as LibraryProjection, ProjectedModuleText } from "../library/model";
 
 export type DraftRead = {
   status: "ready" | "error" | "unavailable";
@@ -62,6 +63,59 @@ export type DraftSelectionPreview = {
 export type DraftSelectionSave = DraftSelectionPreview & {
   saved: boolean;
   result: { revision?: string; replayed?: boolean } | null;
+};
+
+export type EditableModule = {
+  key: string;
+  name: string;
+  kind: "rules" | "skills" | "stances";
+  root: { id: string; label: string };
+  projections: LibraryProjection[];
+  context_cost: { tokens: number; estimate: string; method: string };
+};
+
+export type ModuleDiagnostic = { message: string; line: number | null; severity: "error" };
+export type ModuleBudget = {
+  runtime: string;
+  label: string;
+  lines: number;
+  line_delta: number;
+  line_cap: number;
+  tokens: number;
+  token_delta: number;
+  token_cap: number;
+  over_cap: boolean;
+};
+export type ModuleProjection = ProjectedModuleText;
+export type ModuleRead = {
+  status: "ready" | "unavailable";
+  message: string;
+  error_code: string;
+  draft: { name?: string; revision?: string };
+  modules: EditableModule[];
+  module: EditableModule | null;
+  content: string;
+  source_digest: string;
+  nothing_applied: boolean;
+};
+export type ModulePreview = {
+  valid: boolean;
+  error: string;
+  error_code: string;
+  base_revision: string;
+  source_digest: string;
+  content_digest: string;
+  unchanged: boolean;
+  module: EditableModule | null;
+  diagnostics: ModuleDiagnostic[];
+  budgets: ModuleBudget[];
+  projections: ModuleProjection[];
+  nothing_applied: boolean;
+};
+export type ModuleSave = ModulePreview & {
+  saved: boolean;
+  result: { revision?: string; replayed?: boolean } | null;
+  saved_lint: ModuleDiagnostic[];
 };
 
 async function json<T>(response: Response): Promise<T> {
@@ -134,5 +188,29 @@ export async function saveDraftSelection(
     base_revision: baseRevision,
     idempotency_key: idempotencyKey,
     changes,
+  });
+}
+
+export async function loadDraftModule(draft: string, module = ""): Promise<ModuleRead> {
+  return post<ModuleRead>("/api/configure/module/read", { draft, module });
+}
+
+export async function previewDraftModule(
+  draft: string, module: string, content: string,
+): Promise<ModulePreview> {
+  return post<ModulePreview>("/api/configure/module/preview", { draft, module, content });
+}
+
+export async function saveDraftModule(
+  draft: string,
+  module: string,
+  baseRevision: string,
+  sourceDigest: string,
+  idempotencyKey: string,
+  content: string,
+): Promise<ModuleSave> {
+  return post<ModuleSave>("/api/configure/module/save", {
+    draft, module, base_revision: baseRevision, source_digest: sourceDigest,
+    idempotency_key: idempotencyKey, content,
   });
 }

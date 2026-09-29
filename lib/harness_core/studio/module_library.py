@@ -6,7 +6,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from harness_core import catalog
 
@@ -16,19 +16,25 @@ CHARS_PER_TOKEN = 4.0
 KINDS = dict(catalog.KINDS, modes={"directory": "modes", "pattern": "*.json", "value": None})
 
 
-def _config_and_selection(root: Path):
+def _config_and_selection(root: Path, supplied: Optional[Mapping[str, Any]] = None):
     posture = catalog.posture_module(root)
     if posture is None:
         return {}, {"sources": {}}
-    config = posture._user_config(os.environ, False)
-    return config, posture.selection(os.environ, strict=False, config=config, root=root)
+    config = dict(supplied) if supplied is not None else posture._user_config(os.environ, False)
+    return config, posture.selection({} if supplied is not None else os.environ,
+                                     strict=False, config=config, root=root)
 
 
 def _roots(root: Path, config: Dict[str, Any]) -> List[Dict[str, Any]]:
-    result = [{"id": "core", "label": "Core", "path": root / "primitives", "core": True}]
+    core = (root / "primitives").resolve()
+    result = [{"id": "core", "label": "Core", "path": core, "core": True}]
+    seen = {core}
     for index, value in enumerate(config.get("primitive_roots", [])):
         if isinstance(value, str) and Path(value).expanduser().is_absolute():
-            path = Path(value).expanduser()
+            path = Path(value).expanduser().resolve()
+            if path in seen:
+                continue
+            seen.add(path)
             result.append({"id": "root-%d" % (index + 1), "label": path.name or str(path),
                            "path": path, "core": False})
     return result
@@ -137,11 +143,12 @@ def _state(kind: str, name: str, selection: Dict[str, Any]) -> Dict[str, Any]:
     return {"value": "on", "layer": "not switchable", "switchable": False}
 
 
-def inventory(root: Path) -> Dict[str, Any]:
+def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
+              metadata_only: bool = False) -> Dict[str, Any]:
     root = Path(root)
     started = time.perf_counter()
-    config, selection = _config_and_selection(root)
-    roots = _roots(root, config)
+    resolved_config, selection = _config_and_selection(root, config)
+    roots = _roots(root, resolved_config)
     modules: List[Dict[str, Any]] = []
     for root_entry in roots:
         for kind, definition in KINDS.items():
@@ -156,10 +163,13 @@ def inventory(root: Path) -> Dict[str, Any]:
                     "state": _state(kind, name, selection),
                     "collision": False,
                     "manifest": _manifest(root_entry["path"], kind, manifest_name),
-                    "source": {"path": str(path), "text": _rendered(root, "source", path, name)},
-                    "rendered": {"text": _rendered(root, kind, path, name)},
+                    "source": {"path": str(path),
+                               "text": "" if metadata_only else _rendered(root, "source", path, name)},
+                    "rendered": {"text": "" if metadata_only else _rendered(root, kind, path, name)},
                     "projections": _projection_paths(kind, name, root_entry["core"]),
-                    "context_cost": _cost(kind, path, name),
+                    "context_cost": ({"tokens": 0, "estimate": "not measured",
+                                      "method": "source is validated before measurement"}
+                                     if metadata_only else _cost(kind, path, name)),
                 })
     # Hooks live in the kernel rather than under primitives.
     manifests = root / "policy" / "hooks" / "manifests.json"

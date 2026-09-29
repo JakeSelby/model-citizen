@@ -1,4 +1,6 @@
 export type ModuleProjection = { runtime: string; path: string };
+export type ModuleSourceText = { text: string };
+export type ProjectedModuleText = ModuleProjection & ModuleSourceText & { truncated: boolean };
 
 export type LibraryModule = {
   key: string;
