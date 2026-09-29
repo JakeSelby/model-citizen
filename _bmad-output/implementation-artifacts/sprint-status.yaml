@@ -475,6 +475,9 @@ development_status:
   ah-b122-package-a-minimal-claude-directory-bundle-for-v0: ready-for-dev
   ah-b134-studio-tests-leave-draft-branches-in-the-shared: backlog
   ah-b136-studio-draft-lookup-fails-when-another-session: backlog
+  ah-b137-studio-run-catalog-discovery-blocks-run-history: backlog
+  ah-b138-concurrent-first-studio-lock-opens-fail-with: backlog
+  ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done

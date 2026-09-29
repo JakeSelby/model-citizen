@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from collections import OrderedDict
@@ -208,6 +209,42 @@ class FreeSuiteTests(unittest.TestCase):
         studio_security.server._prune_run_progress(
             studio, 500.0 + studio_security.server.RUN_PROGRESS_TERMINAL_TTL_SECONDS)
         self.assertNotIn("terminal", studio.run_progress)
+
+    def test_slow_catalog_does_not_block_run_history(self):
+        executor = studio_security.server.MutationExecutor()
+        self.addCleanup(executor.close)
+        discovering = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def catalog(_repository):
+            discovering.set()
+            release.wait(timeout=10)
+            return {"suites": []}
+
+        supervisor = mock.Mock(catalog=catalog, history_page=lambda **_: {"items": []})
+        studio = mock.Mock(mutations=executor, run_supervisor=supervisor, repo_root=REPO)
+        route = mock.Mock()
+        catalog_handler = mock.Mock(server=studio)
+        history_handler = mock.Mock(server=studio, request_json={
+            name: None for name in ("limit", "cursor", "suite_id", "target", "status",
+                                    "created_from", "created_to", "min_cost_usd",
+                                    "max_cost_usd", "min_duration_ms", "max_duration_ms")})
+        loading = threading.Thread(
+            target=studio_security.server._runs_catalog, args=(catalog_handler, route))
+        loading.start()
+        self.assertTrue(discovering.wait(timeout=5))
+
+        answered = threading.Thread(
+            target=studio_security.server._run_history, args=(history_handler, route))
+        answered.start()
+        answered.join(timeout=5)
+        self.assertFalse(answered.is_alive(), "run history waited behind catalog discovery")
+        history_handler._json.assert_called_once_with(200, {"items": []})
+
+        release.set()
+        loading.join(timeout=5)
+        catalog_handler._json.assert_called_once_with(200, {"suites": []})
 
     def test_cli_catalog_is_the_same_core_payload(self):
         output = io.StringIO()

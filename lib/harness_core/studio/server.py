@@ -524,9 +524,10 @@ def _activity(handler: Handler, route: Route) -> None:
 
 
 def _runs_catalog(handler: Handler, route: Route) -> None:
+    # A read that spawns unit-test discovery, which takes seconds on a large suite; on the
+    # serial mutation executor it would stall every run request queued behind it.
     try:
-        payload = handler.server.mutations.call(
-            lambda: handler.server.run_supervisor.catalog(handler.server.repo_root))
+        payload = handler.server.run_supervisor.catalog(handler.server.repo_root)
     except runs.RunError:
         handler._error(503, "run_catalog_unavailable")
         return
