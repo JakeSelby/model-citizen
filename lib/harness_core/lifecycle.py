@@ -99,6 +99,17 @@ def normalize(payload):
 
 # The hooks selection for the dispatch in progress, so one event resolves the ladder once.
 _SWITCHES = []
+_SELECTIONS = []
+
+
+def effective_selection():
+    """The non-strict selection for this event, or defaults when no layer can be resolved."""
+    if _SELECTIONS:
+        return _SELECTIONS[-1]
+    try:
+        return load("posture").selection(strict=False)
+    except Exception:
+        return {}
 
 
 def switches():
@@ -110,10 +121,17 @@ def switches():
     """
     if _SWITCHES:
         return _SWITCHES[-1]
-    try:
-        return load("posture").selection(strict=False).get("hooks") or {}
-    except Exception:
-        return {}
+    return effective_selection().get("hooks") or {}
+
+
+def switched_off_role(name):
+    """The effective layer that switches named harness role `name` off, or None."""
+    if not isinstance(name, str) or not ROLE_NAME.fullmatch(name):
+        return None
+    selection = effective_selection()
+    if (selection.get("roles") or {}).get(name) != "off":
+        return None
+    return ((selection.get("sources") or {}).get("roles") or {}).get(name) or "selection"
 
 
 def enabled(name):
@@ -737,11 +755,13 @@ def store_write_deny(paths):
 def dispatch(runtime, payload):
     if runtime not in ("claude-code", "codex"):
         raise ValueError("unknown runtime")
+    _SELECTIONS.append(effective_selection())
     _SWITCHES.append(switches())
     try:
         return _dispatch(runtime, payload)
     finally:
         _SWITCHES.pop()
+        _SELECTIONS.pop()
 
 
 def _dispatch(runtime, payload):
@@ -839,6 +859,12 @@ def _dispatch(runtime, payload):
             role_name, prompt = inputs.get("subagent_type"), inputs.get("prompt")
             session = event.get("session_id")
             fields = constrained_role(role_name)
+            role_source = switched_off_role(role_name) if delegation != "off" else None
+            if role_source is not None:
+                results.append({"hookSpecificOutput": {"permissionDecision": "deny",
+                    "permissionDecisionReason": "The %s role is switched off by the %s selection; "
+                    "switch it on there or choose an enabled role." % (role_name, role_source)}})
+                return encode_pre(runtime, payload, event, results)
             if fields is not None:
                 results.append(confinement_deny(runtime, session, role_name, fields, prompt,
                                                 "subagent_type"))
