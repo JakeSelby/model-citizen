@@ -33,6 +33,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import time
 from pathlib import Path
 
@@ -42,6 +43,8 @@ PREFIX = "HARNESS_STANCE_"
 # will never spawn again, and its record is three fields nobody reads.
 SESSION_TTL_DAYS = 14
 SESSION_ID_MAX = 128
+# Retakes of a session lock whose file a prune removed between the open and the lock.
+SESSION_LOCK_ATTEMPTS = 8
 # How stale a record may get before a spawn that read it moves its mtime out of the sweep's way.
 SESSION_REFRESH_SECONDS = 86400
 DELEGATION_READS_KEY = "delegation_read_files"
@@ -246,20 +249,41 @@ def read_session_record(session_id, env=None):
     return record if isinstance(record, dict) else None
 
 
+def _same_file(descriptor, path):
+    """Whether an open lock descriptor is still the file at `path`, not one a prune unlinked."""
+    try:
+        held, current = os.fstat(descriptor), os.stat(str(path))
+    except OSError:
+        return False
+    return (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+
+
 @contextlib.contextmanager
 def _session_lock(session_id, env=None):
-    """Hold this session's kernel-released state lock, or yield no path on failure."""
+    """Hold this session's kernel-released state lock, or yield no path on failure.
+
+    A prune may unlink an idle lock file, so a lock taken on a descriptor whose file has since
+    left the path is released and taken again on the file now there; otherwise two hooks could
+    each hold a lock on a different inode of the same name.
+    """
     path = session_record_path(session_id, env)
     descriptor = None
     if path is None:
         yield None
         return
+    lock = path.with_name(path.name + ".lock")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(str(path.parent), 0o700)
-        descriptor = os.open(str(path.with_name(path.name + ".lock")),
-                             os.O_RDWR | os.O_CREAT, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        for _ in range(SESSION_LOCK_ATTEMPTS):
+            descriptor = os.open(str(lock), os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            if _same_file(descriptor, lock):
+                break
+            os.close(descriptor)
+            descriptor = None
+        if descriptor is None:
+            raise OSError("session lock kept moving")
     except OSError:
         yield None
         if descriptor is not None:
@@ -427,15 +451,59 @@ def delegation_read(session_id, paths, threshold, env=None):
     return result[0] if written and result else (False, 0)
 
 
+def _prune_locked(record, lock, cutoff):
+    """Remove a stale record and its lock file, only while holding that lock without waiting.
+
+    A lock another hook holds is skipped, and the record's age is judged again under the lock,
+    so a session written to since the sweep listed it keeps both files. The lock file goes last,
+    while still held; `_session_lock` retakes a lock whose file left the path.
+    """
+    try:
+        descriptor = os.open(str(lock), os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return 0
+    removed = 0
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if not _same_file(descriptor, lock):
+            return 0
+        try:
+            if record.stat().st_mtime >= cutoff:
+                return 0
+            record.unlink()
+            removed = 1
+        except FileNotFoundError:
+            # An orphaned lock: only one idle past the same age goes.
+            if os.fstat(descriptor).st_mtime >= cutoff:
+                return 0
+        lock.unlink()
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+    return removed
+
+
 def prune_session_records(keep=None, days=SESSION_TTL_DAYS, env=None):
-    """Drop records older than `days`, never `keep`'s. Best effort: a sweep never fails a session."""
+    """Drop records older than `days`, never `keep`'s. Best effort: a sweep never fails a session.
+
+    A record's `<id>.json.lock` goes with it, and an orphaned lock of the same age goes alone,
+    but never one a live hook holds.
+    """
     cutoff, removed = time.time() - days * 86400, 0
     try:
         paths = sorted(sessions_dir(env).glob("*.json"))
+        locks = set(sessions_dir(env).glob("*.json.lock"))
     except OSError:
         return 0
+    swept = set()
     for path in paths:
         if keep is not None and path.stem == keep:
+            continue
+        lock = path.with_name(path.name + ".lock")
+        if lock in locks:
+            swept.add(lock)
+            removed += _prune_locked(path, lock, cutoff)
             continue
         try:
             if path.stat().st_mtime < cutoff:
@@ -443,6 +511,11 @@ def prune_session_records(keep=None, days=SESSION_TTL_DAYS, env=None):
                 removed += 1
         except OSError:
             continue
+    for lock in sorted(locks):
+        record = lock.with_name(lock.name[:-len(".lock")])
+        if lock in swept or (keep is not None and record.stem == keep):
+            continue
+        _prune_locked(record, lock, cutoff)
     return removed
 
 
@@ -787,10 +860,14 @@ def _load_sidecar_inside(path, base, strict, warnings):
         parts = relative.parts
         for index, part in enumerate(parts):
             flags = os.O_RDONLY | os.O_NOFOLLOW
-            if index < len(parts) - 1:
-                flags |= os.O_DIRECTORY
+            last = index == len(parts) - 1
+            # The leaf opens without blocking, so a FIFO swapped in cannot hang the hook, and
+            # anything but a regular file is refused before a byte is read.
+            flags |= os.O_NONBLOCK if last else os.O_DIRECTORY
             descriptor = os.open(part, flags, dir_fd=descriptor)
             descriptors.append(descriptor)
+            if last and not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise OSError(str(path) + " is not a regular file")
         with os.fdopen(os.dup(descriptors[-1]), "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (OSError, ValueError, json.JSONDecodeError) as exc:

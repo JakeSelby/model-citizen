@@ -1,6 +1,7 @@
 """PostToolUse nudges for deterministic multi-file delegation opportunities."""
 import importlib.util
 import json
+import fcntl
 import os
 import subprocess
 import sys
@@ -15,6 +16,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 from harness_core import lifecycle
+from isolation import without_harness_vars
 
 
 def load_posture():
@@ -270,6 +272,147 @@ class DelegationNudgeTests(unittest.TestCase):
             result = posture.delegation_nudge("racing", config, root=self.home / "builtin")
         self.assertEqual(result["message"], "Trusted.")
 
+
+    def test_custom_sidecar_fifo_swapped_in_is_refused_without_hanging(self):
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("no FIFOs on this platform")
+        posture = load_posture()
+        custom = self.home / "custom"
+        directory = custom / "stances/delegation"
+        directory.mkdir(parents=True)
+        selected = directory / "fifo.json"
+        selected.write_text(json.dumps({"schema_version": 1, "threshold": 3,
+                                        "message": "Regular."}))
+        real_resolve = Path.resolve
+
+        def racing_resolve(path, *args, **kwargs):
+            resolved = real_resolve(path, *args, **kwargs)
+            if path == selected and not selected.is_fifo():
+                selected.unlink()
+                os.mkfifo(str(selected))
+            return resolved
+
+        config = {"primitive_roots": [str(custom)]}
+        result = {}
+
+        def load():
+            with patch.object(Path, "resolve", racing_resolve):
+                result["value"] = posture.delegation_nudge("fifo", config,
+                                                           root=self.home / "builtin")
+
+        worker = threading.Thread(target=load, daemon=True)
+        worker.start()
+        worker.join(10)
+        if worker.is_alive():
+            # Release the blocked open so the thread can end, then fail.
+            os.close(os.open(str(selected), os.O_WRONLY | os.O_NONBLOCK))
+            self.fail("a FIFO sidecar hung the hook")
+        self.assertTrue(selected.is_fifo())
+        self.assertIn("value", result)
+        self.assertIsNone(result["value"])
+
+
+class SessionStateTests(unittest.TestCase):
+    """Hook-time writers share one lock, and a sweep never removes one a hook holds."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        self.env = patch.dict(os.environ, {"HARNESS_HOME": str(self.home), "HOME": str(self.home)})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.posture = load_posture()
+
+    def stale(self, *paths):
+        old = time.time() - (self.posture.SESSION_TTL_DAYS + 1) * 86400
+        for path in paths:
+            os.utime(str(path), (old, old))
+
+    def files(self, session):
+        record = self.posture.session_record_path(session)
+        return record, record.with_name(record.name + ".lock")
+
+    def test_resume_narrows_under_the_lock_and_keeps_a_concurrent_write(self):
+        posture = self.posture
+        self.assertTrue(posture.write_session_record("resumed", {"agents": ["worker-a"], "at": 0}))
+        record, _lock = self.files("resumed")
+        env = without_harness_vars()
+        env["HOME"] = str(self.home)
+        payload = {"hook_event_name": "SessionStart", "source": "resume",
+                   "session_id": "resumed", "cwd": str(self.home)}
+        with posture._session_lock("resumed") as held:
+            self.assertEqual(held, record)
+            hook = subprocess.Popen([sys.executable, str(ROOT / "policy/hooks/harness-session.py")],
+                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, env=env)
+            self.addCleanup(lambda: hook.poll() is None and hook.kill())
+            hook.stdin.write(json.dumps(payload))
+            hook.stdin.close()
+            # Long enough for an unlocked resume to have read the record it would write back.
+            time.sleep(1.5)
+            self.assertIsNone(hook.poll())
+            self.assertTrue(posture._write_session_record(record, {
+                "agents": ["worker-a"], "at": 0, posture.DELEGATION_READS_KEY: ["/one"]}))
+        stderr = hook.stderr.read()
+        hook.stdout.close()
+        hook.stderr.close()
+        self.assertEqual(hook.wait(timeout=30), 0, stderr)
+        narrowed = posture.read_session_record("resumed")
+        self.assertEqual(narrowed["agents"], [])
+        self.assertEqual(narrowed[posture.DELEGATION_READS_KEY], ["/one"])
+
+    def test_prune_removes_a_stale_record_with_its_idle_lock(self):
+        self.assertTrue(self.posture.write_session_record("old", {"at": 0}))
+        record, lock = self.files("old")
+        self.stale(record, lock)
+        self.assertEqual(self.posture.prune_session_records(), 1)
+        self.assertFalse(record.exists())
+        self.assertFalse(lock.exists())
+
+    def test_prune_keeps_a_stale_record_and_lock_a_live_hook_holds(self):
+        self.assertTrue(self.posture.write_session_record("held", {"at": 0}))
+        record, lock = self.files("held")
+        self.stale(record, lock)
+        with self.posture._session_lock("held") as path:
+            self.assertEqual(path, record)
+            self.assertEqual(self.posture.prune_session_records(), 0)
+            self.assertTrue(record.exists())
+            self.assertTrue(lock.exists())
+
+    def test_prune_removes_only_stale_idle_orphaned_locks_and_never_keeps(self):
+        for session in ("orphan", "fresh", "mine"):
+            self.assertTrue(self.posture.write_session_record(session, {"at": 0}))
+            self.files(session)[0].unlink()
+        self.stale(self.files("orphan")[1], self.files("mine")[1])
+        self.posture.prune_session_records(keep="mine")
+        self.assertFalse(self.files("orphan")[1].exists())
+        self.assertTrue(self.files("fresh")[1].exists())
+        self.assertTrue(self.files("mine")[1].exists())
+
+    def test_a_lock_file_removed_before_it_is_locked_is_retaken_at_the_path(self):
+        posture = self.posture
+        record, lock = self.files("moved")
+        real_flock = fcntl.flock
+        removed = []
+
+        def racing_flock(descriptor, operation):
+            if not removed:
+                removed.append(descriptor)
+                os.unlink(str(lock))
+            return real_flock(descriptor, operation)
+
+        with patch.object(posture.fcntl, "flock", side_effect=racing_flock):
+            with posture._session_lock("moved") as path:
+                self.assertEqual(path, record)
+                self.assertTrue(removed)
+                self.assertTrue(lock.exists())
+                probe = os.open(str(lock), os.O_RDWR)
+                try:
+                    with self.assertRaises(OSError):
+                        real_flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(probe)
 
 if __name__ == "__main__":
     unittest.main()
