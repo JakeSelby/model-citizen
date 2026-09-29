@@ -139,7 +139,12 @@ Task manifest sha256: %s
                            "input_tokens": 1000 + trial, "output_tokens": 100 + trial,
                            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
                            "cache_write_1h": 0, "passed": passed, "error": False,
-                           "outcome": "pass" if passed else "fail", "task_long": task == "beta"}
+                           "outcome": "pass" if passed else "fail", "task_long": task == "beta",
+                           "init_surface_source": "cli-init", "observed_effort": None}
+                    for field in EVIDENCE.SURFACE_FIELDS:
+                        row[field] = 1 if arm == "harness" else 0
+                    for field in EVIDENCE.SURFACE_HASH_FIELDS:
+                        row[field] = hashlib.sha256((field + arm).encode()).hexdigest()
                     rows.append(row)
                     rel = "artifacts/trajectories/%s-%s-%d.log" % (task, arm, trial)
                     path = self.root / rel
@@ -238,6 +243,9 @@ Task manifest sha256: %s
         self.assertTrue(result["cards"][0]["verify_status"])
         self.assertEqual(10, result["derived"]["per_task"]["alpha"]["bare"]["attempts"] * 2)
         self.assertEqual(5, result["derived"]["icc"]["bare"]["pass"]["m"])
+        self.assertEqual("verified", result["derived"]["runtime_surface"]["bare"]["status"])
+        self.assertEqual({"pinned": "high", "status": "unknown", "observed": 0, "unknown": 10},
+                         result["derived"]["runtime_surface"]["bare"]["effort"])
 
     def test_each_standard_item_fails_closed(self):
         cases = {
@@ -264,6 +272,33 @@ Task manifest sha256: %s
                 self.assertFalse(result["checks"].get(str(item), False), result["errors"])
         (self.root / "bundle.json").write_text(original)
 
+    def test_structural_audits_drive_their_numbered_checks(self):
+        original_index = self._index()
+        audits_ref = original_index["artifacts"]["audits"]
+        audits_path = self.root / audits_ref["path"]
+        original_audits = json.loads(audits_path.read_text())
+        cases = {
+            2: lambda audit: audit["task_audits"][0].update(task_valid=False),
+            8: lambda audit: audit.update(judge={"kind": "model"}),
+            9: lambda audit: audit["contamination"].update(answer_unreachable=False),
+            11: lambda audit: audit["field_checks"]["sample_ratio"].update(p_value=0.5),
+            12: lambda audit: audit["limitations"].update(models=""),
+        }
+        for item, mutate in cases.items():
+            with self.subTest(item=item):
+                index, audits = copy.deepcopy(original_index), copy.deepcopy(original_audits)
+                if item == 8:
+                    index["items"]["8"] = {"status": "satisfied"}
+                mutate(audits)
+                self._write_json(audits_path, audits)
+                index["artifacts"]["audits"]["sha256"] = self._sha(audits_path)
+                self._save_index(index)
+                result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["checks"][str(item)], result["errors"])
+        self._write_json(audits_path, original_audits)
+        original_index["artifacts"]["audits"]["sha256"] = self._sha(audits_path)
+        self._save_index(original_index)
+
     def test_unknown_price_and_nonfinite_json_are_refused(self):
         index = self._index()
         rows = self.root / index["artifacts"]["rows"]["path"]
@@ -279,6 +314,91 @@ Task manifest sha256: %s
         self.assertIn("non-finite", EVIDENCE.verify(self.root)["errors"][0])
         (self.root / "bundle.json").write_text('{"schema_version": 1e999}')
         self.assertIn("non-finite", EVIDENCE.verify(self.root)["errors"][0])
+
+    def _mutate_rows(self, change):
+        index = self._index()
+        rows = self.root / index["artifacts"]["rows"]["path"]
+        values = [json.loads(line) for line in rows.read_text().splitlines()]
+        for row in values:
+            change(row)
+        rows.write_text("".join(json.dumps(row) + "\n" for row in values))
+        index["artifacts"]["rows"]["sha256"] = self._sha(rows)
+        self._save_index(index)
+
+    def _set_card_claim(self, claim):
+        index = self._index()
+        index["evidence_cards"][0]["claim"] = claim
+        self._save_index(index)
+
+    def test_missing_init_surface_is_unknown_and_fails_item_three(self):
+        first = {}
+
+        def drop_init(row):
+            if not first:
+                first.update(arm=row["arm"])
+                row["init_surface_source"] = None
+                for field in EVIDENCE.SURFACE_FIELDS + EVIDENCE.SURFACE_HASH_FIELDS:
+                    row[field] = None
+        self._mutate_rows(drop_init)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["checks"]["3"])
+        self.assertTrue(any("no verified CLI init surface" in error for error in result["errors"]))
+        self.assertEqual("unknown", result["derived"]["runtime_surface"][first["arm"]]["status"])
+        self.assertTrue(any(line.startswith(first["arm"] + " loaded surface")
+                            for line in result["unknown"]), result["unknown"])
+
+    def test_absent_observed_effort_field_fails_item_three(self):
+        self._mutate_rows(lambda row: row.pop("observed_effort"))
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["checks"]["3"])
+        self.assertTrue(any("observed effort from unknown" in error for error in result["errors"]))
+        for arm in EVIDENCE.ARMS:
+            self.assertEqual("unknown", result["derived"]["runtime_surface"][arm]["effort"]["status"])
+
+    def test_requested_but_unobserved_effort_is_reported_unknown_never_verified(self):
+        self._mutate_rows(lambda row: row.update(effort="high", observed_effort=None))
+        result = EVIDENCE.verify(self.root)
+        self.assertTrue(result["ok"], result["errors"])
+        effort = result["derived"]["runtime_surface"]["harness"]["effort"]
+        self.assertEqual({"pinned": "high", "status": "unknown", "observed": 0, "unknown": 10}, effort)
+        self.assertIn("harness effort: requested high, observed on 0 of 10 planned attempts",
+                      result["unknown"])
+        self._set_card_claim("Observed ratio at matched high effort")
+        refused = EVIDENCE.verify(self.root)
+        self.assertFalse(refused["ok"])
+        self.assertFalse(refused["cards"][0]["verify_status"])
+        self.assertTrue(any("reasoning effort the rows did not observe" in error
+                            for error in refused["errors"]), refused["errors"])
+
+    def test_observed_effort_on_every_attempt_verifies_and_admits_an_effort_claim(self):
+        self._mutate_rows(lambda row: row.update(effort="high", observed_effort="high"))
+        self._set_card_claim("Observed ratio at matched high effort and loaded surface")
+        result = EVIDENCE.verify(self.root)
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertEqual([], result["unknown"])
+        self.assertTrue(result["cards"][0]["verify_status"])
+
+    def test_observed_or_requested_effort_off_the_pin_fails_item_three(self):
+        for field, phrase in (("observed_effort", "observed effort differs"),
+                              ("effort", "requested effort differs")):
+            with self.subTest(field=field):
+                self._mutate_rows(lambda row: row.update({"observed_effort": None, field: "low"}))
+                result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["checks"]["3"])
+                self.assertTrue(any(phrase in error for error in result["errors"]), result["errors"])
+                self._mutate_rows(lambda row: row.update({"observed_effort": None, "effort": "high"}))
+
+    def test_surface_claim_needs_the_init_surface_on_every_attempt(self):
+        def drop_init(row):
+            if row["arm"] == "harness":
+                row["init_surface_source"] = None
+        self._mutate_rows(drop_init)
+        self._set_card_claim("Observed ratio with the loaded surface held constant")
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["cards"][0]["verify_status"])
+        self.assertTrue(any("loaded runtime surface the rows did not observe" in error
+                            for error in result["errors"]), result["errors"])
 
     def test_safe_loader_rejects_traversal_symlink_and_duplicate_keys(self):
         index = self._index()
@@ -304,10 +424,26 @@ Task manifest sha256: %s
         self.assertFalse(marker.exists())
 
     def test_inherited_git_selectors_do_not_redirect_provenance_checks(self):
+        marker = self.root / "global-helper-ran"
+        global_config = self.root / "host-gitconfig"
+        global_config.write_text("[core]\n\tfsmonitor = touch %s\n" % marker)
         with mock.patch.dict(os.environ, {"GIT_DIR": str(self.root / "missing"),
-                                          "GIT_WORK_TREE": str(self.root / "missing")}, clear=False):
+                                          "GIT_WORK_TREE": str(self.root / "missing"),
+                                          "GIT_CONFIG_GLOBAL": str(global_config),
+                                          "GIT_CONFIG_COUNT": "1",
+                                          "GIT_CONFIG_KEY_0": "core.fsmonitor",
+                                          "GIT_CONFIG_VALUE_0": "touch %s" % marker}, clear=False):
             result = EVIDENCE.verify(self.root)
         self.assertTrue(result["ok"], result["errors"])
+        self.assertFalse(marker.exists())
+
+    def test_repository_git_helper_is_refused_without_execution(self):
+        marker = self.root / "repository-helper-ran"
+        run("git", "config", "core.fsmonitor", "touch %s" % marker, cwd=self.repo)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertIn("executable helper", result["errors"][0])
+        self.assertFalse(marker.exists())
 
     def test_malformed_nested_records_fail_without_a_traceback(self):
         index = self._index()

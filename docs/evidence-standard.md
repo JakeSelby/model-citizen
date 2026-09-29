@@ -73,8 +73,9 @@ manifests.
 - The pre-registration (item 1) was committed before the first trial, and the history shows it.
 - Every published figure can be re-derived from the proof set's own rows without calling a model.
 
-A verifier that checks these mechanically is planned for proof set 1 (#799). Until it ships, the
-check is done by a reviewer against this page.
+`citizen evidence verify BUNDLE` checks these mechanically and offline; the bundle contract and what
+it cannot prove are in [Evidence bundles](evidence-bundles.md). A reviewer still checks what the
+verifier cannot re-derive.
 
 ## The twelve items
 

@@ -264,7 +264,7 @@ development_status:
   ah-d011-decide-whether-a-red-smoke-tier-blocks-the: done
   ah-s209-compatibility-catalog-an-explicit-waiver-for-a: ready-for-dev
   ah-s214-acceptance-runner-use-the-codex-session-login-in: done
-  ah-s243-proof-set-1-the-proof-bundle-harness-evidence: backlog
+  ah-s243-proof-set-1-the-proof-bundle-harness-evidence: ready-for-dev
   ah-t013-amend-the-0-12-0-release-notes-with-the-work: done
 
   ah-e015-guardrails-and-runtime-parity-close-the-gaps: in-progress

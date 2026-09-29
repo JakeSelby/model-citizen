@@ -1114,12 +1114,17 @@ Releases are cut by milestone, and a regression fix releases at once as a patch.
 
 #### FR-54: Landing copy as data
 All landing, README and About copy must come from `product.json`. Published copy must follow the §1.2
-positioning. **Status:** implemented (0.11); `landing-copy` check (0.12). **Scope:** repository process.
+positioning. **Status:** implemented (0.11); `landing-copy` check (0.12); evidence-card claim gate
+(0.15). **Scope:** repository process.
 
 **Consequences (testable):**
 - The `landing-copy` check fails a pull request that changes a path under `bin/`, `lib/`, `adapters/`,
   `primitives/` or `policy/` without either updating `product.json` or stating why no update is needed.
 - No published copy says "cheaper" until a result supports SM-2's pre-registered hypothesis (FR-56).
+- A mechanically recognized measured claim in `product.json` binds its exact field and text to an
+  evidence card whose local bundle verifies again. A cheaper claim requires SM-2 support, and any
+  numeric cheaper magnitude fits the paired interval. Semantic review remains responsible for claims
+  outside the documented recognizer.
 - Published copy uses no em dashes. (Partial: the README still has some, and no test checks copy for
   them.)
 - Public documents credit the projects they compare against rather than framing them as competition.
@@ -1554,6 +1559,8 @@ test and apply loop headless, and a new install must reach an applied draft thro
   - Every public claim is labelled implemented, validated, proposed, historical or unknown, following the
     mapping in §0.
   - No copy asserts an unmeasured saving or a first-in-field claim that the field scan has not checked.
+  - Each mechanically recognized measured product claim names an exact evidence card and passes fresh
+    bundle verification; cached success is not evidence.
 - **NFR-14 Release cost:**
   - A release costs one qualification round.
   - The baseline to beat is about 60 minutes and about 1M orchestrator tokens per round.
@@ -1779,6 +1786,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 
 **The evaluation gate in the 1.0 contract.** A candidate ships only with a verified proof bundle:
 - `harness evidence verify` re-derives the published proof set;
+- every published measured figure and interval has a verified evidence card naming its estimand and
+  exact product field and text;
 - every module in the selection document has a scorecard row, measured or marked unmeasured.
 
 ## 10. Success metrics

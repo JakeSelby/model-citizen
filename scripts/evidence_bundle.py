@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -25,6 +26,16 @@ SCHEMA_VERSION = 1
 INDEX = "bundle.json"
 ARMS = ("bare", "harness")
 ESTIMANDS = ("intention-to-treat", "adherence", "complier-effect", "hypothetical")
+SURFACE_FIELDS = tuple("init_" + name for name in
+                       ("skills", "agents", "slash_commands", "tools", "mcp_servers", "memory_paths"))
+SURFACE_HASH_FIELDS = tuple(name + "_sha256" for name in SURFACE_FIELDS)
+# A card whose claim text speaks to reasoning effort or the loaded runtime surface verifies only
+# when the rows observed that fact for every attempt of both arms; a request is not an observation.
+OBSERVATION_CLAIMS = (
+    ("effort", re.compile(r"\beffort\b", re.IGNORECASE)),
+    ("surface", re.compile(r"\b(?:surface|parity)\b|\bloaded (?:skills|agents|tools|commands|"
+                           r"mcp servers|memory)\b", re.IGNORECASE)),
+)
 ARTIFACT_KEYS = ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report",
                  "arms", "trajectories")
 INDEX_KEYS = ("schema_version", "bundle_id", "repository", "artifacts", "design", "statistics",
@@ -136,24 +147,32 @@ PRICING = _load_pricing()
 
 
 def _git_env():
-    blocked = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
-               "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_CONFIG_GLOBAL",
-               "GIT_CONFIG_SYSTEM"}
-    env = dict((key, value) for key, value in os.environ.items() if key not in blocked)
+    env = dict((key, value) for key, value in os.environ.items() if not key.startswith("GIT_"))
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
-               GIT_CONFIG_NOSYSTEM="1")
+               GIT_CONFIG_NOSYSTEM="1", GIT_EXTERNAL_DIFF="", GIT_PAGER="cat", PAGER="cat",
+               GIT_TERMINAL_PROMPT="0", GIT_OPTIONAL_LOCKS="0")
     return env
 
 
 def _git(repo, *args):
-    done = subprocess.run(["git", "-C", str(repo)] + list(args), stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, universal_newlines=True, env=_git_env())
+    command = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+               "-c", "diff.external=", "-c", "pager.show=false", "-C", str(repo)] + list(args)
+    try:
+        done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, env=_git_env(), timeout=30)
+    except subprocess.TimeoutExpired:
+        return 124, ""
     return done.returncode, done.stdout.strip()
 
 
 def _git_bytes(repo, *args):
-    done = subprocess.run(["git", "-C", str(repo)] + list(args), stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, env=_git_env())
+    command = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+               "-c", "diff.external=", "-c", "pager.show=false", "-C", str(repo)] + list(args)
+    try:
+        done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              env=_git_env(), timeout=30)
+    except subprocess.TimeoutExpired:
+        return 124, b""
     return done.returncode, done.stdout
 
 
@@ -199,12 +218,19 @@ def load_bundle(directory):
     git_dir = repo / ".git"
     if not git_dir.is_dir():
         raise StrictJSONError("repository is not a self-contained Git checkout")
-    if (git_dir / "objects/info/alternates").exists() \
+    if any((git_dir / "objects/info").glob("*alternates")) \
             or any(path.is_symlink() for path in git_dir.rglob("*")):
         raise StrictJSONError("repository Git data reaches outside the bundle")
-    config = (git_dir / "config").read_text(encoding="utf-8")
-    if "[include" in config.lower():
-        raise StrictJSONError("repository Git config includes external configuration")
+    executable_keys = ("fsmonitor=", "hookspath=", "external=", "textconv=", "helper=",
+                       "sshcommand=", "pager=")
+    for config_path in git_dir.glob("config*"):
+        if not config_path.is_file():
+            continue
+        compact_config = "".join(config_path.read_text(encoding="utf-8").lower().split())
+        if "[include" in compact_config:
+            raise StrictJSONError("repository Git config includes external configuration")
+        if any(key in compact_config for key in executable_keys):
+            raise StrictJSONError("repository Git config declares an executable helper")
     artifacts = index["artifacts"]
     _keys(artifacts, ARTIFACT_KEYS, "artifacts")
     loaded = {"root": root, "index": index, "repository": repo, "raw": {}}
@@ -385,7 +411,7 @@ def verify(directory):
         bundle = load_bundle(directory)
     except (OSError, UnicodeError, StrictJSONError) as exc:
         return {"ok": False, "bundle_id": None, "derived": {}, "cards": [], "checks": {},
-                "errors": [str(exc)]}
+                "errors": [str(exc)], "unknown": []}
     index, repo, raw = bundle["index"], bundle["repository"], bundle["raw"]
     bundle_id = index["bundle_id"]
     items = index["items"]
@@ -411,7 +437,7 @@ def verify(directory):
         price_table = PRICING.shipped_prices(raw["prices"][0])
     except (UnicodeError, ValueError, StrictJSONError, OSError) as exc:
         return {"ok": False, "bundle_id": bundle_id, "derived": {}, "cards": [], "checks": {},
-                "errors": [str(exc)]}
+                "errors": [str(exc)], "unknown": []}
     if not isinstance(price_doc, dict) or price_doc.get("schema_version") != 1 \
             or not isinstance(price_doc.get("models"), dict) or not price_doc["models"]:
         _error(errors, 4, "price artifact has no supported dated model table")
@@ -482,6 +508,8 @@ def verify(directory):
     task_ref = index["artifacts"]["tasks"]
     starts = []
     identities, ordered = set(), []
+    surfaces = {arm: [] for arm in ARMS}
+    effort_observations = {arm: {"observed": 0, "unknown": 0} for arm in ARMS}
     for number, row in enumerate(rows, 1):
         try:
             start = _time(row.get("started_at"), "row %d started_at" % number)
@@ -520,6 +548,25 @@ def verify(directory):
             cost = row.get("cost_usd")
             if not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost != design.get("run_cap_usd"):
                 _error(errors, 4, "row %d timeout cost is not its declared cap" % number)
+        surface = {field: row.get(field) for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}
+        known_surface = row.get("init_surface_source") == "cli-init" \
+            and all(type(surface[field]) is int and surface[field] >= 0 for field in SURFACE_FIELDS) \
+            and all(_digest(surface[field]) for field in SURFACE_HASH_FIELDS)
+        if arm in ARMS:
+            if known_surface:
+                surfaces[arm].append(surface)
+            else:
+                _error(errors, 3, "row %d has no verified CLI init surface" % number)
+            if row.get("effort") is not None and row["effort"] != design.get("effort"):
+                _error(errors, 3, "row %d requested effort differs from the pin" % number)
+            if "observed_effort" not in row:
+                _error(errors, 3, "row %d does not distinguish observed effort from unknown" % number)
+            elif row["observed_effort"] is None:
+                effort_observations[arm]["unknown"] += 1
+            elif not isinstance(row["observed_effort"], str) or row["observed_effort"] != design.get("effort"):
+                _error(errors, 3, "row %d observed effort differs from the pin" % number)
+            else:
+                effort_observations[arm]["observed"] += 1
 
     expected_schedule = _counterbalanced(design) if valid_tasks \
         and type(design.get("trials_per_task")) is int else []
@@ -530,6 +577,29 @@ def verify(directory):
     if [identity for _, identity in ordered] != [(e["task"], e["arm"], e["trial"])
                                                  for e in expected_schedule]:
         _error(errors, 6, "recorded schedule is not the declared counterbalanced order")
+    derived["runtime_surface"] = {}
+    unknown = []
+    planned = len(tasks) * trials_per_task
+    for arm in ARMS:
+        unique = {_sha(json.dumps(surface, sort_keys=True, separators=(",", ":")).encode())
+                  for surface in surfaces[arm]}
+        if len(unique) > 1:
+            _error(errors, 3, "%s rows report different loaded runtime surfaces" % arm)
+        surface_known = planned > 0 and len(surfaces[arm]) == planned and len(unique) == 1
+        effort = effort_observations[arm]
+        effort_known = planned > 0 and effort["observed"] == planned
+        if not surface_known:
+            unknown.append("%s loaded surface: CLI init observed on %d of %d planned attempts"
+                           % (arm, len(surfaces[arm]), planned))
+        if not effort_known:
+            unknown.append("%s effort: requested %s, observed on %d of %d planned attempts"
+                           % (arm, design.get("effort"), effort["observed"], planned))
+        derived["runtime_surface"][arm] = {
+            "status": "verified" if surface_known else "unknown",
+            "surface": surfaces[arm][0] if len(unique) == 1 else None,
+            "effort": dict({"pinned": design.get("effort"),
+                            "status": "verified" if effort_known else "unknown"}, **effort),
+        }
 
     for ref, label in ((plan_ref, "plan"), (task_ref, "tasks")):
         if not isinstance(ref.get("git_path"), str) or not ref["git_path"]:
@@ -764,6 +834,14 @@ def verify(directory):
                 _keys(part, ("pointer", "value"), "card %s" % name)
                 if _pointer(derived, part["pointer"]) != part["value"]:
                     raise ValueError("card %s differs from the derived value" % name)
+            claim = card["claim"] if isinstance(card["claim"], str) else ""
+            for fact, pattern in OBSERVATION_CLAIMS:
+                key = "effort" if fact == "effort" else None
+                statuses = [(derived["runtime_surface"][arm][key]["status"] if key
+                             else derived["runtime_surface"][arm]["status"]) for arm in ARMS]
+                if pattern.search(claim) and statuses != ["verified"] * len(ARMS):
+                    raise ValueError("claim describes %s the rows did not observe for every attempt"
+                                     % ("reasoning effort" if key else "the loaded runtime surface"))
         except (StrictJSONError, ValueError) as exc:
             verified = False
             _error(errors, 10, "evidence card %d: %s" % (number, exc))
@@ -773,7 +851,7 @@ def verify(directory):
     for item in range(1, 13):
         checks[str(item)] = not any(message.startswith("item %d:" % item) for message in errors)
     return {"ok": not errors, "bundle_id": bundle_id, "derived": derived, "cards": cards,
-            "checks": checks, "errors": errors}
+            "checks": checks, "errors": errors, "unknown": unknown}
 
 
 def main(argv=None):

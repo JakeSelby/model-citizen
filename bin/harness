@@ -18,6 +18,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
+    citizen evidence verify BUNDLE [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen worktree create NAME [REPO] [--branch BRANCH] [--base BASE] [--no-fetch]
@@ -5640,6 +5641,35 @@ def cmd_tiers(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_evidence(args: argparse.Namespace) -> int:
+    """Re-derive a local evidence bundle; saved commands and cached success are never trusted."""
+    if args.action != "verify":
+        raise SystemExit("evidence needs the verify action")
+    import importlib.util
+
+    path = REPO / "scripts" / "evidence_bundle.py"
+    spec = importlib.util.spec_from_file_location("harness_evidence_bundle", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    result = module.verify(Path(args.bundle))
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    elif result["ok"]:
+        print("evidence bundle {}: verified; 12/12 evidence-standard items pass".format(
+            result["bundle_id"]))
+        # An unrecorded observation is reported as unknown, never as verified parity.
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation)
+    else:
+        print("evidence bundle {}: verification failed".format(result.get("bundle_id") or args.bundle),
+              file=sys.stderr)
+        for error in result["errors"]:
+            print("  " + error, file=sys.stderr)
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation, file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
 def program_name(argv0: Optional[str] = None) -> str:
     """The name usage text shows: `citizen` or its alias `harness` as invoked, else `citizen`."""
     name = os.path.basename(sys.argv[0] if argv0 is None else argv0)
@@ -5874,6 +5904,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--release-check", action="store_true", help="fail unless every release target has native evidence")
     p.set_defaults(func=cmd_compatibility)
+
+    p = sub.add_parser("evidence", help="verify a local published evidence bundle offline")
+    evidence_sub = p.add_subparsers(dest="action", required=True)
+    verify = evidence_sub.add_parser("verify", help="re-derive every declared figure and card")
+    verify.add_argument("bundle", help="bundle directory; no saved command is executed")
+    verify.add_argument("--json", action="store_true", help="emit the machine-readable result")
+    verify.set_defaults(func=cmd_evidence)
 
     p = sub.add_parser("freeze", help="show runtime source drift from the frozen release commit")
     p.add_argument("--json", action="store_true")
