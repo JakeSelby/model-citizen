@@ -1,6 +1,7 @@
 """Compatibility claims must carry versioned native evidence."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -142,6 +143,15 @@ def qualification_reuse(root, data, target=None, seen=None, depth=0):
     """Validate a patch release's explicit reuse of an immutable prior release's evidence."""
     reuse = reuse_metadata(data)
     if reuse is None:
+        if (target or release_target(root, data) or "HEAD") == "HEAD":
+            staged = subprocess.run(["git", "-C", str(root), "show", ":compatibility/catalog.json"],
+                                    capture_output=True)
+            if staged.returncode == 0:
+                staged_catalog = json.loads(staged.stdout)
+                if not isinstance(staged_catalog, dict):
+                    raise ValueError("staged compatibility catalog must be an object")
+                if staged_catalog.get("qualification_reuse") is not None:
+                    raise ValueError("qualification reuse catalog differs from the staged catalog; stage the validated catalog")
         return None
     if depth >= MAX_REUSE_DEPTH:
         raise ValueError("qualification reuse chain exceeds " + str(MAX_REUSE_DEPTH) + " releases")
@@ -495,10 +505,10 @@ def changed_files(root, commit, target, paths, carved):
             continue
         revisions = ["--cached", commit] if target == "HEAD" else [commit, target]
         done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", "--no-renames",
-                               *revisions, "--", *spec], capture_output=True, text=True)
+                               *revisions, "--", *spec], capture_output=True)
         if done.returncode:
             return None
-        names.update(name for name in (done.stdout or "").split("\0") if name)
+        names.update(os.fsdecode(name) for name in (done.stdout or b"").split(b"\0") if name)
     return sorted(names)
 
 

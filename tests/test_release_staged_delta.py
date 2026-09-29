@@ -72,7 +72,7 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
         self.git("add", ".")
         self.git("commit", "--quiet", "-m", "prior")
         prior = self.git("rev-parse", "HEAD")
-        names = [" ", "docs/é.md", "docs/two\nlines.md"]
+        names = [" ", "docs/é.md", "docs/two\nlines.md", "docs/a\rb.md", "docs/a\r\nb.md"]
         (self.root / "docs").mkdir()
         for name in names:
             (self.root / name).write_text("new\n")
@@ -84,6 +84,13 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
         root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
         git("reset", "--soft", "HEAD~1")
         git("restore", "--staged", "compatibility/catalog.json")
+        with self.assertRaisesRegex(ValueError, "differs from the staged catalog"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_pending_reuse_cannot_hide_staged_metadata_by_omitting_it_from_data(self):
+        root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
+        git("reset", "--soft", "HEAD~1")
+        data.pop("qualification_reuse")
         with self.assertRaisesRegex(ValueError, "differs from the staged catalog"):
             compatibility.qualification_reuse(root, data)
 
@@ -105,7 +112,7 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
 
     def test_working_head_fails_closed_when_either_path_query_fails(self):
         failed = subprocess.CompletedProcess([], 1, stdout="", stderr="failed")
-        passed = subprocess.CompletedProcess([], 0, stdout="VERSION\0", stderr="")
+        passed = subprocess.CompletedProcess([], 0, stdout=b"VERSION\0", stderr=b"")
 
         with patch.object(compatibility.subprocess, "run", return_value=failed):
             self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], ["docs"]))
