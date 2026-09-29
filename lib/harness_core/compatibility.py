@@ -220,6 +220,12 @@ def qualification_reuse(root, data, target=None, seen=None, depth=0):
         raise ValueError("qualification reuse release delta contains ineligible path: " + refused[0])
     if "VERSION" not in changed:
         raise ValueError("qualification reuse release delta must change VERSION")
+    if target_commit == "HEAD":
+        staged_catalog = json.loads(git_output(root, "show", ":compatibility/catalog.json"))
+        if not same_json(data, staged_catalog):
+            raise ValueError("qualification reuse catalog differs from the staged catalog; stage the validated catalog")
+        if git_output(root, "show", ":VERSION").strip() != current:
+            raise ValueError("qualification reuse staged VERSION does not match the catalog")
     return reuse
 
 
@@ -488,11 +494,11 @@ def changed_files(root, commit, target, paths, carved):
         if not spec:
             continue
         revisions = ["--cached", commit] if target == "HEAD" else [commit, target]
-        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames",
+        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", "--no-renames",
                                *revisions, "--", *spec], capture_output=True, text=True)
         if done.returncode:
             return None
-        names.update(line for line in (done.stdout or "").splitlines() if line.strip())
+        names.update(name for name in (done.stdout or "").split("\0") if name)
     return sorted(names)
 
 

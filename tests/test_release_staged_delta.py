@@ -67,9 +67,45 @@ class ReleaseStagedDeltaTests(unittest.TestCase):
         self.git("add", ".")
         self.assertEqual(compatibility.changed_files(self.root, prior, "HEAD", ["."], []), [])
 
+    def test_staged_path_names_are_not_quoted_or_stripped(self):
+        (self.root / "VERSION").write_text("1.0.0\n")
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "prior")
+        prior = self.git("rev-parse", "HEAD")
+        names = [" ", "docs/é.md", "docs/two\nlines.md"]
+        (self.root / "docs").mkdir()
+        for name in names:
+            (self.root / name).write_text("new\n")
+        self.git("add", ".")
+        self.assertEqual(compatibility.changed_files(self.root, prior, "HEAD", ["."], []),
+                         sorted(names))
+
+    def test_pending_reuse_refuses_catalog_not_matching_index(self):
+        root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
+        git("reset", "--soft", "HEAD~1")
+        git("restore", "--staged", "compatibility/catalog.json")
+        with self.assertRaisesRegex(ValueError, "differs from the staged catalog"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_pending_reuse_refuses_version_not_matching_index(self):
+        root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
+        git("reset", "--soft", "HEAD~1")
+        (root / "VERSION").write_text("1.2.99\n")
+        git("add", "VERSION")
+        with self.assertRaisesRegex(ValueError, "staged VERSION does not match"):
+            compatibility.qualification_reuse(root, data)
+
+    def test_immutable_reuse_target_ignores_other_staged_metadata(self):
+        root, data, git = test_compatibility.QualificationReuseTests.fixture(self)
+        target = git("rev-parse", "HEAD")
+        (root / "VERSION").write_text("1.2.99\n")
+        git("add", "VERSION")
+        self.assertEqual(compatibility.qualification_reuse(root, data, target=target)["prior_version"],
+                         "1.2.3")
+
     def test_working_head_fails_closed_when_either_path_query_fails(self):
         failed = subprocess.CompletedProcess([], 1, stdout="", stderr="failed")
-        passed = subprocess.CompletedProcess([], 0, stdout="VERSION\n", stderr="")
+        passed = subprocess.CompletedProcess([], 0, stdout="VERSION\0", stderr="")
 
         with patch.object(compatibility.subprocess, "run", return_value=failed):
             self.assertIsNone(compatibility.changed_files(self.root, "prior", "HEAD", ["."], ["docs"]))
