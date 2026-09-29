@@ -194,6 +194,46 @@ class ParetoTests(unittest.TestCase):
         got = STATS.analyse(rows_for(spec), resamples=100)
         self.assertEqual([p[3] for p in STATS.pareto(got)], ["frontier", "frontier"])
 
+    def test_plot_coordinates_derive_from_cost_and_pass_rate(self):
+        from xml.etree import ElementTree
+        result = STATS.analyse(rows_for(cheaper_set(tasks=2, trials=2)), resamples=100)
+        svg = ElementTree.fromstring(STATS.pareto_svg(result))
+        points = svg.findall(".//{http://www.w3.org/2000/svg}circle")
+        self.assertEqual(len(points), 2)
+        maximum = max(a["mean_cost_per_attempt"] for a in result["arms"].values()) * 1.2
+        for point in points:
+            arm = result["arms"][point.attrib["data-arm"]]
+            self.assertAlmostEqual(float(point.attrib["cx"]), 80 + 480 * arm["mean_cost_per_attempt"] / maximum, places=3)
+            self.assertAlmostEqual(float(point.attrib["cy"]), 330 - 290 * arm["pass_rate"], places=3)
+
+    def test_plot_does_not_turn_unknown_cost_into_zero(self):
+        from xml.etree import ElementTree
+        result = STATS.analyse(rows_for(cheaper_set(tasks=2, trials=2)), resamples=100)
+        result["arms"]["harness"]["mean_cost_per_attempt"] = None
+        svg = ElementTree.fromstring(STATS.pareto_svg(result))
+        self.assertEqual([p.attrib["data-arm"] for p in svg.findall(".//{http://www.w3.org/2000/svg}circle")], ["bare"])
+        self.assertIn("harness: unpriced", STATS.pareto_svg(result))
+
+    def test_plot_cannot_overwrite_its_source_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / BENCH.RESULTS
+            BENCH.write_jsonl(path, rows_for(cheaper_set(tasks=2, trials=2)))
+            before = path.read_bytes()
+            with self.assertRaisesRegex(SystemExit, "must differ"):
+                BENCH.main(["summarise", "--results", str(path), "--plot", str(path), "--resamples", "100"])
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_summarise_writes_a_standalone_plot_when_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rows = rows_for(cheaper_set(tasks=2, trials=2))
+            path = Path(tmp) / BENCH.RESULTS
+            plot = Path(tmp) / "pareto.svg"
+            BENCH.write_jsonl(path, rows)
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(BENCH.main(["summarise", "--results", str(path), "--plot", str(plot), "--resamples", "100"]), 0)
+            self.assertIn('data-arm="harness"', plot.read_text())
+
+
 
 class RederivationTests(unittest.TestCase):
     def test_every_replay_row_carries_what_the_analysis_needs(self):

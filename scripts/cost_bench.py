@@ -1137,6 +1137,11 @@ def cmd_summarise(args):
         result = replay_stats.analyse(read_jsonl(path), args.seed, args.resamples)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
+    if args.plot:
+        plot = Path(args.plot).expanduser()
+        if plot.resolve() == path.resolve():
+            raise SystemExit("cost-bench: plot output must differ from the saved rows")
+        plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
                      else replay_stats.render(result))
     return 0
@@ -1446,6 +1451,7 @@ def main(argv=None):
     summ.add_argument("--seed", type=int, default=replay_stats.SEED, help="the bootstrap's seed")
     summ.add_argument("--resamples", type=int, default=replay_stats.RESAMPLES, help="bootstrap resamples")
     summ.add_argument("--json", action="store_true", help="print the result as JSON")
+    summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")

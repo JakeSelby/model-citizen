@@ -71,7 +71,7 @@ python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --
 python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 5 reps
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
-python3 scripts/cost_bench.py summarise --results <dir>                # SM-2's verdict from the saved rows; calls no model
+python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -206,7 +206,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `"long": true` in `benchmarks/tasks.json` joins the long-task subset, whose ratio interval is
   reported beside the whole set's, and a saving is claimed only when it too lies wholly below 1.0.
   No task is marked yet.
-- **A Pareto view sits beside it:** a table of each arm's mean cost per attempt against its pass
+- **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across

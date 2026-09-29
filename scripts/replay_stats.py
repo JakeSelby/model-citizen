@@ -247,6 +247,34 @@ def pareto(result):
     return out
 
 
+def pareto_svg(result):
+    """A standalone plot of the two arms; unknown cost has no plotted coordinate."""
+    points = pareto(result)
+    maximum = max([cost for _, cost, _, _ in points if cost is not None] + [0.01]) * 1.2
+    lines = ['<svg xmlns="http://www.w3.org/2000/svg" width="640" height="420" viewBox="0 0 640 420" role="img" aria-labelledby="title desc">',
+             '<title id="title">Cost and pass rate by arm</title>',
+             '<desc id="desc">Lower cost and higher pass rate are preferable. Unknown costs are not plotted. Descriptive comparison; the paired intervals govern the verdict.</desc>',
+             '<rect width="640" height="420" fill="white"/>',
+             '<g font-family="sans-serif" font-size="12" fill="#222">',
+             '<path d="M80 40V330H560" fill="none" stroke="#333"/>',
+             '<text x="320" y="380" text-anchor="middle">Mean USD per attempt</text>',
+             '<text transform="translate(22 185) rotate(-90)" text-anchor="middle">Pass rate</text>']
+    for n in range(6):
+        x, y = 80 + 96 * n, 330 - 58 * n
+        lines.append('<text x="%g" y="350" text-anchor="middle">%.3f</text>' % (x, maximum * n / 5))
+        lines.append('<text x="68" y="%g" text-anchor="end">%d%%</text>' % (y + 4, n * 20))
+    for index, (arm, cost, rate, status) in enumerate(points):
+        color = ('#476582', '#a84432')[index]
+        label = '%s: %s' % (arm, status)
+        lines.append('<text x="80" y="%d" fill="%s">%s</text>' % (400 + 15 * index, color, label))
+        if cost is not None:
+            x, y = 80 + 480 * cost / maximum, 330 - 290 * rate
+            lines.append('<circle data-arm="%s" data-cost="%s" data-pass-rate="%s" cx="%g" cy="%g" r="6" fill="%s"><title>%s, %.4f USD, %.1f%%</title></circle>'
+                         % (arm, cost, rate, x, y, color, label, cost, rate * 100))
+            lines.append('<text x="%g" y="%g" fill="%s">%s</text>' % (x + 9, y + (-12 if index else 18), color, arm))
+    return "\n".join(lines + ['</g></svg>']) + "\n"
+
+
 def _num(value, places=3):
     return "undefined" if value is None else "%.*f" % (places, value)
 
