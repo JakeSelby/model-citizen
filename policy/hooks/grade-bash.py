@@ -1520,8 +1520,18 @@ def literal_text_command(command):
     words, delimiter = parsed
     if not words or words[0][1] or words[0][0] not in ("cat", "printf", "echo", "tee"):
         return False
-    if words[0][0] == "printf" and (len(words) < 2 or words[1][0].startswith("-")):
-        return False  # printf -v can evaluate an array subscript instead of emitting data.
+    if words[0][0] == "printf":
+        args, index = [], 1
+        while index < len(words):
+            if not words[index][1] and words[index][0] in ("<", ">", ">>"):
+                index += 2
+                continue
+            args.append(words[index][0])
+            index += 1
+        # Shell printf has variable-writing options and formats (notably zsh %n).
+        # Only string output and escaped percent conversions are known to be data-only.
+        if not args or args[0].startswith("-") or "%" in re.sub(r"%%|%s", "", args[0]):
+            return False
     tail = lines[1:]
     if delimiter is not None:
         if delimiter not in tail:
@@ -1554,6 +1564,8 @@ def _policy_hits(command, found, walked=True):
             hits = ["the governance policy file " + match.group(0)]
         else:
             match = CONFIG_RE.search(command)
+            if match is None:
+                match = re.search(r"\.config[/\\]+agent-harness[/\\]+[^\s]*[{}*?\[]", command)
             if match and not (walked and literal_text_command(command)):
                 hits = ["the harness configuration " + match.group(0)
                         + ", which selects the decision provider"]

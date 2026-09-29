@@ -78,3 +78,27 @@ class LiteralDocumentationWrites(Home):
                 self.assertEqual(answer, "ask", reason)
                 self.assertIn("level 1", reason)
                 self.assertIn("configuration", reason)
+
+    def test_printf_variable_formats_and_redirected_options_are_not_data(self):
+        target = "~/.config/agent-harness/config.json"
+        payload = "'x[$(cp /tmp/p " + target + "; echo 1)]'"
+        for command in ("printf >/dev/null -v " + payload + " %s x",
+                        "printf '%n' " + payload,
+                        "tee ~/.config/agent-harness/{config.json,other} </dev/null"):
+            with self.subTest(command=command):
+                self.assertFalse(grader.literal_text_command(command))
+                answer, reason = self.bash(command)
+                self.assertEqual(answer, "ask", reason)
+                self.assertIn("level 1", reason)
+                self.assertIn("configuration", reason)
+
+    def test_force_clobber_redirect_resolves_its_actual_symlink_destination(self):
+        target = self.home / ".config" / "agent-harness" / "config.json"
+        link = self.home / "document.md"
+        link.symlink_to(target)
+        for operator in (">!", ">>!"):
+            with self.subTest(operator=operator):
+                answer, reason = self.bash("echo x " + operator + " " + str(link))
+                self.assertEqual(answer, "ask", reason)
+                self.assertIn("configuration", reason)
+                self.assertIn("level 1", reason)
