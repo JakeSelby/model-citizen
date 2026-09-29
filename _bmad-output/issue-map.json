@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 132,
-    "chore": 97,
+    "chore": 98,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -6839,6 +6839,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C097",
+      "github_number": 913,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
+      "title": "docs/usage.md's decision point table leaves out framework-spawn",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C097.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C096",
       "github_number": 914,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/914",
@@ -6859,6 +6872,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B125.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B129",
+      "github_number": 918,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/918",
+      "title": "A named spawn of a role switched off in a project or session layer still launches from the definition the last sync wrote",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B129.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
