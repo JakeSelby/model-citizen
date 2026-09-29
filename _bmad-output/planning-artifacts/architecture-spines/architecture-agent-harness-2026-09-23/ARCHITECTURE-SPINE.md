@@ -468,7 +468,7 @@ flowchart TB
     - the configuration values that reach the model or the hooks;
     - the harness version.
 
-### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PARTIAL: opt-in registration #867 and replay surface record #482 remain]
+### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PARTIAL: opt-in registration #867 remains]
 
 - **Binds:** FR-11, FR-23, FR-27, FR-56, FR-58; the observation layer, the ledgers, the decision log and
   every benchmark arm.
@@ -637,10 +637,10 @@ Composition and calibrated-judge delivery previously marked 0.16 is now 0.17; fi
 
 See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
 
-## Status amendment — 2026-09-28
+## Status amendment — 2026-09-29
 
 AD-11 is adopted: usage and decision rows carry `schema_version`, and their readers apply
 `FIELD_FOLDS` (delivered in #835). AD-23 is partial: the observation entry point (#864),
-profile fingerprints (#861), and adherence recording (#883) have shipped. Opt-in recorder
-registration (#867) and replay-row surface records (#482) remain open. These status corrections
-leave the recorded decisions and their original rationale unchanged.
+profile fingerprints (#861), adherence recording (#883) and replay-row surface records (#482)
+have shipped. Opt-in recorder registration (#867) remains open. These status corrections leave
+the recorded decisions and their original rationale unchanged.
