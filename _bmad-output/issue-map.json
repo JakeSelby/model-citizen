@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 329,
+    "story": 330,
     "task": 37
   },
   "items": [
@@ -6813,6 +6813,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S329",
+      "github_number": 909,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/909",
+      "title": "Add a --json output to citizen usage",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S329.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B128",
       "github_number": 910,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/910",
@@ -6859,6 +6872,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B125.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B129",
+      "github_number": 918,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/918",
+      "title": "A named spawn of a role switched off in a project or session layer still launches from the definition the last sync wrote",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B129.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

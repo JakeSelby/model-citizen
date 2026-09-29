@@ -85,6 +85,24 @@ class FixtureAttributionTests(unittest.TestCase):
             with self.subTest(rules=rules, stance=stance), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(HARNESS.cmd_usage(args), 2)
 
+    def test_usage_json_preserves_both_scopes_and_input_limitations(self):
+        original_root = HARNESS.claude_projects_root
+        HARNESS.claude_projects_root = lambda: FIXTURES
+        args = argparse.Namespace(action=None, days=30, by="rebuild", rules=False, stance=None,
+                                  rescan=False, conflicts=False, json=True)
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                code = HARNESS.cmd_usage(args)
+        finally:
+            HARNESS.claude_projects_root = original_root
+        document = json.loads(output.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual((document["report"], document["by"]), ("rebuild", "rebuild"))
+        self.assertEqual([group["scope"] for group in document["groups"]], ["long", "all"])
+        self.assertEqual(document["files"]["files_read"], 20)
+        self.assertEqual(document["rescan"], "direct transcript scan")
+
     def test_break_cost_prices_each_write_tier_through_the_shared_authority(self):
         call = {"model": "claude-sonnet-5", "cache_write": 40000,
                 "cache_write_5m": 20000, "cache_write_1h": 20000}
