@@ -244,7 +244,7 @@ development_status:
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
   ah-s252-replay-charges-the-user-s-personal-layer-to-the: done
-  ah-s253-record-the-cli-s-own-account-of-the-loaded: backlog
+  ah-s253-record-the-cli-s-own-account-of-the-loaded: done
   ah-s254-price-every-rule-stance-variant-skill-and-agent: done
   ah-s255-replay-stored-transcripts-through-the-rule: backlog
   ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
@@ -473,7 +473,7 @@ development_status:
   ah-b112-lock-the-intent-overlap-counter-s-read-modify: done
   ah-b113-test-worker-context-budget-rewrites-a-tracked: done
   ah-b114-the-governance-config-set-check-gates-commands: done
-  ah-b115-a-heredoc-that-only-names-the-user-config-path: backlog
+  ah-b115-a-heredoc-that-only-names-the-user-config-path: ready-for-dev
   ah-b116-git-c-with-or-a-variable-resolves-a-push-to-an: ready-for-dev
   ah-b120-directed-bmad-prompt-paths-can-evade-spawn: done
   ah-b121-fix-skills-sh-discovery-for-five-invalid-skill: done
@@ -486,6 +486,7 @@ development_status:
   ah-b128-three-timing-tests-fail-under-a-loaded-full: ready-for-dev
   ah-b129-a-named-spawn-of-a-role-switched-off-in-a: ready-for-dev
   ah-b130-the-installation-case-skips-the-role-list-on: ready-for-dev
+  ah-b131-the-compaction-detector-counts-a-miss-under-a: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -546,6 +547,9 @@ development_status:
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-c096-remove-the-changelog-lint-s-unreleased-exemption: ready-for-dev
   ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
+  ah-c098-bring-ad-11-s-and-ad-23-s-status-tags-in-the: ready-for-dev
+  ah-c099-add-resume-tests-that-change-the-model-or-the: ready-for-dev
+  ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
@@ -646,6 +650,7 @@ development_status:
   ah-s320-every-cost-efficacy-or-system-change-test-is-a: done
   ah-s322-allow-documentation-only-patch-releases-to-carry: done
   ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
+  ah-s329-add-a-json-output-to-citizen-usage: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
@@ -667,3 +672,4 @@ development_status:
   ah-t032-add-a-merge-driver-for-the-bmad-issue-map-so: done
   ah-t033-keep-plans-committed-by-build-lint-clean-in-this: done
   ah-t034-let-bmad-code-review-run-without-halts-inside-an: done
+  ah-t037-governance-decision-rows-lose-their-segment: ready-for-dev

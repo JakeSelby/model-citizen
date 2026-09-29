@@ -58,7 +58,8 @@ Prerequisites: a locked target and a working capture command. Get both before ro
    orientation, missing assets and failed loads here. Do not use this step to tune visuals.
 5. **Capture** the current state to `.design-loop/round-<n>.png`.
 6. **Judge** — spawn the `design-judge` agent with the image paths, the surface type and the
-   target path, per [references/judge.md](references/judge.md). Never judge your own work inline.
+   target path and evidence for non-visual hard gates, per
+   [references/judge.md](references/judge.md). Never judge your own work inline.
 7. **Address every gap** the judge named, hardest first. Do not cherry-pick the easy ones.
 8. **Evaluate exit criteria** below. Exit, escalate, or return to step 4.
 

@@ -4,13 +4,13 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 131,
-    "chore": 98,
+    "bug": 132,
+    "chore": 101,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 329,
-    "task": 37
+    "story": 330,
+    "task": 38
   },
   "items": [
     {
@@ -3728,7 +3728,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S253.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6748,6 +6748,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-T037",
+      "github_number": 897,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/897",
+      "title": "Governance decision rows lose their segment fields when the provider errors",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T037.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B110",
       "github_number": 898,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/898",
@@ -6813,6 +6826,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S329",
+      "github_number": 909,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/909",
+      "title": "Add a --json output to citizen usage",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S329.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B128",
       "github_number": 910,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/910",
@@ -6820,6 +6846,32 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B128.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B131",
+      "github_number": 911,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/911",
+      "title": "The compaction detector counts a miss under a custom cost variant that allows compaction",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B131.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C099",
+      "github_number": 912,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/912",
+      "title": "Add resume tests that change the model or the class routing at the same commit",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C099.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -6846,6 +6898,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C096.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C098",
+      "github_number": 916,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/916",
+      "title": "Bring AD-11's and AD-23's status tags in the architecture spine up to date",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C098.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8071,6 +8136,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C100",
+      "github_number": 1058,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1058",
+      "title": "Resolve canonical plugin workflow findings from directory review",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C100.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
