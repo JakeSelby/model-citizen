@@ -32,22 +32,6 @@ Preamble.
 - An older fix. (#1)
 """
 
-# A base whose last hand-written release has not been cut yet.
-OPEN = """# Changelog
-
-## [Unreleased]
-
-### Added
-
-- Written by hand. (#2)
-
-## [0.12.0] — 2026-09-22
-
-### Fixed
-
-- An older fix. (#1)
-"""
-
 
 def write(root, name, text):
     path = Path(root) / changelog.DIRECTORY / name
@@ -227,35 +211,17 @@ class LintRuleTests(unittest.TestCase):
         self.commit("docs/a.md", "again\n")
         self.assertEqual(changelog.findings(self.root), [], "no origin/main to compare with")
 
-    def open_release(self):
-        (self.root / "CHANGELOG.md").write_text(OPEN)
-        git(self.root, "commit", "-qam", "open release")
-        git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
-
-    def test_an_unreleased_entry_counts_while_the_last_hand_written_release_is_open(self):
-        self.open_release()
-        self.commit("CHANGELOG.md", OPEN.replace("- Written by hand. (#2)\n",
-                                                 "- New entry. (#3)\n\n- Written by hand. (#2)\n"))
-        self.commit("docs/a.md")
-        self.assertEqual(changelog.findings(self.root), [])
-
-    def test_a_changelog_edit_outside_unreleased_does_not_count(self):
-        self.open_release()
-        self.commit("CHANGELOG.md", OPEN.replace("- An older fix. (#1)", "- An older fix, reworded. (#1)"))
-        self.commit("docs/a.md")
-        self.assertEqual(len(changelog.findings(self.root)), 1)
-
-    def test_the_release_that_folds_unreleased_passes_and_ends_the_exemption(self):
-        self.open_release()
-        folded = OPEN.replace("## [Unreleased]\n", "## [Unreleased]\n\n## [%s] — 2026-10-01\n"
-                              % changelog.LAST_HAND_WRITTEN)
-        self.commit("CHANGELOG.md", folded)
-        self.commit("adapters/claude/bindings.json", "{}\n")
-        self.assertEqual(changelog.findings(self.root), [], "the release pull request itself")
-        git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
-        self.commit("CHANGELOG.md", folded.replace("## [Unreleased]\n", "## [Unreleased]\n\n- Late. (#4)\n"))
-        self.commit("docs/a.md")
-        self.assertEqual(len(changelog.findings(self.root)), 1, "every branch after it")
+    def test_an_unreleased_edit_never_substitutes_for_a_fragment(self):
+        for base in (HEAD, HEAD.replace("0.13.0", "0.12.0")):
+            with self.subTest(base=base):
+                if (self.root / "CHANGELOG.md").read_text() != base:
+                    self.commit("CHANGELOG.md", base)
+                git(self.root, "update-ref", "refs/remotes/origin/main", "HEAD")
+                self.commit("CHANGELOG.md", base.replace("## [Unreleased]", "## [Unreleased]\n\n- New entry."))
+                self.commit("docs/a.md", base)
+                hits = changelog.findings(self.root)
+                self.assertEqual(len(hits), 1)
+                self.assertIn("adds no fragment", hits[0])
 
     def test_git_that_cannot_run_skips_the_rule_with_a_note(self):
         self.commit("docs/a.md")
