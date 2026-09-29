@@ -699,15 +699,20 @@ def workflow_ceiling(runtime):
     variant = selected("cost", "balanced")
     classes_apply = selected("delegation", "tiered") == "tiered"
     strongest, highest = WORKFLOW_CEILING
+    # The model map is read on its own: a cost table that cannot be read must not also discard
+    # the class lookup, or a frontier model would log `unresolved` and launch unrefused.
     try:
         posture = load("posture")
         models = posture.tier_models(runtime) or posture.tier_models()
+    except Exception:
+        return variant, strongest, highest, {}, classes_apply
+    try:
         stances = dict(posture.DEFAULT_STANCES, cost=variant,
                        delegation=selected("delegation", "tiered"))
         table = posture.table_for(stances, posture._user_config(os.environ, False), strict=False)
         rows = [row for row in (table.get("rows") or {}).values() if isinstance(row, dict)]
     except Exception:
-        return variant, strongest, highest, {}, classes_apply
+        return variant, strongest, highest, models, classes_apply
     from . import catalog
     granted = [c for c in (row.get("class") for row in rows) if c in catalog.TIER_CLASSES[1:]]
     if granted:

@@ -127,6 +127,20 @@ class WorkflowCeilingTests(unittest.TestCase):
         self.assertIn("names model `fable` in agent(), the `frontier` class", refusal)
         self.assertIn("name `sonnet` or a lighter model", refusal)
 
+    def test_an_unreadable_cost_table_keeps_the_frontier_refusal(self):
+        fake = self.fake_posture({})
+
+        def broken(stances, config, strict=True):
+            raise ValueError("unreadable cost table")
+        fake.table_for = broken
+        with patch.object(lifecycle, "load", return_value=fake), \
+                patch.object(lifecycle, "_SELECTIONS", []):
+            _variant, strongest, highest, models, _applies = lifecycle.workflow_ceiling("claude-code")
+            self.assertEqual((strongest, highest), lifecycle.WORKFLOW_CEILING)
+            self.assertEqual(models["frontier"], "fable")
+            refusal, _, _ = lifecycle.workflow_limits("claude-code", FRONTIER)
+        self.assertIn("names model `fable` in agent(), the `frontier` class", refusal)
+
     def test_a_custom_variants_over_strongest_class_reads_over_ceiling_at_launch(self):
         fake = self.fake_posture({"A": {"class": "light", "effort": "high"},
                                   "B": {"class": "standard", "effort": "medium"}})
