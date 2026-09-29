@@ -25,6 +25,7 @@ import platform
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -324,11 +325,43 @@ def prepare_observation_dir(out):
     """Create this replay tag's new run-owned observation directory before a launch."""
     root = Path(out).resolve()
     target = root / "observations"
-    if target.is_symlink() or target.exists():
+    root.mkdir(parents=True, exist_ok=True)
+    try:  # one atomic create, so a concurrent run with the same tag is refused the same way
+        target.mkdir(mode=0o700)
+    except FileExistsError:
         raise SystemExit("cost-bench: refusing existing observation output %s" % target)
-    target.mkdir(parents=True, mode=0o700)
     (target / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
     return target
+
+
+def observation_stem(name):
+    """A file-safe stem for one session name, injective: a name that needed rewriting carries
+    a hash of the original, so `a/b` and `a-b` never share observation files."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
+    if safe == name:
+        return safe
+    return "%s-%s" % (safe, hashlib.sha256(name.encode("utf-8")).hexdigest()[:10])
+
+
+def refuse_observation_collisions(tasks, opts):
+    """Refuse, before any probe or model call, a plan whose sessions would share a stem."""
+    if not opts.get("observation_dir"):
+        return
+    names = ["preflight-%s" % arm for arm in ARMS]
+    names += ["%s-%s-%d" % (task["id"], arm, rep) for task, rep, arm in schedule(tasks, opts["reps"])]
+    seen = {}
+    for name in names:
+        stem = observation_stem(name)
+        if stem in seen:
+            raise SystemExit("cost-bench: refusing the replay: sessions %r and %r share observation files %s"
+                             % (seen[stem], name, stem))
+        seen[stem] = name
+
+
+def discard_observation(run):
+    """Remove one session's staging directory; its retained copy is already in the archive."""
+    if run:
+        shutil.rmtree(str(run["private"]), ignore_errors=True)
 
 
 def observation_run(opts, name, profile):
@@ -336,7 +369,7 @@ def observation_run(opts, name, profile):
     root = opts.get("observation_dir")
     if not root:
         return None
-    stem = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
+    stem = observation_stem(name)
     archive = Path(root)
     if any((archive / (stem + suffix)).exists() for suffix in (".jsonl", ".errors.jsonl")):
         raise SystemExit("cost-bench: refusing existing observation files for %s" % stem)
@@ -346,7 +379,12 @@ def observation_run(opts, name, profile):
         raise SystemExit("cost-bench: refusing repeated observation session %s" % stem)
     # Only this session's empty output directory enters the container. The retained result
     # directory may be in the host checkout, but no arm can read or alter it or another run.
-    stage = Path(tempfile.mkdtemp(prefix="cost-observation-", dir=opts.get("tmp")))
+    # The stage is open to every user so the image's user can write it whatever its uid, as
+    # `replay_arms.open_for_image` does for the snapshot; it sits inside a private (0o700)
+    # parent, so no other host user can reach it, and `discard_observation` removes both.
+    private = Path(tempfile.mkdtemp(prefix="cost-observation-", dir=opts.get("tmp")))
+    stage = private / "out"
+    stage.mkdir()
     (stage / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
     os.chmod(str(stage), 0o777)
     ledger, errors = stage / (stem + ".jsonl"), stage / (stem + ".errors.jsonl")
@@ -354,7 +392,7 @@ def observation_run(opts, name, profile):
         path.touch(mode=0o666, exist_ok=False)
         os.chmod(str(path), 0o666)
     return {"ledger": ledger, "errors": errors, "archive": archive, "mount": stage,
-            "relative": "observations/" + ledger.name,
+            "private": private, "relative": "observations/" + ledger.name,
             "container_ledger": arms.OBSERVATION_MOUNT + "/" + ledger.name,
             "container_errors": arms.OBSERVATION_MOUNT + "/" + errors.name,
             "profile": profile}
@@ -366,11 +404,17 @@ def observation_result(run):
         return {"observation_ledger": None, "observation_rows": None,
                 "observation_errors": None}, None
     counts, problems = {}, []
+    # The container has exited: close the stage before reading, then accept only regular files
+    # still owned by this user, which the observer's append into the pre-created file keeps.
+    os.chmod(str(run["mount"]), 0o700)
     for key in ("ledger", "errors"):
         path = run[key]
         try:
-            if path.is_symlink() or not path.is_file():
+            info = os.lstat(str(path))
+            if not stat.S_ISREG(info.st_mode):
                 raise ValueError("collector output is not a regular file")
+            if info.st_uid != os.getuid():
+                raise ValueError("collector output is not owned by the invoking user")
             raw = path.read_bytes()
             # Retain malformed output as evidence too; validation never rewrites its contents.
             with (run["archive"] / path.name).open("xb") as archive:
@@ -1078,7 +1122,7 @@ def _attempt(task, rep, arm, opts, launch):
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
-    observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
+    observed = None
 
     def finish(value):
         fields, problem = observation_result(observed)
@@ -1091,6 +1135,7 @@ def _attempt(task, rep, arm, opts, launch):
 
     started = time.time()
     try:
+        observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         try:
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
@@ -1134,6 +1179,7 @@ def _attempt(task, rep, arm, opts, launch):
         return finish(row)
     finally:
         shutil.rmtree(str(workdir.parent), ignore_errors=True)  # removed, never reset
+        discard_observation(observed)
 
 
 def gate_output(stdout):
@@ -1180,6 +1226,7 @@ def preflight(tasks, opts, launch=subprocess.run):
     checks, spent = [], 0.0
     for arm in ARMS:
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
+        collector = None
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
             env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
@@ -1216,6 +1263,7 @@ def preflight(tasks, opts, launch=subprocess.run):
                            "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
+            discard_observation(collector)
     return checks, spent
 
 
@@ -1261,6 +1309,7 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
 
 
 def _replay(tasks, opts, launch, sink):
+    refuse_observation_collisions(tasks, opts)
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     arms.admit_pair(opts["arms"]["bare"], opts["arms"]["harness"])

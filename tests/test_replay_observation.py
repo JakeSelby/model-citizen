@@ -2,6 +2,7 @@
 import json
 import os
 import copy
+import stat
 import tempfile
 import types
 import unittest
@@ -91,6 +92,68 @@ class DestinationTests(unittest.TestCase):
             self.assertEqual(first["ledger"].parent, first["mount"])
             with self.assertRaisesRegex(SystemExit, "repeated observation session"):
                 BENCH.observation_run(opts, "task-bare-1", "bare")
+
+    def test_a_racing_or_symlinked_observation_output_is_refused_uniformly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "run"
+            root.mkdir()
+            (root / "observations").symlink_to(Path(tmp) / "missing")
+            with self.assertRaisesRegex(SystemExit, "refusing existing observation output"):
+                BENCH.prepare_observation_dir(root)
+            # A second run creating the directory between any check and the create is refused
+            # by the create itself, with the same message rather than a raw FileExistsError.
+            other = Path(tmp) / "other"
+            real_mkdir = Path.mkdir
+
+            def racing_mkdir(path, *args, **kwargs):
+                if path.name == "observations":
+                    real_mkdir(path)
+                return real_mkdir(path, *args, **kwargs)
+            with mock.patch.object(Path, "mkdir", racing_mkdir):
+                with self.assertRaisesRegex(SystemExit, "refusing existing observation output"):
+                    BENCH.prepare_observation_dir(other)
+
+    def test_sanitised_task_ids_never_share_observation_files(self):
+        self.assertNotEqual(BENCH.observation_stem("a/b-bare-1"), BENCH.observation_stem("a-b-bare-1"))
+        self.assertEqual(BENCH.observation_stem("a-b-bare-1"), "a-b-bare-1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            opts = {"observation_dir": root, "tmp": tmp}
+            first = BENCH.observation_run(opts, "a/b-bare-1", "bare")
+            second = BENCH.observation_run(opts, "a-b-bare-1", "bare")
+            self.assertNotEqual(first["ledger"].name, second["ledger"].name)
+
+    def test_a_stem_collision_is_refused_before_any_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp, reps=1)
+            opts["observation_dir"] = BENCH.prepare_observation_dir(Path(tmp) / "output")
+            launch = NativeLaunch()
+            with mock.patch.object(BENCH, "observation_stem", lambda name: "same"):
+                with self.assertRaisesRegex(SystemExit, "share observation files"):
+                    BENCH.replay([TASK], opts, launch)
+            self.assertEqual(launch.calls, [])
+
+    def test_staging_is_private_to_the_invoking_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            run = BENCH.observation_run({"observation_dir": root, "tmp": tmp}, "one", "bare")
+            self.assertEqual(run["mount"].parent, run["private"])
+            self.assertEqual(stat.S_IMODE(run["private"].stat().st_mode), 0o700)
+            self.assertEqual(run["private"].stat().st_uid, os.getuid())
+            BENCH.observation_result(run)
+            self.assertEqual(stat.S_IMODE(run["mount"].stat().st_mode), 0o700)
+            BENCH.discard_observation(run)
+            self.assertFalse(run["private"].exists())
+
+    def test_collector_output_owned_by_another_user_is_not_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            run = BENCH.observation_run({"observation_dir": root, "tmp": tmp}, "one", "bare")
+            with mock.patch.object(BENCH.os, "getuid", return_value=os.getuid() + 1):
+                fields, error = BENCH.observation_result(run)
+            self.assertIsNone(fields["observation_rows"])
+            self.assertIn("unreadable ledger", error)
+            self.assertFalse((root / "one.jsonl").exists())
 
     def test_native_settings_are_part_of_each_arm_declaration(self):
         inputs = {"base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.2.3"}
@@ -189,6 +252,36 @@ class ReplayCollectionTests(unittest.TestCase):
             self.assertIsNone(fields["observation_rows"])
             self.assertIn("unreadable ledger", error)
             self.assertFalse((root / "one.jsonl").exists())
+
+    def staged(self, opts):
+        return sorted(Path(opts["tmp"]).glob("cost-observation-*"))
+
+    def test_staging_is_removed_after_archival_on_success_and_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            row, opts = self.run_attempt(tmp, NativeLaunch())
+            self.assertFalse(row["error"])
+            self.assertEqual(self.staged(opts), [])
+            self.assertTrue((Path(opts["observation_dir"]) / "demo-bare-1.jsonl").is_file())
+        with tempfile.TemporaryDirectory() as tmp:
+            row, opts = self.run_attempt(tmp, NativeLaunch(collector_error=True))
+            self.assertTrue(row["error"])
+            self.assertEqual(self.staged(opts), [])
+
+        def broken(command, **kwargs):
+            raise RuntimeError("docker vanished")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError):
+                self.run_attempt(tmp, broken)
+            self.assertEqual(sorted(Path(tmp, "runs").glob("cost-observation-*")), [])
+
+    def test_preflight_staging_is_removed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp, reps=1)
+            opts["observation_dir"] = BENCH.prepare_observation_dir(Path(tmp) / "output")
+            checks, _ = BENCH.preflight([TASK], opts, NativeLaunch())
+            self.assertEqual(len(checks), 2)
+            self.assertEqual(self.staged(opts), [])
+            self.assertTrue((Path(opts["observation_dir"]) / "preflight-bare.jsonl").is_file())
 
     def test_missing_or_errored_collection_makes_the_attempt_an_error_without_losing_cost(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,10 +2,15 @@
 """Observation registration is opt-in and reversible in both native homes."""
 import io
 import json
+import os
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from copy import deepcopy
+from pathlib import Path
+from unittest import mock
 
+from isolation import isolate_home
 from test_harness import REPO, TempHome, harness
 from harness_core import lifecycle, observation
 
@@ -38,6 +43,26 @@ class ObservationSyncTests(TempHome):
         with redirect_stdout(io.StringIO()):
             self.assertEqual(harness.cmd_sync(harness.argparse.Namespace(
                 dry_run=False, adopt=False, adopt_codex=False, print_only=False)), 0)
+
+    def runtime_files(self):
+        return (harness.claude_dir() / "settings.json", harness.codex_dir() / "hooks.json")
+
+    def test_never_opted_sync_persists_the_pre_opt_in_files_byte_for_byte(self):
+        self.sync()
+        opted_out = [path.read_bytes() for path in self.runtime_files()]
+        with tempfile.TemporaryDirectory() as other:
+            isolate_home(Path(other))
+            try:
+                # The sync as it was before the opt-in existed: no observation step at all.
+                with mock.patch.object(harness.observation, "with_observation",
+                                       lambda template, repo, runtime, cfg: template):
+                    self.sync()
+                before = [path.read_bytes() for path in self.runtime_files()]
+            finally:
+                isolate_home(self.home)
+        self.assertEqual(opted_out, before)
+        for raw in opted_out:
+            self.assertNotIn(b"observe.py", raw)
 
     def test_invalid_observation_refuses_before_creating_any_state(self):
         config = harness.config_path()
