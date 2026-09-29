@@ -549,7 +549,13 @@ class SelectionEditingBrowserTests(unittest.TestCase):
                   body: JSON.parse(init.body || '{}'),
                 });
               }
-              return originalFetch(input, init);
+              const response = await originalFetch(input, init);
+              if (url.includes('/api/configure/selection/save')) {
+                const payload = await response.clone().json();
+                globalThis.__savedCheckpoints = (globalThis.__savedCheckpoints || 0) +
+                  (payload.saved ? 1 : 0);
+              }
+              return response;
             };
         """)
         self.devtools.evaluate("""
@@ -576,9 +582,14 @@ class SelectionEditingBrowserTests(unittest.TestCase):
             "[...document.querySelectorAll('.selection-switch-group > summary')]"
             ".find(s => s.textContent.includes('workflows')).click()"
         )
+        # The checkpoint is durable once its response arrives; only then does the
+        # canonical selection replace the workflow switches.
+        self._wait("globalThis.__savedCheckpoints === 1", "mode checkpoint did not land")
         self._wait(
-            "(() => { const label = [...document.querySelectorAll('label')]"
-            ".find(item => item.textContent.trim().startsWith('build'));"
+            "(() => { const group = [...document.querySelectorAll('.selection-switch-group')]"
+            ".find(g => g.querySelector('summary').textContent.includes('workflows'));"
+            "const label = group && [...group.querySelectorAll('label')]"
+            ".find(item => item.textContent.trim() === 'build');"
             "const input = label && (document.getElementById(label.htmlFor) || "
             "label.closest('div').querySelector('input')); return input && !input.checked; })()",
             "canonical mode response did not update the implicit workflow switch",
