@@ -397,6 +397,36 @@ class SwitchKindSyncTests(TempHome):
         self.switch("roles", "reviewer", "on")
         self.assertEqual(harness.load_selection(env={})["roles"]["reviewer"], "on")
 
+    def test_a_switch_can_repair_an_already_invalid_dependency(self):
+        path = harness.config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"roles": {"builder": "off"}}))
+        with self.assertRaisesRegex(SystemExit, "workflows/build depends on roles/builder"):
+            harness.load_selection(env={})
+
+        self.switch("workflows", "build", "off")
+
+        cfg = json.loads(path.read_text())
+        self.assertEqual(cfg["roles"]["builder"], "off")
+        self.assertEqual(cfg["workflows"]["build"], "off")
+        self.assertEqual(harness.load_selection(env={})["workflows"]["build"], "off")
+
+    def test_a_repair_is_refused_while_another_selection_fault_remains(self):
+        path = harness.config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "hooks": {"grade-bash": "off"},
+            "roles": {"builder": "off"},
+        }))
+        before = path.read_text()
+
+        with redirect_stdout(io.StringIO()), self.assertRaisesRegex(
+            SystemExit, "workflows/build depends on roles/builder"
+        ):
+            harness.config_set("hooks.grade-bash", "on")
+
+        self.assertEqual(path.read_text(), before)
+
     def test_a_switch_value_or_unit_config_set_cannot_apply_is_refused(self):
         with self.assertRaises(SystemExit):
             harness.config_set("rules.decisions-and-plans", "maybe")
