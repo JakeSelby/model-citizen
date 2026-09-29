@@ -50,7 +50,7 @@ def replay_args(work, **over):
               "history_dir": str(Path(work) / "history"), "change_note": "",
               "out": str(Path(work) / "out"), "arms_dir": str(Path(work) / "arms"), "raw": None,
               "tmp": None, "skip_preflight": True, "dry_run": False, "exploratory": False,
-              "pre_registration": None}
+              "pre_registration": None, "effort": "high", "allow_surface_drift": False}
     values.update(over)
     repo = Path(work) / "repo"
     if not values["exploratory"] and values["pre_registration"] is None and (repo / ".git").is_dir():
