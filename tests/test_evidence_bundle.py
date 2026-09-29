@@ -398,6 +398,49 @@ Task manifest sha256: %s
                 self.assertTrue(any(phrase in error for error in result["errors"]), result["errors"])
                 self._mutate_rows(lambda row: row.update({"observed_effort": None, "effort": "high"}))
 
+    def _set_arm_effort(self, effort):
+        """Re-declare both arms at `effort`, keeping every row's arm identity consistent."""
+        index = self._index()
+        digests = {}
+        for ref in index["artifacts"]["arms"]:
+            path = self.root / ref["path"]
+            record = json.loads(path.read_text())
+            record["declaration"]["effort"] = effort
+            record["declaration_sha256"] = EVIDENCE.replay_arms.digest(record["declaration"])
+            digests[record["arm"]] = record["declaration_sha256"]
+            self._write_json(path, record)
+            ref["sha256"] = self._sha(path)
+        self._save_index(index)
+        self._mutate_rows(lambda row: row.update(arm_declaration_sha256=digests[row["arm"]]))
+
+    def test_arm_declarations_off_the_design_effort_fail_item_four(self):
+        self._set_arm_effort("low")
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["checks"]["4"])
+        self.assertIn("item 4: bare arm declaration pins effort 'low', not the design's 'high'",
+                      result["errors"])
+        self.assertIn("item 4: harness arm declaration pins effort 'low', not the design's 'high'",
+                      result["errors"])
+
+    def test_arm_declaration_pinning_no_effort_fails_item_four(self):
+        self._set_arm_effort(None)
+        result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertFalse(result["checks"]["4"])
+        self.assertIn("item 4: bare arm declaration pins no effort", result["errors"])
+        self.assertIn("item 4: harness arm declaration pins no effort", result["errors"])
+
+    def test_arm_declarations_at_the_design_effort_verify(self):
+        self._set_arm_effort("low")
+        index = self._index()
+        index["design"]["effort"] = "low"
+        self._save_index(index)
+        self._mutate_rows(lambda row: row.update(effort="low", observed_effort="low"))
+        result = EVIDENCE.verify(self.root)
+        self.assertTrue(result["ok"], result["errors"])
+        self.assertTrue(result["checks"]["4"])
+
     def test_surface_claim_needs_the_init_surface_on_every_attempt(self):
         def drop_init(row):
             if row["arm"] == "harness":

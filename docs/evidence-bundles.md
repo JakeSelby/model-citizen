@@ -47,7 +47,8 @@ and must equal the pinned model; its `observed_model` is what the trial's transc
 required, prices the trial, and counts a fallback when it differs from the pin. Every evidence-eligible row must
 carry the CLI init event's loaded-surface counts and content hashes; a missing init event stays
 `unknown` and fails item 3 rather than counting as a stable surface. Requested effort is the pin,
-and a row's requested `effort` must equal it. `observed_effort: null` explicitly means the headless client did
+and a row's requested `effort` must equal it. Each arm record's declaration must pin that
+same effort; one pinning none or another fails item 4. `observed_effort: null` explicitly means the headless client did
 not report an observation; it is retained as unknown, never filled from the request, and a row with
 no `observed_effort` field fails item 3. A non-null observation must equal the pin. The result's
 `unknown` list, and the command's text output, name each arm whose effort or loaded surface was not

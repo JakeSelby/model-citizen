@@ -787,6 +787,14 @@ def _verify_loaded(bundle, git):
         if not isinstance(record, dict):
             _error(errors, 3, "arm record is not an object")
             continue
+        # Rows only claim the effort; the declaration is what the arm was built and launched at.
+        declaration = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+        pinned = declaration.get("effort")
+        if pinned is None:
+            _error(errors, 4, "%s arm declaration pins no effort" % record.get("arm"))
+        elif pinned != design.get("effort"):
+            _error(errors, 4, "%s arm declaration pins effort %r, not the design's %r"
+                   % (record.get("arm"), pinned, design.get("effort")))
         try:
             replay_arms.admit(record)
         except (SystemExit, AttributeError, KeyError, TypeError, ValueError) as exc:
