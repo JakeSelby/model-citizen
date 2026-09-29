@@ -309,21 +309,26 @@ selection, with the bare arm beside them in every trial.
   change that exists only at build time cannot be a pair factor.
 - **Three arms, the lead rotating.** Every trial runs bare, reference and treatment, and the arm
   that goes first rotates through all three across trials, so none always runs on another's warm
-  cache. Each row names its `arm`, the `ablation` it answers (name, digest, schema), the `factor`
-  and the `selection` its arm ran with.
+  cache. Each row names its `arm`, the `ablation` it answers (name, digest, schema and its
+  `factors`, a list) and the `selection` its arm ran with, so a design of more factors writes the
+  same row keys. `summarise` recognises a pair by its `ablation`, so a pair stopped at its spend
+  cap before every arm ran is still reported as a pair, each unfinished trial named.
 - **Parity is checked before launch and after the run.** Before anything is spent, the two
   harness arms' launch specs (image id, declaration and manifest digests, commit, model, run cap,
   command line, environment by value, network, proxy, credential name, protocol stamp, and the
   task file and price table digests) must differ in the factor and nothing else, and this
   checkout's resolver must give the two selections different profile fingerprints; either
-  refusal names every difference. After the run, `summarise` compares each trial's loaded surface
+  refusal names every difference. `replay --pair` launches both harness arms from one image
+  record with `--stance-cost` refused, so the spec check holds by construction there; it guards
+  arm records assembled any other way, such as ones read back from the arms directory. After the run, `summarise` compares each trial's loaded surface
   between reference and treatment, and exits 1 naming each trial that differs.
 - **Decision calls are copied out, never mounted in.** A harness arm's container is kept after it
   exits; its usage ledger is copied out with `docker cp`, then the container is removed by name,
   on a timeout too. Only `kind: "decision"` rows are kept, in `decisions/` beside the results.
   Every row records `decision_ledger`: `read`, `absent` for the bare arm, or `unknown: <reason>`
   when the copy failed, which is never read as no calls. The egress rule is unchanged, so a call
-  to a remote decision provider cannot complete from an arm, and its row, if any, is unpriced.
+  to a remote decision provider cannot complete from an arm; its row, if any, is unpriced, and the
+  report labels it `blocked by egress` when the row records a network failure.
 - **Costing.** Per arm, `summarise` reports attempts, passes with a Wilson interval, pooled
   Cost-of-Pass for workers alone and with the arm's decision calls, total and per-attempt wall
   time, and `respawns_up` (a brief spawned again on a stronger model class, ranked by the classes

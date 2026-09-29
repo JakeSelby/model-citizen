@@ -1259,7 +1259,12 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
 
 def admit_pair_arms(opts):
     """A pair's two refusals before any spend: `replay_pair.parity` over the two harness arms'
-    launch specs, then `replay_pair.effective_difference` over their resolved profiles."""
+    launch specs, then `replay_pair.effective_difference` over their resolved profiles.
+
+    `replay_tag` gives both harness arms the one image record and refuses `--stance-cost` with a
+    pair, so their specs differ only in the selection and the spec check cannot fire there. It is
+    kept for arm records assembled any other way, such as ones read back from the declaration and
+    manifest files `replay_arms.write_record` leaves in the arms directory."""
     pair = opts["pair"]
     replay_pair.admit(arm_spec(replay_pair.REFERENCE, opts), arm_spec(replay_pair.TREATMENT, opts), pair["factor"])
     fingerprints = [arm_profile(arm, arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm)), opts)
@@ -1770,6 +1775,7 @@ def replay_tag(tag, args, common, harness):
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
         if pair:
+            # One record for both harness arms: launch-spec parity is exact by construction here.
             opts.update(arm_names=replay_pair.ARMS, pair=pair, selections=replay_pair.selections(pair),
                         arms={"bare": common["bare"], "reference": harness, "treatment": harness},
                         decisions=out / replay_pair.DECISIONS, tasks_sha256=replay_pair.sha256(args.tasks),

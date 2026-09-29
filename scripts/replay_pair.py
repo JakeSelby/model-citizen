@@ -12,8 +12,9 @@ Each arm is scored on pooled Cost-of-Pass (`replay_stats`), workers alone and wi
 decision-provider calls, which are copied out of each harness container's usage ledger, joined to
 the attempt by session id and priced from the price table. An unpriced call, or a ledger that could
 not be read, leaves the with-decisions figure undefined and is named; it is never counted as zero.
-Rows are keyed by arm name and carry the selection they ran with, so a runner of any number of
-declared arms can write the same rows. Reading and limits: docs/benchmarks.md, "Pairs".
+Rows are keyed by arm name and carry the selection they ran with, and their `ablation` record
+names the design's factors as a list, so a runner of more factors or more arms writes the same
+row keys; `is_pair` recognises the rows by that record, whichever arms ran. Reading and limits: docs/benchmarks.md, "Pairs".
 
 Standard library only, and no model call.
 """
@@ -98,9 +99,27 @@ def selections(manifest):
 
 
 def row_stamp(manifest, arm):
-    """What every pair row adds: the ablation it answers and the selection its arm ran with."""
-    return {"ablation": {"name": manifest["name"], "sha256": manifest["sha256"], "schema": SCHEMA},
-            "factor": manifest["factor"], "selection": dict(selections(manifest)[arm])}
+    """What every pair row adds: the ablation it answers, with its design, and the selection its
+    arm ran with. The design is `factors`, a list, and each arm's selection maps every factor to
+    its value, so a design of more factors or more arms writes the same row keys."""
+    return {"ablation": {"name": manifest["name"], "sha256": manifest["sha256"], "schema": SCHEMA,
+                         "factors": [manifest["factor"]]},
+            "selection": dict(selections(manifest)[arm])}
+
+
+def ablation_of(rows):
+    """The first row's `ablation` record, or None when no row carries one."""
+    return next((r["ablation"] for r in rows if isinstance(r.get("ablation"), dict)), None)
+
+
+def factors_of(rows):
+    """The factors a pair's rows varied: the ablation's `factors`, or the scalar `factor` a row
+    written before the list carried."""
+    ablation = ablation_of(rows) or {}
+    if isinstance(ablation.get("factors"), list):
+        return list(ablation["factors"])
+    legacy = next((r.get("factor") for r in rows if r.get("factor")), None)
+    return [legacy] if legacy else []
 
 
 def effective_difference(reference, treatment):
@@ -246,6 +265,21 @@ def load_pricing(root=ROOT):
     return module
 
 
+def unpriced_reason(decision):
+    """Why a decision row has no price. A `partial` row that says its call never reached the
+    provider over the network (`decisions.ledger` writes status `unavailable`, error `network`)
+    is labelled as blocked: a harness arm's only way out is the model-API allowlist, so a remote
+    decision provider cannot be reached from it. Any other cause the row names is kept."""
+    if not decision.get("partial"):
+        return "no price for %s" % (decision.get("model") or "an unnamed model")
+    status, error = decision.get("status"), decision.get("error")
+    if status == "unavailable" and error == "network":
+        return "partial: blocked by egress (unavailable: network)"
+    if status and status != "ok":
+        return "partial (%s%s)" % (status, ": %s" % error if error else "")
+    return "partial"
+
+
 def decision_rollup(rows, decisions, table, pricing=None):
     """Per harness arm: `{calls, priced_usd, unpriced, unmatched, unknown, decision_seconds}`.
 
@@ -281,8 +315,7 @@ def decision_rollup(rows, decisions, table, pricing=None):
                     roll["decision_seconds"] += ms / 1000.0
                 cost = pricing.row_cost(decision, table)
                 if cost is None:
-                    reason = "partial" if decision.get("partial") else "no price for %s" % (decision.get("model") or "an unnamed model")
-                    roll["unpriced"].append(dict(named, reason=reason))
+                    roll["unpriced"].append(dict(named, reason=unpriced_reason(decision)))
                 else:
                     roll["priced_usd"] += cost
         roll["priced_usd"] = round(roll["priced_usd"], 6)
@@ -305,7 +338,19 @@ def attempt_decision_cost(row, decisions, table, pricing):
 # --- The pair summary -----------------------------------------------------------------------------
 
 def is_pair(rows):
-    return bool(rows) and {r.get("arm") for r in rows} == set(ARMS)
+    """True when the rows answer an ablation, whichever of its arms ran: a pair stopped at its
+    spend cap before every arm ran is still a pair, and its decision costs are still reported."""
+    return ablation_of(rows) is not None
+
+
+def incomplete(rows):
+    """One line per trial some arm of the pair did not run, as when the spend cap stopped it."""
+    ran = {}
+    for row in rows:
+        ran.setdefault((row.get("task"), row.get("rep")), set()).add(row.get("arm"))
+    return ["%s rep %s: %s did not run" % (task, rep, ", ".join(a for a in ARMS if a not in arms))
+            for (task, rep), arms in sorted(ran.items(), key=lambda k: (str(k[0][0]), k[0][1] or 0))
+            if set(ARMS) - arms]
 
 
 def default_surface(row):
@@ -316,13 +361,13 @@ def default_surface(row):
 
 
 def surface_parity(rows, surface=default_surface):
-    """One reason per trial whose reference and treatment surfaces differ, or that lacks one arm."""
+    """One reason per trial whose reference and treatment surfaces differ. A trial that lacks one
+    arm compares nothing and is named by `incomplete` instead."""
     by = {(r.get("task"), r.get("rep"), r.get("arm")): r for r in rows if r.get("arm") in HARNESS_ARMS}
     reasons = []
     for task, rep in sorted({(t, p) for t, p, _ in by}, key=lambda k: (str(k[0]), k[1] or 0)):
         ref, treat = by.get((task, rep, REFERENCE)), by.get((task, rep, TREATMENT))
         if ref is None or treat is None:
-            reasons.append("%s rep %s: only the %s arm ran" % (task, rep, REFERENCE if treat is None else TREATMENT))
             continue
         left, right = surface(ref), surface(treat)
         if left != right:
@@ -391,12 +436,12 @@ def summarise(rows, decisions, table, seed=replay_stats.SEED, resamples=replay_s
             entry["with_decisions_undefined"] = None
         else:
             roll = rollup[arm]
-            causes = []
+            causes = [] if n else ["the arm did not run"]
             if roll["unknown"]:
                 causes.append("%d attempt(s) with no readable decision ledger" % len(roll["unknown"]))
             if roll["unpriced"]:
                 causes.append("%d unpriced decision call(s)" % len(roll["unpriced"]))
-            if workers is None:
+            if workers is None and n:
                 causes.append("a worker run with no readable cost")
             whole = None if causes else workers + roll["priced_usd"]
             if whole is not None and not passes:
@@ -418,11 +463,10 @@ def summarise(rows, decisions, table, seed=replay_stats.SEED, resamples=replay_s
         comparisons[name] = {"workers": _intervals(rows, pair, seed, resamples),
                              "with_decisions": _intervals(with_decisions, pair, seed, resamples)}
     reasons = surface_parity(rows, surface)
-    first = rows[0]
-    return {"ablation": first.get("ablation"), "factor": first.get("factor"),
+    return {"ablation": ablation_of(rows), "factors": factors_of(rows),
             "selections": {arm: next((r.get("selection") for r in rows if r.get("arm") == arm), None) for arm in ARMS},
             "seed": seed, "resamples": resamples, "arms": arms, "comparisons": comparisons,
-            "pareto": replay_stats.pareto({"arms": arms}, ARMS),
+            "pareto": replay_stats.pareto({"arms": arms}, ARMS), "incomplete": incomplete(rows),
             "parity": {"ok": not reasons, "reasons": reasons}}
 
 
@@ -437,11 +481,19 @@ def _span(interval):
 def render(result):
     """The pair report as text. No SM-2 verdict is printed: its rule is harness against bare."""
     ablation = result.get("ablation") or {}
-    lines = ["Pair %s: factor %s, reference %r, treatment %r; seed %d, %d resamples"
-             % (ablation.get("name"), result.get("factor"),
-                (result["selections"].get(REFERENCE) or {}).get(result.get("factor")),
-                (result["selections"].get(TREATMENT) or {}).get(result.get("factor")),
+    factors = result.get("factors") or []
+
+    def chosen(arm):
+        selection = result["selections"].get(arm) or {}
+        if len(factors) == 1:
+            return repr(selection.get(factors[0]))
+        return "{%s}" % ", ".join("%s: %r" % (f, selection.get(f)) for f in factors)
+
+    lines = ["Pair %s: factor %s, reference %s, treatment %s; seed %d, %d resamples"
+             % (ablation.get("name"), ", ".join(factors) or "unknown", chosen(REFERENCE), chosen(TREATMENT),
                 result["seed"], result["resamples"])]
+    for item in result.get("incomplete") or []:
+        lines.append("  incomplete trial, the run stopped before it: %s" % item)
     for arm in ARMS:
         a = result["arms"][arm]
         lines.append("  %s: %d/%d passed (%d errored), pass rate %s, Wilson %s (descriptive)"

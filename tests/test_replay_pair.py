@@ -351,7 +351,7 @@ def attempt(arm, rep=1, task="demo", passed=True, cost=0.5, sessions=("s1",), le
             "session_ids": list(sessions), "decision_ledger": "absent" if arm == "bare" else ledger,
             "wall_seconds": wall, "respawns_up": respawns, "spawns_unranked": unranked,
             "init_surface_source": "cli-init", "init_skills": skills, "observed_effort": None,
-            "ablation": {"name": "delegation-off", "sha256": "0" * 64, "schema": 1}, "factor": FACTOR,
+            "ablation": {"name": "delegation-off", "sha256": "0" * 64, "schema": 1, "factors": [FACTOR]},
             "selection": {} if arm == "bare" else {FACTOR: "off" if arm == "treatment" else None}}
 
 
