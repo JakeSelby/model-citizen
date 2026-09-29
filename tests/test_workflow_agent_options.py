@@ -15,6 +15,8 @@ from unittest.mock import patch
 from test_harness import REPO  # noqa: F401  (puts lib/ on the path)
 from harness_core import lifecycle
 
+real_load = lifecycle.load
+
 WITHIN = ("await parallel([\n"
           "  agent('Summarise it.', { label: 'a', model: 'sonnet', effort: 'low' }),\n"
           "  agent('Plan it.', { label: 'b', model: 'claude-opus-4-1', effort: \"high\" }),\n"
@@ -29,6 +31,20 @@ SHORTHAND = "const effort = choose();\nawait agent('Pick one.', { label: 'x', ef
 TEMPLATE = "const tier = 'op';\nawait agent('Pick one.', { model: `${tier}us` });\n"
 UNKNOWN_MODEL = "await agent('Use another.', { model: 'gpt-9' });\n"
 UNKNOWN_EFFORT = "await agent('Try it.', { effort: 'extreme' });\n"
+BRACKET_ASSIGNED = "const o = {};\no['model'] = 'fable';\nawait agent('Design it.', o);\n"
+BRACKET_COMPUTED = "await agent('Design it.', {['model']: 'fable'});\n"
+BRACKET_JOINED = "await agent('Design it.', {[`mod` + 'el']: 'fable'});\n"
+BLOCK_COMMENTED = "await agent('Design it.', { model: 'fable' /* top */ });\n"
+LINE_COMMENTED = "await agent('Design it.', {\n  label: 'd',\n  model: 'fable' // best\n});\n"
+PARENTHESISED = "await agent('Design it.', { model: ('fable') });\n"
+AS_CONST = "await agent('Design it.', { model: 'fable' as const });\n"
+ESCAPED_WITHIN = "await agent('Summarise it.', { model: 'sonn\\u0065t', effort: 'l\\x6fw' });\n"
+COMMENTED_OUT = ("// never set model: 'fable'\n"
+                 "/* effort: 'max' */\n"
+                 "await agent('Summarise it.', { model: 'sonnet' });\n")
+TYPED = ("type Options = { model: 'fable'; effort: 'max' }\n"
+         "interface Wide {\n  model: 'fable'\n}\n"
+         "await agent('Summarise it.', { model: 'haiku' });\n")
 PROSE = ("// Pick the model and effort per task; effort === 'max' is never right here.\n"
          "if (effort === 'max') throw new Error('no');\n"
          "await agent('Explain which model is best and why effort matters.', { label: 'p' });\n")
@@ -56,6 +72,29 @@ class WorkflowOptionReadTests(unittest.TestCase):
         self.assertEqual(lifecycle.workflow_options(FRONTIER_ESCAPED)[0], [("model", "claude-fable-1")])
         self.assertEqual(lifecycle.workflow_options(FRONTIER_ASSIGNED)[0], [("model", "fable")])
         self.assertIn(("effort", "effort (shorthand)"), lifecycle.workflow_options(SHORTHAND)[1])
+
+    def test_every_spelling_of_a_model_key_is_read(self):
+        for script in (BRACKET_ASSIGNED, BRACKET_COMPUTED, BRACKET_JOINED):
+            with self.subTest(script=script[:40]):
+                self.assertEqual(lifecycle.workflow_options(script), ([("model", "fable")], []))
+
+    def test_a_literal_is_whole_past_comments_parentheses_and_as_const(self):
+        for script in (BLOCK_COMMENTED, LINE_COMMENTED, PARENTHESISED, AS_CONST):
+            with self.subTest(script=script[:50]):
+                self.assertEqual(lifecycle.workflow_options(script), ([("model", "fable")], []))
+
+    def test_an_escaped_value_is_read_once_as_its_decoded_form(self):
+        self.assertEqual(lifecycle.workflow_options(ESCAPED_WITHIN),
+                         ([("model", "sonnet"), ("effort", "low")], []))
+
+    def test_comments_and_typescript_types_say_nothing(self):
+        self.assertEqual(lifecycle.workflow_options(COMMENTED_OUT), ([("model", "sonnet")], []))
+        self.assertEqual(lifecycle.workflow_options(TYPED), ([("model", "haiku")], []))
+
+    def test_a_regular_expression_or_template_substitution_keeps_the_read_in_step(self):
+        script = "const q = /'/g;\nawait agent(`Use ${ {model: 'fable'}.model }`, { effort: 'low' });\n"
+        self.assertEqual(lifecycle.workflow_options(script),
+                         ([("model", "fable"), ("effort", "low")], []))
 
     def test_prose_and_comparisons_say_nothing(self):
         self.assertEqual(lifecycle.workflow_options(PROSE), ([], []))
@@ -87,6 +126,27 @@ class WorkflowCeilingTests(unittest.TestCase):
             refusal, _, _ = lifecycle.workflow_limits("claude-code", FRONTIER)
         self.assertIn("names model `fable` in agent(), the `frontier` class", refusal)
         self.assertIn("name `sonnet` or a lighter model", refusal)
+
+    def test_a_custom_variants_over_strongest_class_reads_over_ceiling_at_launch(self):
+        fake = self.fake_posture({"A": {"class": "light", "effort": "high"},
+                                  "B": {"class": "standard", "effort": "medium"}})
+        script = "await agent('Plan it.', { model: 'claude-opus-4-1', effort: 'low' });\n"
+        with tempfile.TemporaryDirectory() as home, \
+                patch.dict(os.environ, {"HOME": home, "PATH": os.environ["PATH"]}, clear=True), \
+                patch.object(lifecycle, "load", side_effect=lambda name: fake if name == "posture"
+                             else real_load(name)), \
+                patch.object(lifecycle, "_SELECTIONS", [{"stances": {"cost": "custom",
+                                                                     "delegation": "tiered"}}]):
+            module = lifecycle.decisions()
+            with patch.object(module, "_CONFIG", [{}]):
+                result = lifecycle.dispatch("claude-code", {
+                    "hook_event_name": "PreToolUse", "tool_name": "Workflow",
+                    "session_id": "wf-custom", "cwd": home, "tool_input": {"script": script}})
+            log = Path(home) / ".local" / "state" / "agent-harness" / "decisions.jsonl"
+            rows = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        self.assertNotEqual(decision(result), "deny", "a custom variant's over-strongest class is logged")
+        self.assertEqual([row["deterministic_answer"] for row in rows
+                          if row.get("point") == lifecycle.WORKFLOW_POINT], ["over-ceiling"])
 
     def test_a_frontier_row_never_lifts_the_ceiling(self):
         fake = self.fake_posture({"C": {"class": "frontier", "effort": "high"}})
@@ -132,20 +192,22 @@ class WorkflowAgentOptionLaunchTests(unittest.TestCase):
         return [row["deterministic_answer"] for row in rows if row.get("point") == lifecycle.WORKFLOW_POINT]
 
     def test_values_within_the_ceiling_are_allowed(self):
-        for script in (WITHIN, PROSE):
+        for script in (WITHIN, PROSE, ESCAPED_WITHIN, COMMENTED_OUT, TYPED):
             with self.subTest(script=script[:30]):
                 self.assertNotEqual(decision(self.launch(script)), "deny")
-        self.assertEqual(self.answers(), ["allow", "allow"])
+        self.assertEqual(self.answers(), ["allow"] * 5)
 
     def test_a_frontier_model_is_refused(self):
-        for script in (FRONTIER, FRONTIER_ESCAPED, FRONTIER_ASSIGNED):
+        spellings = (FRONTIER, FRONTIER_ESCAPED, FRONTIER_ASSIGNED, BRACKET_ASSIGNED, BRACKET_COMPUTED,
+                     BRACKET_JOINED, BLOCK_COMMENTED, LINE_COMMENTED, PARENTHESISED, AS_CONST)
+        for script in spellings:
             with self.subTest(script=script[:40]):
                 result = self.launch(script)
                 self.assertEqual(decision(result), "deny")
                 self.assertIn("the `frontier` class, which no spawn may request", reason(result))
                 self.assertIn("past every spawn guard", reason(result))
                 self.assertIn("name `opus` or a lighter model", reason(result))
-        self.assertEqual(self.answers(), ["deny"] * 3)
+        self.assertEqual(self.answers(), ["deny"] * len(spellings))
 
     def test_an_effort_above_the_ceiling_is_logged_not_refused(self):
         for script, effort in ((XHIGH, "xhigh"), (MAX, "max")):

@@ -744,8 +744,10 @@ a different band by naming `worker-a`, `worker-b` or `worker-c`. Routing must re
 change to the runtime's agent registry. **Status:** partial:
 - implemented (0.11);
 - routing resume is unreleased (#584);
-- the Workflow tool's `agent()` calls bypass routing; the launch refuses a literal `frontier` model
-  and logs one above the cost variant's ceiling as `over-ceiling` (#915, v0.15.0).
+- the Workflow tool's `agent()` calls bypass routing: the launch refuses a literal `frontier` model
+  and logs an effort above the cost variant's ceiling, or a class above a custom variant's
+  strongest, as `over-ceiling` (#915, v0.15.0); an `agent()` naming no `model` still runs on the
+  session model, which is the routing gap itself.
 
 **Consequences (testable):**
 - An unnamed spawn is rewritten to the posture's default band, and the usage ledger records the band.

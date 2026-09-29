@@ -32,6 +32,10 @@ effort any of its rows grants, never `frontier` and never above `high`) is let t
 row reads `over-ceiling`: an effort such as `xhigh` or `max`, or a class above a custom variant's
 strongest. A computed value, a shorthand property, a model the table does not hold or an effort
 outside `low` to `max` cannot be judged, so the launch goes ahead and its row reads `unresolved`.
+The script is read as code: every spelling of the key counts (`model`, `'model'`, `o['model']`,
+an escaped name), and a comment, a string's text or a TypeScript type does not. A value set
+through a variable, a helper function's parameter or an imported module reads `unresolved`, or is
+not seen at all, and an `agent()` naming no `model` runs on the session model.
 Each launch is one `workflow-launch` row in the decision log. A built-in
 workflow or a resumed run carries no script for the guard to read.
 
