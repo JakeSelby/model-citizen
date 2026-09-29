@@ -115,6 +115,20 @@ class NamedDisabledRoleTests(unittest.TestCase):
         result = self.spawn("codex", role="custom-worker")
         self.assertIn("switched off", result["hookSpecificOutput"]["permissionDecisionReason"])
 
+    def test_custom_role_without_frontmatter_remains_switched_off(self):
+        root = self.home / "custom"
+        (root / "roles").mkdir(parents=True)
+        (root / "roles" / "custom-worker.md").write_text("Work without frontmatter.\n")
+        self.user({"custom-worker": "off"})
+        path = self.home / ".config" / "agent-harness" / "config.json"
+        config = json.loads(path.read_text())
+        config["primitive_roots"] = [str(root)]
+        path.write_text(json.dumps(config))
+        for runtime in ("claude-code", "codex"):
+            with self.subTest(runtime=runtime):
+                result = self.spawn(runtime, role="custom-worker")
+                self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_broken_custom_role_cannot_erase_effective_role_or_delegation_switches(self):
         root = self.home / "custom"
         (root / "roles").mkdir(parents=True)
@@ -162,7 +176,7 @@ class NamedDisabledRoleTests(unittest.TestCase):
             raise ValueError("outer")
         posture = type("Posture", (), {"_user_config": staticmethod(lambda *a: {}),
                                       "selection": staticmethod(lambda **k: outer),
-                                      "role_catalog": staticmethod(lambda cfg: ({"builder"}, set()))})()
+                                      "primitive_roots": staticmethod(lambda *a, **k: [REPO / "primitives/roles"])})()
         with patch.object(lifecycle, "load", return_value=posture), \
                 patch.object(lifecycle, "_dispatch", side_effect=dispatch):
             with self.assertRaisesRegex(ValueError, "outer"):
