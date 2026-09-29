@@ -131,14 +131,14 @@ _PLACEHOLDER = "__ROSUB__"  # stands in for a verified substitution; never a rea
 # Redirection tokens that are safe on their own: input redirects (their operand is
 # read, never written) and fd duplication.
 READ_REDIRECTS = {"<", "<<", "<<<", "<&"}
-WRITE_REDIRECTS = re.compile(r"^\d*(>|>>|>!|>>!|>\||&>|&>>|>&|<>)$")
-PUNCTUATION_RUN = re.compile(r"^\d*(?:[<>&|]+|>{1,2}!)$")
+WRITE_REDIRECTS = re.compile(r"^\d*(?:&?>>?[!|]?|>&|<>)$")
+PUNCTUATION_RUN = re.compile(r"^\d*[<>&|]+!?$")
 
 
 # Characters that begin an operator outside quotes, and the operators they spell, longest
 # first. `;&` and `;;&` are not listed, so they split into delimiters and fail closed.
 OPERATOR_CHARS = "();<>|&"
-OPERATORS = (">>!", ">!", "&>>", "<<<", "&&", "||", ";;", "|&", "&>", ">>", ">&", ">|", "<<", "<&", "<>",
+OPERATORS = ("&>>!", "&>>|", "&>!", "&>|", ">>!", ">>|", ">!", "&>>", "<<<", "&&", "||", ";;", "|&", "&>", ">>", ">&", ">|", "<<", "<&", "<>",
              ";", "&", "|", "(", ")", "<", ">")
 _WHITESPACE = " \t\r\n"
 

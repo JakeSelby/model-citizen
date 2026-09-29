@@ -1427,7 +1427,7 @@ def _plain_words(line, redirects=False):
         elif redirects and c in "<>":
             if i + 1 < n and line[i + 1] in "<>|&!" and not (c == ">" and line[i + 1] == ">"):
                 return None
-            if started:
+            if started and not ("".join(word).isdigit() and not any(marks)):
                 words.append(("".join(word), all(marks), marks))
             word, marks, started = [], [], False
             operator = c
@@ -1565,7 +1565,8 @@ def _policy_hits(command, found, walked=True):
         else:
             match = CONFIG_RE.search(command)
             if match is None:
-                match = re.search(r"\.config[/\\]+agent-harness[/\\]+[^\s]*[{}*?\[]", command)
+                match = re.search(r"\.config[^\s]*[{}*?\[][^\s]*config\.json|"
+                                  r"\.config[/\\]+agent-harness[/\\]+[^\s]*[{}*?\[]", command)
             if match and not (walked and literal_text_command(command)):
                 hits = ["the harness configuration " + match.group(0)
                         + ", which selects the decision provider"]

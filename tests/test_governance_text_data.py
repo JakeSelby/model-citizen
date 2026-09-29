@@ -84,7 +84,9 @@ class LiteralDocumentationWrites(Home):
         payload = "'x[$(cp /tmp/p " + target + "; echo 1)]'"
         for command in ("printf >/dev/null -v " + payload + " %s x",
                         "printf '%n' " + payload,
-                        "tee ~/.config/agent-harness/{config.json,other} </dev/null"):
+                        "printf 2>/dev/null '%n' " + payload,
+                        "tee ~/.config/agent-harness/{config.json,other} </dev/null",
+                        "tee ~/.config/{agent-harness,other}/config.json </dev/null"):
             with self.subTest(command=command):
                 self.assertFalse(grader.literal_text_command(command))
                 answer, reason = self.bash(command)
@@ -96,7 +98,7 @@ class LiteralDocumentationWrites(Home):
         target = self.home / ".config" / "agent-harness" / "config.json"
         link = self.home / "document.md"
         link.symlink_to(target)
-        for operator in (">!", ">>!"):
+        for operator in (">!", ">>!", ">&", "&>!", "&>>!", ">|", ">>|", "&>|", "&>>|"):
             with self.subTest(operator=operator):
                 answer, reason = self.bash("echo x " + operator + " " + str(link))
                 self.assertEqual(answer, "ask", reason)
