@@ -1573,14 +1573,14 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
                 slug, top = places[where]
                 root = top or where
             resolved.append((action_class, level_grade, slug, root))
-        # The provider is selected, loaded and its policy read for the command's own directory
-        # before any segment is looked at. A provider that cannot be used then asks for the whole
-        # command, whatever its segments grade: a line whose only graded part is hidden from the
-        # segment walk, such as `cd $(cat x)`, must not pass for want of a segment to ask about.
-        providers[home_root] = decision.select_provider(config, root=home_root, variant=variant)
-        load = getattr(providers[home_root], "policy", None)
-        if callable(load):
-            load()
+        # Validate every involved policy before any judgments, including the command's home
+        # policy when its only positive-grade action is hidden from the segment walk.
+        roots = dict.fromkeys([home_root] + [row[3] for row in resolved])
+        for root in roots:
+            providers[root] = decision.select_provider(config, root=root, variant=variant)
+            load = getattr(providers[root], "policy", None)
+            if callable(load):
+                load()
     except Exception as exc:
         error = "%s: %s" % (type(exc).__name__, exc)
         rows = resolved + [(action_class, level_grade, None, None)
@@ -1594,8 +1594,6 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
     worst = None
     for action_class, level_grade, slug, root in resolved:
         try:
-            if root not in providers:
-                providers[root] = decision.select_provider(config, root=root, variant=variant)
             answer = providers[root].decide(decision.Action(action_class, level_grade), slug)
             if answer.outcome not in RANK:
                 raise decision.PolicyError("provider %s answered %r, not allow, ask or deny"
