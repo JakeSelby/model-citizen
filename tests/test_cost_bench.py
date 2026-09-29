@@ -233,6 +233,7 @@ def options(tmp, **over):
             "arms": {"bare": arm_record("bare"), "harness": arm_record("harness")},
             "network": "model-citizen-arm-egress-test", "proxy": "http://model-citizen-arm-proxy-test:3128",
             "client_env": {"PATH": "/bin", "CLAUDE_CODE_OAUTH_TOKEN": SECRET},
+            "contamination_checker": lambda tasks, repo, commit, tmp: [],
             "skip_preflight": True}  # the pre-flight has its own tests; these count scored launches
     (Path(tmp) / "runs").mkdir()
     opts["repo"].parent.joinpath("home").mkdir()
@@ -362,6 +363,27 @@ class ReplayCaptureTests(unittest.TestCase):
         self.assertEqual(parsed["spawns"], 3)
         self.assertEqual(BENCH.parse_result(json.dumps(result()))["tool_counts"], {})
 
+    def test_an_installed_checkout_reference_is_recorded_without_command_text(self):
+        message = call(None, ["Read"])
+        message["message"]["content"][0]["input"] = {
+            "file_path": "/opt/model-citizen/policy/hooks/stop-gate.py"}
+        parsed = BENCH.parse_result(json.dumps([message, result()]))
+        self.assertEqual(parsed["installed_checkout_reads"],
+                         ["Read:/opt/model-citizen"])
+
+    def test_a_scored_run_that_reads_the_installed_checkout_fails(self):
+        message = call(None, ["Read"])
+        message["message"]["content"][0]["input"] = {
+            "file_path": "/opt/./model-citizen/policy/hooks/stop-gate.py"}
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp, reps=1)
+            rows, _ = BENCH.replay([TASK], opts, Launch([json.dumps([message, result()])] * 2))
+        self.assertEqual([row["error_kind"] for row in rows],
+                         ["installed-checkout-read", "installed-checkout-read"])
+        self.assertTrue(all(row["passed"] is None for row in rows))
+        self.assertTrue(all(row["contamination_control"] == BENCH.CONTAMINATION_CONTROL
+                            for row in rows))
+
     def test_hook_blocks_is_none_for_output_kept_as_one_json_document(self):
         """Hook lifecycle events are the only structured place a Stop hook's `block` appears, and
         the CLI emits them only under `--include-hook-events`, which its help limits to
@@ -389,6 +411,50 @@ class ReplayRunTests(unittest.TestCase):
             launch = Launch([])
             rows, stopped = BENCH.replay([TASK], options(tmp, spend_cap=1.5), launch)
             self.assertEqual((rows, stopped, launch.calls), ([], True, []))
+
+    def test_contamination_refuses_before_a_probe_or_model_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([])
+            opts = options(tmp, contamination_checker=lambda *args: ["demo: exposed"])
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], opts, launch)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual((launch.probes, launch.calls), ([], []))
+
+    def test_an_issue_task_is_refused_even_when_the_same_fix_is_not_an_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            parent = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            base_branch = subprocess.check_output(
+                ["git", "-C", str(repo), "branch", "--show-current"]).decode().strip()
+            subprocess.run(["git", "-C", str(repo), "branch", "known-good"], check=True)
+            subprocess.run(["git", "-C", str(repo), "checkout", "-q", "known-good"], check=True)
+            (repo / "file.txt").write_text("the fix\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t",
+                            "commit", "-qam", "fix: known good"], check=True)
+            good = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            subprocess.run(["git", "-C", str(repo), "checkout", "-q", base_branch], check=True)
+            (repo / "file.txt").write_text("the fix\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t",
+                            "commit", "-qam", "fix: squashed equivalent"], check=True)
+            harness = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            issue = dict(TASK, kind="issue", parent_sha=parent, good_sha=good,
+                         tests={"copy": [], "pattern": "test_*.py"})
+            ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor",
+                                       good, harness])
+            self.assertEqual(ancestor.returncode, 1)
+            self.assertEqual(BENCH.contamination_errors([issue], repo, harness), [
+                "demo: same-repository issue task cannot prove its fixed files are absent from "
+                "the installed checkout"])
+
+    def test_a_git_error_in_a_synthetic_checkout_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            with self.assertRaises(RuntimeError):
+                BENCH.contamination_errors([TASK], repo, "f" * 40)
 
     def test_the_cumulative_stop_counts_reported_cost_and_a_costless_error_at_the_run_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -901,28 +967,27 @@ class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.tasks = BENCH.load_tasks(REPO / BENCH.TASKS)
 
-    def test_every_solved_issue_and_synthetic_task_is_pinned_by_full_sha(self):
-        kinds = [t["kind"] for t in self.tasks]
-        self.assertEqual((kinds.count("issue"), kinds.count("synthetic")), (5, 2))
-        self.assertEqual(len(kinds), len(set(t["id"] for t in self.tasks)))
-        for task in self.tasks:
-            self.assertRegex(task["parent_sha"], r"^[0-9a-f]{40}$")
-            if task["kind"] == "issue":
-                self.assertRegex(task["good_sha"], r"^[0-9a-f]{40}$")
-            else:
-                self.assertTrue((REPO / BENCH.ORACLES / (task["tests"]["oracle"] + ".py")).is_file())
+    def test_no_task_remains_live_without_proven_answer_absence(self):
+        self.assertEqual(self.tasks, [])
 
     def test_a_prompt_never_names_its_held_back_check(self):
-        for task in self.tasks:
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        tasks = self.tasks + [entry["task"] for entry in manifest["retired"]]
+        self.assertTrue(tasks, "prompt isolation must inspect at least one task")
+        for task in tasks:
             prompt = BENCH.prompt_of(task)
             for held in task["tests"].get("copy", []) + task["tests"].get("select", []) + ["oracle"]:
                 self.assertNotIn(held, prompt, msg=task["id"])
 
-    def test_every_task_declares_a_known_leak_class_the_loader_ignores(self):
-        for task in self.tasks:
-            self.assertIn(task["leak_class"], ("clean", "leaks", "control"), msg=task["id"])
-        self.assertEqual([t["id"] for t in self.tasks if t["leak_class"] != "clean"],
-                         ["link-alias", "cost-variants"])
+    def test_every_retired_issue_fix_is_reachable_from_the_installed_checkout(self):
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        issues = [entry for entry in manifest["retired"] if entry["task"]["kind"] == "issue"]
+        self.assertEqual(len(issues), 6)
+        for entry in issues:
+            good = entry["task"]["good_sha"]
+            done = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor",
+                                   good, "HEAD"])
+            self.assertEqual(done.returncode, 0, msg=entry["id"])
 
     def test_a_malformed_task_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

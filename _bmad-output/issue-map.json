@@ -4,8 +4,8 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 129,
-    "chore": 97,
+    "bug": 131,
+    "chore": 98,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -6826,6 +6826,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C097",
+      "github_number": 913,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
+      "title": "docs/usage.md's decision point table leaves out framework-spawn",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C097.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C096",
       "github_number": 914,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/914",
@@ -6862,6 +6875,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B130",
+      "github_number": 923,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/923",
+      "title": "The installation case skips the role list on Codex, though Codex reads the synced role files",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B130.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

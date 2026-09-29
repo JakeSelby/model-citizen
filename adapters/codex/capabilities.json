@@ -49,6 +49,7 @@
   },
   "limitations": [
     "Native restrictions take precedence. Hook activation requires runtime trust.",
+    "Synced role definitions are projected to Codex agent files and can be listed as spawn_agent agent types. Listing a role does not qualify its execution or provide Claude Code subagent records; native acceptance checks role discovery separately.",
     "Unsupported controls remain visible; custom stance prose does not add enforcement.",
     "The usage feed is uncovered: this runtime raises none of UserPromptSubmit, SubagentStart or SubagentStop, so turn spend, the fresh-session nudge, in-flight width and finished-subagent spend are not fed back and no such event is registered.",
     "Cache-prefix stability is not measurable here: this runtime reports a cached-read figure and no cache-write figure at all, so a ledger row carries real cached_input_tokens in cache_read and leaves cache_write unreported. `harness usage --by prefix` reports a Codex session as unknown rather than as a perfectly held prefix.",

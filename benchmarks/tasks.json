@@ -1,243 +1,6 @@
 {
   "schema_version": 1,
-  "tasks": [
-    {
-      "id": "link-alias",
-      "kind": "issue",
-      "source": "issue 237, solved by pull request 238",
-      "parent_sha": "29a9b7844a8f64cb509a6282503ce900eecdc468",
-      "good_sha": "b8f1b36c5cf74cc445221ee9d030cadcafa93ade",
-      "max_turns": 60,
-      "leak_class": "leaks",
-      "prompt": [
-        "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
-        "",
-        "# Stop reporting a managed link as redirected when it reaches its file through an alias",
-        "",
-        "## Outcome",
-        "",
-        "`harness diff` and `harness doctor` report no drift for a managed link that leads to its recorded target through an alias of the checkout, and `harness uninstall` removes that link.",
-        "",
-        "## Why",
-        "",
-        "`claude/stances` is a link to `primitives/stances`. `ensure_link` accepts an existing link that reaches the wanted file through the other spelling, and records the new spelling in the manifest while the old one stays on disk. The drift report, uninstall and both link-retirement paths compare the two as text. The result is a permanent \"redirected link\" report for every selected stance, and an uninstall that leaves those links behind as if the user had changed them.",
-        "",
-        "A link pointed at a different file is still reported and still preserved.",
-        "",
-        "## Exit",
-        "",
-        "`bin/harness lint` clean, the tests you add or change passing, and a link re-pointed to the alias spelling produces no drift and is removed by uninstall."
-      ],
-      "tests": {
-        "copy": [
-          "tests/test_harness.py"
-        ],
-        "pattern": "test_harness.py",
-        "select": [
-          "LinkAliasTests"
-        ],
-        "pythonpath": [
-          "lib"
-        ]
-      }
-    },
-    {
-      "id": "codex-pre-allow",
-      "kind": "issue",
-      "source": "issue 285, solved by pull request 288",
-      "parent_sha": "0e0d446243723e5bb049e85181339800c1f65255",
-      "good_sha": "ba7441f775b5bd15f056a5f9bc521dc96b47b595",
-      "max_turns": 60,
-      "leak_class": "clean",
-      "prompt": [
-        "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
-        "",
-        "# Codex rejects the PreToolUse hook's allow decision",
-        "",
-        "## Problem",
-        "",
-        "The harness emits `permissionDecision: \"allow\"` for every non-gated PreToolUse call. codex-cli 0.154.0-alpha.6.2 lists `allow` as an unsupported value, reports `hook: PreToolUse Failed` and discards the hook output. It fails open, so nothing is blocked wrongly, but every allowed call shows a hook failure, real failures are masked, and an `updatedInput` rewrite cannot take effect. codex-cli 0.155.1 accepts the value.",
-        "",
-        "## Wanted",
-        "",
-        "On Codex, say nothing for a plain approval (absence of a decision is the client's default allow) and send `allow` only alongside an `updatedInput` rewrite, where it is required. `deny` and the Codex ask-to-deny narrowing are unchanged; Claude Code output is unchanged.",
-        "",
-        "## Done when",
-        "",
-        "Codex non-gated call: no `permissionDecision`. Deny unchanged. Rewrite: `allow` plus `updatedInput`. Claude Code unchanged.",
-        "",
-        "## Not in scope",
-        "",
-        "A `doctor` notice for a client that cannot apply rewrites under any decision value."
-      ],
-      "tests": {
-        "copy": [
-          "tests/test_codex_pre_allow.py"
-        ],
-        "pattern": "test_codex_pre_allow.py",
-        "pythonpath": [
-          "lib"
-        ]
-      }
-    },
-    {
-      "id": "hook-inventory",
-      "kind": "synthetic",
-      "source": "written for this benchmark: many-file read and summarize",
-      "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
-      "good_sha": null,
-      "max_turns": 60,
-      "leak_class": "clean",
-      "prompt": [
-        "Read every Python module in `policy/hooks/` and write `hook-inventory.json` at the repository root.",
-        "",
-        "It is one JSON object keyed by file name, for example `stop-gate.py`, with one entry per module and no other keys. Each value is an object with two fields: `summary`, exactly the first line of the module's docstring, and `top_level_functions`, the number of functions defined at module level, not counting methods or nested functions.",
-        "",
-        "Change no other file."
-      ],
-      "tests": {
-        "oracle": "hook_inventory"
-      }
-    },
-    {
-      "id": "hook-ids",
-      "kind": "synthetic",
-      "source": "written for this benchmark: multi-module mechanical edit",
-      "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
-      "good_sha": null,
-      "max_turns": 60,
-      "leak_class": "clean",
-      "prompt": [
-        "Give every Python module in `policy/hooks/` a module-level constant `HOOK_ID` whose value is that file's name without the `.py` extension, for example `HOOK_ID = \"stop-gate\"` in `stop-gate.py`.",
-        "",
-        "Put it after the module's docstring and imports. Every module must still compile and behave as before. Add exactly one such constant per module, touch no other file, and do not commit."
-      ],
-      "tests": {
-        "oracle": "hook_ids"
-      }
-    },
-    {
-      "id": "import-instructions",
-      "kind": "issue",
-      "source": "issue 448, solved by pull request 478",
-      "parent_sha": "df282772c57e04ba1ee27c3aa0e449cecd9f6326",
-      "good_sha": "5ddf546f444ec23a382637beae7d817922132300",
-      "max_turns": 60,
-      "leak_class": "clean",
-      "prompt": [
-        "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
-        "",
-        "# harness import: read an existing CLAUDE.md, AGENTS.md or .cursorrules into primitives",
-        "",
-        "## Outcome",
-        "",
-        "`harness import` reads an existing CLAUDE.md, AGENTS.md or `.cursorrules` into primitives, so adopting the harness does not mean discarding the configuration a user already has. rulesync's `import` is the reference and is credited.",
-        "",
-        "## Acceptance",
-        "",
-        "- `harness import <path>` writes rules and skills under an external primitive root and prints the `harness sync --dry-run` diff before anything is adopted.",
-        "- Front-matter, `@`-imports and section headings survive as structure; unrecognised content lands as one rule with a note rather than being dropped.",
-        "- Importing a file the harness already owns is refused with the ownership record shown.",
-        "",
-        "## Exit",
-        "",
-        "`bin/harness lint` clean and the tests you add or change passing."
-      ],
-      "tests": {
-        "copy": [
-          "tests/test_import.py"
-        ],
-        "pattern": "test_import.py",
-        "pythonpath": [
-          "lib"
-        ]
-      }
-    },
-    {
-      "id": "brief-budget",
-      "kind": "issue",
-      "source": "issue 253, solved by pull request 254",
-      "parent_sha": "ceb2d7c27ff4bc402f71a1da0e3be46d8f9fe95a",
-      "good_sha": "a90b0c7376900d4b537f29e5b90e323459814061",
-      "max_turns": 60,
-      "leak_class": "clean",
-      "prompt": [
-        "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
-        "",
-        "# State the soft budget in every subagent brief",
-        "",
-        "## Outcome",
-        "",
-        "Every subagent brief states what the work is expected to spend: a soft budget in output tokens and tool calls taken from the selected cost variant, with an instruction to finish if close or otherwise return what it has and say why. Nothing is ever denied or cut off for cost.",
-        "",
-        "## Why",
-        "",
-        "A subagent cannot see its own token spend, and a brief says nothing today about how much work the task deserves. Tool calls are something an agent can count, and a stated expectation lets it pace itself the way a search budget already does.",
-        "",
-        "## Done when",
-        "",
-        "- A brief carries one fixed-wording sentence with the numbers from the resolved cost row of the agent that will actually run, including the band worker an unnamed spawn is routed to.",
-        "- An unbudgeted role, a brief that already states a budget, and any failure to resolve the table all leave the brief as it is today.",
-        "",
-        "## Exit",
-        "",
-        "`bin/harness lint` clean and the tests you add or change passing."
-      ],
-      "tests": {
-        "copy": [
-          "tests/test_brief_budget.py",
-          "tests/test_brief_guard.py"
-        ],
-        "pattern": "test_brief_*.py",
-        "pythonpath": [
-          "lib"
-        ]
-      }
-    },
-    {
-      "id": "cost-variants",
-      "kind": "issue",
-      "source": "issue 247, solved by pull request 248",
-      "parent_sha": "0027c8be69ba7a81fb86ad4467dc1025463ef8d6",
-      "good_sha": "fad0f33d5dd383206dd080e4cd26fc3e32619c3a",
-      "max_turns": 60,
-      "leak_class": "control",
-      "prompt": [
-        "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
-        "",
-        "# Give cost variants a machine-readable table with extends and fixed roles",
-        "",
-        "## Outcome",
-        "",
-        "A `cost` variant carries a machine-readable table beside its prose: the switches it sets and, per role or work band, the model class, effort and soft budget it implies. You can write your own variant that extends a shipped one and changes only what you disagree with, and `harness stances --json` shows the resolved result.",
-        "",
-        "## Why",
-        "",
-        "The `cost` stance is prose the model reads. Hooks and sync cannot act on it, so model tier and effort for a role are fixed whatever posture you select, and there is nowhere to state what a role is expected to spend. Preferences about cost differ between people, so the numbers have to live in selectable data rather than in hook code.",
-        "",
-        "## Done when",
-        "",
-        "- `frugal`, `balanced` and `max` each ship a sidecar; `balanced` reproduces today's class and effort for every role it names.",
-        "- A custom variant in a `primitive_roots` directory can `extends` another and override single fields; unknown keys and bad values warn and never block work.",
-        "- Verifier roles can be marked fixed so no variant changes their class or effort.",
-        "- Nothing consumes the table yet: no hook output and no sync rendering changes.",
-        "",
-        "## Exit",
-        "",
-        "`bin/harness lint` clean and the tests you add or change passing."
-      ],
-      "tests": {
-        "copy": [
-          "tests/test_cost_sidecars.py",
-          "tests/test_posture.py"
-        ],
-        "pattern": "test_[cp]os*.py",
-        "pythonpath": [
-          "lib"
-        ]
-      }
-    }
-  ],
+  "tasks": [],
   "retired": [
     {
       "id": "usage-prices",
@@ -283,6 +46,275 @@
           "pythonpath": [
             "lib"
           ]
+        }
+      }
+    },
+    {
+      "id": "link-alias",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs a later full checkout under /opt/model-citizen, including Git history in which this task's known-good commit is reachable. That gives only the harness arm a readable reference solution. The whole task remains here as provenance; a future task set must use fixes the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "link-alias",
+        "kind": "issue",
+        "source": "issue 237, solved by pull request 238",
+        "parent_sha": "29a9b7844a8f64cb509a6282503ce900eecdc468",
+        "good_sha": "b8f1b36c5cf74cc445221ee9d030cadcafa93ade",
+        "max_turns": 60,
+        "leak_class": "leaks",
+        "prompt": [
+          "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
+          "",
+          "# Stop reporting a managed link as redirected when it reaches its file through an alias",
+          "",
+          "## Outcome",
+          "",
+          "`harness diff` and `harness doctor` report no drift for a managed link that leads to its recorded target through an alias of the checkout, and `harness uninstall` removes that link.",
+          "",
+          "## Why",
+          "",
+          "`claude/stances` is a link to `primitives/stances`. `ensure_link` accepts an existing link that reaches the wanted file through the other spelling, and records the new spelling in the manifest while the old one stays on disk. The drift report, uninstall and both link-retirement paths compare the two as text. The result is a permanent \"redirected link\" report for every selected stance, and an uninstall that leaves those links behind as if the user had changed them.",
+          "",
+          "A link pointed at a different file is still reported and still preserved.",
+          "",
+          "## Exit",
+          "",
+          "`bin/harness lint` clean, the tests you add or change passing, and a link re-pointed to the alias spelling produces no drift and is removed by uninstall."
+        ],
+        "tests": {
+          "copy": [
+            "tests/test_harness.py"
+          ],
+          "pattern": "test_harness.py",
+          "select": [
+            "LinkAliasTests"
+          ],
+          "pythonpath": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "id": "codex-pre-allow",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs a later full checkout under /opt/model-citizen, including Git history in which this task's known-good commit is reachable. That gives only the harness arm a readable reference solution. The whole task remains here as provenance; a future task set must use fixes the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "codex-pre-allow",
+        "kind": "issue",
+        "source": "issue 285, solved by pull request 288",
+        "parent_sha": "0e0d446243723e5bb049e85181339800c1f65255",
+        "good_sha": "ba7441f775b5bd15f056a5f9bc521dc96b47b595",
+        "max_turns": 60,
+        "leak_class": "clean",
+        "prompt": [
+          "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
+          "",
+          "# Codex rejects the PreToolUse hook's allow decision",
+          "",
+          "## Problem",
+          "",
+          "The harness emits `permissionDecision: \"allow\"` for every non-gated PreToolUse call. codex-cli 0.154.0-alpha.6.2 lists `allow` as an unsupported value, reports `hook: PreToolUse Failed` and discards the hook output. It fails open, so nothing is blocked wrongly, but every allowed call shows a hook failure, real failures are masked, and an `updatedInput` rewrite cannot take effect. codex-cli 0.155.1 accepts the value.",
+          "",
+          "## Wanted",
+          "",
+          "On Codex, say nothing for a plain approval (absence of a decision is the client's default allow) and send `allow` only alongside an `updatedInput` rewrite, where it is required. `deny` and the Codex ask-to-deny narrowing are unchanged; Claude Code output is unchanged.",
+          "",
+          "## Done when",
+          "",
+          "Codex non-gated call: no `permissionDecision`. Deny unchanged. Rewrite: `allow` plus `updatedInput`. Claude Code unchanged.",
+          "",
+          "## Not in scope",
+          "",
+          "A `doctor` notice for a client that cannot apply rewrites under any decision value."
+        ],
+        "tests": {
+          "copy": [
+            "tests/test_codex_pre_allow.py"
+          ],
+          "pattern": "test_codex_pre_allow.py",
+          "pythonpath": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "id": "import-instructions",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs a later full checkout under /opt/model-citizen, including Git history in which this task's known-good commit is reachable. That gives only the harness arm a readable reference solution. The whole task remains here as provenance; a future task set must use fixes the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "import-instructions",
+        "kind": "issue",
+        "source": "issue 448, solved by pull request 478",
+        "parent_sha": "df282772c57e04ba1ee27c3aa0e449cecd9f6326",
+        "good_sha": "5ddf546f444ec23a382637beae7d817922132300",
+        "max_turns": 60,
+        "leak_class": "clean",
+        "prompt": [
+          "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
+          "",
+          "# harness import: read an existing CLAUDE.md, AGENTS.md or .cursorrules into primitives",
+          "",
+          "## Outcome",
+          "",
+          "`harness import` reads an existing CLAUDE.md, AGENTS.md or `.cursorrules` into primitives, so adopting the harness does not mean discarding the configuration a user already has. rulesync's `import` is the reference and is credited.",
+          "",
+          "## Acceptance",
+          "",
+          "- `harness import <path>` writes rules and skills under an external primitive root and prints the `harness sync --dry-run` diff before anything is adopted.",
+          "- Front-matter, `@`-imports and section headings survive as structure; unrecognised content lands as one rule with a note rather than being dropped.",
+          "- Importing a file the harness already owns is refused with the ownership record shown.",
+          "",
+          "## Exit",
+          "",
+          "`bin/harness lint` clean and the tests you add or change passing."
+        ],
+        "tests": {
+          "copy": [
+            "tests/test_import.py"
+          ],
+          "pattern": "test_import.py",
+          "pythonpath": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "id": "brief-budget",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs a later full checkout under /opt/model-citizen, including Git history in which this task's known-good commit is reachable. That gives only the harness arm a readable reference solution. The whole task remains here as provenance; a future task set must use fixes the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "brief-budget",
+        "kind": "issue",
+        "source": "issue 253, solved by pull request 254",
+        "parent_sha": "ceb2d7c27ff4bc402f71a1da0e3be46d8f9fe95a",
+        "good_sha": "a90b0c7376900d4b537f29e5b90e323459814061",
+        "max_turns": 60,
+        "leak_class": "clean",
+        "prompt": [
+          "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
+          "",
+          "# State the soft budget in every subagent brief",
+          "",
+          "## Outcome",
+          "",
+          "Every subagent brief states what the work is expected to spend: a soft budget in output tokens and tool calls taken from the selected cost variant, with an instruction to finish if close or otherwise return what it has and say why. Nothing is ever denied or cut off for cost.",
+          "",
+          "## Why",
+          "",
+          "A subagent cannot see its own token spend, and a brief says nothing today about how much work the task deserves. Tool calls are something an agent can count, and a stated expectation lets it pace itself the way a search budget already does.",
+          "",
+          "## Done when",
+          "",
+          "- A brief carries one fixed-wording sentence with the numbers from the resolved cost row of the agent that will actually run, including the band worker an unnamed spawn is routed to.",
+          "- An unbudgeted role, a brief that already states a budget, and any failure to resolve the table all leave the brief as it is today.",
+          "",
+          "## Exit",
+          "",
+          "`bin/harness lint` clean and the tests you add or change passing."
+        ],
+        "tests": {
+          "copy": [
+            "tests/test_brief_budget.py",
+            "tests/test_brief_guard.py"
+          ],
+          "pattern": "test_brief_*.py",
+          "pythonpath": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "id": "cost-variants",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs a later full checkout under /opt/model-citizen, including Git history in which this task's known-good commit is reachable. That gives only the harness arm a readable reference solution. The whole task remains here as provenance; a future task set must use fixes the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "cost-variants",
+        "kind": "issue",
+        "source": "issue 247, solved by pull request 248",
+        "parent_sha": "0027c8be69ba7a81fb86ad4467dc1025463ef8d6",
+        "good_sha": "fad0f33d5dd383206dd080e4cd26fc3e32619c3a",
+        "max_turns": 60,
+        "leak_class": "control",
+        "prompt": [
+          "Fix this issue in the repository you are in. Do not commit; leave the change in the working tree.",
+          "",
+          "# Give cost variants a machine-readable table with extends and fixed roles",
+          "",
+          "## Outcome",
+          "",
+          "A `cost` variant carries a machine-readable table beside its prose: the switches it sets and, per role or work band, the model class, effort and soft budget it implies. You can write your own variant that extends a shipped one and changes only what you disagree with, and `harness stances --json` shows the resolved result.",
+          "",
+          "## Why",
+          "",
+          "The `cost` stance is prose the model reads. Hooks and sync cannot act on it, so model tier and effort for a role are fixed whatever posture you select, and there is nowhere to state what a role is expected to spend. Preferences about cost differ between people, so the numbers have to live in selectable data rather than in hook code.",
+          "",
+          "## Done when",
+          "",
+          "- `frugal`, `balanced` and `max` each ship a sidecar; `balanced` reproduces today's class and effort for every role it names.",
+          "- A custom variant in a `primitive_roots` directory can `extends` another and override single fields; unknown keys and bad values warn and never block work.",
+          "- Verifier roles can be marked fixed so no variant changes their class or effort.",
+          "- Nothing consumes the table yet: no hook output and no sync rendering changes.",
+          "",
+          "## Exit",
+          "",
+          "`bin/harness lint` clean and the tests you add or change passing."
+        ],
+        "tests": {
+          "copy": [
+            "tests/test_cost_sidecars.py",
+            "tests/test_posture.py"
+          ],
+          "pattern": "test_[cp]os*.py",
+          "pythonpath": [
+            "lib"
+          ]
+        }
+      }
+    },
+    {
+      "id": "hook-inventory",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs this repository under /opt/model-citizen, including the held-back oracle source whose solve() function is a readable reference implementation. An oracle failure on the installed tree would not prove that answer absent. The whole task remains here as provenance; #796 owns replacement workloads whose answers the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "hook-inventory",
+        "kind": "synthetic",
+        "source": "written for this benchmark: many-file read and summarize",
+        "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
+        "good_sha": null,
+        "max_turns": 60,
+        "prompt": [
+          "Read every Python module in `policy/hooks/` and write `hook-inventory.json` at the repository root.",
+          "",
+          "It is one JSON object keyed by file name, for example `stop-gate.py`, with one entry per module and no other keys. Each value is an object with two fields: `summary`, exactly the first line of the module's docstring, and `top_level_functions`, the number of functions defined at module level, not counting methods or nested functions.",
+          "",
+          "Change no other file."
+        ],
+        "tests": {
+          "oracle": "hook_inventory"
+        }
+      }
+    },
+    {
+      "id": "hook-ids",
+      "retired": "2026-09-28",
+      "reason": "Excluded by the v0.15 installed-checkout contamination control. The harness arm installs this repository under /opt/model-citizen, including the held-back oracle source whose solve() function is a readable reference implementation. An oracle failure on the installed tree would not prove that answer absent. The whole task remains here as provenance; #796 owns replacement workloads whose answers the installed harness cannot carry. The manifest's bytes seed a history row's series, so this change starts a new series.",
+      "task": {
+        "id": "hook-ids",
+        "kind": "synthetic",
+        "source": "written for this benchmark: multi-module mechanical edit",
+        "parent_sha": "bd488ee764b6ca98f88b9844d3045b1960d8402d",
+        "good_sha": null,
+        "max_turns": 60,
+        "prompt": [
+          "Give every Python module in `policy/hooks/` a module-level constant `HOOK_ID` whose value is that file's name without the `.py` extension, for example `HOOK_ID = \"stop-gate\"` in `stop-gate.py`.",
+          "",
+          "Put it after the module's docstring and imports. Every module must still compile and behave as before. Add exactly one such constant per module, touch no other file, and do not commit."
+        ],
+        "tests": {
+          "oracle": "hook_ids"
         }
       }
     }
