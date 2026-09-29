@@ -80,7 +80,9 @@ configuration. It never calls a model or network service.
 names the claim's exact JSON-pointer `field`, exact `text`, repository-relative `bundle`, and card
 `id`. The landing-copy check runs that bundle's verifier again on every pull request, whether or not
 `product.json` changed, and ignores every saved success flag.
-A cost claim (cheaper, savings, less expensive, reduces, lowers, cuts or halves cost) additionally
+A cost claim (cheaper, savings, less expensive, reduces, lowers, cuts or halves cost, costs less,
+fewer tokens, or any percentage beside a cost noun or a reduction word such as less, fewer, lower,
+down or drops) additionally
 needs a supported SM-2 result with a ratio interval wholly below 1, and every percentage in it must
 fit inside that interval. A pass-rate improvement needs a pass-rate difference interval wholly above
 zero, and every percentage in it, read as points, must fit under the interval's lower bound. A

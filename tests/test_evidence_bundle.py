@@ -261,7 +261,7 @@ Task manifest sha256: %s
             1: lambda i: i["repository"].update(run_commit="0" * 40),
             2: lambda i: i["design"].update(tasks=["alpha", "missing"]),
             3: lambda i: i["design"].update(cli_version="different"),
-            4: lambda i: i["design"].update(run_cap_usd=float("inf")),
+            4: lambda i: i["design"].update(run_cap_usd=-1),
             5: lambda i: i["statistics"].update(seed=99),
             6: lambda i: i["design"].update(tasks=["beta", "alpha"]),
             7: lambda i: i["artifacts"].update(trajectories=i["artifacts"]["trajectories"][:-1]),
@@ -278,7 +278,7 @@ Task manifest sha256: %s
                 mutate(index)
                 self._save_index(index)
                 result = EVIDENCE.verify(self.root)
-                self.assertFalse(result["checks"].get(str(item), False), result["errors"])
+                self.assertFalse(result["checks"][str(item)], result["errors"])
         (self.root / "bundle.json").write_text(original)
 
     def test_structural_audits_drive_their_numbered_checks(self):
@@ -507,6 +507,45 @@ Task manifest sha256: %s
         result = EVIDENCE.verify(self.root)
         self.assertFalse(result["checks"]["3"])
         self.assertTrue(any("design is not an object" in error for error in result["errors"]))
+
+    def test_option_shaped_revisions_never_reach_git(self):
+        original = (self.root / "bundle.json").read_text()
+        written = self.root / "written-by-git"
+        real = EVIDENCE._git_bytes
+        for value in ("--output=%s" % written, "-q", "--help", "--all", "HEAD", self.run_commit[:12]):
+            with self.subTest(value=value):
+                index = json.loads(original)
+                index["repository"]["run_commit"] = value
+                self._save_index(index)
+                calls = []
+
+                def record(git, *args):
+                    calls.append(args)
+                    return real(git, *args)
+
+                with mock.patch.object(EVIDENCE, "_git_bytes", side_effect=record):
+                    result = EVIDENCE.verify(self.root)
+                self.assertFalse(result["checks"]["1"], result["errors"])
+                self.assertFalse([args for args in calls if any(value in arg for arg in args)], calls)
+                self.assertFalse(written.exists())
+        (self.root / "bundle.json").write_text(original)
+
+    def test_sample_ratio_is_exact_for_thousands_of_rows(self):
+        planned = {"bare": 1, "harness": 1}
+        balanced = [{"arm": "bare"}] * 2500 + [{"arm": "harness"}] * 2500
+        self.assertEqual(EVIDENCE._sample_ratio(balanced, planned)["p_value"], 1.0)
+        skewed = [{"arm": "bare"}] * 2300 + [{"arm": "harness"}] * 2700
+        p_value = EVIDENCE._sample_ratio(skewed, planned)["p_value"]
+        self.assertGreater(p_value, 0.0)
+        self.assertLess(p_value, 1e-6)
+        small = [{"arm": "bare"}] * 3 + [{"arm": "harness"}] * 7
+        self.assertAlmostEqual(EVIDENCE._sample_ratio(small, planned)["p_value"], 352 / 1024)
+
+    def test_arithmetic_failure_is_a_failed_bundle_not_a_traceback(self):
+        with mock.patch.object(EVIDENCE, "_sample_ratio", side_effect=OverflowError("too large")):
+            result = EVIDENCE.verify(self.root)
+        self.assertFalse(result["ok"])
+        self.assertTrue(any("OverflowError" in error for error in result["errors"]), result["errors"])
 
     def test_icc_is_per_arm_and_preserves_negative_and_undefined_results(self):
         rows = []

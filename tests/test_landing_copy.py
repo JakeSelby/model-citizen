@@ -192,6 +192,18 @@ class EvidenceClaimTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'wholly below 1'):
             self.check('It lowers cost.', upper=1.02)
 
+    def test_every_cost_reduction_wording_takes_the_sm2_path(self):
+        forms = ('Costs 40% less.', 'It costs less.', '40% fewer tokens.', 'Uses fewer tokens.',
+                 'Spend drops 40%.', 'The bill falls by 40 percent.', 'Token use down 40%.',
+                 'A 40% reduction in spend.', 'Pays 40% lower prices.')
+        for text in forms:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'not supported by SM-2'):
+                self.check(text, verdict='not supported', claim=None)
+        for text in ('Costs 40% less.', '40% fewer tokens.', 'Spend drops 40%.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'magnitude 40%'):
+                self.check(text, upper=0.8)
+        self.assertIn('1 measured', self.check('Costs 20% less.', upper=0.8))
+
     def test_pass_rate_claims_need_a_positive_difference_interval(self):
         with self.assertRaisesRegex(ValueError, 'wholly above 0'):
             self.check('Improves the pass rate.', difference=(-0.1, 0.2))

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from fractions import Fraction
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -215,8 +216,17 @@ def _git(git, *args):
     return code, output.decode("utf-8", errors="replace").strip()
 
 
+def _is_ancestor(git, ancestor, descendant):
+    """Git's ancestry answer; a revision that is not a full sha never reaches Git's option parser."""
+    if not (_full_sha(ancestor) and _full_sha(descendant)):
+        return False
+    return _git(git, "merge-base", "--is-ancestor", ancestor, descendant)[0] == 0
+
+
 def _committer_time(git, commit):
     """The committer timestamp, parsed from the raw commit so no signature is ever checked."""
+    if not _full_sha(commit):
+        return None
     code, body = _git_bytes(git, "cat-file", "commit", commit)
     if code:
         return None
@@ -421,9 +431,13 @@ def _sample_ratio(rows, planned):
     observed = counts["bare"]
     if planned["bare"] != planned["harness"]:
         return {"counts": counts, "p_value": None, "reason": "unequal assignment needs its declared test"}
-    probabilities = [math.comb(total, k) * 0.5 ** total for k in range(total + 1)]
-    threshold = probabilities[observed]
-    return {"counts": counts, "p_value": min(1.0, sum(p for p in probabilities if p <= threshold + 1e-15)),
+    # Exact integers: a float binomial coefficient overflows past about 1,030 rows.
+    weights = [1]
+    for k in range(total):
+        weights.append(weights[-1] * (total - k) // (k + 1))
+    threshold = weights[observed]
+    extreme = sum(weight for weight in weights if weight <= threshold)
+    return {"counts": counts, "p_value": min(1.0, float(Fraction(extreme, 2 ** total))),
             "reason": None}
 
 
@@ -505,7 +519,8 @@ def verify(directory):
     try:
         with _IsolatedGit(bundle["repository"]) as git:
             return _verify_loaded(bundle, git)
-    except (AttributeError, KeyError, TypeError, ValueError, IndexError, OSError) as exc:
+    except (AttributeError, KeyError, TypeError, ValueError, IndexError, OSError,
+            ArithmeticError) as exc:
         # A shape the numbered checks did not anticipate is still a failed bundle, never a crash.
         return {"ok": False, "bundle_id": bundle["index"].get("bundle_id"), "derived": {},
                 "cards": [], "checks": {}, "unknown": [],
@@ -725,8 +740,7 @@ def _verify_loaded(bundle, git):
     if not _full_sha(plan_commit):
         _error(errors, 1, "plan commit is not a full sha")
     elif starts:
-        code, ancestor = _git(repo, "merge-base", "--is-ancestor", plan_commit, run_commit)
-        if code:
+        if not _is_ancestor(repo, plan_commit, run_commit):
             _error(errors, 1, "plan commit is not an ancestor of the run commit")
         stamp = _committer_time(repo, plan_commit)
         if stamp is None or stamp >= min(starts):
@@ -758,10 +772,9 @@ def _verify_loaded(bundle, git):
             _error(errors, 1, "plan merge postdates the first trial")
         if not _full_sha(receipt["merge_commit"]):
             _error(errors, 1, "receipt merge commit is not a full sha")
-        elif _git(repo, "merge-base", "--is-ancestor", receipt["merge_commit"], run_commit)[0]:
+        elif not _is_ancestor(repo, receipt["merge_commit"], run_commit):
             _error(errors, 1, "receipt merge commit is not an ancestor of the run commit")
-        elif _full_sha(plan_commit) \
-                and _git(repo, "merge-base", "--is-ancestor", plan_commit, receipt["merge_commit"])[0]:
+        elif not _is_ancestor(repo, plan_commit, receipt["merge_commit"]):
             _error(errors, 1, "registered plan is not an ancestor of the receipt merge commit")
     except (StrictJSONError, ValueError, KeyError) as exc:
         _error(errors, 1, str(exc))

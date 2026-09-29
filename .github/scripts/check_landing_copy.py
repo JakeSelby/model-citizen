@@ -21,7 +21,14 @@ PERCENT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:%|percent\b)', re.IGNORECASE)
 MULTIPLIER = r'\b\d+(?:\.\d+)?(?:x|\s*×)(?![\w])'
 COST = re.compile(
     r'\b(?:cheaper|less expensive|savings?|saved|saves|(?:reduces?|lowers?|cuts?|halves)'
-    r' (?:the )?(?:cost|spend|bill)s?)\b', re.IGNORECASE)
+    r' (?:the )?(?:cost|spend|bill)s?|costs? less|fewer tokens'
+    r'|(?:cost|spend|bill)s? (?:drops?|falls?))\b', re.IGNORECASE)
+# A percentage beside a cost noun or a reduction word is a cost claim whatever its phrasing,
+# so "spend drops 40%" and "40% fewer tokens" take the SM-2 path rather than the descriptive one.
+COST_CONTEXT = re.compile(
+    r'\b(?:costs?|costing|spend(?:s|ing)?|spent|bills?|billing|prices?|pricing|tokens?|dollars?'
+    r'|money|budgets?|expens\w*|less|fewer|lower\w*|drops?|dropped|falls?|fell|down'
+    r'|reduc\w*|cuts?|halve[sd]?)\b', re.IGNORECASE)
 PASS_RATE = re.compile(
     r'\b(?:improves?|raises?|increases?|boosts?|higher) (?:the )?(?:pass|success) rates?\b',
     re.IGNORECASE)
@@ -69,6 +76,10 @@ def _verify_bundle(path):
     return module.verify(path)
 
 
+def _is_cost_claim(text):
+    return bool(COST.search(text) or (PERCENT.search(text) and COST_CONTEXT.search(text)))
+
+
 def _check_direction(field, text, derived):
     """Refuse a directional claim the paired SM-2 result does not support, at every magnitude."""
     sm2 = derived.get('sm2') if isinstance(derived, dict) else None
@@ -78,7 +89,7 @@ def _check_direction(field, text, derived):
         raise ValueError('speed claim at {} has no re-derived time estimand to support it'.format(field))
     if re.search(MULTIPLIER, text, re.IGNORECASE):
         raise ValueError('multiplier claim at {} has no re-derived estimand to support it'.format(field))
-    if COST.search(text):
+    if _is_cost_claim(text):
         if sm2.get('verdict') != 'supported' or not sm2.get('claim'):
             raise ValueError('cost claim at {} is not supported by SM-2'.format(field))
         interval = sm2.get('ratio_interval')
