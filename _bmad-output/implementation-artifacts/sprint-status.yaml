@@ -478,6 +478,8 @@ development_status:
   ah-b120-directed-bmad-prompt-paths-can-evade-spawn: done
   ah-b121-fix-skills-sh-discovery-for-five-invalid-skill: done
   ah-b122-package-a-minimal-claude-directory-bundle-for-v0: done
+  ah-b124-compatibility-candidate-fixture-retains-live: ready-for-dev
+  ah-b125-qualification-provision-runs-its-git-calls-under: ready-for-dev
   ah-b127-config-set-refuses-a-switch-that-repairs-a: done
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
