@@ -10,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
+import draft_support
 import test_studio_browser as browser_support
 from harness_core.studio import drafts
 
@@ -35,13 +36,7 @@ class ConfigureBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=10,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-        self.addCleanup(self._discard_draft)
-
-    def _discard_draft(self):
-        subprocess.run(
-            [sys.executable, str(CLI), "draft", "discard", self.draft, "--json"],
-            env=self.env, capture_output=True, text=True, timeout=10,
-        )
+        draft_support.register_draft_cleanup(self, self.draft, self.env, stop=self._stop_studio)
 
     def _wait(self, expression: str, message: str, attempts: int = 400):
         for _ in range(attempts):

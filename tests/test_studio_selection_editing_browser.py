@@ -10,6 +10,7 @@ import time
 import unittest
 from pathlib import Path
 
+import draft_support
 import test_studio_browser as browser_support
 from harness_core.studio import drafts
 
@@ -37,20 +38,9 @@ class SelectionEditingBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=15,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        draft_support.register_draft_cleanup(self, self.draft, self.env, stop=self._stop_studio)
         self.assertTrue(created.stdout, "draft create returned no JSON output")
         self.created = json.loads(created.stdout)
-        self.addCleanup(self._discard_draft)
-
-    def _discard_draft(self):
-        for _ in range(100):
-            discarded = subprocess.run(
-                [sys.executable, str(CLI), "draft", "discard", self.draft, "--json"],
-                env=self.env, capture_output=True, text=True, timeout=15,
-            )
-            if discarded.returncode == 0 or '"code": "busy"' not in discarded.stdout:
-                break
-            time.sleep(0.05)
-        self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
 
     def _wait(self, expression: str, message: str, attempts: int = 500):
         for _ in range(attempts):
@@ -625,19 +615,7 @@ class SelectionEditingBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=15,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-
-        def discard_other():
-            for _ in range(100):
-                discarded = subprocess.run(
-                    [sys.executable, str(CLI), "draft", "discard", other, "--json"],
-                    env=self.env, capture_output=True, text=True, timeout=15,
-                )
-                if discarded.returncode == 0 or '"code": "busy"' not in discarded.stdout:
-                    break
-                time.sleep(0.05)
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
-
-        self.addCleanup(discard_other)
+        draft_support.register_draft_cleanup(self, other, self.env, stop=self._stop_studio)
         self._open("""
             globalThis.__releaseDraftSwitchRead = null;
             globalThis.__draftSwitchReadStarted = false;
@@ -701,20 +679,8 @@ class SelectionEditingBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=15,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        draft_support.register_draft_cleanup(self, other, self.env, stop=self._stop_studio)
         other_created = json.loads(created.stdout)
-
-        def discard_other():
-            for _ in range(100):
-                discarded = subprocess.run(
-                    [sys.executable, str(CLI), "draft", "discard", other, "--json"],
-                    env=self.env, capture_output=True, text=True, timeout=15,
-                )
-                if discarded.returncode == 0 or '"code": "busy"' not in discarded.stdout:
-                    break
-                time.sleep(0.05)
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
-
-        self.addCleanup(discard_other)
         self._open("""
             globalThis.__releaseOldSelectionSave = null;
             globalThis.__oldSelectionSaveCommitted = false;
