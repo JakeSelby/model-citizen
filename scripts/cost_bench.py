@@ -1256,10 +1256,14 @@ def preflight(tasks, opts, launch=subprocess.run):
             effort_matches = observed_effort is None or observed_effort == effort
             fields, observation_problem = observation_result(collector)
             spent += PREFLIGHT_CAP_USD if cost is None else cost
+            # Every reason a preflight is red is named: an effort mismatch never hides a
+            # collector failure behind it.
+            problems = ([] if effort_matches else
+                        ["observed effort %s, pinned %s" % (observed_effort, effort)])
+            problems += [observation_problem] if observation_problem else []
             checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches
                            and not observation_problem,
-                           "reply": (observation_problem or reply if effort_matches else
-                                     "observed effort %s, pinned %s" % (observed_effort, effort)),
+                           "reply": "; ".join(problems) if problems else reply,
                            "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)

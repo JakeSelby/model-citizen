@@ -356,6 +356,19 @@ class EffortTests(unittest.TestCase):
         self.assertEqual(checks[0]["observed_effort"], "max")
         self.assertIn("observed effort max, pinned high", checks[0]["reply"])
 
+    def test_preflight_names_an_observation_problem_beside_an_effort_mismatch(self):
+        mismatched = json.loads(gate_reply(GREEN))
+        mismatched.insert(0, init(effort="max"))
+        problem = ({"observation_ledger": None, "observation_rows": None,
+                    "observation_errors": None}, "observation ledger is missing")
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(BENCH, "observation_result", return_value=problem):
+            checks, _ = BENCH.preflight([TASK], options(tmp),
+                                        Launch([json.dumps(mismatched), json.dumps(mismatched)]))
+        self.assertFalse(checks[0]["passed"])
+        self.assertIn("observed effort max, pinned high", checks[0]["reply"])
+        self.assertIn("observation ledger is missing", checks[0]["reply"])
+
     def test_a_run_that_reports_another_effort_errors_and_stops_the_set(self):
         """Even with --allow-surface-drift: a different effort is a different arm."""
         with tempfile.TemporaryDirectory() as tmp:
