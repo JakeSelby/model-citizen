@@ -502,8 +502,8 @@ a context token.
 ```
 
 `module` names the hook that owns the decision, as `hooks/<id>`: `grade-bash`, `stop-gate` and
-`brief-guard` their own, and the band routing row and the `integration-descriptor` notice
-`hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
+`brief-guard` their own, and the band routing row, the `delegation-nudge` row and the
+`integration-descriptor` notice `hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
 launch guard name `null`, because no hook id switches them off, and so does any other point no
 hook owns, such as `decision-provider`.
 `POINT_MODULES` in `decisions.py` is the map.
@@ -519,6 +519,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
 | `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
+| `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |
 | `evasion-deny` | `deny`, on a re-spawn of already-refused work | not labelled yet |
 | `role-confinement` | `deny`, on a native spawn naming a constrained role, by `subagent_type` or a `harness-role:` line; `input` leads with the role and which of the two named it | not labelled yet |
