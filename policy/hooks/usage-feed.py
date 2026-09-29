@@ -1325,11 +1325,27 @@ def row_for(table, agent_type):
         return None
 
 
+def workflow_transcript(path):
+    """Whether a transcript is a Workflow-tool agent's: `subagents/workflows/wf_*/agent-*.jsonl`.
+
+    Such an agent is launched by the tool, not spawned: no spawn hook routed it and no brief
+    stated it a budget, so `usage.jsonl` records it `unconfined` with both budgets null. The feed
+    leaves it unbudgeted for the same reason, whatever role name its type happens to carry, so
+    the live line and `citizen usage --by role` agree about the same agent.
+    """
+    if not isinstance(path, str) or not path:
+        return False
+    parts = path.replace("\\", "/").split("/")
+    return (len(parts) >= 4 and parts[-4] == "subagents" and parts[-3] == "workflows"
+            and parts[-2].startswith("wf_"))
+
+
 def stop_line(table, nudges, record):
     agent_id = record.get("id")
     round_number = record.get("round")
+    row = None if workflow_transcript(record.get("path")) else row_for(table, record.get("type"))
     return agent_line(agent_name(record.get("type")), record.get("output"),
-                      record.get("tool_calls"), row_for(table, record.get("type")), nudges,
+                      record.get("tool_calls"), row, nudges,
                       bool(record.get("partial")), bool(record.get("so_far")),
                       bool(record.get("not_yet")),
                       agent_id if isinstance(agent_id, str) else None,
