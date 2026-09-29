@@ -36,7 +36,8 @@ from .. import reconcile
 # is reached by file from a hook directory, not by module path, and a configuration must
 # validate in a process that never loads it. `test_jev_outbound_controls.py` asserts the two
 # lists agree, so a point added there and forgotten here is a test failure.
-POINTS = ("grade-bash", "stop-gate", "tier-agent-spawns", "brief-guard", "evasion-deny")
+POINTS = ("grade-bash", "stop-gate", "tier-agent-spawns", "delegation-nudge",
+          "brief-guard", "evasion-deny")
 
 MODES = ("off", "shadow", "advise", "act")
 DEFAULT_MODE = "off"
