@@ -44,6 +44,7 @@ class CompatibilityTests(unittest.TestCase):
             data = json.loads(path.read_text())
             data["release_state"] = "candidate"
             data.pop("qualification_source_commit", None)
+            data.pop("qualification_reuse", None)
             data["clients"][0]["status"] = "qualified"
             path.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "missing acceptance"):
