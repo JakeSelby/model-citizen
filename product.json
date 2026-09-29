@@ -111,7 +111,7 @@
         },
         {
           "name": "Live usage feed",
-          "line": "See turn and subagent costs, context-size alerts, hook decisions and machine-readable JSON for every local usage report.",
+          "line": "The orchestrator sees what each turn and each subagent cost, and hears once when its context passes the size your stance sets. A decision log records what a hook decided.",
           "doc": "docs/usage.md"
         },
         {
