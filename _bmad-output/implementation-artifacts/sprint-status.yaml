@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-28"
+generated: "2026-09-29"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -486,6 +486,9 @@ development_status:
   ah-b128-three-timing-tests-fail-under-a-loaded-full: ready-for-dev
   ah-b129-a-named-spawn-of-a-role-switched-off-in-a: ready-for-dev
   ah-b130-the-installation-case-skips-the-role-list-on: ready-for-dev
+  ah-b131-the-compaction-detector-counts-a-miss-under-a: ready-for-dev
+  ah-b132-usage-feed-prices-a-workflow-tool-agent-against: ready-for-dev
+  ah-b133-fix-coordination-let-a-subagent-write-paths-its: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -546,6 +549,9 @@ development_status:
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-c096-remove-the-changelog-lint-s-unreleased-exemption: ready-for-dev
   ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
+  ah-c098-bring-ad-11-s-and-ad-23-s-status-tags-in-the: ready-for-dev
+  ah-c099-add-resume-tests-that-change-the-model-or-the: ready-for-dev
+  ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
@@ -646,6 +652,7 @@ development_status:
   ah-s320-every-cost-efficacy-or-system-change-test-is-a: done
   ah-s322-allow-documentation-only-patch-releases-to-carry: done
   ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
+  ah-s329-add-a-json-output-to-citizen-usage: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
