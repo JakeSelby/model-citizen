@@ -481,6 +481,7 @@ development_status:
   ah-b123-release-validation-misses-staged-files-when: ready-for-dev
   ah-b124-compatibility-candidate-fixture-retains-live: ready-for-dev
   ah-b125-qualification-provision-runs-its-git-calls-under: ready-for-dev
+  ah-b126-grade-bash-falls-back-to-its-most-permissive: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
