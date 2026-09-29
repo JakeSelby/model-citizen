@@ -65,8 +65,8 @@ def read_journal(run: Path) -> tuple[list[str], dict[str, int], dict[str, str]]:
                 states[agent_id] = "pending"
         elif entry.get("type") == "result":
             payload = entry.get("result")
-            results[key] = len(payload) if isinstance(payload, str) else 0
-            if agent_id:
+            if agent_id and isinstance(payload, str):
+                results[key] = len(payload)
                 states[agent_id] = "returned"
         elif entry.get("type") == "failed" and agent_id:
             results.pop(key, None)

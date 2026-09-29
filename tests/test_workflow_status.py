@@ -57,6 +57,14 @@ class WorkflowStatusTests(unittest.TestCase):
         self.assertIn("failed;", self.report())
         self.journal([{"type": "result", "key": "unmapped", "result": "abc"}])
         self.assertIn("unknown;", self.report())
+        self.assertIn("0/1 returned", self.report())
+
+    def test_malformed_result_does_not_count_as_returned(self):
+        self.journal([{"type": "started", "key": "k", "agentId": "one"},
+                      {"type": "result", "key": "k", "result": {"text": "abc"}}])
+        text = self.report()
+        self.assertIn("pending;", text)
+        self.assertIn("0/1 returned", text)
 
     def test_restarted_key_does_not_keep_an_old_result(self):
         self.journal([{"type": "result", "key": "k", "agentId": "one", "result": "abc"},
