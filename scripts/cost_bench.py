@@ -1649,7 +1649,7 @@ def cmd_detect(args):
             raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
         rows, runs = replay_detect.detect_dir(raw, ARMS, cli_messages, module)
         write_jsonl(raw / DETECTIONS, rows)
-        unread = len(set(r["source"] for r in rows if r.get("count") is None))
+        unread = replay_detect.unreadable(rows, lambda r: r["source"])
         print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))
         return 0
     root = Path(args.backfill).expanduser()

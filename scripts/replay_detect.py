@@ -322,6 +322,15 @@ def write_jsonl(path, rows):
     Path(path).write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows), encoding="utf-8")
 
 
+def unreadable(rows, key):
+    """How many runs, grouped by `key`, had no readable stream: every one of their rows is unknown.
+    A run where one detector raised still read its stream, so it is not counted."""
+    missing = {}
+    for row in rows:
+        missing.setdefault(key(row), []).append(row.get("count") is None)
+    return sum(1 for flags in missing.values() if all(flags))
+
+
 def backfill(root, reader, module, overwrite=False):
     """Write `detections.jsonl` beside every `results.jsonl` under `root`; read the results
     and never write them, and leave an existing `detections.jsonl` alone unless `overwrite`.
@@ -344,8 +353,7 @@ def backfill(root, reader, module, overwrite=False):
                 shared[directory] = len(sets)
         detections = detect_rows(rows, dirs, reader, module, shared)
         write_jsonl(target, detections)
-        unread = len(set((r.get("task"), r.get("arm"), r.get("rep")) for r in detections
-                         if r.get("count") is None))
+        unread = unreadable(detections, lambda r: (r.get("task"), r.get("arm"), r.get("rep")))
         report.append((target, len(rows), unread))
     return report
 

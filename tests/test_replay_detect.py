@@ -112,12 +112,21 @@ class StreamDetectionTests(unittest.TestCase):
         module.DETECTORS["test/broken"] = module.Detector("test/broken", "testing", "session", broken)
         with tempfile.TemporaryDirectory() as tmp:
             raw = copy_of("raw", tmp)
+            out = io.StringIO()
             with mock.patch.object(DETECT, "load_detectors", return_value=module), \
-                    redirect_stdout(io.StringIO()):
+                    redirect_stdout(out):
                 self.assertEqual(BENCH.main(["detect", "--raw", str(raw)]), 0)
             run = by_detector(BENCH.read_jsonl(raw / BENCH.DETECTIONS), "gate-run-harness-1.json")
         self.assertEqual((run["test/broken"]["count"], run["test/broken"]["error"]), (None, "RuntimeError"))
         self.assertEqual(run["verification/no-verify"]["turns"], [4])
+        # One detector raising leaves a stream readable: only the fixture's one unreadable
+        # stream counts, not every run the broken detector touched.
+        self.assertIn("over 3 run(s), 1 unreadable,", out.getvalue())
+
+    def test_only_a_run_with_every_row_unknown_counts_as_unreadable(self):
+        rows = [{"source": "a", "count": None}, {"source": "a", "count": 2},
+                {"source": "b", "count": None}, {"source": "b", "count": None}]
+        self.assertEqual(DETECT.unreadable(rows, lambda r: r["source"]), 1)
 
     def test_detect_leaves_existing_detections_alone_without_overwrite(self):
         with tempfile.TemporaryDirectory() as tmp:
