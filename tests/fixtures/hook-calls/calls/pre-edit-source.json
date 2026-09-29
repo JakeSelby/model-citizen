@@ -1,0 +1,16 @@
+{
+ "about": "Editing a source file in the workspace.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+   "file_path": "/workspace/example-repo/src/app.py",
+   "old_string": "hello",
+   "new_string": "world"
+  }
+ }
+}

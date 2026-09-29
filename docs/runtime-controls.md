@@ -186,7 +186,8 @@ three separate questions per decision, and all three must agree before anything 
 
 **How far this point may be judged.** `governance.jev.mode` sets the default and
 `governance.jev.modes.<point>` overrides it for one of the decision points the ledger already
-names — `grade-bash`, `stop-gate`, `tier-agent-spawns`, `brief-guard`, `evasion-deny`. `off`
+names — `grade-bash`, `stop-gate`, `tier-agent-spawns`, `delegation-nudge`, `brief-guard`,
+`evasion-deny`. `off`
 calls nothing. `shadow` calls, writes the ledger row and returns the deterministic decision
 untouched, so an answer can be measured before it is trusted: nothing reaches the model or the
 user. `advise` puts the judgment in `rule_matches`, says what `act` would have done, and changes

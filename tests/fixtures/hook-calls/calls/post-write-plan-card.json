@@ -1,0 +1,22 @@
+{
+ "about": "A plan file written with a complete Review Card.",
+ "files": {
+  "{home}/.claude/plans/rename-parser.md": "# Plan: rename the parser\n\n> Rename the parser module. Nothing else moves.\n\n## At a glance\n\n- One file.\n\n## System design\n\n```\nparser -> reader\n```\n\n## Steps\n\n1. Rename it. Exit: tests pass.\n\n## Decisions for the reviewer\n\n1. None.\n\n## Risks\n\n- None.\n\n---\n\n# Addendum\n\nDetail.\n"
+ },
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+   "file_path": "{home}/.claude/plans/rename-parser.md",
+   "content": "# Plan: rename the parser\n\n> Rename the parser module. Nothing else moves.\n\n## At a glance\n\n- One file.\n\n## System design\n\n```\nparser -> reader\n```\n\n## Steps\n\n1. Rename it. Exit: tests pass.\n\n## Decisions for the reviewer\n\n1. None.\n\n## Risks\n\n- None.\n\n---\n\n# Addendum\n\nDetail.\n"
+  },
+  "tool_response": {
+   "filePath": "{home}/.claude/plans/rename-parser.md",
+   "type": "create"
+  }
+ }
+}

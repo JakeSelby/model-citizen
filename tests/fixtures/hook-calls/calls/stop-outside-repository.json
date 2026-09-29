@@ -1,0 +1,11 @@
+{
+ "about": "A turn ending outside any repository.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+ }
+}
