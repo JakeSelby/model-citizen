@@ -4,13 +4,13 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 126,
-    "chore": 96,
+    "bug": 131,
+    "chore": 98,
     "decision": 14,
     "epic": 27,
     "spike": 19,
     "story": 329,
-    "task": 37
+    "task": 38
   },
   "items": [
     {
@@ -3728,7 +3728,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S253.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6618,6 +6618,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B126",
+      "github_number": 868,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/868",
+      "title": "grade-bash falls back to its most permissive threshold on an unknown autonomy variant",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B126.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S266",
       "github_number": 874,
       "github_url": "https://github.com/JakeSelby/agent-harness/issues/874",
@@ -6735,6 +6748,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-T037",
+      "github_number": 897,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/897",
+      "title": "Governance decision rows lose their segment fields when the provider errors",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T037.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B110",
       "github_number": 898,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/898",
@@ -6800,6 +6826,45 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B128",
+      "github_number": 910,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/910",
+      "title": "Three timing tests fail under a loaded full-suite run and pass alone",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B128.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C097",
+      "github_number": 913,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
+      "title": "docs/usage.md's decision point table leaves out framework-spawn",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C097.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C096",
+      "github_number": 914,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/914",
+      "title": "Remove the changelog lint's Unreleased exemption now that 0.13.0 has shipped",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C096.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B125",
       "github_number": 917,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/917",
@@ -6807,6 +6872,45 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B125.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B129",
+      "github_number": 918,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/918",
+      "title": "A named spawn of a role switched off in a project or session layer still launches from the definition the last sync wrote",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B129.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B127",
+      "github_number": 919,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/919",
+      "title": "config set refuses a switch that repairs a selection the resolver already refuses",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B127.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B130",
+      "github_number": 923,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/923",
+      "title": "The installation case skips the role list on Codex, though Codex reads the synced role files",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B130.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -7915,6 +8019,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B123",
+      "github_number": 1050,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1050",
+      "title": "Release validation misses staged files when comparing against HEAD",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B123.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

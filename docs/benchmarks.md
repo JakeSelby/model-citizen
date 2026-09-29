@@ -68,9 +68,10 @@ it is run by hand on a release candidate and never in CI. It needs Docker, and
 ```sh
 python3 scripts/cost_bench.py replay --verify-tasks                  # prove every check in a container; calls no model
 python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --exploratory --dry-run   # the arms and the schedule
-python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 7 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registration <plan>  # 0 tasks x 2 arms x 5 reps; refuses until #796
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
+python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -94,6 +95,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   stamped with the version and commit of the ref that ran; the bare image is built once. Every ref
   resolves before anything is built, so a typo costs nothing, and `--spend-cap` applies to each
   tag's schedule on its own.
+- **The defaults nominally size one full set.** `--reps` is five trials per task and arm, SM-2's
+  minimum. `--spend-cap` defaults to 140.50 USD: 7 tasks x 5 trials x 2 arms at the 2 USD per-run
+  cap, plus each arm's 0.25 USD preflight. The per-run cap is soft, so an overrun can exhaust that
+  total before the last trial. The runner stops before the next launch, records a partial set and
+  publishes no history row or claim.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
   Dockerfile and the lister. The manifest is every file, link and directory under the image user's
@@ -108,12 +114,34 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   difference, and `--dry-run` prints every command without building. `replay --dry-run` prints the
   image each arm will be.
 - **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
-  refuses an arm whose manifest holds a Claude Code version, agent client or harness commit other
-  than its declaration names; whose settings, hooks, rules, skills, agents, plugins or instruction
-  files are not the declared harness's (a link into its checkout, or the settings files its sync
-  writes; the bare arm has none); whose recorded inputs name your home directory, this checkout or
-  an ambient `CLAUDE_CONFIG_DIR`; or whose run is neither pre-registered nor exploratory. Every
-  `docker run` is refused the same way when a mount or a variable names one of those paths.
+  recomputes the declaration and manifest digests and requires their known schemas. It refuses an
+  arm whose components are missing, duplicated or malformed; whose manifest holds a Claude Code
+  version, agent client or harness commit other than its declaration names; whose settings, hooks,
+  rules, skills, agents, plugins or instruction files are not the declared harness's; whose
+  recorded inputs name your home directory, this checkout or an ambient `CLAUDE_CONFIG_DIR`; whose
+  declaration pins no reasoning effort; or whose run is neither pre-registered nor exploratory.
+  A refusal prints every admission defect found. Every `docker run` is refused the same way when a
+  mount or a variable names one of those paths.
+- **The two arms differ by the harness and nothing else.** After each arm is admitted,
+  `replay_arms.admit_pair` compares the pair and refuses the replay, printing every difference,
+  when their declarations differ in anything but the harness component (base digest, Claude Code
+  version, Dockerfile, lister or effort), when their manifests differ in Claude Code, agent
+  clients or roots, or when any manifest entry outside the harness component is not identical in
+  both. The harness treatment is its checkout, links whose targets are inside that checkout, the
+  exact regular files its sync and trust commands generate, and only the parent directories needed
+  to reach those entries. Unrelated files and links remain part of pair parity even when they sit
+  under `.claude`, `.codex` or `.local/bin`.
+- **Every run pins its reasoning effort.** `--effort` (`low`, `medium`, `high`, `xhigh` or `max`;
+  default `high`) is recorded in each arm's declaration and passed to Claude Code as `--effort` on
+  every launch, the pre-flight's included, so no arm takes its model's default, which differs by
+  model. Every row records it as `effort`. The effort is a launch input, so it changes the
+  declaration's digest but not the image. `CLAUDE_CODE_EFFORT_LEVEL` outranks `--effort`, so the
+  image manifest records whether it was baked into the image, and admission refuses it there or in
+  the run environment. Each row also records `observed_effort`, the
+  level the `init` event reports; a run whose observed effort differs from the pinned one is an
+  errored row and stops the set, with no override. The pre-flight applies the same check and keeps
+  both the pinned and observed values in its verdict. Claude Code sends that field only to Remote
+  Control clients, so on a headless run it is normally `null` and the pin rests on the flag.
 - **Every row records the container it ran in**: `arm_image`, `arm_image_id`,
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
@@ -126,7 +154,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   gate container is named, and one that times out is removed by name. The credential is
   passed by name, so its value is on no command line and in no row. The container runs with
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
-  `--model`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
+  `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
@@ -150,6 +178,34 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   Stop hook's decisions, so each row records `stop_hooks`, how often the hook ran, and
   `hook_blocks`, how often it refused the stop. A raw file kept in the older single-document form
   still reads, with both fields `null`.
+- **Every row records the loaded surface, as the CLI reports it.** The stream's `init` event lists
+  what the session loaded, so each row carries `init_skills`, `init_agents`,
+  `init_slash_commands`, `init_tools`, `init_mcp_servers` and `init_memory_paths`, the length of
+  each list, plus an `init_<name>_sha256` over each key's canonical reported members and
+  `init_surface_source: cli-init`. The hashes detect a member replacement that leaves the count
+  unchanged without claiming identities the event did not report. All fields are `null` for a
+  stream with no `init` event, and one count and hash are `null` when the event lacks its key.
+  Within a set, each run is compared with its own arm's first run that reported a surface, including
+  its reported effort. A difference is written on the row as `surface_drift`, one
+  `field: before -> after` line each, and stops the set once that row is written.
+  `--allow-surface-drift` runs on instead and stamps every row of the set
+  `surface_drift_allowed: true`. Beside `first_call_cache_write`, each row carries
+  `first_call_context`, the first call's input, cache write and cache read together: the write
+  alone moves with how warm the cache was and the total does not, so compare runs on the total.
+  `backfill` derives all of these for sets already on disk; missing or unreadable raw output never
+  replaces diagnostic evidence already present on a row.
+- **Contamination is refused before either arm spends.** While the harness image contains a checkout
+  of this repository, every issue task mined from the same repository is refused: commit ancestry
+  cannot prove the files lack a cherry-picked, squashed or equivalent fix. The synthetic tasks are
+  excluded too: the installed checkout contains their held-back oracle source and its `solve()`
+  reference implementation, while an unrelated oracle failure would not prove the answer absent.
+  An exposed task is refused before the writable-worktree probe or preflight. During a scored run,
+  an observed tool input whose normalized path names `/opt/model-citizen` fails that attempt as
+  `installed-checkout-read`; every row records the
+  `installed-checkout-oracle-and-transcript-v1` control. The transcript check is evidence for the
+  paths visible in tool inputs, not a complete filesystem-read audit: an unknown symlink, relative
+  traversal or copied file may evade it. Prelaunch exclusion is the primary control. The installed
+  runtime remains intact.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its
@@ -158,8 +214,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `--skip-preflight` bypasses the check and stamps the rows `skipped`.
 - **Every run starts in a throwaway snapshot.** The snapshot holds one commit and its ancestors, so
   the change that solved a task is not reachable from it, and it is removed after scoring. The
-  harness arm's image does hold the harness checkout at its ref, which may postdate a task; that
-  was as true of the profile arms this replaced, and it is recorded rather than hidden.
+  harness arm's installed checkout is checked separately by the contamination control above.
 - **Cost is the CLI's own `total_cost_usd`**, a list-price equivalent and not money charged under a
   plan sign-in. Run order changes it, because a later run finds its prefix already cached, so each
   row also carries a cache-normalised cost that reprices every thread's first-turn cache reads as
@@ -178,22 +233,58 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   served its whole prefix.
 - **Every attempt counts.** An errored, crashed or timed-out run is a failed attempt whose cost is
   in the arm's cost per passed task, as the evidence standard's intention to treat requires; its
-  `error` field keeps it countable apart. A timed-out run with no readable cost is charged at the
-  per-run cap; another error with no readable cost leaves the figure undefined rather than cheaper.
-  The per-run cap is soft, so the runner also stops
+  `error` field keeps it countable apart and its `outcome` is `fail`. A timed-out run with no
+  readable cost is charged at the per-run cap; another error with no readable cost leaves the
+  figure undefined rather than cheaper. The per-run cap is soft, so the runner also stops
   before any launch that could take reported spend past `--spend-cap`.
+- **SM-2 decides the result, from the saved rows alone.** Every row names its `task`, `arm`, trial
+  (`rep`), `outcome` (`pass` or `fail`), `cost_usd` and `task_long`, so `summarise` re-derives
+  every figure from `results.jsonl` without calling a model; rows that saved no pass or fail, as
+  the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, arm trial-set
+  mismatches across arms or tasks, contradictory outcomes, inconsistent long-task markers, boolean
+  costs and non-finite pooled costs or ratios are refused too. A replay exclusively creates its
+  results file before probes or model calls; even an existing empty file is refused, so concurrent
+  runs cannot mix cohorts. After an interrupted run, choose a fresh output path. It reports, per arm, Cost-of-Pass (the
+  total cost of every attempt over total passes, pooled across the set) and the pass rate with a
+  Wilson 95% interval, which is descriptive only. The harness-over-bare ratio and the pass-rate
+  difference (harness minus bare) carry paired, task-clustered 95% intervals from a percentile
+  bootstrap that resamples tasks and keeps both arms' trials of a task together; it prints its seed
+  and resample count (`--seed`, `--resamples`, default 795 and 10,000) and gives the same interval
+  for the same seed. The ratio is undefined when either arm passes nothing or a run has no
+  readable cost, and an interval bound that lands on a resample where an arm passed nothing is
+  undefined too; those sentinels never masquerade as zero or infinity. A real zero ratio remains
+  valid when the harness arm has zero cost and both arms passed.
+- **The verdict is supported, not supported or inconclusive, whatever it shows.** Supported needs
+  the ratio's interval wholly below 1.0 and the difference's lower bound above -0.125. Not
+  supported means the data rule that out: the ratio's interval wholly at or above 1.0, or the
+  difference's wholly below -0.125. Anything else is inconclusive, with the reason. "At least 15%
+  cheaper" is claimed only when the ratio's upper bound is at or below 0.85. A task marked
+  `"long": true` in `benchmarks/tasks.json` joins the long-task subset, whose ratio interval is
+  reported beside the whole set's, and a saving is claimed only when it too lies wholly below 1.0.
+  With no marked long-task subset, no saving is claimed. Fewer than five paired trials per task and
+  arm remain available as an exploratory diagnostic, but are explicitly ineligible for an SM-2
+  proof or saving claim. No task is marked yet.
+- **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
+  rate, naming the arm on the frontier and any arm another dominates.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
-  days, never dollars. The publishable threshold is fixed in the script: the harness costs at most
-  85% of bare per passed task while passing no fewer than bare minus one, mean of reps.
-- **What is faked:** single-shot prompts stand in for interactive sessions, 2 of the 7 tasks are
-  synthetic, and a tagged run measures the tag's default configuration rather than a configured
-  one. The arms run on Linux; a macOS arm is not built.
+  days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.
+  The older mean-of-reps `status` (at most 85% of bare per passed task, passing no fewer than bare
+  minus one) is kept beside it so earlier rows stay comparable; SM-2's verdict is the one that
+  decides a claim.
+- **What is faked:** 0 of the 0 tasks are synthetic because no live replay task is currently
+  eligible. The retired synthetic tasks used single-shot prompts in place of interactive sessions,
+  and a tagged run measures the tag's default configuration rather than a configured one. The arms
+  run on Linux; a macOS arm is not built.
 - **A task that cannot be passed honestly leaves the set** and moves to the manifest's `retired`
-  list with its reason and date. `usage-prices` left on 2026-09-25: its held-back tests pin live
-  prices and helper names its prompt never gives, and no arm can reach the web to confirm a price.
+  list with its reason and date. The five issue-derived tasks left on 2026-09-28 because the
+  installed harness checkout can reach their known-good commits. `usage-prices` had already left
+  on 2026-09-25 because its held-back tests pin live prices and helper names its prompt never gives.
 
-**Status.** The live tier has produced one uncontaminated result: 1.052 on a four-task set, above
+**Status.** The current manifest has no eligible replay tasks, so the runner refuses before probes,
+preflight or model calls. #796 owns an adequately powered replacement task set whose answers the
+installed harness cannot carry. The earlier live tier
+produced one result of 1.052 on a four-task set, above
 the 0.85 threshold, so no cost claim is published. Two earlier figures in either direction were
 artifacts of the runner's sandbox and of a test-suite defect, both since fixed. A review on
 2026-09-24 found six more ways the arms were unequal or a task unfair: the task count above, the
