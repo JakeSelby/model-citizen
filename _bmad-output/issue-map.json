@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 123,
+    "bug": 129,
     "chore": 96,
     "decision": 14,
     "epic": 27,
@@ -6618,6 +6618,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B126",
+      "github_number": 868,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/868",
+      "title": "grade-bash falls back to its most permissive threshold on an unknown autonomy variant",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B126.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S266",
       "github_number": 874,
       "github_url": "https://github.com/JakeSelby/agent-harness/issues/874",
@@ -6796,6 +6809,45 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B109.md",
       "parent_bmad_id": "AH-E020",
       "parent_github_number": 875,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B128",
+      "github_number": 910,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/910",
+      "title": "Three timing tests fail under a loaded full-suite run and pass alone",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B128.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B125",
+      "github_number": 917,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/917",
+      "title": "qualification_provision runs its git calls under an inherited GIT_DIR, so they can act on another repository",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B125.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B127",
+      "github_number": 919,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/919",
+      "title": "config set refuses a switch that repairs a selection the resolver already refuses",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B127.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "completed",
       "provenance": "authored"
     },
@@ -7902,6 +7954,32 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B123",
+      "github_number": 1050,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1050",
+      "title": "Release validation misses staged files when comparing against HEAD",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B123.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B124",
+      "github_number": 1051,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1051",
+      "title": "Compatibility candidate fixture retains live qualification reuse metadata",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B124.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

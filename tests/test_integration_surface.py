@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from test_harness import REPO, harness
 from harness_core import frameworks
@@ -127,7 +128,8 @@ class SessionNoticeTests(Surface):
         """End to end: the hook's own subprocess, its filter, and the framework-named prefix."""
         subprocess.run(["git", "init", "-q", str(self.base)], check=True)
         module = load_hook()
-        lines = module.integration_lines(str(REPO), str(self.base))
+        with patch.object(module, "remaining", return_value=30):
+            lines = module.integration_lines(str(REPO), str(self.base))
         self.assertEqual(len(lines), 1, lines)
         self.assertTrue(lines[0].startswith("BMad Method integration check: "), lines[0])
         self.assertIn("template not installed (citizen integration apply bmad)", lines[0])
@@ -136,7 +138,9 @@ class SessionNoticeTests(Surface):
     def test_the_notice_is_silent_once_the_overrides_are_in_place(self):
         subprocess.run(["git", "init", "-q", str(self.base)], check=True)
         self.assertEqual(self.cli("integration", "apply", "bmad", str(self.base))[0], 0)
-        self.assertEqual(load_hook().integration_lines(str(REPO), str(self.base)), [])
+        module = load_hook()
+        with patch.object(module, "remaining", return_value=30):
+            self.assertEqual(module.integration_lines(str(REPO), str(self.base)), [])
 
     def test_a_directory_that_is_not_a_repository_says_nothing(self):
         self.assertEqual(load_hook().integration_lines(str(REPO), str(self.base)), [])
