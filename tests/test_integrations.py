@@ -9,7 +9,7 @@ import uuid
 from pathlib import Path
 
 from isolation import without_config_dir
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from test_harness import harness, REPO
 from harness_core import integrations as api
 
@@ -173,14 +173,46 @@ print(json.dumps({"contract_version": 1, "request_id": r["request_id"],
             api.invoke(self.binding(), "open")
 
     def test_timeout_is_indeterminate_for_mutation_and_never_retried(self):
-        self.script.write_text("import time\ntime.sleep(20)\n")
-        with self.assertRaises(api.IntegrationError) as error:
-            api.viewer(self.root, self.cfg, self.root / "sessions", "open", timeout=0.03)
-        self.assertFalse(error.exception.indeterminate)  # describe timed out before open could execute
-        self.script.write_text('import json,sys,time\nr=json.load(sys.stdin)\nif r["operation"] == "open": time.sleep(20)\nr.update(status="ok",result={"capabilities":["open"]})\nprint(json.dumps(r))')
-        with self.assertRaises(api.IntegrationError) as error:
-            api.viewer(self.root, self.cfg, self.root / "sessions", "open", timeout=0.2)
+        operations = []
+        children = []
+        timed_out = "describe"
+
+        def launch(argv, stdin, stdout, **kwargs):
+            request = json.load(stdin)
+            operations.append(request["operation"])
+            child = Mock(returncode=0)
+            children.append(child)
+            if request["operation"] != timed_out:
+                request.update(status="ok", result={"capabilities": ["open"]})
+                stdout.write(json.dumps(request).encode())
+                stdout.flush()
+                child.poll.return_value = 0
+            else:
+                child.poll.return_value = None
+            return child
+
+        with patch.object(api.subprocess, "Popen", side_effect=launch), \
+                patch.object(api.time, "monotonic", side_effect=[0, 1]):
+            with self.assertRaises(api.IntegrationError) as error:
+                api.viewer(self.root, self.cfg, self.root / "sessions", "open", timeout=0.2)
+        self.assertFalse(error.exception.indeterminate)
+        self.assertEqual(operations, ["describe"])
+        children[-1].kill.assert_called_once_with()
+        children[-1].wait.assert_called_once_with()
+
+        operations.clear()
+        children.clear()
+        timed_out = "open"
+        with patch.object(api.subprocess, "Popen", side_effect=launch), \
+                patch.object(api.time, "monotonic", side_effect=[0, 0, 1]):
+            with self.assertRaises(api.IntegrationError) as error:
+                api.viewer(self.root, self.cfg, self.root / "sessions", "open", timeout=0.2)
         self.assertTrue(error.exception.indeterminate)
+        self.assertEqual(operations, ["describe", "open"])
+        children[0].kill.assert_not_called()
+        children[0].wait.assert_not_called()
+        children[-1].kill.assert_called_once_with()
+        children[-1].wait.assert_called_once_with()
         records = list((self.root / "sessions").glob("*.json"))
         self.assertEqual(len(records), 1)
         self.assertEqual(json.loads(records[0].read_text())["open_error"]["code"], "adapter-timeout")
