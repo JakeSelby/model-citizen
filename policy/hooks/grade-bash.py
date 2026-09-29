@@ -162,6 +162,7 @@ DOCKER_EXEC_VALUE_FLAGS = ("-e", "--env", "-u", "--user", "-w", "--workdir",
                            "--index", "--env-file")
 SSH_VALUE_FLAGS = ("-p", "-i", "-l", "-o", "-F", "-L", "-R", "-D", "-b", "-c", "-E", "-J", "-W")
 SCAN_CAP = 16384
+TOO_LONG = (3, "command too long to grade", "", "opaque")
 SQL_RE = re.compile(
     r"\b(DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW|ROLE|USER)|TRUNCATE(?:\s+TABLE)?|"
     r"DELETE\s+FROM)\s+(?:IF\s+EXISTS\s+)?([`\"\w.]+)", re.I)
@@ -317,16 +318,28 @@ def normalize(cmd):
     or behind a line continuation. A body is data to the shell; only a client that interprets
     it — a SQL client — is graded on its contents."""
     texts, bodies = _readings(cmd)
+    if texts is None:
+        return _strip_comments(_outer(cmd)[0]), bodies
     return texts[0], bodies
+
+
+def _outer(cmd):
+    """(the shell text with here-document bodies split out, the bodies)."""
+    return _split_heredocs(cmd.replace("\r\n", "\n").replace("\r", "\n"))
 
 
 def _readings(cmd):
     """([shell text, …], here-document bodies): one reading, or two when `_join_continuations`
     cannot place a backslash-newline with certainty — its own, then every pair removed, as the
     hook read continuations before it modelled quoting. A caller grades the worse reading and
-    takes no directory from either."""
-    text = cmd.replace("\r\n", "\n").replace("\r", "\n")
-    text, bodies = _split_heredocs(text)
+    takes no directory from either.
+
+    The texts are None when the shell text, bodies excluded, is longer than `SCAN_CAP`: the
+    caller grades it too long without decomposing it, because the lexer and the substitution
+    walk are not linear in its length and a hook that runs past its timeout fails open."""
+    text, bodies = _outer(cmd)
+    if len(text) > SCAN_CAP:
+        return None, bodies
     joined, certain = _join_continuations(text)
     texts = [joined] if certain else [joined, text.replace("\\\n", "")]
     return [_strip_comments(each) for each in texts], bodies
@@ -445,7 +458,7 @@ def _scan(text):
     its separator-free chunks, or grade 1. Linear in the length of the text, and the text it
     reads is capped, because a hook that runs past its timeout fails open."""
     if len(text) > SCAN_CAP:
-        return 3, "command too long to grade", "", "opaque"
+        return TOO_LONG
     for chunk in SCAN_SPLIT.split(text.lower()):
         for needles, verb, family in SCAN:
             if all(needle in chunk for needle in needles):
@@ -1031,6 +1044,8 @@ def _grade_text(cmd, cwd, depth):
     if depth >= MAX_DEPTH:
         return _scan(cmd)
     texts, bodies = _readings(cmd)
+    if texts is None:
+        return TOO_LONG
     if len(texts) > 1:
         # A continuation the lexer cannot place: the worse reading, and never read-only.
         return max([_grade_reading(text, bodies, cwd, depth) for text in texts]
@@ -1602,16 +1617,20 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
     A line with a continuation the lexer cannot place is walked in each reading `_readings`
     gives, and every directory is None: which repository it reaches is not known. When neither
     reading decomposes, the line is one entry at an unknown directory, a push at grade 2 when a
-    chunk of it names `git` and `push`, as `_scan` reads text it cannot decompose. `causes` is
+    chunk of it names `git` and `push`, as `_scan` reads text it cannot decompose. A line too
+    long for `_readings` to read is not walked and is that one entry, at grade 3. `causes` is
     filled as `_governed` describes."""
     if depth >= MAX_DEPTH:
         return None
     texts, _bodies = _readings(cmd)
-    if len(texts) == 1:
-        return _walk(texts[0], cwd, depth, isolated, causes)
     found = []
-    for text in texts:
-        found.extend(_walk(text, cwd, depth, isolated, causes) or [])
+    if texts is None:  # too long to decompose: unplaced, and graded as `_scan` grades it
+        texts = [_outer(cmd)[0]]
+    elif len(texts) == 1:
+        return _walk(texts[0], cwd, depth, isolated, causes)
+    else:
+        for text in texts:
+            found.extend(_walk(text, cwd, depth, isolated, causes) or [])
     if not found:
         pushes = any("git" in chunk and "push" in chunk
                      for text in texts for chunk in SCAN_SPLIT.split(text.lower()))
