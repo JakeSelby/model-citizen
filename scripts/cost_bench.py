@@ -25,6 +25,7 @@ import platform
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 from harness_core import cache_prefix  # noqa: E402  the ledger's miss ratio, one definition
 from harness_core import catalog  # noqa: E402  the resolver the hooks load, for the profile fingerprint
+from harness_core import observation  # noqa: E402  the shared observer registration
+from harness_core import observer  # noqa: E402  benchmark-owned destination variables
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
@@ -81,7 +84,8 @@ MODEL_USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "
 # refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
 # the harness arm's settings carry.
 NO_WEB = ("WebFetch", "WebSearch")
-ARM_SETTINGS = {"permissions": {"deny": list(NO_WEB)}}
+OBSERVER_COMMAND = arms.OBSERVER_COMMAND
+ARM_SETTINGS = arms.observer_settings()
 # The container is the fence: no host path but the snapshot, no way out but the model API. Inside
 # it the agent acts without prompts, as a headless run cannot answer one.
 PERMISSION_MODE = "bypassPermissions"
@@ -308,12 +312,19 @@ def scrubbed_env(extra=None, base=None):
     return env
 
 
-def arm_env(arm, stance_cost=None, proxy=None, selection=None):
+def arm_env(arm, stance_cost=None, proxy=None, selection=None, observation_run=None):
     """The variables one arm's container is given by value (`replay_arms.arm_env`): the same for
-    both arms, bar the harness arm's stance override and a pair arm's selection. The container's
-    HOME is the image's own, and the credential goes by name alone, so neither is here."""
+    both arms, bar the harness arm's stance override, a pair arm's selection and one native
+    session's observation files. The container's HOME is the image's own, and the credential goes
+    by name alone, so neither is here."""
     harness = arm != "bare"
-    return arms.arm_env(proxy, stance_cost if harness else None, selection if harness else None)
+    env = arms.arm_env(proxy, stance_cost if harness else None, selection if harness else None)
+    if observation_run:
+        env.update({observer.LEDGER_ENV: observation_run["container_ledger"],
+                    observer.ERRORS_ENV: observation_run["container_errors"]})
+        if observation_run["profile"] is not None:
+            env[observer.PROFILE_ENV] = observation_run["profile"]
+    return env
 
 
 def arm_names(opts):
@@ -339,6 +350,135 @@ def arm_spec(arm, opts):
             "network": opts.get("network"), "proxy": opts.get("proxy"), "credential": arms.CREDENTIAL,
             "protocol": opts.get("stamp"), "tasks_sha256": opts.get("tasks_sha256"),
             "prices_sha256": opts.get("prices_sha256")}
+
+
+def prepare_observation_dir(out):
+    """Create this replay tag's new run-owned observation directory before a launch."""
+    root = Path(out).resolve()
+    target = root / "observations"
+    root.mkdir(parents=True, exist_ok=True)
+    try:  # one atomic create, so a concurrent run with the same tag is refused the same way
+        target.mkdir(mode=0o700)
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing existing observation output %s" % target)
+    (target / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
+    return target
+
+
+def observation_stem(name):
+    """A file-safe stem for one session name, injective: a name that needed rewriting carries
+    a hash of the original, so `a/b` and `a-b` never share observation files."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
+    if safe == name:
+        return safe
+    return "%s-%s" % (safe, hashlib.sha256(name.encode("utf-8")).hexdigest()[:10])
+
+
+def refuse_observation_collisions(tasks, opts):
+    """Refuse, before any probe or model call, a plan whose sessions would share a stem."""
+    if not opts.get("observation_dir"):
+        return
+    names = ["preflight-%s" % arm for arm in arm_names(opts)]
+    names += ["%s-%s-%d" % (task["id"], arm, rep)
+              for task, rep, arm in schedule(tasks, opts["reps"], arm_names(opts))]
+    seen = {}
+    for name in names:
+        stem = observation_stem(name)
+        if stem in seen:
+            raise SystemExit("cost-bench: refusing the replay: sessions %r and %r share observation files %s"
+                             % (seen[stem], name, stem))
+        seen[stem] = name
+
+
+def discard_observation(run):
+    """Remove one session's staging directory; its retained copy is already in the archive."""
+    if run:
+        shutil.rmtree(str(run["private"]), ignore_errors=True)
+
+
+def observation_run(opts, name, profile):
+    """The fresh host and container files for one real native session."""
+    root = opts.get("observation_dir")
+    if not root:
+        return None
+    stem = observation_stem(name)
+    archive = Path(root)
+    if any((archive / (stem + suffix)).exists() for suffix in (".jsonl", ".errors.jsonl")):
+        raise SystemExit("cost-bench: refusing existing observation files for %s" % stem)
+    try:
+        (archive / (stem + ".reserved")).touch(exist_ok=False)
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing repeated observation session %s" % stem)
+    # Only this session's empty output directory enters the container. The retained result
+    # directory may be in the host checkout, but no arm can read or alter it or another run.
+    # The stage is open to every user so the image's user can write it whatever its uid, as
+    # `replay_arms.open_for_image` does for the snapshot; it sits inside a private (0o700)
+    # parent, so no other host user can reach it, and `discard_observation` removes both.
+    private = Path(tempfile.mkdtemp(prefix="cost-observation-", dir=opts.get("tmp")))
+    stage = private / "out"
+    stage.mkdir()
+    (stage / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
+    os.chmod(str(stage), 0o777)
+    ledger, errors = stage / (stem + ".jsonl"), stage / (stem + ".errors.jsonl")
+    for path in (ledger, errors):
+        path.touch(mode=0o666, exist_ok=False)
+        os.chmod(str(path), 0o666)
+    return {"ledger": ledger, "errors": errors, "archive": archive, "mount": stage,
+            "private": private, "relative": "observations/" + ledger.name,
+            "container_ledger": arms.OBSERVATION_MOUNT + "/" + ledger.name,
+            "container_errors": arms.OBSERVATION_MOUNT + "/" + errors.name,
+            "profile": profile}
+
+
+def observation_result(run):
+    """Validate and retain each native stream independently, including collector failures."""
+    if not run:
+        return {"observation_ledger": None, "observation_rows": None,
+                "observation_errors": None}, None
+    counts, problems = {}, []
+    # The container has exited: close the stage before reading, then accept only regular files
+    # still owned by this user, which the observer's append into the pre-created file keeps.
+    os.chmod(str(run["mount"]), 0o700)
+    for key in ("ledger", "errors"):
+        path = run[key]
+        try:
+            info = os.lstat(str(path))
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("collector output is not a regular file")
+            if info.st_uid != os.getuid():
+                raise ValueError("collector output is not owned by the invoking user")
+            raw = path.read_bytes()
+            # Retain malformed output as evidence too; validation never rewrites its contents.
+            with (run["archive"] / path.name).open("xb") as archive:
+                archive.write(raw)
+            lines = raw.decode("utf-8").splitlines()
+            for line in lines:
+                row = json.loads(line)
+                valid = isinstance(row, dict) and row.get("runtime") == "claude-code" \
+                    and isinstance(row.get("ts"), str) and bool(row["ts"])
+                if key == "ledger":
+                    valid = valid and row.get("schema_version") == observer.SCHEMA_VERSION \
+                        and type(row.get("schema_version")) is int \
+                        and row.get("event") in observation.events("claude-code") \
+                        and "session_id" in row \
+                        and (row["session_id"] is None or isinstance(row["session_id"], str)) \
+                        and "profile_fingerprint" in row \
+                        and row["profile_fingerprint"] == run["profile"]
+                else:
+                    valid = valid and isinstance(row.get("error"), str) and bool(row["error"]) \
+                        and isinstance(row.get("detail"), str)
+                if not valid:
+                    raise ValueError("invalid observer row")
+            counts[key] = len(lines)
+        except (OSError, ValueError, UnicodeError) as exc:
+            counts[key] = None
+            problems.append("observation: unreadable %s output (%s)" % (key, type(exc).__name__))
+    if counts["errors"]:
+        problems.append("observation: %d collector error(s)" % counts["errors"])
+    if counts["ledger"] == 0:
+        problems.append("observation: no native events recorded")
+    return {"observation_ledger": run["relative"], "observation_rows": counts["ledger"],
+            "observation_errors": counts["errors"]}, "; ".join(problems) or None
 
 
 def arm_profile(arm, env, opts):
@@ -458,13 +598,22 @@ def mounted_snapshot(repo, sha, dest):
     return arms.open_for_image(snapshot(repo, sha, dest))
 
 
-def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None):
+def check_observer_settings(record):
+    """Refuse a launch whose native observer settings differ from the arm's declared inputs."""
+    if arms.digest(ARM_SETTINGS) != record["declaration"].get("observer_settings_sha256"):
+        raise SystemExit("cost-bench: native observer settings differ from the declared inputs")
+
+
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written. `arm` names a pair arm, whose selection is
-    passed by value."""
-    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
-    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name)
+    passed by value; `observation_run` is one native session's observation stage."""
+    check_observer_settings(record)
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
+                  observation_run)
+    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
+                               observation_dir=observation_run["mount"] if observation_run else None)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -475,15 +624,20 @@ def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=Non
         raise
 
 
-def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None):
+def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None, observation_run=None):
     """(completed run or None, timeout or None, ledger status): a pair harness arm's run.
 
     The container is kept after it exits so its usage ledger can be copied out to `dest`
     (`copy_ledger`), then removed by name whatever happened. On a timeout it is stopped first, so
-    nothing keeps running or spending. The one mount stays the snapshot, and nothing of the host
-    is writable from inside."""
-    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
-    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name, keep=True)
+    nothing keeps running or spending. The mounts stay the snapshot and, with `observation_run`,
+    that session's observation stage, which the caller archives once this returns; nothing else of
+    the host is writable from inside."""
+    check_observer_settings(record)
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
+                  observation_run)
+    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
+                               observation_dir=observation_run["mount"] if observation_run else None,
+                               keep=True)
     client = opts.get("client_env") or arms.client_env()
     quiet = {"env": client, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "universal_newlines": True}
     done = timeout = None
@@ -1059,6 +1213,7 @@ def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
+    profile = arm_profile(arm, env, opts)
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
@@ -1067,8 +1222,9 @@ def _attempt(task, rep, arm, opts, launch):
                init_surface_source=None, installed_checkout_reads=[],
                contamination_control=CONTAMINATION_CONTROL,
                surface_drift=[],
+               observation_ledger=None, observation_rows=None, observation_errors=None,
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
-               profile_fingerprint=arm_profile(arm, env, opts),
+               profile_fingerprint=profile,
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
@@ -1079,15 +1235,28 @@ def _attempt(task, rep, arm, opts, launch):
         row.update(replay_pair.row_stamp(pair, arm),
                    decision_ledger=replay_pair.LEDGER_ABSENT if not kept else None)
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
+    observed = None
+
+    def finish(value):
+        fields, problem = observation_result(observed)
+        value.update(fields)
+        if problem:
+            prior = value.get("error_kind")
+            value.update(error=True, passed=None, error_kind="; ".join(x for x in (prior, problem) if x),
+                         cache_miss_ratio=None)
+        return value
+
     started = time.time()
     try:
+        observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
         timeout = None
         if kept:
             copied = workdir.parent / "usage.jsonl"
-            done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied, launch, arm)
+            done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied,
+                                                                 launch, arm, observed)
             if row["decision_ledger"] == replay_pair.LEDGER_READ:
                 try:
                     keep_decisions(copied, replay_pair.decisions_file(opts["decisions"], task["id"], arm, rep))
@@ -1095,7 +1264,7 @@ def _attempt(task, rep, arm, opts, launch):
                     row["decision_ledger"] = "%s: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
         else:
             try:
-                done = launch_arm(record, workdir, argv, opts, name, launch, arm)
+                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
         if timeout is not None:
@@ -1103,8 +1272,8 @@ def _attempt(task, rep, arm, opts, launch):
             partial = getattr(exc, "stdout", None)
             partial = partial if partial is not None else getattr(exc, "output", None)
             _partial_diagnostics(row, partial)
-            return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
-                        wall_seconds=round(time.time() - started, 1))
+            return finish(dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
+                               wall_seconds=round(time.time() - started, 1)))
         row["wall_seconds"] = round(time.time() - started, 1)
         if opts.get("raw"):
             Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
@@ -1114,28 +1283,30 @@ def _attempt(task, rep, arm, opts, launch):
             parsed = parse_result(done.stdout)
         except ValueError as exc:
             _partial_diagnostics(row, done.stdout)
-            return dict(row, error=True, error_kind="exit %s: %s" % (done.returncode, exc))
+            return finish(dict(row, error=True, error_kind="exit %s: %s" % (done.returncode, exc)))
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),
                    **{field: parsed[field] for field in STREAM_FIELDS})
         if parsed["installed_checkout_reads"]:
-            return dict(row, error=True, error_kind="installed-checkout-read")
+            return finish(dict(row, error=True, error_kind="installed-checkout-read"))
         if parsed["observed_effort"] is not None and parsed["observed_effort"] != effort:
             # The stream says the run went at another effort than the one pinned: not this arm.
-            return dict(row, error=True, cache_miss_ratio=None,
-                        error_kind="effort: observed %s, pinned %s" % (parsed["observed_effort"], effort))
+            return finish(dict(row, error=True, cache_miss_ratio=None,
+                               error_kind="effort: observed %s, pinned %s"
+                               % (parsed["observed_effort"], effort)))
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
-            return dict(row, error=True, cache_miss_ratio=None,
-                        error_kind=parsed["subtype"] or "exit %s" % done.returncode)
+            return finish(dict(row, error=True, cache_miss_ratio=None,
+                               error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
             row["passed"] = bool(_scorer(opts, launch)(task, workdir, opts["repo"])[0])
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
-            return dict(row, error=True, error_kind="check: %s" % type(exc).__name__)
-        return row
+            return finish(dict(row, error=True, error_kind="check: %s" % type(exc).__name__))
+        return finish(row)
     finally:
         shutil.rmtree(str(workdir.parent), ignore_errors=True)  # removed, never reset
+        discard_observation(observed)
 
 
 def gate_output(stdout):
@@ -1182,18 +1353,22 @@ def preflight(tasks, opts, launch=subprocess.run):
     checks, spent = [], 0.0
     for arm in arm_names(opts):
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
+        collector = None
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
+            env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
+            collector = observation_run(opts, "preflight-%s" % arm, arm_profile(arm, env, opts))
             command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
                                   PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
-                                  container_name("preflight", arm), launch, arm)
+                                  container_name("preflight", arm), launch, arm, collector)
             except subprocess.TimeoutExpired:
                 spent += PREFLIGHT_CAP_USD
+                fields, problem = observation_result(collector)
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None,
                                "effort": opts["arms"][arm]["declaration"]["effort"],
-                               "observed_effort": None})
+                               "observed_effort": None, **fields})
                 continue
             if opts.get("raw"):
                 raw = Path(opts["raw"]); raw.mkdir(parents=True, exist_ok=True)
@@ -1201,18 +1376,25 @@ def preflight(tasks, opts, launch=subprocess.run):
             reply = reply_text(done.stdout)
             try:
                 parsed = parse_result(done.stdout)
-                cost, observed = parsed["cost_usd"], parsed["observed_effort"]
+                cost, observed_effort = parsed["cost_usd"], parsed["observed_effort"]
             except ValueError:
-                cost, observed = None, None
+                cost, observed_effort = None, None
             effort = opts["arms"][arm]["declaration"]["effort"]
-            effort_matches = observed is None or observed == effort
+            effort_matches = observed_effort is None or observed_effort == effort
+            fields, observation_problem = observation_result(collector)
             spent += PREFLIGHT_CAP_USD if cost is None else cost
-            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches,
-                           "reply": (reply if effort_matches else
-                                     "observed effort %s, pinned %s" % (observed, effort)),
-                           "cost_usd": cost, "effort": effort, "observed_effort": observed})
+            # Every reason a preflight is red is named: an effort mismatch never hides a
+            # collector failure behind it.
+            problems = ([] if effort_matches else
+                        ["observed effort %s, pinned %s" % (observed_effort, effort)])
+            problems += [observation_problem] if observation_problem else []
+            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches
+                           and not observation_problem,
+                           "reply": "; ".join(problems) if problems else reply,
+                           "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
+            discard_observation(collector)
     return checks, spent
 
 
@@ -1275,6 +1457,7 @@ def admit_pair_arms(opts):
 
 
 def _replay(tasks, opts, launch, sink):
+    refuse_observation_collisions(tasks, opts)
     names = arm_names(opts)
     harness_arms = [arm for arm in names if arm != "bare"]
     for arm in names:
@@ -1782,6 +1965,7 @@ def replay_tag(tag, args, common, harness):
                         prices_sha256=replay_pair.sha256(ROOT / "policy" / "prices.json"))
             opts["stamp"]["prices_sha256"] = opts["prices_sha256"]
         out.mkdir(parents=True, exist_ok=True)
+        opts["observation_dir"] = prepare_observation_dir(out)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)

@@ -1,9 +1,10 @@
 """Replay arms as fresh containers: declare an arm, build its image, list what it holds, run it.
 
 An arm is a Docker image built from pinned inputs and nothing else. `bare` is the Linux
-qualification image's base and Claude Code; `harness` is that plus this repository at one
+qualification image's base, Claude Code and the shared observer; `harness` is that plus this repository at one
 commit, synced for the image's agent user. Nothing from the machine running the replay reaches
-either: no home directory, profile, environment, hook or setting.
+either: no home directory, profile, environment, hook or setting. A run may also mount the fresh
+benchmark-owned observation directory prepared and marked by `cost_bench.py`.
 
 Each build writes two JSON files beside the image: the arm's **declaration**, the inputs it was
 built from, and its **manifest**, every file and link the image holds under the agent user's
@@ -36,6 +37,16 @@ ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_DOCKERFILE = ROOT / "scripts" / "linux-target.Dockerfile"
 ARM_DOCKERFILE = ROOT / "scripts" / "replay-arm.Dockerfile"
 MANIFEST_SCRIPT = ROOT / "scripts" / "arm_manifest.py"
+OBSERVER_SOURCE = ROOT / "lib" / "harness_core" / "observer.py"
+sys.path.insert(0, str(ROOT / "lib"))
+from harness_core import observation  # noqa: E402
+
+OBSERVER_COMMAND = "python3 /opt/model-citizen-observer/observe.py --runtime claude-code"
+
+def observer_settings():
+    return {"permissions": {"deny": ["WebFetch", "WebSearch"]},
+            "hooks": observation.hooks_for(OBSERVER_COMMAND, "claude-code")}
+
 PROXY_SCRIPT = ROOT / "scripts" / "egress_proxy.py"
 IMAGE_PREFIX = "model-citizen-arm-"
 ARMS = ("bare", "harness")
@@ -121,14 +132,16 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
         raise SystemExit("replay-arms: harness commit %r is not a full sha" % harness.get("commit"))
     version = claude_code_version or inputs["claude_code_version"]
     components = [{"name": "base-image", "version": inputs["base_image"]},
-                  {"name": "@anthropic-ai/claude-code", "version": version}]
+                  {"name": "@anthropic-ai/claude-code", "version": version},
+                  {"name": "model-citizen-observer", "version": "sha256:" + file_sha(OBSERVER_SOURCE)}]
     if harness:
         components.append({"name": "model-citizen", "version": harness["ref"], "commit": harness["commit"]})
     return {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
             "claude_code_version": version,
             "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
             "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
-            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort}
+            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort,
+            "observer_settings_sha256": digest(observer_settings())}
 
 
 def build_inputs(decl):
@@ -148,10 +161,12 @@ def image_name(decl, tag=None):
 
 
 def build_context(decl, parent, snapshot, repo=ROOT):
-    """The directory one build sends to the daemon: empty for the bare arm, and a `harness/` clone
-    of the declared commit for the harness arm, made by `snapshot(repo, commit, dest)`."""
+    """The build context with the declared observer, plus the harness commit for that arm."""
     context = Path(parent) / "context"
     context.mkdir(parents=True)
+    observer = context / "observer"
+    observer.mkdir()
+    shutil.copyfile(str(OBSERVER_SOURCE), str(observer / "observe.py"))
     if decl["harness"]:
         snapshot(repo, decl["harness"]["commit"], context / "harness")
     return context
@@ -365,12 +380,13 @@ HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md
                   "home:.local/state/agent-harness/manifest.json",
                   "home:.local/state/agent-harness/applied.json")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
-NOT_PACKAGES = ("base-image", "model-citizen")
+NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer")
 
 
 def _matches_its_declaration(record):
     """The manifest holds exactly the declared Claude Code, agent clients and harness commit."""
-    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     problems = []
     components = decl.get("components")
     if not isinstance(components, list):
@@ -388,12 +404,32 @@ def _matches_its_declaration(record):
     if duplicates:
         problems.append("declaration has duplicate components: %s" % ", ".join(duplicates))
     model_citizen = [component for component in valid if component["name"] == "model-citizen"]
+    observers = [component for component in valid if component["name"] == "model-citizen-observer"]
     harness = decl.get("harness")
     if bool(harness) != (len(model_citizen) == 1):
         problems.append("declaration must have exactly one model-citizen component iff it names a harness")
     elif model_citizen and (model_citizen[0].get("version") != harness.get("ref")
                             or model_citizen[0].get("commit") != harness.get("commit")):
         problems.append("the model-citizen component does not match the declared harness")
+    observer_entries = [entry for entry in manifest.get("entries") or []
+                        if isinstance(entry, dict)
+                        and str(entry.get("path") or "").startswith("observer:")]
+    observer_entry = next((entry for entry in observer_entries
+                           if entry.get("path") == "observer:observe.py"), None)
+    observer_version = observers[0].get("version") if len(observers) == 1 else None
+    if decl.get("observer_settings_sha256") != digest(observer_settings()):
+        problems.append("observer hook settings differ from their declaration")
+    if len(observers) != 1:
+        problems.append("declaration must have exactly one model-citizen-observer component")
+    elif not re.fullmatch(r"sha256:[0-9a-f]{64}", observer_version or ""):
+        problems.append("the observer component version is not a sha256")
+    elif not observer_entry or observer_entry.get("kind") != "file" \
+            or "sha256:" + str(observer_entry.get("sha256")) != observer_version:
+        problems.append("the installed observer does not match its declared sha256")
+    if [entry.get("path") for entry in observer_entries] != ["observer:observe.py"]:
+        problems.append("the observer root must hold only its declared entry point")
+    if (manifest.get("roots") or {}).get("observer") != "/opt/model-citizen-observer":
+        problems.append("the manifest lacks the declared observer root")
     if manifest.get("claude_code_version") != decl.get("claude_code_version"):
         problems.append("the manifest holds Claude Code %r, the declaration %r" % (
             manifest.get("claude_code_version"), decl.get("claude_code_version")))
@@ -714,14 +750,39 @@ def arm_env(proxy=None, stance_cost=None, selection=None):
     return env
 
 
-def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False, keep=False):
-    """`docker run --rm` of an arm: the snapshot at WORKDIR is the only mount, `env` goes by value,
+OBSERVATION_MOUNT = "/observations"
+OBSERVATION_MARKER = ".model-citizen-benchmark-output"
+
+
+def observation_mount(path):
+    """A prepared benchmark-owned observation directory, or a refusal reason."""
+    if path is None:
+        return None, None
+    raw = Path(path)
+    if raw.is_symlink() or not raw.is_absolute() or not raw.is_dir():
+        return None, "observation output is not a real absolute directory"
+    resolved = raw.resolve()
+    reason = host_path_reason([str(raw), str(resolved)])
+    if reason:
+        return None, reason
+    marker = resolved / OBSERVATION_MARKER
+    if not marker.is_file() or marker.read_text(encoding="utf-8") != "cost-bench\n":
+        return None, "observation output was not prepared by cost-bench"
+    return resolved, None
+
+
+def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
+                observation_dir=None, keep=False):
+    """`docker run --rm` of an arm with the snapshot and optional marked observation output.
+
+    `env` goes by value,
     the credential by name alone, and the network is the one given (the egress network for a run,
     `none` for a check). With no `workdir` nothing at all is mounted; `stdin` keeps standard input
     attached, which Docker otherwise drops, for a program sent on it. A mount or a value that
-    names a host path in `host_paths` is refused, so no launch can reach the host's home, profile
-    or live checkout. `keep` leaves out `--rm`, so a file can be copied out of the stopped
-    container (`copy_command`) before it is removed by name; it needs a `name`."""
+    names a host path in `host_paths` is refused. The extra output is accepted only with the marker
+    `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
+    leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
+    it is removed by name; it needs a `name`."""
     reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
@@ -731,6 +792,11 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         "--network", network] + HARDENING
     if workdir is not None:
         command += ["-v", "%s:%s" % (workdir, WORKDIR), "-w", WORKDIR]
+    observation, error = observation_mount(observation_dir)
+    if error:
+        raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, error))
+    if observation:
+        command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):
