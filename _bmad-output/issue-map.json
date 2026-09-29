@@ -6865,6 +6865,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C099",
+      "github_number": 912,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/912",
+      "title": "Add resume tests that change the model or the class routing at the same commit",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C099.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C097",
       "github_number": 913,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
@@ -6885,6 +6898,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C096.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C098",
+      "github_number": 916,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/916",
+      "title": "Bring AD-11's and AD-23's status tags in the architecture spine up to date",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C098.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
