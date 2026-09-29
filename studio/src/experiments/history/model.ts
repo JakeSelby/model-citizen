@@ -33,12 +33,20 @@ export type HistoryFilters = {
 
 export type HistoryPage = { items: RunSummary[]; next_cursor: string | null };
 
+export type RunArtifact = {
+  id: string;
+  label: string;
+  available?: boolean;
+  kind?: "html-report";
+  href?: string;
+};
+
 export type RunDetail = RunSummary & {
   cases: RunCase[];
   reruns: { items: string[]; next_cursor: string | null };
   exact_command: string | null;
   rerun: { available: boolean; reason: string | null };
-  artifacts: Array<{ id: string; label: string; available?: boolean }>;
+  artifacts: RunArtifact[];
 };
 
 export type CaseHistory = {
@@ -54,4 +62,12 @@ export const emptyFilters: HistoryFilters = {
 
 export function displayUnknown(value: string | number | null, suffix = ""): string {
   return value === null ? "Unknown" : `${value}${suffix}`;
+}
+
+const REPORT_HREF = /^\/api\/runs\/plugin-eval-report\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** The same-origin report link an imported plugin eval declares, or null for any other artifact. */
+export function reportHref(artifact: RunArtifact): string | null {
+  if (artifact.kind !== "html-report" || artifact.available === false) return null;
+  return typeof artifact.href === "string" && REPORT_HREF.test(artifact.href) ? artifact.href : null;
 }

@@ -369,7 +369,7 @@ development_status:
   ah-s304-run-the-live-replay-benchmark-from-the-studio: ready-for-dev
   ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: backlog
   ah-s306-run-the-four-arm-bench-layer-swaps-and-factorial: backlog
-  ah-s319-import-claude-plugin-eval-reports-into-the-run: backlog
+  ah-s319-import-claude-plugin-eval-reports-into-the-run: ready-for-dev
 
   ah-e025-judge-in-the-studio-whether-a-change-helped: backlog
   ah-s307-compare-two-runs-with-paired-intervals: backlog

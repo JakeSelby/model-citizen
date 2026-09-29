@@ -1667,6 +1667,22 @@ class RunStore:
                 imported += len(records)
             except (RunStoreError, sqlite3.Error, AttributeError, TypeError) as exc:
                 skipped.append({"path": relative, "reason": str(exc)})
+        # Imported here because the plugin eval parser is built on this module's helpers.
+        from . import plugin_evals
+        try:
+            entries = plugin_evals.import_records(root, MAX_RESULTS_FILES - len(candidates))
+        except RunStoreError as exc:
+            skipped.append({"path": plugin_evals.DEFAULT_EVAL_DIRECTORY, "reason": str(exc)})
+            entries = []
+        for relative, record in entries:
+            try:
+                if isinstance(record, RunStoreError):
+                    raise record
+                with self.connection:
+                    self._upsert(record)
+                imported += 1
+            except (RunStoreError, sqlite3.Error, OverflowError, ValueError) as exc:
+                skipped.append({"path": relative, "reason": str(exc)})
         return imported, skipped
 
     def _import_sidecars(self, runs_fd: int) -> int:

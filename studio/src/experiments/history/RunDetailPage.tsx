@@ -5,7 +5,7 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { EvidenceState, StatusBadge } from "../../components/StudioKit";
 import { useLiveUpdates } from "../../live/LiveUpdates";
 import { loadCaseHistory, loadEvidence, loadRunDetail, rerun } from "./api";
-import { displayUnknown, type CaseHistory, type RunDetail } from "./model";
+import { displayUnknown, reportHref, type CaseHistory, type RunDetail } from "./model";
 
 export function RunDetailPage() {
   const { runId = "" } = useParams();
@@ -152,8 +152,13 @@ export function RunDetailPage() {
         <Stack gap="xs">{caseHistory.items.map((item) => <Text key={item.run_id} component={NavLink} to={`/experiments/runs/${item.run_id}`}>{item.case?.outcome} · {displayUnknown(item.created_at)} {item.case?.flaky ? "· Flaky" : ""}</Text>)}</Stack>
         {caseHistory.next_cursor && <Button mt="sm" variant="default" onClick={() => void showCaseHistory(caseHistory.case_id, caseHistory.next_cursor)}>Load more</Button>}
       </Paper>}
-      <Paper p="xl" withBorder><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => <Button key={item.id} variant="default" disabled={item.available === false}
-        onClick={() => void showEvidence(item.id)}>{item.label}</Button>)}</Group>
+      <Paper p="xl" withBorder><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => {
+        const href = reportHref(item);
+        return href
+          ? <Button key={item.id} variant="default" component="a" href={href} target="_blank" rel="noopener noreferrer">{item.label}</Button>
+          : <Button key={item.id} variant="default" disabled={item.available === false || item.kind === "html-report"}
+            onClick={() => void showEvidence(item.id)}>{item.label}</Button>;
+      })}</Group>
         {evidenceError && <EvidenceState kind="error" title="Evidence unavailable">{evidenceError}</EvidenceState>}
         {evidence && <ScrollArea className="run-log" h={300} mt="md"><Code block>{evidence}</Code></ScrollArea>}</Paper>
     </>}
