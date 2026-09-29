@@ -80,6 +80,17 @@ class WorkflowStatusTests(unittest.TestCase):
                 self.assertEqual(STATUS.read_journal(self.run),
                                  (["k"], {}, {"one": "pending"}))
 
+    def test_invalid_or_conflicting_start_preserves_existing_return(self):
+        for identity in (None, "", 7, [], "other"):
+            with self.subTest(identity=identity):
+                self.journal([{"type": "started", "key": "k", "agentId": "one"},
+                              {"type": "result", "key": "k", "result": "abc"},
+                              {"type": "started", "key": "k", "agentId": identity}])
+                self.assertEqual(STATUS.read_journal(self.run),
+                                 (["k"], {"k": 3}, {"one": "returned"}))
+        self.journal([{"type": "started", "key": "unmapped"}])
+        self.assertEqual(STATUS.read_journal(self.run), ([], {}, {}))
+
     def test_result_identity_without_start_does_not_establish_completion(self):
         self.journal([{"type": "result", "key": "k", "agentId": "one", "result": "abc"}])
         self.assertEqual(STATUS.read_journal(self.run), ([], {}, {}))
