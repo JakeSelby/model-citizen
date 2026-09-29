@@ -15,7 +15,7 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from .state import StateError, Store
+from .state import StateError, Store, open_shared
 
 SIDECAR_SCHEMA_VERSION = 2
 SIDECAR_META_SCHEMA_VERSION = 1
@@ -145,8 +145,8 @@ def _sync(descriptor: int) -> None:
 def _authority_lock(state_fd: int):
     descriptor = -1
     try:
-        descriptor = os.open(AUTHORITY_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                             0o600, dir_fd=state_fd)
+        descriptor = open_shared(AUTHORITY_LOCK_NAME, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                 0o600, state_fd)
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise RunStoreError("run authority lock is not a regular file")

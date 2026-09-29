@@ -7,6 +7,7 @@ import json
 import os
 import secrets
 import stat
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,30 @@ UI_COLOR_SCHEMES = frozenset(("auto", "light", "dark"))
 
 class StateError(ValueError):
     """The instance store cannot be trusted or is incompatible."""
+
+
+CREATE_RACE_ATTEMPTS = 8
+CREATE_RACE_FIRST_DELAY = 0.001
+
+
+def open_shared(name: str, flags: int, mode: int, dir_fd: int) -> int:
+    """Open a file that concurrent openers may be creating at the same moment.
+
+    On macOS, when two threads or processes race to `O_CREAT` the same absent name, the loser
+    can fail with ENOENT although its directory is intact; a second attempt finds the file the
+    winner created. Attempts back off exponentially from one millisecond, about 0.13 seconds
+    in all, so a slow winner is waited for; a directory that is really gone still fails.
+    """
+    delay = CREATE_RACE_FIRST_DELAY
+    for attempt in range(CREATE_RACE_ATTEMPTS):
+        try:
+            return os.open(name, flags, mode, dir_fd=dir_fd)
+        except FileNotFoundError:
+            if not flags & os.O_CREAT or attempt == CREATE_RACE_ATTEMPTS - 1:
+                raise
+        time.sleep(delay)
+        delay *= 2
+    raise AssertionError("unreachable")
 
 
 class Store:
@@ -91,7 +116,7 @@ class Store:
         assert self.fd is not None
         flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
         try:
-            handle = os.open(LOCK_NAME, flags, 0o600, dir_fd=self.fd)
+            handle = open_shared(LOCK_NAME, flags, 0o600, self.fd)
         except OSError as exc:
             if exc.errno in (errno.ELOOP, errno.EISDIR, errno.ENXIO):
                 raise StateError("Studio instance lock is not a safe regular file") from exc

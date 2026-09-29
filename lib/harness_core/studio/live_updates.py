@@ -190,12 +190,19 @@ class WatchScanner:
                     matches = self._matches(base, pattern, root) if _within(base, root) else ()
                 except OSError:
                     matches = ()
+                # Record each parent directory once, not once per match: a thousand-module
+                # directory otherwise costs a thousand redundant lstat calls every poll. A
+                # single-level pattern's parent is always `base`, recorded just above.
+                nested = "/" in pattern
+                parents = {base}
                 for path, info in matches:
                     path_topics = ("library", "overview", "selection") if kind == "modes" else (
                         "library", "overview")
                     self._record(snapshot, path, path_topics, root, info)
-                    self._record(snapshot, path.parent,
-                                 ("library-index", "overview", "selection"), root)
+                    if nested and path.parent not in parents:
+                        parents.add(path.parent)
+                        self._record(snapshot, path.parent,
+                                     ("library-index", "overview", "selection"), root)
         hook_root = self.repo_root / catalog.HOOKS_DIRECTORY
         self._record(snapshot, hook_root, ("library-index", "overview"), self.repo_root)
         self._record(snapshot, self.repo_root / "policy" / "hooks" / "manifests.json",
