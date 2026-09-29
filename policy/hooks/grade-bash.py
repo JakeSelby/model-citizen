@@ -1192,6 +1192,11 @@ SAFE_VARIABLE_WORD_RE = re.compile(
     r'^(?:\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))|'
     r'"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")$')
 _UNSAFE_OPERANDS = object()
+# A context key: True once the line may have changed HOME, so no `~` is expanded after it.
+_HOME_UNKNOWN = object()
+# The value of a variable assigned something the resolver cannot read, such as `$(pwd)/x` or
+# `-x`: the variable is known to be set, to a value that is not, so it resolves to nothing.
+_UNKNOWN_VALUE = object()
 # Assigning these names invokes shell semantics or changes later word expansion. Their values
 # cannot be treated as inert path strings, and an IFS change makes every later unquoted value
 # dependent on runtime splitting. `getopts` owns `OPTIND` and `OPTARG`; the variable it names
@@ -1299,25 +1304,40 @@ def _operand_context(values, source):
         variable = SAFE_VARIABLE_WORD_RE.match(raw)
         if variable:
             continue
-        quoted = raw[:1] in ("'", '"')
+        # bash expands a tilde-prefix only when no character of it, up to the first slash, is
+        # quoted: `~"/beta"` stays `~/beta`, relative, where zsh expands it.
+        quoted = any(c in raw.split("/", 1)[0] for c in "'\"")
         if "$" in raw or "`" in raw or "\\" in raw or (target.startswith("~") and quoted):
-            unsafe.add(target)
-        if target.startswith("~") and "HOME" in values:
             unsafe.add(target)
     context[_UNSAFE_OPERANDS] = unsafe
     return context
 
 
-def _assignment_contexts(text, parts):
-    """Static assignment values visible before each parsed command in a straight sequence."""
+def _mentions_home(tokens):
+    """Whether a simple command may assign HOME: any word `HOME`, or an assignment to it, as in
+    `HOME=x`, `export HOME=x`, `read HOME` or `unset HOME`."""
+    return any(token == "HOME" or token.startswith(("HOME=", "HOME+=")) for token in tokens)
+
+
+def _assignment_contexts(text, parts, home_unknown=False):
+    """Static assignment values visible before each parsed command in a straight sequence.
+
+    Each context also says whether HOME may have changed before its command, from
+    `home_unknown` or an earlier command naming HOME, so no later `~` is expanded."""
+    homes, home = [], home_unknown
+    for tokens in parts:
+        homes.append(home)
+        home = home or _mentions_home(tokens)
     values, contexts, enabled = {}, [], True
     sources = _source_segments(text)
     if sources is None or len(sources) != len(parts):
-        return [{_UNSAFE_OPERANDS: None} for _part in parts]
+        return [{_UNSAFE_OPERANDS: None, _HOME_UNKNOWN: moved} for moved in homes]
     reserved = ro.WORD_DROP | ro.WORD_COND | ro.WORD_HEADER
-    for tokens, source in zip(parts, sources):
-        contexts.append(_operand_context(values, source)
-                        if enabled else {_UNSAFE_OPERANDS: None})
+    for tokens, source, moved in zip(parts, sources, homes):
+        context = (_operand_context(values, source)
+                   if enabled else {_UNSAFE_OPERANDS: None})
+        context[_HOME_UNKNOWN] = moved
+        contexts.append(context)
         raw_words = _source_words(source)
         matches = [SAFE_ASSIGNMENT_RE.match(word) for word in (raw_words or [])]
         assignments = bool(matches) and all(matches) and not any(token in reserved
@@ -1334,24 +1354,34 @@ def _assignment_contexts(text, parts):
             continue
         for match in matches:
             name, value = match.group(1), match.group(2)
-            if _static_dir(value, "/") is None:
-                values.pop(name, None)
-            else:
-                values[name] = value
+            # Never forget an assignment it cannot read: the variable is now set to an unknown
+            # value, which neither resolves nor falls back to the hook's own environment.
+            values[name] = _UNKNOWN_VALUE if _static_dir(value, "/") is None else value
     return contexts
 
 
 def _static_operand(target, variables):
     """A literal operand, including an exact reference to an earlier static assignment."""
-    unsafe = (variables or {}).get(_UNSAFE_OPERANDS, set())
+    variables = variables or {}
+    unsafe = variables.get(_UNSAFE_OPERANDS, set())
     if unsafe is None and (VARIABLE_OPERAND_RE.match(target) or target.startswith("~")):
         return None
     if unsafe is not None and target in unsafe:
         return None
+    if target.startswith("~") and _home_unknown(variables):
+        return None
     match = VARIABLE_OPERAND_RE.match(target)
     if not match:
         return target
-    return (variables or {}).get(match.group(1) or match.group(2))
+    value = variables.get(match.group(1) or match.group(2))
+    return None if value is _UNKNOWN_VALUE else value
+
+
+def _home_unknown(variables):
+    """Whether HOME may differ from the hook's own by the time this context's command runs:
+    the line named HOME earlier, or a command ran that the static model does not follow."""
+    variables = variables or {}
+    return bool(variables.get(_HOME_UNKNOWN)) or "HOME" in variables
 
 
 def _isolating(text):
@@ -1514,7 +1544,9 @@ def _git_dir(args, cwd, variables=None):
             if a == "-C":
                 operand = _static_operand(args[i + 1], variables)
                 cwd = _static_dir(operand, cwd) if operand is not None else None
-                cause = args[i + 1] if cwd is None else None
+                # A literal relative operand under an unknown directory is not the cause.
+                static = operand is not None and _static_dir(operand, "/") is not None
+                cause = None if cwd is not None or static else args[i + 1]
             elif a in ("--git-dir", "--work-tree"):
                 cwd, cause = None, None
             i += 2
@@ -1585,9 +1617,17 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
             inner = ("text", " ".join(args))
     if inner is not None and inner[1]:
         if inner[0] == "tokens":
+            if _mentions_home(tokens):  # `env HOME=x bash -c '…'` hands the shell that HOME
+                variables = dict(variables or {})
+                variables[_HOME_UNKNOWN] = True
             found = _governed(inner[1], cwd, depth + 1, variables, causes)
         else:
-            found = governed_text(inner[1], cwd, depth + 1, causes=causes)
+            # An inner shell inherits HOME: from this line, or from an assignment prefixed to
+            # the command that runs it, as `HOME=x bash -c '…'` and `env HOME=x sh -c '…'` do.
+            variables = variables or {}
+            moved = (_home_unknown(variables) or variables.get(_UNSAFE_OPERANDS, set()) is None
+                     or _mentions_home(tokens))
+            found = governed_text(inner[1], cwd, depth + 1, causes=causes, home_unknown=moved)
         if found:
             return [(c, max(g, grade), d, w + written) for c, g, d, w in found]
     if prog == "git":
@@ -1602,7 +1642,7 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
     return [(SHELL, grade, cwd, written)]
 
 
-def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
+def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=False):
     """[(action class, grade, directory, paths written)] for every simple command in `cmd`, in
     execution order, or None when the text does not decompose.
 
@@ -1619,7 +1659,8 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
     reading decomposes, the line is one entry at an unknown directory, a push at grade 2 when a
     chunk of it names `git` and `push`, as `_scan` reads text it cannot decompose. A line too
     long for `_readings` to read is not walked and is that one entry, at grade 3. `causes` is
-    filled as `_governed` describes."""
+    filled as `_governed` describes. With `home_unknown`, HOME may have changed before `cmd`
+    runs, so no `~` in it is expanded."""
     if depth >= MAX_DEPTH:
         return None
     texts, _bodies = _readings(cmd)
@@ -1627,10 +1668,10 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
     if texts is None:  # too long to decompose: unplaced, and graded as `_scan` grades it
         texts = [_outer(cmd)[0]]
     elif len(texts) == 1:
-        return _walk(texts[0], cwd, depth, isolated, causes)
+        return _walk(texts[0], cwd, depth, isolated, causes, home_unknown)
     else:
         for text in texts:
-            found.extend(_walk(text, cwd, depth, isolated, causes) or [])
+            found.extend(_walk(text, cwd, depth, isolated, causes, home_unknown) or [])
     if not found:
         pushes = any("git" in chunk and "push" in chunk
                      for text in texts for chunk in SCAN_SPLIT.split(text.lower()))
@@ -1641,7 +1682,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None):
     return [(action, grade, None, written) for action, grade, _where, written in found]
 
 
-def _walk(text, cwd, depth, isolated, causes):
+def _walk(text, cwd, depth, isolated, causes, home_unknown=False):
     """`governed_text` for one normalized reading."""
     stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
@@ -1653,17 +1694,21 @@ def _walk(text, cwd, depth, isolated, causes):
         confined = [None] * len(parts)
     queue = list(inners)
     found = []
-    assignment_contexts = _assignment_contexts(stripped, parts)
+    assignment_contexts = _assignment_contexts(stripped, parts, home_unknown)
 
-    def substitutions(count, where):
+    def substitutions(count, where, variables):
+        # A substitution runs in a subshell of this one, with its HOME.
+        moved = (_home_unknown(variables)
+                 or (variables or {}).get(_UNSAFE_OPERANDS, set()) is None)
         for _ in range(min(count, len(queue))):
             inner = queue.pop(0)
-            found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes)
+            found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes,
+                                       home_unknown=moved)
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     here = cwd
     for tokens, alone, variables in zip(parts, confined, assignment_contexts):
-        substitutions(sum(t.count(PLACEHOLDER) for t in tokens), here)
+        substitutions(sum(t.count(PLACEHOLDER) for t in tokens), here, variables)
         body, _targets = _redirects(list(tokens))
         while body and ASSIGN_RE.match(body[0]):
             body = body[1:]
@@ -1682,11 +1727,14 @@ def _walk(text, cwd, depth, isolated, causes):
                 here = None
             elif head == "pushd" and not args:
                 here = None  # swaps with the directory stack, which this walk does not hold
+            elif (args[0] if args else "~").startswith("~") and _home_unknown(variables):
+                here = None  # HOME may have been reassigned earlier in the line
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue
         found.extend(_governed(tokens, here, depth, variables, causes))
-    substitutions(len(queue), None)  # any the segments did not account for: fail closed
+    # Any the segments did not account for: fail closed, HOME included.
+    substitutions(len(queue), None, {_HOME_UNKNOWN: True})
     return found
 
 
