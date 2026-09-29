@@ -76,8 +76,10 @@ def run_usage(args, projects, now):
     HARNESS.claude_projects_root = lambda: Path(projects)
     output = io.StringIO()
     try:
-        with mock.patch.object(HARNESS.time, "time", return_value=now), \
+        # `say` prints nothing while HARNESS_QUIET is set, and other suites set it.
+        with mock.patch.dict(os.environ), mock.patch.object(HARNESS.time, "time", return_value=now), \
                 contextlib.redirect_stdout(output):
+            os.environ.pop("HARNESS_QUIET", None)
             code = HARNESS.cmd_usage(args)
     finally:
         HARNESS.claude_projects_root = original
