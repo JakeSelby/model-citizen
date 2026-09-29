@@ -4,8 +4,8 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 131,
-    "chore": 98,
+    "bug": 132,
+    "chore": 101,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -6852,6 +6852,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B131",
+      "github_number": 911,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/911",
+      "title": "The compaction detector counts a miss under a custom cost variant that allows compaction",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B131.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C097",
       "github_number": 913,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",
@@ -8097,6 +8110,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C100",
+      "github_number": 1058,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1058",
+      "title": "Resolve canonical plugin workflow findings from directory review",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C100.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

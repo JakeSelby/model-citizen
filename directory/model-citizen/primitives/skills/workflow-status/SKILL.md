@@ -16,11 +16,16 @@ agent view; an empty local journal search does not mean no agents are running.
 ## Run it
 
 ```bash
-python3 "{skill-root}/scripts/status.py"            # most recent run
-python3 "{skill-root}/scripts/status.py" --all      # every run, newest first
-python3 "{skill-root}/scripts/status.py" --limit 3  # the last three
-python3 "{skill-root}/scripts/status.py" --run wf_eed4141a   # one specific run
+python3 "${CLAUDE_SKILL_DIR}/scripts/status.py"            # most recent run
+python3 "${CLAUDE_SKILL_DIR}/scripts/status.py" --all      # every run, newest first
+python3 "${CLAUDE_SKILL_DIR}/scripts/status.py" --limit 3  # the last three
+python3 "${CLAUDE_SKILL_DIR}/scripts/status.py" --run wf_eed4141a   # one specific run
 ```
+
+Claude Code expands `CLAUDE_SKILL_DIR` to this skill's installed directory. In another client,
+resolve this SKILL.md's absolute parent directory before invoking the script. Never execute an
+unexpanded placeholder. Pass `--terminal-status completed|failed|cancelled` only with an exact
+`--run` and an explicit terminal notification from the runtime; omit it when unknown.
 
 Report the output to the user in prose — the counts, what is still in flight, and roughly how
 far along the run is. Do not paste the raw table unless they ask for it.
@@ -43,15 +48,11 @@ or read the file the workflow wrote — not the transcript.
 
 ## Interpreting it
 
-- **`✓` vs `•`** — an agent whose transcript has been quiet for more than ~45 seconds has almost
-  certainly returned; one still being written to is working. The journal's result count is the
-  authoritative figure, and the two can briefly disagree while a result is being flushed.
-- **`RUNNING` with no recent activity** across every agent usually means the run is between
-  phases (a barrier), or that the parent is synthesising.
-- **Growing transcript size** is a good sign for a research agent — it means real tool use
-  (fetching, searching) rather than answering from memory.
-- A run whose journal shows fewer `started` entries than there are `agent-*.jsonl` files is
-  mid-fan-out; more agents are still being spawned.
+- **`returned`, `pending`, `failed`, `unknown`** come from journal records joined by `agentId`
+  and key. Transcript age describes activity only; it never proves that an agent returned.
+- **`UNKNOWN (no terminal signal)`** means the journal cannot establish run completion, even
+  when every currently known agent has returned. More phases may still launch.
+- Missing or malformed journal records leave status unknown; they are not evidence of success.
 
 ## When a run has finished
 

@@ -37,11 +37,13 @@ release once confirmed safe.
 comment. Lossy (`TEXT` → `INTEGER`, shrinking a `VARCHAR`) stops and asks.
 
 **Removing a column.** Only after confirming no deployed code reads or writes it, and a backup
-exists or the column is confirmed empty. Archive before dropping in the downgrade path:
+exists or the column is confirmed empty. In the migration direction that removes it, archive
+and verify row counts and retained values while the column still exists, before the drop. A
+downgrade cannot archive a column an earlier upgrade already removed:
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS archive;
-CREATE TABLE IF NOT EXISTS archive.<table>_<revision>_downgrade AS
+CREATE TABLE IF NOT EXISTS archive.<table>_<revision>_before_drop AS
   SELECT id, <dropped_column> FROM <table>;
 ```
 

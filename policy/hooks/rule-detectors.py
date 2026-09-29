@@ -21,6 +21,8 @@ that `run()` returns `{detector_id: [Hit, ...]}` with the empty detectors omitte
 hit never carries a snippet — the transcript is the evidence, and `usage.jsonl` holds no
 command text (plan decision 3).
 """
+import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -41,7 +43,7 @@ from ruleprobe.shell import (MAX_COMMAND, MARKER_RE, SUB_PLACEHOLDER, git_calls,
 SECRET_PATTERNS = generic.SECRET_PATTERNS
 
 # The three openers and the closing phrase are read from `claude/output-styles/scannable.md`
-# (sections 1 and 9) at build time and frozen here; this module never reads a file at runtime.
+# (sections 1 and 9) at build time and frozen here.
 BANNED_OPENERS = ("I started by", "After investigating", "Great question")
 BANNED_CLOSER = "Let me know if"
 
@@ -477,11 +479,19 @@ _VOICE_ON = ("voice", None)  # the shape is the stance's; `off` imposes none
 _VOICE_CONCISE = ("voice", ("concise",))  # shapes only the `concise` voice forbids
 _COMMITS_ATTRIBUTED = ("commits", ("conventional-attributed",))
 
-# A cost variant whose `compaction` switch is `compact-allowed` lifts `cache-hygiene.md`'s "not
-# compaction", so a compaction there is the stance working, not a miss. Frozen here because
-# this module reads no file at runtime; a test holds it equal to the shipped sidecars.
-COMPACTION_ALLOWED = frozenset(("max",))
-_GATES = {"cache-hygiene/compact": lambda stances: stances.get("cost") not in COMPACTION_ALLOWED}
+def compaction_required(stances):
+    """Resolve the selected cost variant's switch, including custom sidecar inheritance."""
+    path = Path(__file__).resolve().with_name("posture.py")
+    spec = importlib.util.spec_from_file_location("detector_posture", path)
+    posture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(posture)
+    config_path = posture.config_path()
+    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    table = posture.table_for(stances, config, strict=True)
+    return table["switches"].get("compaction") != "compact-allowed"
+
+
+_GATES = {"cache-hygiene/compact": compaction_required}
 
 # The six the engine ships, re-registered under this file's `Detector` so every entry in the
 # registry answers to the same field names. The functions are the wheel's, not a second copy.
@@ -552,4 +562,21 @@ def run(events, stances=None, strict=False, errors=None, extra=()):
     registry = Registry(_REGISTRY)
     for detector in extra:
         registry.add(detector)
+    compact = registry.get("cache-hygiene/compact")
+    if compact is not None and compact.gate is compaction_required:
+        # The engine catches detector failures, but not gate failures. Resolve this file-backed
+        # gate once here so an unreadable custom selection costs only its own measurement.
+        try:
+            enabled = compact.enabled(stances)
+        except Exception as exc:
+            if strict:
+                raise
+            if errors is not None:
+                errors.append({"detector": compact.id, "error": type(exc).__name__})
+            enabled = False
+        if enabled:
+            registry.add(Detector(compact.id, compact.rule, compact.event, compact.fn,
+                                  examples=compact.examples))
+        else:
+            registry.remove(compact.id)
     return _run(events, stances, registry=registry, strict=strict, errors=errors)
