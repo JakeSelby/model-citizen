@@ -72,6 +72,18 @@ class WorkflowStatusTests(unittest.TestCase):
         self.assertIn("0/1 returned", self.report())
         self.assertIn("pending;", self.report())
 
+    def test_conflicting_result_or_failure_cannot_replace_started_identity(self):
+        for kind in ("result", "failed"):
+            with self.subTest(kind=kind):
+                self.journal([{"type": "started", "key": "k", "agentId": "one"},
+                              {"type": kind, "key": "k", "agentId": "other", "result": "abc"}])
+                self.assertEqual(STATUS.read_journal(self.run),
+                                 (["k"], {}, {"one": "pending"}))
+
+    def test_result_identity_without_start_does_not_establish_completion(self):
+        self.journal([{"type": "result", "key": "k", "agentId": "one", "result": "abc"}])
+        self.assertEqual(STATUS.read_journal(self.run), ([], {}, {}))
+
     def test_run_filter_is_exact_and_terminal_signal_requires_a_run(self):
         other = self.run.with_name("wf_exact_extra")
         with patch.object(STATUS, "find_runs", return_value=[self.run, other]), \

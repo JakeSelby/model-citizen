@@ -14,7 +14,8 @@ is an issue number, a path to a plan file, or a pull request number; when none i
    against the wrong tree. Save the full patch to a review artifact outside tracked source and
    record the repository path and resolved base/head SHAs alongside it. Outside a git repository there is no diff at all: say so, and offer to
    review named files or a pasted patch instead.
-2. **Spawn `spec-reviewer` first**, in its own fresh context, with the absolute diff-artifact path, repository path, base/head SHAs and spec source.
+2. **Materialize the spec:** fetch an issue or PR body into a local input file; retain an existing plan-file path or `infer`.
+   **Spawn `spec-reviewer` first**, in its own fresh context, with that input, the absolute diff-artifact path, repository path and base/head SHAs.
    It reports only what the diff does that nothing asked for, what was asked for and is missing,
    and which stated acceptance criteria the diff does not prove. Tell it to leave every
    correctness, style and test-quality question to the second pass.

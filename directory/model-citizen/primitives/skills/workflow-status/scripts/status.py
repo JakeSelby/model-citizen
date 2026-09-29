@@ -53,10 +53,14 @@ def read_journal(run: Path) -> tuple[list[str], dict[str, int], dict[str, str]]:
         key = entry.get("key")
         if not isinstance(key, str) or not key:
             continue
-        agent_id = entry.get("agentId")
-        if isinstance(agent_id, str) and agent_id:
-            identities[key] = agent_id
+        supplied_id = entry.get("agentId")
+        if entry.get("type") == "started":
+            if isinstance(supplied_id, str) and supplied_id:
+                identities[key] = supplied_id
         agent_id = identities.get(key)
+        if entry.get("type") != "started" and (
+                not agent_id or ("agentId" in entry and supplied_id != agent_id)):
+            continue
         if entry.get("type") == "started":
             if key not in started:
                 started.append(key)

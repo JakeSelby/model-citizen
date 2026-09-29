@@ -34,8 +34,8 @@ Never create a task worktree as a sibling under the directory holding permanent 
 
 ## Land
 
-Push the task branch, open a PR and merge through the repository's delivery process. After
-a merged PR supplies the removal proof:
+Where PRs are required, push the task branch and merge through a PR. Where the repository permits
+direct pushes, land the verified change through that route. With merged-PR removal proof:
 
 ```bash
 citizen worktree remove "$NAME" "$REPO" --merged
