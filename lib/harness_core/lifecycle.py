@@ -551,14 +551,359 @@ def workflow_role_in(script):
     return None
 
 
+# A script's `agent(prompt, {model?, effort?, ...})` call picks class and effort itself, and the
+# call cannot be rewritten, so the launch reads what it names against the cost variant (#915).
+# The runtime's own effort ladder, weakest first, runs past the harness's `catalog.EFFORTS`.
+WORKFLOW_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# The stances' own ceiling, and the answer when the cost table cannot be read: never `frontier`,
+# effort never above `high` (`primitives/stances/delegation/tiered.md`).
+WORKFLOW_CEILING = ("strong", "high")
+WORKFLOW_OPTIONS = ("model", "effort")
+# One pass reads the script as JavaScript or TypeScript tokens, so a comment, a string's prose and
+# a type declaration are never read as an option, and every spelling of a key is: `model`,
+# `'model'`, `model`, `o['model']` and `{['mod' + 'el']: ...}` alike.
+WORKFLOW_IDENTIFIER = re.compile(r"(?:[A-Za-z_$]|\\u\{[0-9A-Fa-f]+\}|\\u[0-9A-Fa-f]{4}|[^\x00-\x7f\s])"
+                                 r"(?:[A-Za-z0-9_$]|\\u\{[0-9A-Fa-f]+\}|\\u[0-9A-Fa-f]{4}|[^\x00-\x7f\s])*")
+WORKFLOW_NUMBER = re.compile(r"\.?[0-9][0-9A-Za-z_.]*")
+WORKFLOW_PUNCTUATORS = (">>>=", "===", "!==", "**=", "...", "<<=", ">>=", ">>>", "&&=", "||=", "??=",
+                        "=>", "==", "!=", "<=", ">=", "&&", "||", "??", "?.", "++", "--", "+=", "-=",
+                        "*=", "/=", "%=", "&=", "|=", "^=", "**", "<<", ">>")
+WORKFLOW_PUNCTUATOR_STARTS = {c: tuple(p for p in WORKFLOW_PUNCTUATORS if p[0] == c)
+                              for c in {p[0] for p in WORKFLOW_PUNCTUATORS}}
+# After one of these words a `/` opens a regular expression, not a division.
+WORKFLOW_REGEX_AFTER = frozenset(("return", "typeof", "case", "do", "else", "in", "of", "new", "delete",
+                                  "void", "throw", "instanceof", "yield", "await"))
+WORKFLOW_CLOSERS = (",", ";", ")", "]", "}")
+
+
+def workflow_tokens(script):
+    """The code tokens of a workflow script, comments dropped, as `(kind, value, start, newline)`.
+
+    `kind` is `id` (an identifier, escapes decoded), `str` (a string or a template without a
+    substitution, its value decoded), `tpl` (a template with one, whose value is None), `num`, `re`
+    or `p` (a punctuator); `start` is its offset in `script` and `newline` says a line break
+    precedes it. A template substitution's code is tokenised in place. One pass, linear in length.
+    """
+    tokens, templates = [], []
+    i, n, newline = 0, len(script), False
+
+    def emit(kind, value, start):
+        tokens.append((kind, value, start, newline))
+
+    def template(start, head):
+        # Scan a template's text from `start`, after its opening backtick or closing brace.
+        j, body = start, []
+        while j < n:
+            c = script[j]
+            if c == "\\":
+                body.append(script[j:j + 2])
+                j += 2
+            elif c == "`":
+                if head is not None:
+                    emit("str", workflow_literal("".join(body)), head)
+                return j + 1
+            elif script.startswith("${", j):
+                templates.append(0)
+                if head is not None:
+                    emit("tpl", None, head)
+                return j + 2
+            else:
+                body.append(c)
+                j += 1
+        if head is not None:
+            emit("str", workflow_literal("".join(body)), head)
+        return n
+
+    while i < n:
+        c = script[i]
+        if c == "\n":
+            newline, i = True, i + 1
+            continue
+        if c.isspace():
+            i += 1
+            continue
+        if script.startswith("//", i):
+            end = script.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if script.startswith("/*", i):
+            end = script.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            newline = newline or script.find("\n", i, end) >= 0
+            i = end
+            continue
+        if c in "'\"":
+            j, body = i + 1, []
+            while j < n and script[j] != c and script[j] != "\n":
+                body.append(script[j:j + 2] if script[j] == "\\" else script[j])
+                j += 2 if script[j] == "\\" else 1
+            emit("str", workflow_literal("".join(body)), i)
+            i = j + 1
+        elif c == "`":
+            i = template(i + 1, i)
+        elif c == "}" and templates and templates[-1] == 0:
+            templates.pop()
+            i = template(i + 1, None)
+            continue
+        elif c == "/":
+            prev = tokens[-1] if tokens else None
+            if prev is None or (prev[0] == "p" and prev[1] not in (")", "]", "}")) \
+                    or (prev[0] == "id" and prev[1] in WORKFLOW_REGEX_AFTER):
+                j, klass = i + 1, False
+                while j < n and script[j] != "\n" and (klass or script[j] != "/"):
+                    if script[j] == "\\":
+                        j += 1
+                    elif script[j] in "[]":
+                        klass = script[j] == "["
+                    j += 1
+                j += 1
+                while j < n and (script[j].isalnum() or script[j] in "_$"):
+                    j += 1
+                emit("re", None, i)
+                i = j
+            else:
+                operator = "/=" if script.startswith("/=", i) else "/"
+                emit("p", operator, i)
+                i += len(operator)
+        elif c in "0123456789" or (c == "." and script[i + 1:i + 2] in tuple("0123456789")):
+            match = WORKFLOW_NUMBER.match(script, i)
+            emit("num", match.group(0), i)
+            i = match.end()
+        else:
+            match = WORKFLOW_IDENTIFIER.match(script, i)
+            if match is not None:
+                name = match.group(0)
+                emit("id", workflow_literal(name) if "\\" in name else name, i)
+                i = match.end()
+            else:
+                operator = next((p for p in WORKFLOW_PUNCTUATOR_STARTS.get(c, ())
+                                 if script.startswith(p, i)), c)
+                if templates and operator == "{":
+                    templates[-1] += 1
+                elif templates and operator == "}":
+                    templates[-1] -= 1
+                emit("p", operator, i)
+                i += len(operator)
+        newline = False
+    return tokens
+
+
+def workflow_code(tokens):
+    """`tokens` without TypeScript `type` and `interface` declarations, which name no value."""
+    code, k, count = [], 0, len(tokens)
+    while k < count:
+        token = tokens[k]
+        prev = code[-1] if code else None
+        statement = prev is None or token[3] or prev[1] in (";", "{", "}", "export", "declare")
+        if statement and token[0] == "id" and token[1] in ("type", "interface") \
+                and k + 2 < count and tokens[k + 1][0] == "id":
+            if token[1] == "interface":
+                k = workflow_skip(tokens, k + 2, interface=True)
+                continue
+            if tokens[k + 2][1] in ("=", "<"):
+                k = workflow_skip(tokens, k + 2, interface=False)
+                continue
+        code.append(token)
+        k += 1
+    return code
+
+
+def workflow_skip(tokens, k, interface):
+    """The index just past a type declaration's body, which starts at `tokens[k]`."""
+    depth, count, started = 0, len(tokens), False
+    continuing = ("=", "|", "&", ":", "?", ",", "=>", "<", "extends", "keyof", "typeof")
+    for j in range(k, count):
+        kind, value, _, newline = tokens[j]
+        if kind == "p" and value in ("(", "[", "{", "<"):
+            depth += 1
+            started = started or value == "{"
+        elif kind == "p" and value in (")", "]", "}", ">", ">>", ">>>"):
+            depth -= len(value) if value[0] == ">" else 1
+            if depth < 0:
+                return j
+            if interface and started and depth == 0:
+                return j + 1
+        elif not interface and depth == 0:
+            if kind == "p" and value == ";":
+                return j + 1
+            if newline and j > k and tokens[j - 1][1] not in continuing and value not in ("|", "&"):
+                return j
+    return count
+
+
+def workflow_option_value(code, v):
+    """The literal `code[v:]` holds as a whole value, else None: `'x'`, `('x')` and `'x' as const`
+    count, `'x' + y` does not."""
+    j, opened, count = v, 0, len(code)
+    while j < count and code[j][:2] == ("p", "("):
+        opened, j = opened + 1, j + 1
+    if j >= count or code[j][0] != "str":
+        return None
+    value, j = code[j][1], j + 1
+    while opened and j < count and code[j][:2] == ("p", ")"):
+        opened, j = opened - 1, j + 1
+    if opened:
+        return None
+    if j + 1 < count and code[j][0] == "id" and code[j][1] in ("as", "satisfies") \
+            and not code[j][3] and code[j + 1][0] == "id":
+        j += 2
+    if j >= count or (code[j][0] == "p" and code[j][1] in WORKFLOW_CLOSERS) \
+            or (code[j][3] and code[j][0] != "p"):
+        return value
+    return None
+
+
+def workflow_bracket_key(code, k):
+    """`(name, end)` for a bracketed key of string literals joined by `+` at `code[k]`, else None."""
+    if code[k][:2] != ("p", "["):
+        return None
+    parts, j, count = [], k + 1, len(code)
+    while j < count and code[j][0] == "str":
+        parts.append(code[j][1])
+        j += 1
+        if j < count and code[j][:2] == ("p", "+"):
+            j += 1
+        else:
+            break
+    if not parts or j >= count or code[j][:2] != ("p", "]"):
+        return None
+    return "".join(parts), j + 1
+
+
+def workflow_options(script):
+    """`(named, unresolved)`: each `(option, literal)` a workflow script names for `model` or
+    `effort`, and each option whose value is an expression this read cannot evaluate.
+
+    The script is read as code (`workflow_tokens`), so an option is a property key, an assignment
+    or a shorthand property; one in a comment, a string or a TypeScript type says nothing. A value
+    set through a variable, a helper's parameter or another module is an expression or unseen.
+    """
+    named, unresolved = [], []
+    if not isinstance(script, str):
+        return named, unresolved
+    code = workflow_code(workflow_tokens(script))
+    count = len(code)
+    for k, token in enumerate(code):
+        prev = code[k - 1][1] if k and code[k - 1][0] == "p" else None
+        key_position = prev in ("{", ",")
+        option, value_at = None, None
+        bracket = workflow_bracket_key(code, k)
+        if bracket is not None and bracket[0] in WORKFLOW_OPTIONS and bracket[1] < count:
+            after = code[bracket[1]][:2]
+            if after == ("p", "=") or (after == ("p", ":") and key_position):
+                option, value_at = bracket[0], bracket[1] + 1
+        elif token[0] in ("id", "str") and token[1] in WORKFLOW_OPTIONS:
+            after = code[k + 1][:2] if k + 1 < count else None
+            if after == ("p", ":") and key_position:
+                option, value_at = token[1], k + 2
+            elif token[0] == "id" and after == ("p", "="):
+                option, value_at = token[1], k + 2
+            elif token[0] == "id" and key_position and (after is None or after in (("p", ","), ("p", "}"))):
+                entry = (token[1], token[1] + " (shorthand)")
+                if entry not in unresolved:
+                    unresolved.append(entry)
+        if option is None:
+            continue
+        literal = workflow_option_value(code, value_at)
+        if literal is not None:
+            entry, into = (option, literal), named
+        else:
+            start = code[value_at][2] if value_at < count else len(script)
+            expression = script[start:start + 40].split("\n", 1)[0].strip()
+            entry, into = (option, expression or "(empty)"), unresolved
+        if entry not in into:
+            into.append(entry)
+    return named, unresolved
+
+
+def workflow_ceiling(runtime):
+    """`(variant, class, effort, models, classes_apply)` a workflow script's agents are held to.
+
+    The ceiling is the strongest class and the highest effort any row of the active cost variant
+    grants a spawn, never past `WORKFLOW_CEILING`; `models` is the adapter's `{class: model}`.
+    A class is only judged under `delegation: tiered`, where the variant's classes apply, as
+    `tier-agent-spawns` only moves a model there. A table that cannot be read is the stances'
+    own ceiling, never an open one.
+    """
+    variant = selected("cost", "balanced")
+    classes_apply = selected("delegation", "tiered") == "tiered"
+    strongest, highest = WORKFLOW_CEILING
+    # The model map is read on its own: a cost table that cannot be read must not also discard
+    # the class lookup, or a frontier model would log `unresolved` and launch unrefused.
+    try:
+        posture = load("posture")
+        models = posture.tier_models(runtime) or posture.tier_models()
+    except Exception:
+        return variant, strongest, highest, {}, classes_apply
+    try:
+        stances = dict(posture.DEFAULT_STANCES, cost=variant,
+                       delegation=selected("delegation", "tiered"))
+        table = posture.table_for(stances, posture._user_config(os.environ, False), strict=False)
+        rows = [row for row in (table.get("rows") or {}).values() if isinstance(row, dict)]
+    except Exception:
+        return variant, strongest, highest, models, classes_apply
+    from . import catalog
+    granted = [c for c in (row.get("class") for row in rows) if c in catalog.TIER_CLASSES[1:]]
+    if granted:
+        strongest = min(granted, key=catalog.TIER_CLASSES.index)
+    efforts = [e for e in (row.get("effort") for row in rows) if e in catalog.EFFORTS]
+    if efforts:
+        highest = max(efforts, key=WORKFLOW_EFFORTS.index)
+    return variant, strongest, highest, models, classes_apply
+
+
+def workflow_limits(runtime, script):
+    """`(refusal, over, unresolved)` for the `model` and `effort` a workflow script names.
+
+    Per AD-14 a cost hook refuses only an undeclared `frontier` request, so `refusal` is a
+    sentence only for a literal model of the `frontier` class under `delegation: tiered`, else
+    None. What exceeds the cost variant's ceiling otherwise (an effort above its highest, a
+    lighter class still above its strongest) is listed in `over`, logged and never refused.
+    `unresolved` lists what cannot be judged statically: an expression, a model name the
+    adapter's class table does not hold, an effort the runtime's ladder does not. See
+    `workflow_ceiling` for the ceiling.
+    """
+    named, unresolved = workflow_options(script)
+    if not named and not unresolved:
+        return None, [], []
+    from . import catalog
+    _, strongest, highest, models, classes_apply = workflow_ceiling(runtime)
+    over, unknown = [], [option + " " + value for option, value in unresolved]
+    for option, value in named:
+        low = value.strip().lower()
+        if option == "effort":
+            if low not in WORKFLOW_EFFORTS:
+                unknown.append("effort `" + value + "`")
+            elif WORKFLOW_EFFORTS.index(low) > WORKFLOW_EFFORTS.index(highest):
+                over.append("effort `" + value + "`")
+            continue
+        tier = next((name for name, model in models.items()
+                     if isinstance(model, str) and model and model.lower() in low), None)
+        if tier is None:
+            unknown.append("model `" + value + "`")
+        elif not classes_apply:
+            continue
+        elif tier == catalog.TIER_CLASSES[0]:
+            return ("This workflow script names model `" + value + "` in agent(), the `" + tier
+                    + "` class, which no spawn may request under `delegation: tiered`, and a "
+                    "script's agent() calls run in session, past every spawn guard; name `"
+                    + models.get(strongest, strongest) + "` or a lighter model, or leave model "
+                    "unset."), over, unknown
+        elif catalog.TIER_CLASSES.index(tier) < catalog.TIER_CLASSES.index(strongest):
+            over.append("model `" + value + "`")
+    return None, over, unknown
+
+
 def workflow_results(runtime, event):
     """The answers to a `Workflow` launch, with its decision row written.
 
     Every launch is a row, allowed ones included, because a launch is a batch of spawns no other
     row accounts for. The row's input is the script as judged, or the tool input when the script
-    could not be read.
+    could not be read. A launch that is let through answers `over-ceiling` when a script's `model`
+    or `effort` exceeds the cost variant's ceiling, else `unresolved` when one cannot be judged,
+    else `allow`; see `workflow_limits`.
     """
-    results = []
+    results, over, unresolved = [], [], []
     script = workflow_script(event)
     if script is WORKFLOW_TOO_LARGE:
         results.append({"hookSpecificOutput": {"permissionDecision": "deny",
@@ -575,6 +920,11 @@ def workflow_results(runtime, event):
             results.append(role_deny(runtime, named[0], named[1],
                                      "This workflow script " + named[2] + ", and a script's "
                                      "agent() calls run in session, past every spawn guard."))
+        else:
+            refusal, over, unresolved = workflow_limits(runtime, script)
+            if refusal is not None:
+                results.append({"hookSpecificOutput": {"permissionDecision": "deny",
+                                                       "permissionDecisionReason": refusal}})
     if not results and enabled("allow-readonly-bash") and investigating(runtime, event) \
             and plan_allowed_tool("Workflow"):
         results.append({"hookSpecificOutput": {"permissionDecision": "allow",
@@ -584,7 +934,9 @@ def workflow_results(runtime, event):
     if module is not None:
         denied = any(r["hookSpecificOutput"].get("permissionDecision") == "deny" for r in results)
         text = script if isinstance(script, str) else json.dumps(event.get("tool_input") or {}, sort_keys=True)
-        module.record(WORKFLOW_POINT, "deny" if denied else "allow", text, event, runtime)
+        answer = ("deny" if denied else "over-ceiling" if over
+                  else "unresolved" if unresolved else "allow")
+        module.record(WORKFLOW_POINT, answer, text, event, runtime)
     return results
 
 
