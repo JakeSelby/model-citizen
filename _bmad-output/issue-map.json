@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 123,
+    "bug": 125,
     "chore": 96,
     "decision": 14,
     "epic": 27,
@@ -7902,6 +7902,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B124",
+      "github_number": 1051,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1051",
+      "title": "Compatibility candidate fixture retains live qualification reuse metadata",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B124.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {
