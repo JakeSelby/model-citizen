@@ -169,8 +169,8 @@
           "doc": "docs/usage.md"
         },
         {
-          "name": "Cache rebuilds explained",
-          "line": "citizen usage shows each session's cache-miss ratio, names the turn where it jumped, and attributes transcript-observed rebuilds to causes.",
+          "name": "Cache prefix held",
+          "line": "citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.",
           "doc": "docs/usage.md"
         },
         {
