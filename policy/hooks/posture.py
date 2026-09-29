@@ -27,6 +27,8 @@ row carries; see `FINGERPRINT_KEY`.
 Import-cheap on purpose: no work at import, JSON reads only, because the dispatcher loads
 this on every tool call.
 """
+import contextlib
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -244,19 +246,40 @@ def read_session_record(session_id, env=None):
     return record if isinstance(record, dict) else None
 
 
-def write_session_record(session_id, record, env=None):
-    """Replace one session's record atomically; `True` when it was written.
-
-    The directory is the session's own business and nobody else's, so it is 0700 and the file
-    is 0600 from the moment it exists rather than after a chmod a reader could race.
-    """
+@contextlib.contextmanager
+def _session_lock(session_id, env=None):
+    """Hold this session's kernel-released state lock, or yield no path on failure."""
     path = session_record_path(session_id, env)
-    if path is None or not isinstance(record, dict):
-        return False
-    temp = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    descriptor = None
+    if path is None:
+        yield None
+        return
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(str(path.parent), 0o700)
+        descriptor = os.open(str(path.with_name(path.name + ".lock")),
+                             os.O_RDWR | os.O_CREAT, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+    except OSError:
+        yield None
+        if descriptor is not None:
+            os.close(descriptor)
+        return
+    try:
+        yield path
+    finally:
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            os.close(descriptor)
+
+
+def _write_session_record(path, record):
+    """Replace a locked session record atomically."""
+    temp = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
+    try:
         with os.fdopen(os.open(str(temp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
                        "w", encoding="utf-8") as handle:
             json.dump(record, handle)
@@ -268,6 +291,28 @@ def write_session_record(session_id, record, env=None):
         except OSError:
             pass
         return False
+
+
+def update_session_record(session_id, update, env=None):
+    """Apply one read-modify-write while holding the session's shared state lock."""
+    with _session_lock(session_id, env) as path:
+        if path is None:
+            return False
+        record = read_session_record(session_id, env) or {}
+        changed = update(dict(record))
+        return isinstance(changed, dict) and _write_session_record(path, changed)
+
+
+def write_session_record(session_id, record, env=None):
+    """Replace one session's record under its shared lock; `True` when it was written.
+
+    The directory is the session's own business and nobody else's, so it is 0700 and the file
+    is 0600 from the moment it exists rather than after a chmod a reader could race.
+    """
+    if not isinstance(record, dict):
+        return False
+    with _session_lock(session_id, env) as path:
+        return path is not None and _write_session_record(path, record)
 
 
 def session_agents(session_id, env=None):
@@ -299,11 +344,15 @@ def remember_agents(session_id, names, env=None):
     merge would reinstate a worker the session has been told it no longer resolves.
     """
     wanted = sorted({name for name in names if isinstance(name, str)}) if names else []
-    record = read_session_record(session_id, env)
-    record = {} if record is None else record
-    if record.get("announced") == wanted:
-        return False
-    return write_session_record(session_id, dict(record, announced=wanted, at=int(time.time())), env)
+    changed = []
+
+    def update(record):
+        if record.get("announced") == wanted:
+            return None
+        changed.append(True)
+        return dict(record, announced=wanted, at=int(time.time()))
+
+    return update_session_record(session_id, update, env) if not changed else False
 
 
 def refresh_session_record(session_id, env=None, older_than=SESSION_REFRESH_SECONDS):
@@ -332,22 +381,26 @@ def note_once(session_id, key, env=None):
     cannot be written this says nothing at all, because a notice repeated on every spawn is a
     worse failure than one never given.
     """
-    record = read_session_record(session_id, env)
-    if record is None:
-        return write_session_record(session_id, {"notified": [key], "at": int(time.time())}, env)
-    seen = record.get("notified")
-    seen = sorted({name for name in seen if isinstance(name, str)}) if isinstance(seen, list) else []
-    if key in seen:
-        return False
-    return write_session_record(session_id, dict(record, notified=sorted(seen + [key])), env)
+    added = []
+
+    def update(record):
+        seen = record.get("notified")
+        seen = sorted({name for name in seen if isinstance(name, str)}) if isinstance(seen, list) else []
+        if key in seen:
+            return None
+        added.append(True)
+        return dict(record, notified=sorted(seen + [key]), at=int(time.time()))
+
+    written = update_session_record(session_id, update, env)
+    return bool(added and written)
 
 
 def delegation_read(session_id, paths, threshold, env=None):
     """`(fired now, distinct count)` after atomically adding read paths to session state.
 
-    A separate exclusive lock keeps concurrent PostToolUse hooks from both firing. Contention
-    drops one observation rather than waiting in the native hook's deadline; a later read can
-    still cross the threshold. Paths are bounded because this record is session memory, not a log.
+    The session registry's shared kernel lock keeps every read-modify-write from losing another
+    field, and the operating system releases it when a hook exits or is killed. Paths are bounded
+    because this record is session memory, not a log.
     """
     path = session_record_path(session_id, env)
     if path is None or not (_number(threshold, 3, DELEGATION_READS_MAX, integer=True)):
@@ -355,13 +408,9 @@ def delegation_read(session_id, paths, threshold, env=None):
     wanted = {value for value in paths if isinstance(value, str) and value}
     if not wanted:
         return False, 0
-    lock = path.with_name(path.name + ".delegation.lock")
-    descriptor = None
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        os.chmod(str(path.parent), 0o700)
-        descriptor = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        record = read_session_record(session_id, env) or {}
+    result = []
+
+    def update(record):
         seen = record.get(DELEGATION_READS_KEY)
         seen = {value for value in seen if isinstance(value, str)} if isinstance(seen, list) else set()
         seen.update(wanted)
@@ -371,16 +420,11 @@ def delegation_read(session_id, paths, threshold, env=None):
         updated = dict(record, **{DELEGATION_READS_KEY: sorted(seen),
                                  DELEGATION_FIRED_KEY: fired or fire_now,
                                  "at": int(time.time())})
-        return (fire_now, len(seen)) if write_session_record(session_id, updated, env) else (False, 0)
-    except OSError:
-        return False, 0
-    finally:
-        if descriptor is not None:
-            try:
-                os.close(descriptor)
-                os.unlink(str(lock))
-            except OSError:
-                pass
+        result.append((fire_now, len(seen)))
+        return updated
+
+    written = update_session_record(session_id, update, env)
+    return result[0] if written and result else (False, 0)
 
 
 def prune_session_records(keep=None, days=SESSION_TTL_DAYS, env=None):
@@ -701,7 +745,7 @@ def delegation_nudge(variant, config=None, strict=False, root=None, env=None):
         return None
     if config is None:
         config = _user_config(os.environ if env is None else env, strict)
-    path = None
+    path = base = source_path = None
     for source in stance_roots(config, root):
         candidate = source / "delegation" / (variant + ".json")
         if not candidate.is_file():
@@ -711,12 +755,13 @@ def delegation_nudge(variant, config=None, strict=False, root=None, env=None):
         except OSError:
             continue
         if real == base or base in real.parents:
-            path = candidate
+            path = real
+            source_path = candidate
             break
     if path is None:
         return None
     warnings = []
-    data = _load_sidecar(path, strict, warnings)
+    data = _load_sidecar_inside(path, base, strict, warnings)
     if data is None:
         return None
     allowed = {"schema_version", "threshold", "message"}
@@ -729,7 +774,39 @@ def delegation_nudge(variant, config=None, strict=False, root=None, env=None):
             raise ValueError(str(path) + " is not a usable delegation nudge sidecar")
         return None
     return {"threshold": data["threshold"], "message": data["message"].strip(),
-            "source": str(path)}
+            "source": str(source_path)}
+
+
+def _load_sidecar_inside(path, base, strict, warnings):
+    """Read a resolved sidecar without following a component changed after containment."""
+    descriptors = []
+    try:
+        relative = path.relative_to(base)
+        descriptor = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY)
+        descriptors.append(descriptor)
+        parts = relative.parts
+        for index, part in enumerate(parts):
+            flags = os.O_RDONLY | os.O_NOFOLLOW
+            if index < len(parts) - 1:
+                flags |= os.O_DIRECTORY
+            descriptor = os.open(part, flags, dir_fd=descriptor)
+            descriptors.append(descriptor)
+        with os.fdopen(os.dup(descriptors[-1]), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        if strict:
+            raise
+        warnings.append(str(path) + " is not readable JSON: " + str(exc))
+        return None
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+    if not isinstance(data, dict):
+        if strict:
+            raise ValueError(str(path) + " is not a JSON object")
+        warnings.append(str(path) + " is not a JSON object")
+        return None
+    return data
 
 
 def _load_sidecar(path, strict, warnings):

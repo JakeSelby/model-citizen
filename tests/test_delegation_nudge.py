@@ -2,8 +2,11 @@
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -91,6 +94,12 @@ class DelegationNudgeTests(unittest.TestCase):
                 self.assertEqual(lifecycle.dispatch("claude-code", self.event(path, "off")), {})
         self.assertFalse((self.home / ".local/state/agent-harness/sessions/off.json").exists())
 
+    def test_disabled_spawn_hook_never_creates_nudge_state(self):
+        with patch.object(lifecycle, "switches", return_value={"tier-agent-spawns": "off"}):
+            for path in ("one.py", "two.py", "three.py"):
+                self.assertEqual(lifecycle.dispatch("claude-code", self.event(path, "hook-off")), {})
+        self.assertFalse((self.home / ".local/state/agent-harness/sessions/hook-off.json").exists())
+
     def test_simple_read_only_bash_operands_are_counted(self):
         cases = {
             "cat alpha.py": [str(self.home / "alpha.py")],
@@ -103,8 +112,15 @@ class DelegationNudgeTests(unittest.TestCase):
                                          "tool_input": {"command": command}})
             self.assertEqual(lifecycle.delegation_read_paths(event), expected, command)
 
+    def test_native_read_treats_shell_metacharacters_as_literal_path_text(self):
+        event = lifecycle.normalize(self.event("draft[1].py", "literal"))
+        self.assertEqual(lifecycle.delegation_read_paths(event),
+                         [str(self.home / "draft[1].py")])
+
     def test_dynamic_compound_and_mutating_bash_are_not_counted(self):
         for command in ("cat $TARGET", "cat one.py | head", "cat one.py && cat two.py",
+                        "cat one.py two.py three.py", "sed -n -e '1p' one.py",
+                        "cat one.py # plus two.py",
                         "python3 tool.py", "cat one.py > copy.py", "cat one.py > /dev/null",
                         "shasum -a 256 one.py"):
             event = lifecycle.normalize({"tool_name": "Bash", "cwd": str(self.home),
@@ -145,6 +161,75 @@ class DelegationNudgeTests(unittest.TestCase):
         self.assertEqual(sum(1 for fired, _count in results if fired), 1)
         self.assertTrue(posture.read_session_record("concurrent")[posture.DELEGATION_FIRED_KEY])
 
+    def test_registry_and_nudge_updates_share_one_lock(self):
+        posture = load_posture()
+        self.assertEqual(posture.delegation_read("shared", ["/one", "/two"], 3), (False, 2))
+        active = {"now": 0, "max": 0}
+        guard = threading.Lock()
+        real_write = posture._write_session_record
+
+        def slow_write(*args):
+            with guard:
+                active["now"] += 1
+                active["max"] = max(active["max"], active["now"])
+            time.sleep(0.02)
+            try:
+                return real_write(*args)
+            finally:
+                with guard:
+                    active["now"] -= 1
+
+        with patch.object(posture, "_write_session_record", side_effect=slow_write):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda call: call(), (
+                    lambda: posture.delegation_read("shared", ["/three"], 3),
+                    lambda: posture.remember_agents("shared", ["worker-a"]),
+                )))
+        record = posture.read_session_record("shared")
+        self.assertEqual(active["max"], 1)
+        self.assertEqual(results[0], (True, 3))
+        self.assertTrue(results[1])
+        self.assertTrue(record[posture.DELEGATION_FIRED_KEY])
+        self.assertEqual(record["announced"], ["worker-a"])
+
+    def test_killed_lock_owner_does_not_block_the_session_forever(self):
+        posture = load_posture()
+        path = posture.session_record_path("killed")
+        path.parent.mkdir(parents=True)
+        lock = path.with_name(path.name + ".lock")
+        code = ("import fcntl, os, sys, time; "
+                "fd=os.open(sys.argv[1], os.O_RDWR|os.O_CREAT, 0o600); "
+                "fcntl.flock(fd, fcntl.LOCK_EX); print('locked', flush=True); time.sleep(60)")
+        owner = subprocess.Popen([sys.executable, "-c", code, str(lock)],
+                                 stdout=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: owner.poll() is None and owner.kill())
+        self.assertEqual(owner.stdout.readline().strip(), "locked")
+        owner.kill()
+        owner.wait(timeout=5)
+        owner.stdout.close()
+        self.assertEqual(posture.delegation_read("killed", ["/one"], 3), (False, 1))
+
+    def test_failed_later_composition_does_not_consume_the_threshold_read(self):
+        for path in ("one.py", "two.py"):
+            self.assertEqual(lifecycle.dispatch("claude-code", self.event(path, "compose")), {})
+        real_invoke = lifecycle.invoke
+
+        def fail_neutralizer(name, event):
+            if name == "neutralize-tool-output":
+                raise RuntimeError("neutralizer failed")
+            return real_invoke(name, event)
+
+        with patch.object(lifecycle, "invoke", side_effect=fail_neutralizer):
+            with self.assertRaisesRegex(RuntimeError, "neutralizer failed"):
+                lifecycle.dispatch("claude-code", self.event("three.py", "compose"))
+        record = load_posture().read_session_record("compose")
+        self.assertEqual(record["delegation_read_files"],
+                         [str(self.home / "one.py"), str(self.home / "two.py")])
+        self.assertFalse(record["delegation_nudge_fired"])
+        retry = lifecycle.dispatch("claude-code", self.event("three.py", "compose"))
+        self.assertIn("Spawn worker-a", retry["hookSpecificOutput"]["additionalContext"])
+        self.assertEqual(len(self.recorder.rows), 1)
+
     def test_custom_sidecar_symlink_cannot_escape_its_primitive_root(self):
         posture = load_posture()
         custom = self.home / "custom"
@@ -157,6 +242,33 @@ class DelegationNudgeTests(unittest.TestCase):
         config = {"primitive_roots": [str(custom)]}
         self.assertIsNone(posture.delegation_nudge("escaped", config,
                                                   root=self.home / "builtin"))
+
+    def test_sidecar_swap_after_resolution_loads_the_resolved_file(self):
+        posture = load_posture()
+        custom = self.home / "custom"
+        directory = custom / "stances/delegation"
+        directory.mkdir(parents=True)
+        good = directory / "good.json"
+        bad = directory / "bad.json"
+        good.write_text(json.dumps({"schema_version": 1, "threshold": 3,
+                                    "message": "Trusted."}))
+        bad.write_text(json.dumps({"schema_version": 1, "threshold": 3,
+                                   "message": "Swapped."}))
+        selected = directory / "racing.json"
+        selected.symlink_to(good.name)
+        real_resolve = Path.resolve
+
+        def racing_resolve(path, *args, **kwargs):
+            resolved = real_resolve(path, *args, **kwargs)
+            if path == selected and path.is_symlink():
+                path.unlink()
+                path.symlink_to(bad.name)
+            return resolved
+
+        config = {"primitive_roots": [str(custom)]}
+        with patch.object(Path, "resolve", racing_resolve):
+            result = posture.delegation_nudge("racing", config, root=self.home / "builtin")
+        self.assertEqual(result["message"], "Trusted.")
 
 
 if __name__ == "__main__":

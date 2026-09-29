@@ -179,11 +179,12 @@ def selected(name, fallback):
     return load("posture").selected(name, fallback)
 
 
-def _read_path(value, cwd, env=None):
-    """A lexical file identity for one explicit operand, or None when shell state decides it."""
-    if not isinstance(value, str) or not value or value == "-" or value.startswith("-"):
+def _read_path(value, cwd, env=None, shell=False):
+    """A lexical file identity, rejecting shell syntax only for a shell operand."""
+    if not isinstance(value, str) or not value or shell and (value == "-" or value.startswith("-")):
         return None
-    if DELEGATION_DYNAMIC_PATH.search(value) or value.startswith("~") and not value.startswith("~/"):
+    if shell and (DELEGATION_DYNAMIC_PATH.search(value)
+                  or value.startswith("~") and not value.startswith("~/")):
         return None
     env = os.environ if env is None else env
     if value.startswith("~/"):
@@ -199,7 +200,7 @@ def _read_path(value, cwd, env=None):
 
 
 def _bash_read_operands(tokens):
-    """Explicit file operands from one conservative, already read-only simple command."""
+    """One explicit file operand from one conservative, already read-only simple command."""
     if not tokens or any(token in (";", "&&", "||", "|", "|&", "&", "(", ")")
                          or DELEGATION_OPERATOR.match(token) for token in tokens):
         return []
@@ -236,12 +237,12 @@ def _bash_read_operands(tokens):
             files.extend(args[index:])
             break
     elif program == "sed":
-        if not args or args[0] != "-n" or len(args) < 3:
+        if len(args) != 3 or args[0] != "-n" or args[1].startswith("-"):
             return []
-        files = args[2:]
+        files = [args[2]]
     else:
         return []
-    return files
+    return files if len(files) == 1 else []
 
 
 def delegation_read_paths(event):
@@ -254,26 +255,31 @@ def delegation_read_paths(event):
     tool = event.get("tool_name")
     if tool == "Read":
         values = [(event.get("tool_input") or {}).get("file_path")]
+        shell = False
     elif tool == "Bash":
         command = (event.get("tool_input") or {}).get("command")
-        if not isinstance(command, str) or "$" in command or "`" in command or "\n" in command:
+        if (not isinstance(command, str) or "$" in command or "`" in command
+                or "\n" in command or "#" in command):
             return []
         try:
             grader = load("grade-bash")
             if grader.ro is None or grader.grade_text(command, cwd)[0] != 0:
                 return []
             values = _bash_read_operands(grader.ro.tokenize(command))
+            shell = True
         except Exception:
             return []
     else:
         return []
-    paths = [_read_path(value, cwd) for value in values]
+    paths = [_read_path(value, cwd, shell=shell) for value in values]
     return sorted({path for path in paths if path})
 
 
 def delegation_nudge_context(runtime, event):
     """One stance-owned nudge when this session first reaches its distinct-read threshold."""
     try:
+        if not enabled("tier-agent-spawns"):
+            return None
         variant = selected("delegation", "tiered")
         if variant == "off":
             return None
@@ -639,12 +645,21 @@ def notice_once(session_id, key):
     """Whether this session has yet to be told `key`. Records that it now has. Never raises."""
     try:
         posture = load("posture")
+        added = []
+
+        def update(record):
+            said = [k for k in record.get(NOTICED_KEY, []) if isinstance(k, str)]
+            if key in said:
+                return None
+            added.append(True)
+            return dict(record, **{NOTICED_KEY: (said + [key])[-DENIED_MAX:]})
+
+        updater = getattr(posture, "update_session_record", None)
+        if updater is not None:
+            return bool(updater(session_id, update) and added)
         record = posture.read_session_record(session_id) or {}
-        said = [k for k in record.get(NOTICED_KEY, []) if isinstance(k, str)]
-        if key in said:
-            return False
-        posture.write_session_record(session_id, dict(record, **{NOTICED_KEY: (said + [key])[-DENIED_MAX:]}))
-        return True
+        changed = update(record)
+        return bool(changed is not None and posture.write_session_record(session_id, changed))
     except Exception:
         return False
 
@@ -693,10 +708,20 @@ def remember_denial(session_id, name, prompt):
         return False
     try:
         posture = load("posture")
+
+        def update(record):
+            stored = record.get(DENIED_KEY)
+            entries = [e for e in stored if isinstance(e, dict)
+                       and isinstance(e.get("prompt"), str) and e.get("prompt") != text] \
+                if isinstance(stored, list) else []
+            entries.append({"role": name, "prompt": text})
+            return dict(record, **{DENIED_KEY: entries[-DENIED_MAX:]})
+
+        updater = getattr(posture, "update_session_record", None)
+        if updater is not None:
+            return bool(updater(session_id, update))
         record = posture.read_session_record(session_id) or {}
-        entries = [e for e in denied_spawns(session_id) if e.get("prompt") != text]
-        entries.append({"role": name, "prompt": text})
-        return bool(posture.write_session_record(session_id, dict(record, **{DENIED_KEY: entries[-DENIED_MAX:]})))
+        return bool(posture.write_session_record(session_id, update(record)))
     except Exception:
         return False
 
@@ -1046,10 +1071,6 @@ def _dispatch(runtime, payload):
         contexts = []
         if tool == "Bash" and enabled("grade-bash"):
             log_bash_outcome(runtime, event)
-        if tool in ("Read", "Bash"):
-            nudge = delegation_nudge_context(runtime, event)
-            if nudge:
-                contexts.append(nudge)
         if selected("plan-ceremony", "review-card") == "review-card":
             for path in patch_paths(event):
                 result = invoke("validate-plan-card", dict(event, tool_input={"file_path": path},
@@ -1064,6 +1085,12 @@ def _dispatch(runtime, payload):
             feed = invoke("usage-feed", event).get("hookSpecificOutput", {}).get("additionalContext")
             if feed:
                 contexts.append(feed)
+        # Record the read only after every other PostToolUse policy composed successfully. A
+        # later policy failure emits no response, so it must not consume this session's nudge.
+        if tool in ("Read", "Bash"):
+            nudge = delegation_nudge_context(runtime, event)
+            if nudge:
+                contexts.append(nudge)
         return {"hookSpecificOutput": {"hookEventName": kind, "additionalContext": "\n".join(contexts)}} if any(contexts) else {}
     if kind in FEED_EVENTS:
         # A feed never denies, never blocks and never speaks for another policy, so it answers
