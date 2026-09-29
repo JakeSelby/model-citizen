@@ -1544,9 +1544,14 @@ def _git_dir(args, cwd, variables=None):
             if a == "-C":
                 operand = _static_operand(args[i + 1], variables)
                 cwd = _static_dir(operand, cwd) if operand is not None else None
-                # A literal relative operand under an unknown directory is not the cause.
+                # A literal relative operand under an unknown directory is not the cause, and it
+                # cannot restore the directory an earlier operand left unknown, so that earlier
+                # operand stays the cause.
                 static = operand is not None and _static_dir(operand, "/") is not None
-                cause = None if cwd is not None or static else args[i + 1]
+                if cwd is not None:
+                    cause = None
+                elif not static:
+                    cause = args[i + 1]
             elif a in ("--git-dir", "--work-tree"):
                 cwd, cause = None, None
             i += 2

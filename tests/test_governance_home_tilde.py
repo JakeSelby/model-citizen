@@ -108,6 +108,18 @@ class LiteralOperandUnderUnknownDirectory(Fixture):
         _answer, reason = self.bash(command)
         self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
 
+    def test_a_later_literal_operand_keeps_the_earlier_unresolved_cause(self):
+        command = "git -C $MISSING -C sub push"
+        self.assert_unknown(command)
+        self.assertEqual(grader._unresolved_git_c_operands(command, str(self.repo)),
+                         ["$MISSING"])
+        _answer, reason = self.bash(command)
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+
+    def test_a_later_absolute_operand_clears_the_earlier_cause(self):
+        command = "git -C $MISSING -C %s push" % self.repo
+        self.assertEqual(grader._unresolved_git_c_operands(command, str(self.repo)), [None])
+
 
 if __name__ == "__main__":
     unittest.main()
