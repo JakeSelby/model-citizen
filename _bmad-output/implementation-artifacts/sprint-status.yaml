@@ -645,6 +645,7 @@ development_status:
   ah-s320-every-cost-efficacy-or-system-change-test-is-a: done
   ah-s322-allow-documentation-only-patch-releases-to-carry: done
   ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
+  ah-s329-add-a-json-output-to-citizen-usage: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog

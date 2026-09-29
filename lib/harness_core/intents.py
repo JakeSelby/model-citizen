@@ -634,23 +634,40 @@ def conflict_weeks(rows, days, now=None):
     return [(week, weeks[week]) for week in sorted(weeks)]
 
 
-def conflict_report(days, env=None, now=None):
-    """The lines `harness usage --conflicts` prints."""
+def conflict_summary(days, env=None, now=None):
+    """Structured weekly merge and overlap figures, shared by text and JSON reports."""
     module = decisions()
     path = state_dir(env) / "decisions.jsonl"
     rows = module.read_rows(path) if module is not None else []
     weeks = conflict_weeks(rows, days, now)
+    groups = []
+    for week, slot in weeks:
+        groups.append({
+            "week": week,
+            "merges": slot["merges"],
+            "conflicted": slot["conflicted"],
+            "conflict_share": slot["conflicted"] / slot["merges"] if slot["merges"] else None,
+            "overlaps": slot["warn"] + slot["deny"],
+            "denied": slot["deny"],
+        })
+    return {"path": str(path), "groups": groups}
+
+
+def conflict_report(days, env=None, now=None):
+    """The lines `harness usage --conflicts` prints."""
+    data = conflict_summary(days, env, now)
+    weeks = data["groups"]
     if not weeks:
         return ["no landing merges or intent overlaps recorded in the last " + str(days)
-                + " day(s); looked in " + str(path)]
+                + " day(s); looked in " + data["path"]]
     head = "{:<12}{:>8}{:>12}{:>9}{:>10}{:>8}".format(
         "week of", "merges", "conflicted", "share", "overlaps", "denied")
     lines = [head, "-" * len(head)]
-    for week, slot in weeks:
-        share = "{:.0%}".format(slot["conflicted"] / slot["merges"]) if slot["merges"] else "-"
+    for slot in weeks:
+        share = "{:.0%}".format(slot["conflict_share"]) if slot["conflict_share"] is not None else "-"
         lines.append("{:<12}{:>8}{:>12}{:>9}{:>10}{:>8}".format(
-            week, slot["merges"], slot["conflicted"], share, slot["warn"] + slot["deny"],
-            slot["deny"]))
+            slot["week"], slot["merges"], slot["conflicted"], share, slot["overlaps"],
+            slot["denied"]))
     return lines
 
 
