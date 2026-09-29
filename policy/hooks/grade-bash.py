@@ -263,6 +263,32 @@ HEREDOC_WORD_END = set(" \t\n;&|()<>")
 # so past this many, or in a text longer than `HEREDOC_CHECKED_LENGTH`, the line is uncertain.
 HEREDOC_SUB_CHECKS = 8
 HEREDOC_CHECKED_LENGTH = 65536
+# A word that opens an array subscript `a[…]` or a compound assignment `a=(…)` / `a+=(…)`.
+ARRAY_OPEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[|\+?=\()")
+IDENT_START = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+COMMAND_OPENERS = {"if", "then", "else", "elif", "do", "while", "until", "time", "!", "{"}
+
+
+def _command_position(text, i):
+    """Whether bash surely reads the word at text[i] where a command or assignment begins: first
+    in the text, or after an unescaped newline, `;`, `&`, `|` or `(` that is no redirection, or
+    after a word such as `then` that opens a command. After an assignment or `declare` bash may
+    still take one, so those, like anything else, are not sure."""
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if j and text[j - 1] == "\\":
+        return False
+    if text[j] in "\n;(":
+        return True
+    if text[j] in "&|":
+        return not j or text[j - 1] not in "<>"
+    k = j
+    while k >= 0 and j - k < 6 and text[k] not in HEREDOC_WORD_END:
+        k -= 1
+    return text[k + 1:j + 1] in COMMAND_OPENERS and (k < 0 or text[k] in HEREDOC_WORD_END)
 
 
 def _heredoc_word(text, i):
@@ -356,15 +382,20 @@ def _split_heredocs(text):
     an unquoted one but never runs its lines, and a quoted body is not even expanded.
 
     An operator is a `<<` or `<<-` bash would read as one: unquoted, outside a comment, not the
-    `<<<` of a here-string and not a shift inside `$((…))` or `((…))`. Its body starts after the
-    next newline that ends a line, which a continuation does not, and ends at the delimiter line
-    `_heredoc_bodies` finds. The delimiter line stays in the text.
+    `<<<` of a here-string, not a shift inside `$((…))`, `((…))` or `$[…]`, and not inside an
+    array subscript or compound assignment that starts a command. Its body starts after the next
+    newline bash reads as a token in the construct that holds the operator: one a continuation
+    does not end, and not one inside a substitution, an expansion or a subscript, which bash
+    reads to its close first. The body ends at the delimiter line `_heredoc_bodies` finds, which
+    leaves the text as a bare newline, so no quote or backslash in it reaches the lines after.
 
     Not certain: a delimiter `_heredoc_word` cannot read for sure, a `<<` inside `${…}`, an
     arithmetic expression that does not close as one, a construct left open, a here-document
-    whose substitution closes before its body starts, and one inside a `$(…)` whose closing
-    parenthesis bash 3.2, matching it without skipping the body, would place elsewhere. The
-    caller then also reads the text with no body removed and keeps the worse grade.
+    whose substitution closes before its body starts, one whose line ends inside a nested
+    construct, which bash 3.2 reads as above and later versions are not checked on, one after
+    a subscript or compound assignment that may be an assignment, and one inside a `$(…)` whose
+    closing parenthesis bash 3.2, matching it without skipping the body, would place elsewhere.
+    The caller then also reads the text with no body removed and keeps the worse grade.
 
     Linear: text past `SCAN_CAP` outside the bodies is returned unread, for the caller to refuse
     by its length, and the bash 3.2 check runs a bounded number of times."""
@@ -372,25 +403,36 @@ def _split_heredocs(text):
         return text, [], True
     out, bodies, pending, certain = [], [], [], True
     stack, checks, skipped, i, n = [["top"]], 0, 0, 0, len(text)
+    has_case, unsure = CASE_WORD_RE.search(text) is not None, None
+    # The `top` or `sub` frame that holds each run of `pending`, as [frame, index of its first
+    # entry], innermost last: an operator's body starts only at a newline in its own frame.
+    holders = []
     while i < n:
         if i - skipped > SCAN_CAP:  # too long to grade: the caller refuses the text by its length
             out.append(text[i:])
             return "".join(out), bodies, False
         frame = stack[-1]
         state, c = frame[0], text[i]
-        if c == "\n" and pending and state in ("top", "sub", "arith", "brace", "comment"):
-            if state == "comment":
-                stack.pop()
-            out.append(c)
-            start = i + 1
-            i, found = _heredoc_bodies(text, start, pending)
-            skipped += i - start
-            for body, delimiter_line in found:
-                bodies.append(body)
-                out.append(delimiter_line)
-                skipped -= len(delimiter_line)
-            pending = []
-            continue
+        if c == "\n" and pending and state in ("top", "sub", "arith", "brace", "index",
+                                                "compound"):
+            owner = stack[-2] if state == "compound" else frame
+            first = holders[-1][1] if holders and holders[-1][0] is owner else len(pending)
+            ready = pending[first:]
+            if first:
+                certain = False
+            if ready:
+                del pending[first:]
+                holders.pop()
+                out.append(c)
+                start = i + 1
+                i, found = _heredoc_bodies(text, start, ready)
+                skipped += i - start
+                for body, delimiter_line in found:
+                    bodies.append(body)
+                    if delimiter_line.endswith("\n"):
+                        out.append("\n")
+                        skipped -= 1
+                continue
         if state == "single":
             if c == "'":
                 stack.pop()
@@ -420,9 +462,17 @@ def _split_heredocs(text):
             out.append(c)
             i += 1
             continue
-        step = 1
+        step, opens = 1, None
+        if unsure and c == unsure and state in ("top", "sub"):
+            unsure = None
+        if state in ("top", "sub") and c in IDENT_START and (i == 0 or text[i - 1]
+                                                            in HEREDOC_WORD_END):
+            opens = ARRAY_OPEN_RE.match(text, i)
         if text.startswith("$$", i):
             step = 2
+        elif text.startswith("$[", i):
+            step = 2
+            stack.append(["index", 0])
         elif text.startswith("$((", i) or (state != "double" and text.startswith("((", i)):
             step = 3 if c == "$" else 2
             stack.append(["arith", 0, c == "$"])
@@ -445,6 +495,26 @@ def _split_heredocs(text):
             stack.append(["single" if c == "'" else "double"])
             if state == "brace":
                 certain = False
+        elif opens:
+            # bash reads `a[…]` as a subscript and `a=(…)` as a compound assignment, neither
+            # holding a here-document, where an assignment can start; elsewhere `a[1<<2]` holds
+            # one. Where that is not sure, a `<<` before the close is read both ways.
+            if _command_position(text, i) and not has_case:
+                step = opens.end() - i
+                stack.append(["index", 0] if opens.group(1) == "[" else ["compound"])
+            else:
+                step = opens.start(1) - i
+                unsure = "]" if opens.group(1) == "[" else ")"
+        elif state == "index":
+            if c == "[":
+                frame[1] += 1
+            elif c == "]":
+                if frame[1]:
+                    frame[1] -= 1
+                else:
+                    stack.pop()
+        elif state == "compound" and c == ")":
+            stack.pop()
         elif state == "brace":
             if c == "}":
                 stack.pop()
@@ -452,7 +522,9 @@ def _split_heredocs(text):
                 certain = False
         elif text.startswith("<<<", i):
             step = 3
-        elif text.startswith("<<", i) and state != "arith":
+        elif text.startswith("<<", i) and state not in ("arith", "compound"):
+            if unsure:
+                certain = False
             j = i + 2
             strip_tabs = text.startswith("-", j)
             j += 1 if strip_tabs else 0
@@ -466,6 +538,8 @@ def _split_heredocs(text):
                 delimiter, quoted, step, sure = word
                 step -= i
                 certain = certain and sure
+                if not holders or holders[-1][0] is not frame:
+                    holders.append([frame, len(pending)])
                 pending.append((delimiter, strip_tabs, quoted))
                 if state == "sub":
                     frame[3] = True
@@ -488,6 +562,11 @@ def _split_heredocs(text):
             stack.pop()
             if pending:
                 certain = False
+                if holders and holders[-1][0] is frame:  # its bodies start in the parent
+                    if len(holders) > 1 and holders[-2][0] is stack[-1]:
+                        holders.pop()
+                    else:
+                        holders[-1][0] = stack[-1]
             if frame[3]:
                 # bash 3.2 closes the substitution where a quote-aware match does, which a `)` in
                 # the body can move and run the lines after it; where the match finds no close,

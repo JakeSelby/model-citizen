@@ -159,13 +159,12 @@ class HeredocSplitTests(unittest.TestCase):
 
     def test_the_delimiter_is_quote_removed(self):
         text, bodies, certain = self.split('cat <<E"OF"\nE\nx\nEOF\ny')
-        self.assertEqual((bodies, certain), (["E\nx"], True))
-        self.assertTrue(text.endswith("EOF\ny"))
+        self.assertEqual((text, bodies, certain), ('cat <<E"OF"\n\ny', ["E\nx"], True))
         self.assertEqual(self.split("cat <<\\EOF\n$HOME\nEOF")[1], ["$HOME"])
 
     def test_every_operator_on_a_line_takes_its_own_body(self):
         self.assertEqual(self.split("cat <<A <<-B\n1\nA\n2\n\tB\necho after")[:2],
-                         ("cat <<A <<-B\nA\n\tB\necho after", ["1", "2"]))
+                         ("cat <<A <<-B\n\n\necho after", ["1", "2"]))
 
     def test_a_here_document_in_a_substitution_keeps_its_body_out(self):
         command = "git commit -m \"$(cat <<'EOF'\nfix(x): it's done (see #1)\nEOF\n)\""
@@ -184,6 +183,79 @@ class HeredocSplitTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertFalse(self.split(text)[2])
         self.assertEqual(self.split("(( (1) <<X ))\na\nX"), ("(( (1) <<X ))\na\nX", [], True))
+
+
+# Templates whose `{cmd}` line bash runs while the hook once took it for a here-document body or
+# for quoted text.
+PLACED = [
+    # The delimiter line leaves no quote or continuation behind for the lines after it.
+    "cat <<\"it's\"\nx\nit's\n{cmd}; echo \\'",
+    "cat <<'a\\'\nx\na\\\n{cmd}",
+    # `$[…]`, a subscript and a compound assignment hold a shift, not a here-document.
+    "echo $[1<<2]\n{cmd}\n2]",
+    "a[1<<2]=5\n{cmd}\n2]=5",
+    "true && a[1<<2]+=5\n{cmd}\n2]+=5",
+    "a=( [1<<2]=5 )\n{cmd}\n2]=5 )",
+    # After an assignment bash still reads a subscript, which the hook reads both ways.
+    "x=1 a[1<<2]=5\n{cmd}\n2]=5",
+]
+# Templates whose `{cmd}` line bash 3.2 runs: a pending body starts at no newline inside a
+# substitution, which it reads to its close first. Later versions are not checked here.
+PLACED_32 = [
+    "cat <<EOF; echo $(\n{cmd}\nEOF\n)\nEOF",
+    "cat <<EOF; cat <(\n{cmd}\nEOF\n)\nEOF",
+    "cat <<EOF; echo ${{x:-$(\n{cmd}\nEOF\n)}}\nEOF",
+]
+
+
+def bash_major():
+    out = subprocess.run([BASH, "-c", "echo ${BASH_VERSINFO[0]}"], capture_output=True,
+                         text=True, timeout=10)
+    return int(out.stdout.strip() or 0)
+
+
+class HeredocPlacementTests(unittest.TestCase):
+    @unittest.skipUnless(BASH, "bash is not installed")
+    def test_bash_runs_every_placed_line(self):
+        templates = PLACED + (PLACED_32 if bash_major() == 3 else [])
+        self.assertEqual([t for t in templates if not ran(t)], [])
+
+    def test_the_placed_push_grades_a_push(self):
+        for template in PLACED + PLACED_32:
+            command = template.format(cmd="git push")
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 2)
+                self.assertIn("coding.git_push",
+                              [entry[0] for entry in grader.governed_text(command, CWD)])
+                self.assertFalse(ro.command_ok(command))
+
+    def test_the_delimiter_line_leaves_a_bare_newline(self):
+        split = grader._split_heredocs
+        self.assertEqual(split("cat <<\"it's\"\nx\nit's\necho"),
+                         ("cat <<\"it's\"\n\necho", ["x"], True))
+        self.assertEqual(split("cat <<'a\\'\nx\na\\\necho"), ("cat <<'a\\'\n\necho", ["x"], True))
+
+    def test_a_shift_in_a_subscript_is_no_operator(self):
+        for text in ("echo $[1<<2]\na\n2]", "a[1<<2]=5\na\n2]=5", "{ a[\"]\"<<2]=5\na\n2]=5; }",
+                     "if a[1<<2]=5; then :; fi", "a=( [1<<2]=5 )\na\n2]=5 )"):
+            with self.subTest(text=text):
+                self.assertEqual(grader._split_heredocs(text), (text, [], True))
+        # An argument holds a here-document, but after an assignment or `declare` the word may
+        # be a subscript, so outside a command's start the text is read both ways.
+        self.assertEqual(grader._split_heredocs("echo a[1<<X]\nb\nX]"),
+                         ("echo a[1<<X]\n", ["b"], False))
+        for text in ("x=1 a[1<<2]=5\na\n2]=5", "declare a[1<<2]=5\na\n2]=5",
+                     "echo \\\na[1<<2]\na\n2]", "case x in a[1<<2]) ;; esac\na\n2]"):
+            with self.subTest(text=text):
+                self.assertFalse(grader._split_heredocs(text)[2])
+
+    def test_a_pending_body_starts_after_the_construct_closes(self):
+        split = grader._split_heredocs
+        self.assertEqual(split("cat <<EOF; echo $(\na\nEOF\n)\nEOF"),
+                         ("cat <<EOF; echo $(\na\nEOF\n)\n", [""], False))
+        self.assertEqual(split("cat <<EOF; echo $((1+\n2))\nb\nEOF")[1:], (["b"], False))
+        self.assertEqual(split("cat <<EOF; a=(\nb\nEOF\n)")[1:], (["b"], True))
+        self.assertEqual(split("cat <<EOF; (\nb\nEOF\n)")[1:], (["b"], True))
 
 
 class MongoTests(unittest.TestCase):
@@ -235,6 +307,8 @@ class ScalingTests(unittest.TestCase):
             lambda k: "cat <<EOF\n" + "a\\\n" * 5000 * k + "EOF\ngit push",
             lambda k: "x=$(cat <<'E'\n1)\nE\n)\n" * 100 * k,
             lambda k: "echo $'\\'" * 1000 * k,
+            lambda k: "cat <<a $(" * 300 * k + "\n" * 300 * k + ")" * 300 * k,
+            lambda k: "a[1<<2]=5; echo a[1<<2] " * 300 * k + "\ngit push",
         ]
         for make in cases:
             with self.subTest(sample=make(1)[:30]):
