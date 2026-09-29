@@ -111,7 +111,7 @@
         },
         {
           "name": "Live usage feed",
-          "line": "Turn and subagent costs, context-size notices, and decision logs. Opt in to native hook observations without adding model context.",
+          "line": "The orchestrator sees what each turn and each subagent cost, and hears once when its context passes the size your stance sets. A decision log records what a hook decided.",
           "doc": "docs/usage.md"
         },
         {
