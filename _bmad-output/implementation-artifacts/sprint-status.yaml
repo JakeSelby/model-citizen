@@ -244,7 +244,7 @@ development_status:
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
   ah-s252-replay-charges-the-user-s-personal-layer-to-the: done
-  ah-s253-record-the-cli-s-own-account-of-the-loaded: backlog
+  ah-s253-record-the-cli-s-own-account-of-the-loaded: done
   ah-s254-price-every-rule-stance-variant-skill-and-agent: done
   ah-s255-replay-stored-transcripts-through-the-rule: backlog
   ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
