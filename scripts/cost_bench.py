@@ -651,6 +651,38 @@ def spawn_offered(messages):
     return any(isinstance(name, str) and name in SPAWN_TOOLS for name in tools)
 
 
+def failed_tool_uses(messages):
+    """The ids of tool calls whose `tool_result` is an error: denied, hook-blocked or failed."""
+    failed = set()
+    for message in messages:
+        content = (message.get("message") or {}).get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else []:
+            if (isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error")
+                    and isinstance(block.get("tool_use_id"), str)):
+                failed.add(block["tool_use_id"])
+    return failed
+
+
+def counted_spawns(calls, failed):
+    """The spawn calls that count, from `calls`, every spawn-tool call as (id, thread), and the
+    threads those spawns started.
+
+    A spawn counts when its result is not an error and it was made on the main thread or inside a
+    thread that a counted spawn started; one made inside a `Workflow` agent's thread does not. A
+    call with no id counts where it sits but names no thread."""
+    counted, threads, grew = [], set(), True
+    while grew:
+        grew = False
+        for index, (use_id, thread) in enumerate(calls):
+            if index in counted or use_id in failed or not (thread is None or thread in threads):
+                continue
+            counted.append(index)
+            if use_id is not None:
+                threads.add(use_id)
+            grew = True
+    return [calls[index] for index in counted], threads
+
+
 def surface_of(row):
     """A row's observed surface, or None when its stream carried no `init` event."""
     if row.get(SURFACE_SOURCE_FIELD) != SURFACE_SOURCE:
@@ -671,7 +703,7 @@ def _stream_diagnostics(messages, streamed):
     surface, effort = loaded_surface(messages)
     stops, blocks = stop_hook_counts(messages, streamed)
     first_turns, seen, first_write, first_context, tools = [], set(), None, None, {}
-    assistant, gather, absorbed = False, 0, 0
+    assistant, gathers, spawn_calls = False, [], []
     cache = {"cache_read": 0, "cache_write": 0, "turns": 0, "known": True}
     for message in messages:
         if not isinstance(message, dict) or message.get("type") != "assistant":
@@ -684,8 +716,9 @@ def _stream_diagnostics(messages, streamed):
                 name = str(block.get("name") or "")
                 tools[name] = tools.get(name, 0) + 1
                 if name in GATHER_TOOLS:
-                    gather += 1
-                    absorbed += thread is not None
+                    gathers.append(thread)
+                elif name in SPAWN_TOOLS:
+                    spawn_calls.append((block.get("id"), thread))
         if not isinstance(body.get("usage"), dict):
             continue
         if first_write is None:
@@ -705,11 +738,12 @@ def _stream_diagnostics(messages, streamed):
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
     # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
     count = lambda value: value if assistant else None
+    spawned, spawn_thread_ids = counted_spawns(spawn_calls, failed_tool_uses(messages))
     return {"first_turns": first_turns, "first_call_cache_write": first_write,
             "first_call_context": first_context, "tool_counts": tools,
-            "spawns": count(sum(tools.get(name, 0) for name in SPAWN_TOOLS)),
-            "spawn_offered": spawn_offered(messages), "gather_calls": count(gather),
-            "absorbed_calls": count(absorbed),
+            "spawns": count(len(spawned)),
+            "spawn_offered": spawn_offered(messages), "gather_calls": count(len(gathers)),
+            "absorbed_calls": count(sum(1 for thread in gathers if thread in spawn_thread_ids)),
             "workflow_launches": count(sum(tools.get(name, 0) for name in WORKFLOW_TOOLS)), "stop_hooks": stops,
             "hook_blocks": blocks, "cache_miss_ratio": run_miss_ratio(cache),
             "installed_checkout_reads": installed_checkout_reads(messages),
@@ -734,10 +768,11 @@ def parse_result(stdout):
     cache, as against the run's total writes. `first_call_context` is that message's whole input,
     `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
     total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
-    by name, and `spawns` is the subagent share of it.
+    by name; `spawns` counts only the spawn calls `counted_spawns` accepts, so a denied spawn or one
+    inside a `Workflow` agent is in `tool_counts` and not in `spawns`.
 
     `spawn_offered` is whether the `init` event listed a spawn tool. `gather_calls` counts
-    `GATHER_TOOLS` calls in every thread, `absorbed_calls` those made inside a subagent's thread,
+    `GATHER_TOOLS` calls in every thread, `absorbed_calls` those made inside a counted spawn's thread,
     and `workflow_launches` the `Workflow` calls, which are not spawns (`delegation_verdict`).
     With no assistant message the four counts are None, never zero; `tool_counts` stays `{}`.
 
@@ -1401,7 +1436,8 @@ def render_history(rows):
         if block:
             lines.append("    delegation: " + delegation_verdict.heading(block))
             for task, cell in sorted((block.get("tasks") or {}).items()):
-                lines.append("    delegation: " + delegation_verdict.task_line(task, cell))
+                lines.append("    delegation: " + delegation_verdict.task_line(task, cell,
+                                                                            block.get("registered", False)))
     return "\n".join(lines) + "\n"
 
 
