@@ -18,6 +18,7 @@ rather than a floating version.
 """
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
@@ -40,9 +41,30 @@ BMAD_ENV = "HARNESS_ACCEPTANCE_BMAD"
 TIMEOUT = 600
 
 
+def repository_local_variables():
+    """The variables Git treats as local to a repository, including stable fallbacks."""
+    try:
+        listed = subprocess.run(["git", "rev-parse", "--local-env-vars"],
+                                capture_output=True, text=True, check=False, timeout=5)
+        names = set(listed.stdout.split()) if listed.returncode == 0 else set()
+    except (OSError, subprocess.TimeoutExpired):
+        names = set()
+    return names | {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"}
+
+
+LOCAL_GIT_VARIABLES = repository_local_variables()
+
+
+def isolated_environment():
+    """Keep the caller's intended environment without Git's repository selectors."""
+    return {key: value for key, value in os.environ.items() if key not in LOCAL_GIT_VARIABLES}
+
+
 def run(args, cwd=None, timeout=TIMEOUT):
     return subprocess.run([str(item) for item in args], cwd=str(cwd) if cwd else None,
-                          capture_output=True, text=True, check=False, timeout=timeout)
+                          capture_output=True, text=True, check=False, timeout=timeout,
+                          env=isolated_environment())
 
 
 def git(*args, **kwargs):
