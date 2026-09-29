@@ -922,6 +922,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
+    if out and Path(out).is_file() and Path(out).stat().st_size:
+        raise SystemExit("cost-bench: refusing to append to nonempty saved results: %s" % out)
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     probe_workdirs(tasks, opts, launch)
@@ -1139,7 +1141,10 @@ def cmd_summarise(args):
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
         plot = Path(args.plot).expanduser()
-        if plot.resolve() == path.resolve():
+        same_file = plot.resolve() == path.resolve()
+        if plot.exists():
+            same_file = same_file or plot.samefile(path)
+        if same_file:
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
