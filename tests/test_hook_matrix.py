@@ -4,8 +4,7 @@
 The matrix, its corpus and how to rewrite it are described in
 `tests/fixtures/hook-calls/hook_matrix.py`. These tests hold four things: the committed matrix
 is what the hooks answer now, it covers every hook id and every selectable variant, a variant
-that resolves differently fails exactly the cell it moves and names it, and the shortcut that
-skips a hook the dispatcher never asked about gives the answer a full run gives.
+that resolves differently fails exactly the cell it moves and names it, and every row is actually executed even when the event does not query that hook.
 
 Run: python3 -m unittest discover tests
 """
@@ -60,16 +59,31 @@ class HookMatrixTests(unittest.TestCase):
         self.assertEqual(keys[0], HM.BASE)
         self.assertEqual(len(HM.expand(matrix)), len(matrix["rows"]) * len(matrix["calls"]) * len(keys))
 
-    def test_a_variant_that_resolves_differently_fails_exactly_its_cell(self):
-        # `autonomy=ask` resolving as `execute` stands for an edit to that variant that changes
-        # what it lets through: a commit is asked about under `ask` and passes under `execute`.
-        calls = {"pre-bash-commit": HM.calls()["pre-bash-commit"]}
-        flipped = HM.flatten(HM.compute([("autonomy=ask", {"autonomy": "execute"})], calls))
-        expected = dict((cell, answer) for cell, answer in HM.expand(committed()).items() if cell in flipped)
-        moved = HM.differences(expected, flipped)
-        self.assertEqual(len(moved), 1, moved)
-        self.assertEqual(moved[0], "hook grade-bash, call pre-bash-commit, variant autonomy=ask: "
-                                   "expected ask, got as-dispatcher")
+    def test_a_variant_behavior_change_fails_exactly_its_cell_in_the_full_matrix(self):
+        # Prose is not executable policy. Mutate the hook's behavior for one variant and call,
+        # then run the complete corpus; no rows or variant environments are filtered out.
+        original = HM.lifecycle.load
+        command = HM.calls()["pre-bash-commit"]["payload"]["tool_input"]["command"]
+
+        def changed_load(name):
+            module = original(name)
+            if name == "grade-bash" and os.environ.get("HARNESS_STANCE_AUTONOMY") == "ask":
+                grade = module.grade_text
+
+                def changed_grade(text, *args, **kwargs):
+                    result = grade(text, *args, **kwargs)
+                    if text == command:
+                        module.THRESHOLDS = dict(module.THRESHOLDS, ask=3)
+                    return result
+
+                module.grade_text = changed_grade
+            return module
+
+        with mock.patch.object(HM.lifecycle, "load", side_effect=changed_load):
+            flipped = HM.flatten(HM.compute())
+        moved = HM.differences(HM.expand(committed()), flipped)
+        self.assertEqual(moved, ["hook grade-bash, call pre-bash-commit, variant autonomy=ask: "
+                                 "expected ask, got as-dispatcher"])
 
     def test_one_changed_cell_is_reported_once_with_its_names(self):
         matrix = committed()
@@ -79,17 +93,24 @@ class HookMatrixTests(unittest.TestCase):
         self.assertEqual(moved, ["hook validate-plan-card, call post-write-plan-bad, variant "
                                  "plan-ceremony=light: expected as-dispatcher, got context"])
 
-    def test_skipping_hooks_never_asked_about_matches_running_them(self):
-        corpus = HM.calls()
-        sample = dict((name, corpus[name]) for name in (
-            "pre-bash-plan-grep", "pre-agent-unbounded-brief", "post-write-plan-bad", "pre-write-source"))
-        envs = [env for env in HM.variants() if env[0] in (HM.BASE, "autonomy=ask", "delegation=off")]
-        self.assertEqual(HM.compute(envs, sample, exhaustive=True), HM.compute(envs, sample))
+    def test_every_row_is_executed_even_when_dispatcher_never_queries_it(self):
+        with mock.patch.object(HM, "run_one", return_value="none") as run:
+            HM.compute()
+        self.assertEqual(run.call_count, len(HM.rows()) * len(HM.calls()) * len(HM.variants()))
+        for row in HM.rows():
+            self.assertEqual(sum(call.args[0] == row for call in run.call_args_list),
+                             len(HM.calls()) * len(HM.variants()))
 
-    def test_corpus_is_synthetic_and_redacted(self):
+    def test_corpus_is_redacted_and_recorded_calls_have_provenance(self):
         home = re.compile(r"/Users/|/home/|[A-Za-z]:\\\\|/root/|/private/var/|/var/folders/")
+        recorded = [d for d in HM.calls().values() if "provenance" in d]
+        self.assertEqual({d["payload"]["hook_event_name"] for d in recorded}, set(EVENTS))
+        for document in recorded:
+            self.assertRegex(document["provenance"]["sha256"], r"^[0-9a-f]{64}$")
+            self.assertIsInstance(document["provenance"]["record_index"], int)
+            self.assertTrue(document["provenance"]["normalization"])
         for name, document in HM.calls().items():
-            self.assertEqual(sorted(set(document) - {"files", "git"}), ["about", "payload"], name)
+            self.assertEqual(sorted(set(document) - {"files", "git", "provenance"}), ["about", "payload"], name)
             payload = document["payload"]
             self.assertIn(payload["hook_event_name"], EVENTS, name)
             self.assertIn(payload["cwd"], ("/workspace/example-repo", "{repo}"), name)

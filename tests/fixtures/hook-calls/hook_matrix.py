@@ -2,9 +2,10 @@
 """The hook permutation matrix: every hook, every recorded call, every stance variant.
 
 Each call under `calls/` is one tool-call payload, as a runtime hands it to the dispatcher, with a
-line saying what it is for. The payloads are synthetic: every repository path is under
+line saying what it is for. Recorded benchmark calls carry source digests and record indexes in `provenance`; synthetic
+boundary cases supplement them. Every repository path is under
 `/workspace/example-repo`, and anything a hook must read from disk is staged into a temporary
-home through `{home}` and `{repo}` tokens, so no real transcript, home path or name is recorded.
+home through `{home}` and `{repo}` tokens, so no personal home path or name is recorded. Only the selected, redacted tool data is retained.
 
 The variant environments are the base, every stance at its default, then one per non-default
 variant of each stance topic in `primitives/stances/`, set the way a session sets one, through
@@ -229,14 +230,11 @@ def decision(output):
     return "+".join(parts) or "none"
 
 
-def run_one(row, stances, document, queried=None):
-    """Dispatch one call under one row and one variant environment, in a fresh home.
-
-    `queried`, a set, collects every hook id the dispatcher asked about; see `answers`.
-    """
+def run_one(row, stances, document):
+    """Dispatch one call under one row and one variant environment, in a fresh home."""
     home = Path(tempfile.mkdtemp(prefix="hook-matrix-"))
     saved_env, saved_cwd = dict(os.environ), os.getcwd()
-    saved_log, saved_enabled = list(lifecycle._DECISIONS), lifecycle.enabled
+    saved_log = list(lifecycle._DECISIONS)
     try:
         payload = _stage(home, document)
         path = home / ".config" / "agent-harness" / "config.json"
@@ -253,11 +251,6 @@ def run_one(row, stances, document, queried=None):
         os.environ.update(env)
         os.chdir(str(home))
         lifecycle._DECISIONS[:] = [None]
-        if queried is not None:
-            def enabled(name):
-                queried.add(name)
-                return saved_enabled(name)
-            lifecycle.enabled = enabled
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             try:
                 return decision(lifecycle.dispatch(RUNTIME, payload))
@@ -265,28 +258,15 @@ def run_one(row, stances, document, queried=None):
                 return "error:" + type(exc).__name__
     finally:
         lifecycle._DECISIONS[:] = saved_log
-        lifecycle.enabled = saved_enabled
         os.chdir(saved_cwd)
         os.environ.clear()
         os.environ.update(saved_env)
         shutil.rmtree(str(home), ignore_errors=True)
 
 
-def answers(stances, document, exhaustive=False):
-    """`{row: decision}` for one call under one variant environment.
-
-    The `dispatcher` run records every hook id the dispatcher asked `enabled` about. A row whose
-    id was never asked about takes the `dispatcher` answer without a run of its own: that hook,
-    switched on, changes nothing until it is asked about, and a deterministic dispatch of the same
-    input never asks, so the two runs are one run. `enabled` is the only reader of the switches
-    on the decision path. `exhaustive` runs every row anyway, which is how the test holds the
-    shortcut to that claim.
-    """
-    queried = set()
-    out = {DISPATCHER: run_one(DISPATCHER, stances, document, queried)}
-    for row in catalog.HOOK_IDS:
-        out[row] = run_one(row, stances, document) if exhaustive or row in queried else out[DISPATCHER]
-    return out
+def answers(stances, document):
+    """Run every registered row, including rows inapplicable to this event."""
+    return {row: run_one(row, stances, document) for row in rows()}
 
 
 @contextlib.contextmanager
@@ -320,7 +300,7 @@ def cached_code():
         loader.get_code = original
 
 
-def compute(envs=None, corpus=None, exhaustive=False):
+def compute(envs=None, corpus=None):
     """`{row: {call: {variant key: decision}}}` for `envs` (default every variant), in-process."""
     envs = variants() if envs is None else envs
     corpus = calls() if corpus is None else corpus
@@ -328,7 +308,7 @@ def compute(envs=None, corpus=None, exhaustive=False):
     with cached_code():
         for key, stances in envs:
             for name, document in corpus.items():
-                for row, answer in answers(stances, document, exhaustive).items():
+                for row, answer in answers(stances, document).items():
                     out[row].setdefault(name, {})[key] = answer
     return out
 

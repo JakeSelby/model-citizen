@@ -1,0 +1,18 @@
+{
+ "about": "Recorded hook-inventory benchmark event, normalized to the hook payload schema.",
+ "provenance": {
+  "run": "cost-replay-baseline-v2-2026-09-22",
+  "artifact": "hook-inventory-harness-1.json",
+  "sha256": "1724400c70db80220a60ee69efc07d4551a913207fc658970402a2fe3b8c2386",
+  "record_index": 21,
+  "normalization": "Session and workspace metadata replaced; tool input and output preserved. Stop is derived from the successful result record."
+ },
+ "payload": {
+  "session_id": "s-recorded",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": false
+ }
+}

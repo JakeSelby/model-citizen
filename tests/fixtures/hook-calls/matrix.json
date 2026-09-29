@@ -68,6 +68,9 @@
   "pre-webfetch-plan",
   "pre-write-approvals-store",
   "pre-write-source",
+  "recorded-post-hook-inventory",
+  "recorded-pre-hook-inventory",
+  "recorded-stop-hook-inventory",
   "stop-outside-repository",
   "stop-trusted-red-gate",
   "stop-untrusted-gate"
@@ -83,6 +86,9 @@
     "base": "allow"
    },
    "pre-bash-read-only": {
+    "base": "allow"
+   },
+   "recorded-pre-hook-inventory": {
     "base": "allow"
    }
   },
@@ -232,6 +238,15 @@
     "base": "none"
    },
    "pre-write-source": {
+    "base": "none"
+   },
+   "recorded-post-hook-inventory": {
+    "base": "none"
+   },
+   "recorded-pre-hook-inventory": {
+    "base": "none"
+   },
+   "recorded-stop-hook-inventory": {
     "base": "none"
    },
    "stop-outside-repository": {
