@@ -5,8 +5,8 @@ description: Bound what subagents return and what tool output enters the transcr
 
 # Transcript hygiene
 
-The operative lines live in the resident rule `primitives/rules/transcript-hygiene.md`. This skill
-carries the reasoning behind them, the numbers in context, and the examples.
+The resident rule `primitives/rules/transcript-hygiene.md` is provenance for the full harness,
+not a standalone installation requirement. Apply the reading and return limits below directly.
 
 The user reads the transcript, not just the final message. **Thinking summaries are wanted and
 stay** — they are collapsed and opened deliberately. Everything else in the scroll is cost they
