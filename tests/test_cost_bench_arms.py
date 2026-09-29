@@ -15,7 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_harness import REPO
+from isolation import isolate_home
+from test_harness import REPO, harness
 
 
 def load(name):
@@ -362,6 +363,27 @@ class AdmissionSeamTests(unittest.TestCase):
         self.assertIn("no committed pre-registration", refusal)
         self.assertIn("image bakes", refusal)
 
+    def test_a_non_object_manifest_entry_is_refused_without_crashing_other_checks(self):
+        record = dict(self.record, manifest=dict(self.record["manifest"]))
+        record["manifest"]["entries"] = [42]
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        self.assertIn("manifest entries contain a malformed path", str(caught.exception))
+
+    def test_admission_names_every_undeclared_configuration_entry(self):
+        record = dict(self.record, manifest=dict(self.record["manifest"]))
+        entries = [{"path": "home:.claude/settings.json", "kind": "file"},
+                   {"path": "home:.claude/settings.local.json", "kind": "file"}]
+        record["manifest"]["entries"] = entries
+        record["manifest"]["summary"] = LISTER.summary(entries)
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        for entry in entries:
+            self.assertIn(entry["path"], refusal)
+
     def test_a_further_check_can_refuse_through_the_same_seam(self):
         """The protocol's own refusals plug in here, each a function of the arm's record."""
         differs = lambda record: "manifest differs from its declaration"
@@ -437,6 +459,29 @@ class ManifestListerTests(unittest.TestCase):
                 self.assertEqual(LISTER.cli_packages(), ["@anthropic-ai/claude-code@123", "@openai/codex@10",
                                                          "left@2"])
                 self.assertEqual(LISTER.cli_version(), "123")
+
+    def test_treatment_paths_match_files_rendered_by_a_real_sync(self):
+        old_environ = dict(os.environ)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                isolate_home(home)
+                personal = home / ".codex" / "AGENTS.personal.md"
+                personal.parent.mkdir(parents=True)
+                personal.write_text("user-owned\n", encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(harness.cmd_sync(harness.argparse.Namespace(
+                        dry_run=False, adopt=False, adopt_codex=False, print_only=False)), 0)
+                listed = self.listed(home, harness=REPO)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_environ)
+        treatment = ARMS._treatment_paths(listed)
+        for path in ("home:.codex/AGENTS.md", "home:.codex/agents/builder.toml",
+                     "home:.agents/skills/harness-build/SKILL.md"):
+            self.assertIn(path, treatment)
+        self.assertNotIn("home:.codex/AGENTS.personal.md", treatment)
 
     def test_the_arm_image_removes_the_base_templates_codex_client(self):
         """The base is the Codex sandbox template; an arm carries Claude Code and no other client."""
