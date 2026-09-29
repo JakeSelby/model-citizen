@@ -16,6 +16,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -410,6 +411,37 @@ def terminate_owned_group(pgid: int, timeout: float = 5.0,
     return not _group_exists(pgid)
 
 
+class _SharedCall:
+    """Run one call at a time; callers arriving while it runs share its result or error."""
+
+    def __init__(self) -> None:
+        self._guard = threading.Lock()
+        self._flight: Optional[Dict[str, Any]] = None
+
+    def call(self, operation: Any) -> Any:
+        with self._guard:
+            flight = self._flight
+            leader = flight is None
+            if leader:
+                flight = {"done": threading.Event(), "result": None, "error": None}
+                self._flight = flight
+        assert flight is not None
+        if leader:
+            try:
+                flight["result"] = operation()
+            except BaseException as exc:
+                flight["error"] = exc
+            finally:
+                with self._guard:
+                    self._flight = None
+                flight["done"].set()
+        else:
+            flight["done"].wait()
+        if flight["error"] is not None:
+            raise flight["error"]
+        return flight["result"]
+
+
 class RunSupervisor:
     def __init__(self, state_root: Path, catalog_path: Path, max_running: int = MAX_RUNNING,
                  *, repository: Optional[Path] = None, target_service: Any = None):
@@ -426,6 +458,7 @@ class RunSupervisor:
                 or not 1 <= max_running <= MAX_RUNNING):
             raise RunError("max_running must be between one and three")
         self.max_running = max_running
+        self._catalog_call = _SharedCall()
         self.runs_dir = self.state_root / "runs"
         self.targets_dir = self.state_root / "targets"
         self.lock_path = self.state_root / "supervisor.lock"
@@ -1332,12 +1365,18 @@ class RunSupervisor:
                         case_identities=cases)
 
     def catalog(self, repository: Path) -> Dict[str, Any]:
-        """Describe the free catalog from the same definitions used for launch."""
-        catalog = SuiteCatalog.load(self.catalog_path)
-        try:
-            return free_suites.catalog_payload(catalog, repository)
-        except free_suites.FreeSuiteError as exc:
-            raise RunError(str(exc)) from exc
+        """Describe the free catalog from the same definitions used for launch.
+
+        Test discovery takes seconds in a subprocess and runs on request threads, so concurrent
+        callers share one in-flight discovery instead of each starting another.
+        """
+        def load() -> Dict[str, Any]:
+            catalog = SuiteCatalog.load(self.catalog_path)
+            try:
+                return free_suites.catalog_payload(catalog, repository)
+            except free_suites.FreeSuiteError as exc:
+                raise RunError(str(exc)) from exc
+        return self._catalog_call.call(load)
 
     def list(self) -> List[Dict[str, Any]]:
         self.reconcile_and_drain()
