@@ -20,8 +20,9 @@ cd "$DEST"
 
 The dedicated root keeps temporary task checkouts separate from permanent clones. It defaults to
 `~/worktrees/<repo>/<task>`; `HARNESS_WORKTREE_ROOT` may replace `~/worktrees`. The helper fetches
-`origin` and branches from `origin/main`, so it starts from what is actually merged. If the repo's
-instructions name a different base, pass `--base`; if they name a different location, follow them.
+`origin` and defaults to `origin/main`. Confirm the repository's default branch first and pass
+`--base origin/<default>` when it differs, or the explicit base required by the task. Follow
+repository-specific location instructions.
 Never create a task worktree as a sibling under the directory holding permanent repositories.
 
 ## Work
@@ -33,7 +34,8 @@ Never create a task worktree as a sibling under the directory holding permanent 
 
 ## Land
 
-Push the branch and open a PR, or push to `main` if the repo's instructions allow it. Then:
+Push the task branch, open a PR and merge through the repository's delivery process. After
+a merged PR supplies the removal proof:
 
 ```bash
 citizen worktree remove "$NAME" "$REPO" --merged
@@ -42,7 +44,8 @@ citizen worktree remove "$NAME" "$REPO" --merged
 `--merged` deletes the local branch as well, and only once `gh` reports a merged pull request
 whose head commit is the branch tip. A repository that squash-merges leaves the branch's own
 commits out of the default branch, so `git branch -d` refuses work that did land; that proof is
-the check instead. Drop `--merged` to keep the branch. Removal does not count regenerable caches
+the check instead. Direct-push repositories have no merged-PR proof: remove the clean worktree
+without `--merged`, retain the branch, and inspect its reachability before any separate cleanup. Removal does not count regenerable caches
 such as `__pycache__` that a gate run wrote, and still refuses any other modified, untracked or
 ignored entry; `--also-clear <name>` adds a regenerable top-level directory the built-in list
 misses.
@@ -54,7 +57,8 @@ misses.
   error, that is the guard working; run that tool from the shared checkout only.
 - **Shared append-only documents** (a decisions log, a changelog) are not worktree material:
   two agents appending in two worktrees produce a conflict at merge. Append to those on the
-  default branch in one place.
+  integration worktree through one owner, then land through the normal delivery path. This is
+  not permission to edit or push the shared default branch directly.
 - **Generated index files** are rebuilt once at merge, never on both sides.
 - **Leftover worktrees** confuse `git status` and history rewrites. `git worktree list` before
   any operation that touches every branch. `citizen worktree audit "$REPO"` reports dirty and

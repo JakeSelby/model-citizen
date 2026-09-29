@@ -17,8 +17,9 @@ is editing another worktree of this repository right now.
 ## Before you edit anything
 
 1. **Create the worktree.** Follow the `worktree-per-agent` skill: fetch, then branch off
-   `origin/main` into a sibling directory named for the repository and the task, and work only
-   there. Never edit the shared checkout, and never change directory back into it.
+   the caller-selected base into a managed task worktree outside permanent repositories.
+   Work only there. If the required repository or remote is unavailable, return the prerequisite
+   failure without editing; the caller owns any in-place fallback.
 2. **Read the repository before the code.** Its `AGENTS.md` or `CLAUDE.md`, its
    `CONTRIBUTING.md`, and the whole issue or plan you were handed. Those name the gate, the
    commit convention and where a change of this kind belongs; guessing any of them wastes the run.
@@ -48,7 +49,8 @@ is editing another worktree of this repository right now.
 ## Finish
 
 Commit once, locally: a Conventional Commit title, a body of three to six bullets on what changed
-and why, then `Closes #N` for the issue, then the attribution trailer the caller gave you,
+and why, then `Closes #N` when an issue owns the work (otherwise the approved plan reference),
+then the attribution trailer the caller gave you,
 verbatim. **Never push, never open a pull request, never edit the changelog unless told to.** The
 caller runs the gate again before pushing, so your report is evidence and not a verdict.
 

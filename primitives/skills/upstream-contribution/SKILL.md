@@ -20,9 +20,18 @@ git remote -v          # origin = fork, upstream = project (no_push)
 The remote you type by reflex is the one that is safe to push to. **Never commit to local
 `main`** — keep it a clean mirror of upstream so rebases stay trivial:
 
+Before replacing a fork branch, inspect `git status --porcelain` and the commits unique to it.
+Stop if there are local modifications, untracked work, or unpublished commits; preserve them in
+a task branch or worktree first. Never use a hard reset as an automatic cleanup shortcut. For a
+clean mirror with no unique work, fetch and fast-forward:
+
 ```bash
-git fetch upstream && git checkout main && git reset --hard upstream/main
+git fetch upstream
+git switch main
+git merge --ff-only upstream/main
 ```
+
+If that refuses, report the divergence; an intentional reset needs explicit authorization.
 
 ## Issue before code
 

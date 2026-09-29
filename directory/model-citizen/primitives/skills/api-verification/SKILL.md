@@ -5,9 +5,9 @@ description: Prove a search, filter or API answer is real before relying on it, 
 
 # Research and API verification
 
-The operative lines live in the resident rule `primitives/rules/research-and-verification.md`. This
-skill carries the reasoning, the arithmetic behind the search budget, and what to do after a
-fan-out.
+The resident rule `primitives/rules/research-and-verification.md` is provenance for the full
+harness installation, not a dependency of this skill. The verification procedure and search
+budget below also apply when this skill is installed standalone.
 
 ## Search budget
 
