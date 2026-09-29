@@ -6891,6 +6891,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C098",
+      "github_number": 916,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/916",
+      "title": "Bring AD-11's and AD-23's status tags in the architecture spine up to date",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C098.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B125",
       "github_number": 917,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/917",
