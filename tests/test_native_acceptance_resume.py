@@ -36,16 +36,17 @@ class ResumeTests(unittest.TestCase):
             return runner(client, name, model, keep, confirmed)
         return run
 
-    def run_round(self, runner, names=None, commit="a" * 40, client=CLIENT, confirmed=()):
+    def run_round(self, runner, names=None, commit="a" * 40, client=CLIENT, confirmed=(),
+                  model="cheapest", tier_routing=None):
         self.ran = []
         with patch.object(MODULE, "client_version", return_value="9.9.9"), \
                 patch.object(MODULE, "git", side_effect=lambda *args: "" if args[0] == "status"
                              else commit), \
                 patch.dict(MODULE.CASES, {name: (None, "stub") for name in CASES}, clear=True), \
                 redirect_stderr(io.StringIO()) as err:
-            data = MODULE.record(client, names or CASES, "cheapest", False,
+            data = MODULE.record(client, names or CASES, model, False,
                                  runner=self.counting(runner), progress=self.progress,
-                                 confirmed=confirmed)
+                                 confirmed=confirmed, tier_routing=tier_routing)
         return data, err.getvalue()
 
     def lines(self):
@@ -66,6 +67,41 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(self.ran, CASES)
         self.assertEqual(err, "")
         self.assertEqual(data["source_commit"], "c" * 40)
+
+    def test_a_changed_model_reruns_all_cases_at_the_same_commit(self):
+        routing = MODULE.executed_by(MODULE.routing(CLIENT), "first")[1]
+        self.run_round(verdict("failed"), model="first", tier_routing=routing)
+        data, err = self.run_round(verdict("passed"), model="second", tier_routing=routing)
+        self.assertEqual(self.ran, CASES)
+        self.assertEqual(err, "")
+        self.assertEqual(data["source_commit"], "a" * 40)
+        self.assertEqual(data["model_run"], "second")
+        self.assertEqual(data["cases"], {name: "passed" for name in CASES})
+        self.assertEqual([row["model_run"] for row in self.lines()],
+                         ["first"] * len(CASES) + ["second"] * len(CASES))
+        resumed, err = self.run_round(verdict("failed"), model="second", tier_routing=routing)
+        self.assertEqual(self.ran, [])
+        self.assertEqual(resumed["cases"], {name: "passed" for name in CASES})
+        self.assertEqual(err.count("already passed"), len(CASES))
+
+    def test_changed_class_routing_reruns_all_cases_at_the_same_commit_and_model(self):
+        original = MODULE.executed_by(MODULE.routing(CLIENT), "same-model")[1]
+        changed = dict(original, execution_class=("light" if original["execution_class"] != "light"
+                                                  else "standard"))
+        self.run_round(verdict("failed"), model="same-model", tier_routing=original)
+        data, err = self.run_round(verdict("passed"), model="same-model", tier_routing=changed)
+        self.assertEqual(self.ran, CASES)
+        self.assertEqual(err, "")
+        self.assertEqual(data["source_commit"], "a" * 40)
+        self.assertEqual(data["model_run"], "same-model")
+        self.assertEqual(data["tier_routing"], changed)
+        self.assertEqual(data["cases"], {name: "passed" for name in CASES})
+        self.assertEqual([row["tier_routing"] for row in self.lines()],
+                         [original] * len(CASES) + [changed] * len(CASES))
+        resumed, err = self.run_round(verdict("failed"), model="same-model", tier_routing=changed)
+        self.assertEqual(self.ran, [])
+        self.assertEqual(resumed["cases"], {name: "passed" for name in CASES})
+        self.assertEqual(err.count("already passed"), len(CASES))
 
     def test_a_failed_case_keeps_its_verdict_and_is_not_rerun(self):
         self.run_round(verdict("failed"), names=[CASES[0]])

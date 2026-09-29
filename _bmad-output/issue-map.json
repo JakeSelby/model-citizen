@@ -6852,6 +6852,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C099",
+      "github_number": 912,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/912",
+      "title": "Add resume tests that change the model or the class routing at the same commit",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C099.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C097",
       "github_number": 913,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/913",

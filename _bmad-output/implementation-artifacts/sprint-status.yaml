@@ -547,6 +547,7 @@ development_status:
   ah-c095-allow-validated-planning-only-prs-without-an: ready-for-dev
   ah-c096-remove-the-changelog-lint-s-unreleased-exemption: ready-for-dev
   ah-c097-docs-usage-md-s-decision-point-table-leaves-out: ready-for-dev
+  ah-c099-add-resume-tests-that-change-the-model-or-the: ready-for-dev
   ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
