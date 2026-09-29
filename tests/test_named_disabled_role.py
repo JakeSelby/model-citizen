@@ -97,6 +97,56 @@ class NamedDisabledRoleTests(unittest.TestCase):
             if runtime == "claude-code":
                 self.assertIn("tier-agent-spawns", called)
 
+    def test_native_and_unknown_types_are_not_harness_roles(self):
+        for runtime in ("claude-code", "codex"):
+            for role in ("general-purpose", "explorer", "absent-role"):
+                with self.subTest(runtime=runtime, role=role):
+                    self.assertEqual(self.spawn(runtime, role=role, project={role: "off"}), {})
+
+    def test_a_custom_harness_role_is_still_enforced(self):
+        root = self.home / "custom"
+        (root / "roles").mkdir(parents=True)
+        (root / "roles" / "custom-worker.md").write_text("---\nname: custom-worker\n---\nWork.\n")
+        self.user({"custom-worker": "off"})
+        path = self.home / ".config" / "agent-harness" / "config.json"
+        config = json.loads(path.read_text())
+        config["primitive_roots"] = [str(root)]
+        path.write_text(json.dumps(config))
+        result = self.spawn("codex", role="custom-worker")
+        self.assertIn("switched off", result["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_a_disabled_constrained_role_reports_its_selection_first(self):
+        result = self.spawn("codex", role="gatherer", project={"gatherer": "off"})
+        self.assertIn("switched off by the project", result["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_delegation_off_precedes_a_disabled_named_role(self):
+        for runtime in ("claude-code", "codex"):
+            with patch.dict(os.environ, {"HARNESS_STANCE_DELEGATION": "off"}):
+                selection = {"stances": {"delegation": "off"}, "roles": {"builder": "off"},
+                             "role_names": {"builder"}}
+                with patch.object(lifecycle, "effective_selection", return_value=selection):
+                    result = self.spawn(runtime)
+                self.assertIn("Delegation is off", result["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_one_dispatch_keeps_its_selection_and_cleans_up_on_error(self):
+        before = (list(lifecycle._SELECTIONS), list(lifecycle._SWITCHES))
+        outer = {"stances": {"delegation": "off"}, "roles": {}, "role_names": {"builder"}}
+        def dispatch(runtime, payload):
+            self.assertIs(lifecycle.effective_selection(), outer)
+            with patch.object(lifecycle, "_dispatch", side_effect=ValueError("nested")):
+                with self.assertRaisesRegex(ValueError, "nested"):
+                    lifecycle.dispatch(runtime, payload)
+            self.assertIs(lifecycle.effective_selection(), outer)
+            raise ValueError("outer")
+        posture = type("Posture", (), {"_user_config": staticmethod(lambda *a: {}),
+                                      "selection": staticmethod(lambda **k: outer),
+                                      "role_catalog": staticmethod(lambda cfg: ({"builder"}, set()))})()
+        with patch.object(lifecycle, "load", return_value=posture), \
+                patch.object(lifecycle, "_dispatch", side_effect=dispatch):
+            with self.assertRaisesRegex(ValueError, "outer"):
+                lifecycle.dispatch("codex", {})
+        self.assertEqual((lifecycle._SELECTIONS, lifecycle._SWITCHES), before)
+
     def test_a_constrained_role_keeps_its_existing_refusal(self):
         for runtime in ("claude-code", "codex"):
             result = self.spawn(runtime, role="gatherer")

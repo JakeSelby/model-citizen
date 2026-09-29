@@ -107,7 +107,11 @@ def effective_selection():
     if _SELECTIONS:
         return _SELECTIONS[-1]
     try:
-        return load("posture").selection(strict=False)
+        posture = load("posture")
+        config = posture._user_config(os.environ, False)
+        resolved = posture.selection(strict=False, config=config)
+        resolved["role_names"] = posture.role_catalog(config)[0]
+        return resolved
     except Exception:
         return {}
 
@@ -129,7 +133,7 @@ def switched_off_role(name):
     if not isinstance(name, str) or not ROLE_NAME.fullmatch(name):
         return None
     selection = effective_selection()
-    if (selection.get("roles") or {}).get(name) != "off":
+    if name not in selection.get("role_names", ()) or (selection.get("roles") or {}).get(name) != "off":
         return None
     return ((selection.get("sources") or {}).get("roles") or {}).get(name) or "selection"
 
@@ -158,6 +162,8 @@ def invoke(name, event):
 
 def selected(name, fallback):
     """One dimension's variant, resolved by the same file the policy hooks load."""
+    if _SELECTIONS:
+        return (_SELECTIONS[-1].get("stances") or {}).get(name, fallback)
     return load("posture").selected(name, fallback)
 
 
