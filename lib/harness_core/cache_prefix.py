@@ -53,7 +53,7 @@ def _count(row, name):
         return None
     try:
         value = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return max(value, 0)
 

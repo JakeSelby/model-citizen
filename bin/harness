@@ -4491,7 +4491,7 @@ def folded_rules(row: Dict[str, Any], renamed: Dict[str, str]) -> Dict[str, int]
             continue
         try:
             count = int(n or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             count = 0
         key = renamed.get(did, did)
         out[key] = out.get(key, 0) + count
@@ -4575,9 +4575,14 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int, extra_ids: Itera
     Every grouping counts `folded_rules`, not the raw map, so a detector that was renamed is one
     line and one series in all three: by rule, by repo and by stance.
     """
-    measured = [r for r in rows if isinstance(r.get("rules"), dict) and not r.get("rules_errors")]
+    def malformed(row):
+        values = row.get("rules")
+        return isinstance(values, dict) and any(usage_count(value) is None for value in values.values())
+
+    measured = [r for r in rows if isinstance(r.get("rules"), dict)
+                and not r.get("rules_error") and not r.get("rules_errors") and not malformed(r)]
     legacy = sum(1 for r in rows if not isinstance(r.get("rules"), dict) and not r.get("rules_error"))
-    errored = sum(1 for r in rows if r.get("rules_error") or r.get("rules_errors"))
+    errored = sum(1 for r in rows if r.get("rules_error") or r.get("rules_errors") or malformed(r))
     metadata = {"legacy_sessions": legacy, "errored_sessions": errored,
                 "rescanned_excluded": 0, "coverage": list(coverage or []), "rescan": rescan}
     if (legacy or errored) and not json_output:
@@ -5195,6 +5200,9 @@ def cmd_usage(args: argparse.Namespace) -> int:
         # answers its question. Refused rather than accepted and ignored.
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
+        return 2
+    if stance and by != "stance":
+        print("usage --stance applies only to --by stance", file=sys.stderr)
         return 2
     if rules_mode and by == "day":
         by = "rule"

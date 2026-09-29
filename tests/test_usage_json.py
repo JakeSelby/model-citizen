@@ -182,6 +182,27 @@ class JsonReportTests(unittest.TestCase):
                     self.assertEqual(data["rescan"], "rescanned 2 row(s)")
                     self.assertEqual(data["groups"], [])
 
+    def test_nonfinite_prefix_and_rule_metrics_remain_explicitly_unknown(self):
+        infinite = json.loads("1e309")
+        prefix = self.document([session(cache_read=infinite)], by="prefix")
+        self.assertIsNone(prefix["groups"][0]["cache_read"])
+        self.assertIsNone(prefix["groups"][0]["ratio"])
+        self.assertEqual(prefix["totals"]["unknown"], 1)
+        with mock.patch.object(harness, "rule_coverage_lines", return_value=[]):
+            rules = self.document([session(rules={"rule/one": infinite})], rules=True)
+        self.assertEqual(rules["groups"], [])
+        self.assertEqual(rules["errored_sessions"], 1)
+        self.assertEqual(rules["measured_sessions"], 0)
+        self.assertEqual(harness.folded_rules({"rules": {"rule/one": infinite}}, {}), {"rule/one": 0})
+
+    def test_stance_selector_rejects_every_nonstance_grouping(self):
+        for by in ("day", "repo", "model", "role", "profile", "prefix", "provider"):
+            with self.subTest(by=by):
+                code, output, error = self.report([], by=by, stance="cost")
+                self.assertEqual(code, 2)
+                self.assertEqual(output, "")
+                self.assertIn("--stance", error)
+
     def test_empty_windows_are_valid_json(self):
         for values in ({}, {"by": "role"}, {"by": "provider"}, {"by": "prefix"},
                        {"rules": True}):
