@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from isolation import without_config_dir
@@ -438,6 +439,55 @@ class GradeTests(unittest.TestCase):
             with self.subTest(unbalanced=bool(suffix)):
                 self.assertLess(full, budget)
                 self.assertLess(full / quarter, 8)
+
+    def _record(self, name, commands):
+        """The length of every text `grader.<name>` received while grading and governing
+        `commands`; the real function still runs."""
+        lengths = []
+        original = getattr(grader, name)
+
+        def spy(text, *args, **kwargs):
+            lengths.append(len(text))
+            return original(text, *args, **kwargs)
+
+        with mock.patch.object(grader, name, side_effect=spy):
+            for command in commands:
+                grader.grade_text(command, CWD)
+                grader.governed_text(command, CWD)
+        return lengths
+
+    # Over the cap by its outer text alone: substitutions, a continuation and a push in a repo.
+    OVER_CAP = ("cd " + CWD + " && git push " + "$(a \\\n b)" * 2000 + " \\\n x",
+                "echo " + "$(a)" * 8000)
+
+    def test_the_continuation_lexer_never_reads_text_past_the_scan_cap(self):
+        # The lexer still runs on the short inner texts of a line under the cap, so the spy
+        # is live; it never receives a text longer than the cap.
+        under = "echo " + "$(a \\\n b)" * 100 + " \\\n x"
+        self.assertTrue(self._record("_join_continuations", [under]))
+        lengths = self._record("_join_continuations", self.OVER_CAP)
+        self.assertLessEqual(max(lengths, default=0), grader.SCAN_CAP)
+
+    def test_substitutions_are_never_extracted_from_text_past_the_scan_cap(self):
+        lengths = self._record("_extract_subs", self.OVER_CAP)
+        self.assertLessEqual(max(lengths, default=0), grader.SCAN_CAP)
+
+    def test_a_line_past_the_scan_cap_grades_too_long_at_an_unknown_directory(self):
+        for command in self.OVER_CAP:
+            with self.subTest(command=command[:30]):
+                self.assertEqual(grader.grade_text(command, CWD),
+                                 (3, "command too long to grade", "", "opaque"))
+                found = grader.governed_text(command, CWD)
+                self.assertEqual([(grade, where) for _, grade, where, _ in found], [(3, None)])
+        self.assertEqual(grader.governed_text(self.OVER_CAP[0], CWD)[0][0], grader.PUSH)
+
+    def test_a_long_here_document_body_is_not_counted_toward_the_scan_cap(self):
+        short = "cat > notes.md <<'EOF'\nline\nEOF\ngit push"
+        long = "cat > notes.md <<'EOF'\n" + "line $(a) \\\n" * 2000 + "EOF\ngit push"
+        self.assertGreater(len(long), grader.SCAN_CAP)
+        self.assertEqual(grader.grade_text(long, CWD), grader.grade_text(short, CWD))
+        self.assertEqual(grader.governed_text(long, CWD), grader.governed_text(short, CWD))
+        self.assertEqual({where for _, _, where, _ in grader.governed_text(long, CWD)}, {CWD})
 
     def test_an_unparseable_command_past_the_scan_cap_grades_three(self):
         command = "echo " + "x" * 20000 + ' "unbalanced'
