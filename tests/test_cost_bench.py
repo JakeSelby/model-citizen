@@ -222,7 +222,8 @@ def arm_record(arm, ref="v9.9.9"):
                                                 "version": "sha256:" + BENCH.arms.file_sha(
                                                     BENCH.arms.OBSERVER_SOURCE)}]
             + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else []),
-            "effort": "high"}
+            "effort": "high",
+            "observer_settings_sha256": BENCH.arms.digest(BENCH.arms.observer_settings())}
     manifest = arm_manifest(decl)
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,

@@ -38,6 +38,15 @@ QUALIFICATION_DOCKERFILE = ROOT / "scripts" / "linux-target.Dockerfile"
 ARM_DOCKERFILE = ROOT / "scripts" / "replay-arm.Dockerfile"
 MANIFEST_SCRIPT = ROOT / "scripts" / "arm_manifest.py"
 OBSERVER_SOURCE = ROOT / "lib" / "harness_core" / "observer.py"
+sys.path.insert(0, str(ROOT / "lib"))
+from harness_core import observation  # noqa: E402
+
+OBSERVER_COMMAND = "python3 /opt/model-citizen-observer/observe.py --runtime claude-code"
+
+def observer_settings():
+    return {"permissions": {"deny": ["WebFetch", "WebSearch"]},
+            "hooks": observation.hooks_for(OBSERVER_COMMAND, "claude-code")}
+
 PROXY_SCRIPT = ROOT / "scripts" / "egress_proxy.py"
 IMAGE_PREFIX = "model-citizen-arm-"
 ARMS = ("bare", "harness")
@@ -131,7 +140,8 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
             "claude_code_version": version,
             "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
             "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
-            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort}
+            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort,
+            "observer_settings_sha256": digest(observer_settings())}
 
 
 def build_inputs(decl):
@@ -407,6 +417,8 @@ def _matches_its_declaration(record):
     observer_entry = next((entry for entry in observer_entries
                            if entry.get("path") == "observer:observe.py"), None)
     observer_version = observers[0].get("version") if len(observers) == 1 else None
+    if decl.get("observer_settings_sha256") != digest(observer_settings()):
+        problems.append("observer hook settings differ from their declaration")
     if len(observers) != 1:
         problems.append("declaration must have exactly one model-citizen-observer component")
     elif not re.fullmatch(r"sha256:[0-9a-f]{64}", observer_version or ""):
@@ -746,6 +758,9 @@ def observation_mount(path):
     if raw.is_symlink() or not raw.is_absolute() or not raw.is_dir():
         return None, "observation output is not a real absolute directory"
     resolved = raw.resolve()
+    reason = host_path_reason([str(raw), str(resolved)])
+    if reason:
+        return None, reason
     marker = resolved / OBSERVATION_MARKER
     if not marker.is_file() or marker.read_text(encoding="utf-8") != "cost-bench\n":
         return None, "observation output was not prepared by cost-bench"

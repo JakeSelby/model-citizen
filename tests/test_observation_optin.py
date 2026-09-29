@@ -39,6 +39,16 @@ class ObservationSyncTests(TempHome):
             self.assertEqual(harness.cmd_sync(harness.argparse.Namespace(
                 dry_run=False, adopt=False, adopt_codex=False, print_only=False)), 0)
 
+    def test_invalid_observation_refuses_before_creating_any_state(self):
+        config = harness.config_path()
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps({"observation": {"enabled": "false"}}))
+        state = harness.state_dir()
+        self.assertFalse(state.exists())
+        with self.assertRaises(SystemExit):
+            self.sync()
+        self.assertFalse(state.exists())
+
     def test_sync_on_off_is_idempotent_and_preserves_user_hooks(self):
         files = (harness.claude_dir() / "settings.json", harness.codex_dir() / "hooks.json")
         user_entry = {"hooks": [{"type": "command", "command": "echo user"}]}
@@ -51,10 +61,12 @@ class ObservationSyncTests(TempHome):
         first = [path.read_text() for path in files]
         self.sync()
         self.assertEqual(first, [path.read_text() for path in files])
-        for path in files:
-            entries = json.loads(path.read_text())["hooks"]["Stop"]
-            self.assertIn(user_entry, entries)
-            self.assertEqual(sum("observe.py" in e["hooks"][0]["command"] for e in entries), 1)
+        for path, runtime in zip(files, ("claude-code", "codex")):
+            hooks = json.loads(path.read_text())["hooks"]
+            self.assertIn(user_entry, hooks["Stop"])
+            for event in observation.events(runtime):
+                entries = hooks[event]
+                self.assertEqual(sum("observe.py" in e["hooks"][0]["command"] for e in entries), 1)
         with redirect_stdout(io.StringIO()):
             harness.config_set("observation.enabled", "false")
         self.sync()

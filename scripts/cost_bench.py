@@ -82,9 +82,8 @@ MODEL_USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "
 # refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
 # the harness arm's settings carry.
 NO_WEB = ("WebFetch", "WebSearch")
-OBSERVER_COMMAND = "python3 /opt/model-citizen-observer/observe.py --runtime claude-code"
-ARM_SETTINGS = {"permissions": {"deny": list(NO_WEB)},
-                "hooks": observation.hooks_for(OBSERVER_COMMAND, "claude-code")}
+OBSERVER_COMMAND = arms.OBSERVER_COMMAND
+ARM_SETTINGS = arms.observer_settings()
 # The container is the fence: no host path but the snapshot, no way out but the model API. Inside
 # it the agent acts without prompts, as a headless run cannot answer one.
 PERMISSION_MODE = "bypassPermissions"
@@ -329,7 +328,6 @@ def prepare_observation_dir(out):
         raise SystemExit("cost-bench: refusing existing observation output %s" % target)
     target.mkdir(parents=True, mode=0o700)
     (target / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
-    os.chmod(str(target), 0o777)  # the pinned image user may have another uid than the runner
     return target
 
 
@@ -339,45 +337,72 @@ def observation_run(opts, name, profile):
     if not root:
         return None
     stem = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
-    ledger, errors = Path(root) / (stem + ".jsonl"), Path(root) / (stem + ".errors.jsonl")
-    if ledger.exists() or errors.exists():
+    archive = Path(root)
+    if any((archive / (stem + suffix)).exists() for suffix in (".jsonl", ".errors.jsonl")):
         raise SystemExit("cost-bench: refusing existing observation files for %s" % stem)
+    try:
+        (archive / (stem + ".reserved")).touch(exist_ok=False)
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing repeated observation session %s" % stem)
+    # Only this session's empty output directory enters the container. The retained result
+    # directory may be in the host checkout, but no arm can read or alter it or another run.
+    stage = Path(tempfile.mkdtemp(prefix="cost-observation-", dir=opts.get("tmp")))
+    (stage / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
+    os.chmod(str(stage), 0o777)
+    ledger, errors = stage / (stem + ".jsonl"), stage / (stem + ".errors.jsonl")
     for path in (ledger, errors):
         path.touch(mode=0o666, exist_ok=False)
         os.chmod(str(path), 0o666)
-    return {"ledger": ledger, "errors": errors, "relative": "observations/" + ledger.name,
+    return {"ledger": ledger, "errors": errors, "archive": archive, "mount": stage,
+            "relative": "observations/" + ledger.name,
             "container_ledger": arms.OBSERVATION_MOUNT + "/" + ledger.name,
             "container_errors": arms.OBSERVATION_MOUNT + "/" + errors.name,
             "profile": profile}
 
 
 def observation_result(run):
-    """Counts and an error for one collector output; rows are never synthesised."""
+    """Validate and retain each native stream independently, including collector failures."""
     if not run:
         return {"observation_ledger": None, "observation_rows": None,
                 "observation_errors": None}, None
-
-    def count(path):
-        if not path.exists():
-            return 0
-        lines = path.read_text(encoding="utf-8").splitlines()
-        for line in lines:
-            if not isinstance(json.loads(line), dict):
-                raise ValueError("non-object row")
-        return len(lines)
-
-    try:
-        rows, errors = count(run["ledger"]), count(run["errors"])
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return {"observation_ledger": run["relative"], "observation_rows": None,
-                "observation_errors": None}, "observation: unreadable collector output (%s)" % type(exc).__name__
-    problem = None
-    if errors:
-        problem = "observation: %d collector error(s)" % errors
-    elif not rows:
-        problem = "observation: no native events recorded"
-    return {"observation_ledger": run["relative"], "observation_rows": rows,
-            "observation_errors": errors}, problem
+    counts, problems = {}, []
+    for key in ("ledger", "errors"):
+        path = run[key]
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("collector output is not a regular file")
+            raw = path.read_bytes()
+            # Retain malformed output as evidence too; validation never rewrites its contents.
+            with (run["archive"] / path.name).open("xb") as archive:
+                archive.write(raw)
+            lines = raw.decode("utf-8").splitlines()
+            for line in lines:
+                row = json.loads(line)
+                valid = isinstance(row, dict) and row.get("runtime") == "claude-code" \
+                    and isinstance(row.get("ts"), str) and bool(row["ts"])
+                if key == "ledger":
+                    valid = valid and row.get("schema_version") == observer.SCHEMA_VERSION \
+                        and type(row.get("schema_version")) is int \
+                        and row.get("event") in observation.events("claude-code") \
+                        and "session_id" in row \
+                        and (row["session_id"] is None or isinstance(row["session_id"], str)) \
+                        and "profile_fingerprint" in row \
+                        and row["profile_fingerprint"] == run["profile"]
+                else:
+                    valid = valid and isinstance(row.get("error"), str) and bool(row["error"]) \
+                        and isinstance(row.get("detail"), str)
+                if not valid:
+                    raise ValueError("invalid observer row")
+            counts[key] = len(lines)
+        except (OSError, ValueError, UnicodeError) as exc:
+            counts[key] = None
+            problems.append("observation: unreadable %s output (%s)" % (key, type(exc).__name__))
+    if counts["errors"]:
+        problems.append("observation: %d collector error(s)" % counts["errors"])
+    if counts["ledger"] == 0:
+        problems.append("observation: no native events recorded")
+    return {"observation_ledger": run["relative"], "observation_rows": counts["ledger"],
+            "observation_errors": counts["errors"]}, "; ".join(problems) or None
 
 
 def arm_profile(arm, env, opts):
@@ -501,9 +526,11 @@ def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, observa
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written."""
+    if arms.digest(ARM_SETTINGS) != record["declaration"].get("observer_settings_sha256"):
+        raise SystemExit("cost-bench: native observer settings differ from the declared inputs")
     env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
-                               observation_dir=opts.get("observation_dir") if observation_run else None)
+                               observation_dir=observation_run["mount"] if observation_run else None)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,

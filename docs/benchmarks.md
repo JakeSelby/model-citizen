@@ -102,7 +102,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   publishes no history row or claim.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
-  Dockerfile and the lister. The manifest is every file, link and directory under the image user's
+  Dockerfile, the lister and the exact observer hook settings. The manifest is every file, link and directory under the image user's
   home, Claude Code's managed settings, the observer install and the harness checkout, each file by mode, size and
   sha256 and each link by its target, with a summary of settings, hooks, rules, skills, agents and
   plugins, and every global npm package by name and version, where agent clients live. It is listed by `scripts/arm_manifest.py` in a fresh container with no network and no
@@ -148,9 +148,9 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   manifest digest, ref and commit.
 - **A run is `docker run --rm` with two scoped mounts.** The task's snapshot is mounted at `/work`, which
   has no instruction file above it. A fresh run-owned `observations/` directory is mounted at
-  `/observations`; it is the only other host path. The runner creates it beneath that tag's output
-  directory, refuses an existing or unprepared destination, and pre-creates one ledger and error
-  file per native session. Every snapshot is
+  `/observations`; it is the only other host path. Each native session gets a different empty
+  directory outside protected host paths, with one ledger and error file. The host then retains
+  those streams under the tag's output directory, which is never mounted into an arm. Every snapshot is
   made writable for any user, since the image's user id may differ from yours, and the images
   trust `/work` for git. Before anything is measured, each arm's container must write a mounted
   snapshot and have git read it, or the replay is refused with the reason. Every run, check and

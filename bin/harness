@@ -1357,6 +1357,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         say(UNSUPPORTED)
         return 1
     try:
+        load_config(user_defaults_env())  # Reject invalid configuration before creating the lock.
         # A dry run reports the same refusal as the real one; it differs in what it writes.
         if args.dry_run:
             return _cmd_sync_unlocked(args)

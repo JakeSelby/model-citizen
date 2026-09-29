@@ -16,8 +16,9 @@ For ordinary sessions, rows go to the local `observation.jsonl` ledger beside th
 usage ledgers. Recorder failures go to `observation.errors.jsonl` and do not block the session.
 
 Live cost replays are separate. Both benchmark arms contain the same observer bytes and native
-hook registration. The runner mounts only that tag's new `observations/` output directory and
-routes each preflight and scored session to its own JSONL file there. It records the real row and
+hook registration. The runner mounts a fresh output directory for each preflight and scored session, outside
+protected host paths. After the session, it retains both streams under the tag's `observations/`
+directory; no arm can read or change another session's files. It records the real row and
 error counts on the result; missing or errored collection invalidates that attempt. These files
 never use or append to the ordinary local ledger.
 

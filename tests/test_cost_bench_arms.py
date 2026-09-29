@@ -301,7 +301,8 @@ class AdmissionSeamTests(unittest.TestCase):
                                       {"name": "@anthropic-ai/claude-code", "version": "1.0"},
                                       {"name": "model-citizen-observer",
                                        "version": "sha256:" + ARMS.file_sha(ARMS.OBSERVER_SOURCE)}],
-                       "effort": "high"}
+                       "effort": "high",
+                       "observer_settings_sha256": ARMS.digest(ARMS.observer_settings())}
         observer_sha = ARMS.file_sha(ARMS.OBSERVER_SOURCE)
         manifest = {"schema": LISTER.SCHEMA, "claude_code_version": "1.0",
                     "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"], "harness_commit": None,

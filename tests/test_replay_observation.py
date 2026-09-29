@@ -32,8 +32,10 @@ class NativeLaunch:
                          if index and command[index - 1] == "-v" and value.endswith(":" + BENCH.arms.OBSERVATION_MOUNT))
             host = Path(mount.rsplit(":", 1)[0])
             target = values[observer.ERRORS_ENV] if self.collector_error else values[observer.LEDGER_ENV]
-            payload = {"error": "OSError"} if self.collector_error else {
-                "schema_version": 1, "runtime": "claude-code", "event": "SessionStart"}
+            payload = {"error": "OSError", "detail": "disk unavailable"} if self.collector_error else {
+                "schema_version": 1, "event": "SessionStart", "session_id": "session",
+                "profile_fingerprint": values.get(observer.PROFILE_ENV)}
+            payload.update(ts="2026-09-29T00:00:00Z", runtime="claude-code")
             (host / Path(target).name).write_text(json.dumps(payload) + "\n", encoding="utf-8")
         return types.SimpleNamespace(stdout=self.output, stderr="", returncode=0)
 
@@ -68,6 +70,45 @@ class DestinationTests(unittest.TestCase):
             self.assertIn(str(owned) + ":" + BENCH.arms.OBSERVATION_MOUNT, command)
             with self.assertRaisesRegex(SystemExit, "existing observation output"):
                 BENCH.prepare_observation_dir(root / "run")
+
+    def test_marked_host_profile_output_is_never_mounted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            owned = BENCH.prepare_observation_dir(root / "profile" / "run")
+            with mock.patch.object(BENCH.arms, "host_paths", return_value=[str((root / "profile").resolve())]):
+                with self.assertRaisesRegex(SystemExit, "host path"):
+                    BENCH.arms.run_command("image", root / "task", ["true"], "none", observation_dir=owned)
+
+    def test_each_native_session_mounts_only_its_own_fresh_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            opts = {"observation_dir": root, "tmp": tmp}
+            first = BENCH.observation_run(opts, "task-bare-1", "bare")
+            second = BENCH.observation_run(opts, "task-harness-1", "fingerprint")
+            self.assertNotEqual(first["mount"], second["mount"])
+            self.assertNotEqual(first["mount"], root)
+            self.assertFalse((second["mount"] / first["ledger"].name).exists())
+            self.assertEqual(first["ledger"].parent, first["mount"])
+            with self.assertRaisesRegex(SystemExit, "repeated observation session"):
+                BENCH.observation_run(opts, "task-bare-1", "bare")
+
+    def test_native_settings_are_part_of_each_arm_declaration(self):
+        inputs = {"base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.2.3"}
+        before = BENCH.arms.declaration("bare", inputs)
+        with mock.patch.object(BENCH.arms, "observer_settings", return_value={"hooks": {}}):
+            after = BENCH.arms.declaration("bare", inputs)
+        self.assertNotEqual(BENCH.arms.digest(before), BENCH.arms.digest(after))
+        record = copy.deepcopy(arm_record("bare"))
+        record["declaration"]["observer_settings_sha256"] = "0" * 64
+        record["declaration_sha256"] = BENCH.arms.digest(record["declaration"])
+        with self.assertRaisesRegex(SystemExit, "observer hook settings"):
+            BENCH.arms.admit(dict(record, protocol={"evidence": "exploratory"}))
+
+    def test_launch_refuses_settings_that_changed_after_declaration(self):
+        record = arm_record("bare")
+        with mock.patch.object(BENCH, "ARM_SETTINGS", {"hooks": {}}):
+            with self.assertRaisesRegex(SystemExit, "settings differ"):
+                BENCH.launch_arm(record, None, ["true"], {}, "test")
 
     def test_both_images_declare_and_install_the_same_exact_observer(self):
         inputs = {"base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.2.3"}
@@ -122,6 +163,32 @@ class ReplayCollectionTests(unittest.TestCase):
             values = env_values(command)
             self.assertTrue(values[observer.LEDGER_ENV].startswith(BENCH.arms.OBSERVATION_MOUNT + "/"))
             self.assertNotIn(str(Path.home()), " ".join(command))
+
+    def test_malformed_main_stream_does_not_erase_valid_collector_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            run = BENCH.observation_run({"observation_dir": root, "tmp": tmp}, "one", "bare")
+            run["ledger"].write_text("{}\n")
+            run["errors"].write_text(json.dumps({"ts": "2026-09-29T00:00:00Z",
+                "runtime": "claude-code", "error": "OSError", "detail": "failed"}) + "\n")
+            fields, error = BENCH.observation_result(run)
+            self.assertIsNone(fields["observation_rows"])
+            self.assertEqual(fields["observation_errors"], 1)
+            self.assertIn("collector error", error)
+            self.assertEqual((root / "one.jsonl").read_text(), "{}\n")
+
+    def test_collector_symlinks_are_not_followed_by_the_host(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = BENCH.prepare_observation_dir(Path(tmp) / "run")
+            run = BENCH.observation_run({"observation_dir": root, "tmp": tmp}, "one", "bare")
+            private = Path(tmp) / "private"
+            private.write_text("private contents")
+            run["ledger"].unlink()
+            run["ledger"].symlink_to(private)
+            fields, error = BENCH.observation_result(run)
+            self.assertIsNone(fields["observation_rows"])
+            self.assertIn("unreadable ledger", error)
+            self.assertFalse((root / "one.jsonl").exists())
 
     def test_missing_or_errored_collection_makes_the_attempt_an_error_without_losing_cost(self):
         with tempfile.TemporaryDirectory() as tmp:
