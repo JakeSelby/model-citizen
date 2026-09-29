@@ -37,6 +37,7 @@ from harness_core import catalog  # noqa: E402  the resolver the hooks load, for
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
+import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -64,7 +65,10 @@ SNAPSHOT_BRANCH = "main"
 # Each command runs in a container of the bare arm, where `python3` is the image's own.
 GATE_COMMANDS = (["python3", "bin/harness", "lint"], ["python3", "-m", "unittest", "discover", "-s", "tests"])
 RUN_CAP_USD = 2.0
-SPEND_CAP_USD = 25.0
+PREFLIGHT_CAP_USD = 0.25
+DEFAULT_REPS = 5  # SM-2: five or more trials per task and arm
+# One full default set, 7 tasks x 5 trials x 2 arms at the per-run cap, plus one preflight per arm.
+SPEND_CAP_USD = 7 * DEFAULT_REPS * 2 * RUN_CAP_USD + 2 * PREFLIGHT_CAP_USD
 THRESHOLD = 0.85
 RUN_TIMEOUT = 1800
 CHECK_TIMEOUT = 900
@@ -87,7 +91,6 @@ PERMISSION_MODE = "bypassPermissions"
 # profile-dependent at every snapshot commit (`claude_dir()` lets CLAUDE_CONFIG_DIR override the
 # tests' isolation), so demanding it here measures the profile, not the harness.
 PREFLIGHT_PROMPT = "Run exactly this and reply with its output: `python3 bin/harness lint`"
-PREFLIGHT_CAP_USD = 0.25
 PREFLIGHT_TURNS = 3
 PREFLIGHT_RED = re.compile(r"PermissionError|Operation not permitted", re.M)
 INHERITED = "inherited"
@@ -271,6 +274,8 @@ def load_tasks(path):
                    if k not in task]
         if missing or task["kind"] not in ("issue", "synthetic"):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
+        if not isinstance(task.get("long", False), bool):
+            raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
     return tasks
 
 
@@ -770,10 +775,18 @@ def _scorer(opts, launch):
 
 def run_one(task, rep, arm, opts, launch=subprocess.run):
     """One row. An errored run is `error: true` with `passed: null`, so it stays countable apart;
-    `summarise` counts it as a failed attempt with its cost (intention to treat)."""
+    its `outcome` is `fail`, and `summarise` and `replay_stats` count it as a failed attempt with
+    its cost (intention to treat). Every row names its task, arm, trial (`rep`), outcome, cost and
+    the task's long mark, so each figure re-derives from the rows alone."""
+    row = _attempt(task, rep, arm, opts, launch)
+    return dict(row, outcome="pass" if row["passed"] and not row["error"] else "fail")
+
+
+def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
-    row = dict(opts["stamp"], task=task["id"], arm=arm, tag=opts["tag"], rep=rep, passed=None, error=False,
+    row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
+               rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, tool_counts={}, spawns=None, stop_hooks=None, hook_blocks=None,
                cache_miss_ratio=None,
@@ -909,6 +922,17 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
+    if out is None:
+        return _replay(tasks, opts, launch, None)
+    try:
+        sink = open(str(out), "x", encoding="utf-8")
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing to append to existing saved results: %s" % out)
+    with sink:
+        return _replay(tasks, opts, launch, sink)
+
+
+def _replay(tasks, opts, launch, sink):
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     probe_workdirs(tasks, opts, launch)
@@ -929,9 +953,9 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
         row = run_one(task, rep, arm, opts, launch)
         spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
         rows.append(row)
-        if out:
-            with open(str(out), "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        if sink is not None:
+            sink.write(json.dumps(row, sort_keys=True) + "\n")
+            sink.flush()
     return rows, False
 
 
@@ -1025,7 +1049,16 @@ def history_row(rows, series):
             "change_note": first.get("change_note", ""), "per_task": per_task(rows),
             "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
             "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
-            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows)}
+            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+
+
+def sm2(rows, seed=replay_stats.SEED, resamples=replay_stats.RESAMPLES):
+    """SM-2's result for the rows (`replay_stats.analyse`), or `{"unavailable": reason}` for a set
+    it cannot derive from, such as rows that saved no pass or fail."""
+    try:
+        return replay_stats.analyse(rows, seed, resamples)
+    except ValueError as exc:
+        return {"unavailable": str(exc)}
 
 
 def arm_records(rows):
@@ -1084,12 +1117,48 @@ def render_history(rows):
             r["bare"]["errors"] + r["harness"]["errors"], r["status"]))
         if r.get("change_note"):
             lines.append("    note: %s" % r["change_note"])
+        result = r.get("sm2") or {}
+        if result.get("unavailable"):
+            lines.append("    SM-2: unavailable, %s" % result["unavailable"])
+        elif result:
+            lines.append("    SM-2: %s, ratio %s %s, difference %s %s%s" % (
+                result["verdict"], usd(result["ratio"]), _span(result["ratio_interval"]),
+                usd(result["difference"]), _span(result["difference_interval"]),
+                ", claim: %s" % result["claim"] if result["claim"] else ""))
         for task, cell in sorted((r.get("per_task") or {}).items()):
             lines.append("    %s: bare %s, harness %s, ratio %s, spread bare %s / harness %s, n %d"
                          % (task or "n/a", usd(cell.get("bare")), usd(cell.get("harness")),
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
     return "\n".join(lines) + "\n"
+
+
+def _span(interval):
+    return "[undefined]" if not interval else "[%s]" % ", ".join(
+        "undefined" if v is None else "%.3f" % v for v in interval)
+
+
+def cmd_summarise(args):
+    """SM-2's report from a saved `results.jsonl` alone; calls no model."""
+    path = Path(args.results).expanduser()
+    path = path / RESULTS if path.is_dir() else path
+    if not path.is_file():
+        raise SystemExit("cost-bench: %s does not exist" % path)
+    try:
+        result = replay_stats.analyse(read_jsonl(path), args.seed, args.resamples)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
+    if args.plot:
+        plot = Path(args.plot).expanduser()
+        same_file = plot.resolve() == path.resolve()
+        if plot.exists():
+            same_file = same_file or plot.samefile(path)
+        if same_file:
+            raise SystemExit("cost-bench: plot output must differ from the saved rows")
+        plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
+                     else replay_stats.render(result))
+    return 0
 
 
 def raw_path(raw_dir, row):
@@ -1348,7 +1417,7 @@ def main(argv=None):
                      "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
                      "writes its own history row. Required")
     run.add_argument("--model", help="the one model id every arm runs")
-    run.add_argument("--reps", type=int, default=2)
+    run.add_argument("--reps", type=int, default=DEFAULT_REPS, help="trials per task and arm")
     run.add_argument("--run-cap", type=float, default=RUN_CAP_USD, help="--max-budget-usd per run; soft")
     run.add_argument("--spend-cap", type=float, default=SPEND_CAP_USD, help="stop before passing "
                      "this; it applies to each tag's schedule on its own")
@@ -1390,6 +1459,13 @@ def main(argv=None):
     build.add_argument("--out", help="where declarations and manifests go; default a new temporary directory")
     build.add_argument("--tmp", help="parent for the build contexts")
     build.add_argument("--dry-run", action="store_true", help="print the commands and build nothing")
+    summ = sub.add_parser("summarise", help="SM-2's verdict, intervals and Pareto view from saved rows; "
+                          "calls no model")
+    summ.add_argument("--results", required=True, help="a %s, or the directory holding one" % RESULTS)
+    summ.add_argument("--seed", type=int, default=replay_stats.SEED, help="the bootstrap's seed")
+    summ.add_argument("--resamples", type=int, default=replay_stats.RESAMPLES, help="bootstrap resamples")
+    summ.add_argument("--json", action="store_true", help="print the result as JSON")
+    summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")
@@ -1402,6 +1478,8 @@ def main(argv=None):
         return cmd_replay(args)
     if args.command == "backfill":
         return cmd_backfill(args)
+    if args.command == "summarise":
+        return cmd_summarise(args)
     if args.command == "arms":
         return cmd_arms(args)
     if args.check:
