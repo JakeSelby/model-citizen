@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
+import replay_pair  # noqa: E402  the one-policy pair: manifest, parity, re-spawns and decision roll-up
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -109,11 +110,14 @@ SURFACE_SOURCE_FIELD = "init_surface_source"
 # Diagnostic fields `parse_result` reads out of the stream; `backfill` derives the same ones.
 STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", "spawns", "stop_hooks",
                  "hook_blocks", "cache_miss_ratio", "installed_checkout_reads",
+                 "session_ids", "respawns_up", "spawns_unranked",
                  "observed_effort", SURFACE_SOURCE_FIELD) \
                 + SURFACE_FIELDS + SURFACE_HASH_FIELDS
 INSTALLED_CHECKOUT = "/opt/model-citizen"
 CONTAMINATION_CONTROL = "installed-checkout-oracle-and-transcript-v1"
 RESULTS = "results.jsonl"
+# The model classes a re-spawn is ranked on, read once from this checkout's bindings.
+TIERS = replay_pair.load_tiers(ROOT)
 ENRICHED = "results.enriched.jsonl"
 
 
@@ -304,11 +308,37 @@ def scrubbed_env(extra=None, base=None):
     return env
 
 
-def arm_env(arm, stance_cost=None, proxy=None):
+def arm_env(arm, stance_cost=None, proxy=None, selection=None):
     """The variables one arm's container is given by value (`replay_arms.arm_env`): the same for
-    both arms, bar the harness arm's stance override. The container's HOME is the image's own,
-    and the credential goes by name alone, so neither is here."""
-    return arms.arm_env(proxy, stance_cost if arm != "bare" else None)
+    both arms, bar the harness arm's stance override and a pair arm's selection. The container's
+    HOME is the image's own, and the credential goes by name alone, so neither is here."""
+    harness = arm != "bare"
+    return arms.arm_env(proxy, stance_cost if harness else None, selection if harness else None)
+
+
+def arm_names(opts):
+    """The arms one replay runs, in schedule order: `ARMS`, or a pair's three."""
+    return tuple(opts.get("arm_names") or ARMS)
+
+
+def selection_of(opts, arm):
+    """The session-scoped selection an arm is launched with, by value; empty outside a pair."""
+    return dict((opts.get("selections") or {}).get(arm) or {})
+
+
+def arm_spec(arm, opts):
+    """Everything that decides how a harness arm launches, with the prompt as a placeholder: what
+    `replay_pair.parity` compares between a pair's reference and treatment before any spend."""
+    record = opts["arms"][arm]
+    return {"image_id": record.get("image_id"), "declaration_sha256": record.get("declaration_sha256"),
+            "manifest_sha256": record.get("manifest_sha256"), "harness_commit": record.get("harness_commit"),
+            "model": opts.get("model"), "run_cap": opts.get("run_cap"),
+            "argv": arm_command("claude", opts.get("model") or "", "<prompt>", opts.get("run_cap") or RUN_CAP_USD,
+                                None, (record.get("declaration") or {}).get("effort") or arms.DEFAULT_EFFORT),
+            "env": arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm)),
+            "network": opts.get("network"), "proxy": opts.get("proxy"), "credential": arms.CREDENTIAL,
+            "protocol": opts.get("stamp"), "tasks_sha256": opts.get("tasks_sha256"),
+            "prices_sha256": opts.get("prices_sha256")}
 
 
 def arm_profile(arm, env, opts):
@@ -428,11 +458,12 @@ def mounted_snapshot(repo, sha, dest):
     return arms.open_for_image(snapshot(repo, sha, dest))
 
 
-def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run):
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
-    running or spending after the row is written."""
-    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"))
+    running or spending after the row is written. `arm` names a pair arm, whose selection is
+    passed by value."""
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name)
     client = opts.get("client_env") or arms.client_env()
     try:
@@ -442,6 +473,61 @@ def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run):
         launch(arms.kill_command(name), env=client, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                universal_newlines=True)
         raise
+
+
+def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None):
+    """(completed run or None, timeout or None, ledger status): a pair harness arm's run.
+
+    The container is kept after it exits so its usage ledger can be copied out to `dest`
+    (`copy_ledger`), then removed by name whatever happened. On a timeout it is stopped first, so
+    nothing keeps running or spending. The one mount stays the snapshot, and nothing of the host
+    is writable from inside."""
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
+    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name, keep=True)
+    client = opts.get("client_env") or arms.client_env()
+    quiet = {"env": client, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "universal_newlines": True}
+    done = timeout = None
+    try:
+        try:
+            done = launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, universal_newlines=True)
+        except subprocess.TimeoutExpired as exc:
+            timeout = exc
+            launch(arms.stop_command(name), **quiet)
+        status = copy_ledger(record, name, dest, launch, quiet)
+    finally:
+        launch(arms.kill_command(name), **quiet)
+    return done, timeout, status
+
+
+def copy_ledger(record, name, dest, launch, quiet):
+    """`read` when the stopped container's usage ledger was copied to `dest`, else `unknown: <why>`.
+    The harness's usage-log hook writes session rows, so a missing file means something failed,
+    not that no call was made."""
+    path = replay_pair.ledger_path(record)
+    if path is None:
+        return "%s: the arm's manifest names no home root" % replay_pair.LEDGER_UNKNOWN
+    try:
+        done = launch(arms.copy_command(name, path, dest), timeout=CHECK_TIMEOUT, **quiet)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return "%s: docker cp failed: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
+    if done.returncode:
+        detail = ((done.stderr or "") + (done.stdout or "")).strip().splitlines()
+        return "%s: docker cp exit %d%s" % (replay_pair.LEDGER_UNKNOWN, done.returncode,
+                                           ": " + detail[-1] if detail else "")
+    if not Path(dest).is_file():
+        return "%s: the ledger was not copied" % replay_pair.LEDGER_UNKNOWN
+    return replay_pair.LEDGER_READ
+
+
+def keep_decisions(source, dest):
+    """Copy only the `kind: "decision"` rows of a copied ledger to `dest`, one JSON line each.
+    Those rows carry no prompt, path or prose (`decisions/ledger.py`); session rows are dropped."""
+    from harness_core.decisions import ledger  # the ledger's own reader, folds included
+    Path(dest).parent.mkdir(parents=True, exist_ok=True)
+    rows = ledger.rows(source)
+    Path(dest).write_text("".join(json.dumps(r, sort_keys=True) + "\n" for r in rows), encoding="utf-8")
+    return len(rows)
 
 
 def _git(repo, *args):
@@ -682,9 +768,12 @@ def _stream_diagnostics(messages, streamed):
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
+    spawned, sessions = replay_pair.stream_spawns(messages, SPAWN_TOOLS)
+    respawns_up, unranked = replay_pair.respawn_counts(spawned, TIERS) if streamed else (None, None)
     return {"first_turns": first_turns, "first_call_cache_write": first_write,
             "first_call_context": first_context, "tool_counts": tools,
             "spawns": sum(tools.get(name, 0) for name in SPAWN_TOOLS), "stop_hooks": stops,
+            "session_ids": sessions, "respawns_up": respawns_up, "spawns_unranked": unranked,
             "hook_blocks": blocks, "cache_miss_ratio": run_miss_ratio(cache),
             "installed_checkout_reads": installed_checkout_reads(messages),
             "observed_effort": effort, **surface}
@@ -709,6 +798,11 @@ def parse_result(stdout):
     `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
     total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
     by name, and `spawns` is the subagent share of it.
+
+    `session_ids` are the stream's distinct session ids, which a decision row joins on.
+    `respawns_up` counts spawns of a brief already spawned on a weaker model class, and
+    `spawns_unranked` the spawns whose thread model matches no class (`replay_pair.respawn_counts`);
+    both are None for output in the older single-document form, never zero.
 
     `stop_hooks` and `hook_blocks` are how often the Stop hook ran and how often it refused the
     stop. Hook lifecycle events carry them, and the CLI emits those only under
@@ -909,14 +1003,15 @@ def contamination_errors(tasks, repo, harness_commit, tmp=None):
         shutil.rmtree(str(parent), ignore_errors=True)
 
 
-def schedule(tasks, reps):
-    """Arms interleaved inside each task and rep, the leading arm alternating so neither always
-    runs on the other's warm cache."""
+def schedule(tasks, reps, arms=ARMS):
+    """Arms interleaved inside each task and rep, the leading arm rotating so none always runs on
+    another's warm cache: rep r starts at `arms[(r - 1) % len(arms)]`. For two arms that is
+    plain alternation."""
     out = []
     for task in tasks:
         for rep in range(1, reps + 1):
-            order = ARMS if rep % 2 else ARMS[::-1]
-            out += [(task, rep, arm) for arm in order]
+            lead = (rep - 1) % len(arms)
+            out += [(task, rep, arm) for arm in tuple(arms[lead:]) + tuple(arms[:lead])]
     return out
 
 
@@ -963,7 +1058,7 @@ def _partial_diagnostics(row, stdout):
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
-    env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
+    env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
@@ -977,15 +1072,34 @@ def _attempt(task, rep, arm, opts, launch):
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
+    row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    pair = opts.get("pair")
+    kept = pair is not None and arm != "bare"
+    if pair is not None:
+        row.update(replay_pair.row_stamp(pair, arm),
+                   decision_ledger=replay_pair.LEDGER_ABSENT if not kept else None)
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
     started = time.time()
     try:
         mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
-        try:
-            done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
-                                                           opts["run_cap"], task["max_turns"], effort),
-                              opts, container_name(task["id"], arm, rep), launch)
-        except subprocess.TimeoutExpired as exc:
+        argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
+        name = container_name(task["id"], arm, rep)
+        timeout = None
+        if kept:
+            copied = workdir.parent / "usage.jsonl"
+            done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied, launch, arm)
+            if row["decision_ledger"] == replay_pair.LEDGER_READ:
+                try:
+                    keep_decisions(copied, replay_pair.decisions_file(opts["decisions"], task["id"], arm, rep))
+                except (OSError, ValueError) as exc:
+                    row["decision_ledger"] = "%s: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
+        else:
+            try:
+                done = launch_arm(record, workdir, argv, opts, name, launch, arm)
+            except subprocess.TimeoutExpired as exc:
+                timeout = exc
+        if timeout is not None:
+            exc = timeout
             partial = getattr(exc, "stdout", None)
             partial = partial if partial is not None else getattr(exc, "output", None)
             _partial_diagnostics(row, partial)
@@ -1066,7 +1180,7 @@ def preflight(tasks, opts, launch=subprocess.run):
     spends its turns on that instead of on the task, and the comparison measures the runner rather
     than the harness. The verdict is read from the gate's own output (`gate_passed`)."""
     checks, spent = [], 0.0
-    for arm in ARMS:
+    for arm in arm_names(opts):
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
@@ -1074,7 +1188,7 @@ def preflight(tasks, opts, launch=subprocess.run):
                                   PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
-                                  container_name("preflight", arm), launch)
+                                  container_name("preflight", arm), launch, arm)
             except subprocess.TimeoutExpired:
                 spent += PREFLIGHT_CAP_USD
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None,
@@ -1108,7 +1222,7 @@ def probe_workdirs(tasks, opts, launch=subprocess.run):
     parent = Path(tempfile.mkdtemp(prefix="cost-probe-", dir=opts.get("tmp")))
     try:
         workdir = mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], parent / "repo")
-        for arm in ARMS:
+        for arm in arm_names(opts):
             arms.probe_workdir(opts["arms"][arm], workdir, launch, container_name("probe", arm))
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
@@ -1143,13 +1257,30 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
         return _replay(tasks, opts, launch, sink)
 
 
+def admit_pair_arms(opts):
+    """A pair's two refusals before any spend: `replay_pair.parity` over the two harness arms'
+    launch specs, then `replay_pair.effective_difference` over their resolved profiles."""
+    pair = opts["pair"]
+    replay_pair.admit(arm_spec(replay_pair.REFERENCE, opts), arm_spec(replay_pair.TREATMENT, opts), pair["factor"])
+    fingerprints = [arm_profile(arm, arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm)), opts)
+                    for arm in replay_pair.HARNESS_ARMS]
+    reason = replay_pair.effective_difference(*fingerprints)
+    if reason:
+        raise SystemExit("replay-pair: refusing the pair %s: %s" % (pair["name"], reason))
+
+
 def _replay(tasks, opts, launch, sink):
-    for arm in ARMS:
+    names = arm_names(opts)
+    harness_arms = [arm for arm in names if arm != "bare"]
+    for arm in names:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
-    arms.admit_pair(opts["arms"]["bare"], opts["arms"]["harness"])
+    for arm in harness_arms:
+        arms.admit_pair(opts["arms"]["bare"], opts["arms"][arm])
+    if opts.get("pair") is not None:
+        admit_pair_arms(opts)
     check_contamination = opts.get("contamination_checker", contamination_errors)
     contaminated = check_contamination(tasks, opts["repo"],
-                                       opts["arms"]["harness"]["harness_commit"], opts.get("tmp"))
+                                       opts["arms"][harness_arms[0]]["harness_commit"], opts.get("tmp"))
     if contaminated:
         for error in contaminated:
             print("cost-bench: contamination: %s" % error, file=sys.stderr)
@@ -1168,7 +1299,7 @@ def _replay(tasks, opts, launch, sink):
             raise SystemExit(2)
         opts = dict(opts, preflight="passed")
     firsts, allowed = {}, bool(opts["stamp"].get("surface_drift_allowed"))
-    for task, rep, arm in schedule(tasks, opts["reps"]):
+    for task, rep, arm in schedule(tasks, opts["reps"], names):
         if spent + opts["run_cap"] > opts["spend_cap"]:
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
@@ -1376,8 +1507,11 @@ def cmd_summarise(args):
     path = path / RESULTS if path.is_dir() else path
     if not path.is_file():
         raise SystemExit("cost-bench: %s does not exist" % path)
+    rows = read_jsonl(path)
+    if replay_pair.is_pair(rows):
+        return summarise_pair(rows, path, args)
     try:
-        result = replay_stats.analyse(read_jsonl(path), args.seed, args.resamples)
+        result = replay_stats.analyse(rows, args.seed, args.resamples)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
@@ -1391,6 +1525,28 @@ def cmd_summarise(args):
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
                      else replay_stats.render(result))
     return 0
+
+
+def summarise_pair(rows, path, args):
+    """A pair's report (`replay_pair.summarise`), priced from this checkout's price table and its
+    saved decision rows. Exit 1 when the post-run parity refuses the pair."""
+    prices_path = ROOT / "policy" / "prices.json"
+    table = json.loads(prices_path.read_text(encoding="utf-8")).get("models", {})
+    try:
+        result = replay_pair.summarise(rows, replay_pair.read_decisions(path.parent / replay_pair.DECISIONS, rows),
+                                       table, args.seed, args.resamples, surface=surface_of)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the pair in %s: %s" % (path, exc))
+    stamped = {r.get("prices_sha256") for r in rows} - {None}
+    result["prices_sha256"] = replay_pair.sha256(prices_path)
+    result["price_table_changed"] = bool(stamped) and stamped != {result["prices_sha256"]}
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws a two-arm result; a pair's Pareto view is in its report")
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
+                     else replay_pair.render(result) + ("price table: changed since the run; decision calls "
+                                                        "are priced at today's rates\n"
+                                                        if result["price_table_changed"] else ""))
+    return 0 if result["parity"]["ok"] else 1
 
 
 def raw_path(raw_dir, row):
@@ -1513,16 +1669,24 @@ def cmd_replay(args):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    pair = pair_manifest(args)
+    if not pair and args.spend_cap is None:
+        args.spend_cap = SPEND_CAP_USD
     tags = args.tag or []
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
     bare_decl, harness_decls = declarations(tags, effort=args.effort)  # every ref resolves before anything is built
-    plan = schedule(tasks, args.reps)
+    names = replay_pair.ARMS if pair else ARMS
+    plan = schedule(tasks, args.reps, names)
     print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s at effort %s, "
-          "%g USD per run, stop at %g USD reported per tag"
-          % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(ARMS), args.reps,
-             args.model, args.effort, args.run_cap, args.spend_cap))
+          "%g USD per run, stop at %s USD reported per tag"
+          % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(names), args.reps,
+             args.model, args.effort, args.run_cap, "%g" % args.spend_cap if args.spend_cap is not None
+             else "the --spend-cap a pair must name"))
+    if pair:
+        print("pair %s: %s, reference %r, treatment %r; one harness image, the factor set by value"
+              % (pair["name"], pair["factor"], pair["reference"], pair["treatment"]))
     if args.allow_surface_drift:
         print("cost-bench: --allow-surface-drift: a set whose loaded surface moves runs on, and every "
               "row says surface_drift_allowed")
@@ -1534,6 +1698,9 @@ def cmd_replay(args):
             for task, rep, arm in plan:
                 print("    %s rep %d %s" % (task["id"], rep, arm))
         return 0
+    if pair and args.spend_cap is None:
+        raise SystemExit("cost-bench: a pair needs --spend-cap: the default is sized for two arms, and a "
+                         "pair runs three")
     if not os.environ.get(arms.CREDENTIAL):
         raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
                          % arms.CREDENTIAL)
@@ -1545,7 +1712,7 @@ def cmd_replay(args):
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
               "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
               "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
-              "protocol": protocol}
+              "protocol": protocol, "pair": pair}
     status = 0
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
@@ -1553,6 +1720,22 @@ def cmd_replay(args):
             status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
                                             harness))
     return status
+
+
+def pair_manifest(args):
+    """The ablation manifest `--pair` names, with the flags a pair refuses refused; None without one.
+    The manifest's tag becomes the one `--tag`."""
+    if not getattr(args, "pair", None):
+        return None
+    pair = replay_pair.load(args.pair)
+    if args.stance_cost:
+        raise SystemExit("cost-bench: --stance-cost is refused with --pair: the factor is the only override")
+    tags = args.tag or []
+    if len(tags) > 1 or (tags and tags[0] != pair["tag"]):
+        raise SystemExit("cost-bench: a pair runs the one tag its manifest names (%s), not %s"
+                         % (pair["tag"], ", ".join(tags)))
+    args.tag = [pair["tag"]]
+    return pair
 
 
 def replay_tag(tag, args, common, harness):
@@ -1572,6 +1755,7 @@ def replay_tag(tag, args, common, harness):
     try:
         (parent / "home").mkdir()
         profile_root = snapshot(ROOT, commit, parent / "checkout")
+        pair = common.get("pair")
         opts = {"repo": ROOT, "home": parent / "home", "profile_root": profile_root, "model": args.model,
                 "tag": tag, "reps": args.reps, "run_cap": args.run_cap, "spend_cap": args.spend_cap,
                 "prices": common["prices"], "arms": {"bare": common["bare"], "harness": harness},
@@ -1585,6 +1769,12 @@ def replay_tag(tag, args, common, harness):
                           "surface_drift_allowed": bool(args.allow_surface_drift),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
+        if pair:
+            opts.update(arm_names=replay_pair.ARMS, pair=pair, selections=replay_pair.selections(pair),
+                        arms={"bare": common["bare"], "reference": harness, "treatment": harness},
+                        decisions=out / replay_pair.DECISIONS, tasks_sha256=replay_pair.sha256(args.tasks),
+                        prices_sha256=replay_pair.sha256(ROOT / "policy" / "prices.json"))
+            opts["stamp"]["prices_sha256"] = opts["prices_sha256"]
         out.mkdir(parents=True, exist_ok=True)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
@@ -1592,7 +1782,10 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if rows and not experiment_protocol.writes_history(rows):
+    if pair:
+        print("cost-bench: a pair writes no history row; results are in %s, and summarise reads them"
+              % out, file=sys.stderr)
+    elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
@@ -1665,9 +1858,13 @@ def main(argv=None):
                      "surface differs from its arm's first run, instead of stopping the set; every "
                      "row of the set says surface_drift_allowed")
     run.add_argument("--run-cap", type=float, default=RUN_CAP_USD, help="--max-budget-usd per run; soft")
-    run.add_argument("--spend-cap", type=float, default=SPEND_CAP_USD, help="stop before passing "
-                     "this; it applies to each tag's schedule on its own")
+    run.add_argument("--spend-cap", type=float, default=None, help="stop before passing "
+                     "this; it applies to each tag's schedule on its own; default %g USD, and "
+                     "required with --pair" % SPEND_CAP_USD)
     run.add_argument("--stance-cost", help="HARNESS_STANCE_COST for the harness arm")
+    run.add_argument("--pair", help="an ablation manifest (benchmarks/ablations/<name>.json): run its "
+                     "tag as a reference and a treatment arm that differ in its one factor, beside the "
+                     "bare arm; writes no history row")
     run.add_argument("--bucket", default="", help="the one change this run measures, e.g. A; names the "
                      "history row so several buckets can share a day and a commit")
     run.add_argument("--predicted-ratio", type=float, help="the ratio the plan predicts for this bucket; "

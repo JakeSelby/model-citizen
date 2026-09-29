@@ -697,9 +697,10 @@ def egress(image, launch=subprocess.run, token=None, hosts=MODEL_API_HOSTS):
                    universal_newlines=True)
 
 
-def arm_env(proxy=None, stance_cost=None):
+def arm_env(proxy=None, stance_cost=None, selection=None):
     """The variables an arm container is given by value: `ARM_ENV`, the proxy in both spellings,
-    and the harness arm's stance override. The credential is not among them; see `CREDENTIAL`."""
+    the harness arm's stance override, and a pair arm's session-scoped `selection` (variable to
+    value; `replay_pair`). The credential is not among them; see `CREDENTIAL`."""
     env = dict(ARM_ENV)
     if proxy:
         for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -707,20 +708,26 @@ def arm_env(proxy=None, stance_cost=None):
         env["NO_PROXY"] = env["no_proxy"] = NO_PROXY
     if stance_cost:
         env["HARNESS_STANCE_COST"] = stance_cost
+    for key, value in sorted((selection or {}).items()):
+        if value is not None:
+            env[key] = value
     return env
 
 
-def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False):
+def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False, keep=False):
     """`docker run --rm` of an arm: the snapshot at WORKDIR is the only mount, `env` goes by value,
     the credential by name alone, and the network is the one given (the egress network for a run,
     `none` for a check). With no `workdir` nothing at all is mounted; `stdin` keeps standard input
     attached, which Docker otherwise drops, for a program sent on it. A mount or a value that
     names a host path in `host_paths` is refused, so no launch can reach the host's home, profile
-    or live checkout."""
+    or live checkout. `keep` leaves out `--rm`, so a file can be copied out of the stopped
+    container (`copy_command`) before it is removed by name; it needs a `name`."""
     reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
-    command = ["docker", "run", "--rm"] + (["-i"] if stdin else []) + (["--name", name] if name else []) + [
+    if keep and not name:
+        raise SystemExit("replay-arms: a kept container needs a name to be removed by")
+    command = ["docker", "run"] + ([] if keep else ["--rm"]) + (["-i"] if stdin else []) + (["--name", name] if name else []) + [
         "--network", network] + HARDENING
     if workdir is not None:
         command += ["-v", "%s:%s" % (workdir, WORKDIR), "-w", WORKDIR]
@@ -738,6 +745,16 @@ def check_command(image, workdir, argv, env=None, name=None, stdin=False):
 
 def kill_command(name):
     return ["docker", "rm", "--force", name]
+
+
+def stop_command(name):
+    """Stop a kept container that timed out without removing it, so its files can still be copied."""
+    return ["docker", "kill", name]
+
+
+def copy_command(name, path, dest):
+    """Copy one file out of a stopped, kept container: no mount, and nothing is written into it."""
+    return ["docker", "cp", "%s:%s" % (name, path), str(dest)]
 
 
 # --- The snapshot as the image's user sees it ---------------------------------------------------
