@@ -7,12 +7,12 @@ argument-hint: <plan path or issue number>
 
 What to build: {{arguments}}
 
-**Check first, before spawning anything.** This command needs a git repository, a remote you can
-push to, and `gh` logged in for delivery. No repository: implement the authorized change in place
-with tests; do not spawn the worktree-only builder or attempt a commit or PR. Without a usable remote,
-implement and test on a local task branch, preserving unrelated work; stop at the local commit.
-Do not invoke a builder whose contract requires fetching a remote. If only
-`gh` is unavailable, the normal builder can run; stop before step 5 and report the verified branch.
+**Check first, before spawning anything.** Choose the applicable path for repository, push remote and logged-in `gh` availability:
+
+- **No repository:** the caller resolves step 1's scope, implements/tests in place and runs step 3. Skip the builder/spawn and steps 4–6; report files and verification, without a commit or PR.
+- **No usable remote:** the caller resolves scope on a local task branch, preserves unrelated work, implements/tests and runs step 3. Skip the builder; make/check step 4's commit, then stop before 5–6.
+- **Only `gh` is unavailable:** use the normal builder through step 4, report its verified local branch, then stop before step 5.
+- **All prerequisites available:** follow every numbered step below.
 
 1. **Work from the plan path or the issue number you were given**, and say which in your first
    message. Never search for a plan: `/plan` hands over the approved path. With neither path nor

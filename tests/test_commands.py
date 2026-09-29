@@ -138,9 +138,13 @@ class CommandContentTests(unittest.TestCase):
 
     def test_the_repository_bound_commands_name_a_fallback_rather_than_only_stopping(self):
         build = split(COMMANDS / "build.md")[1]
-        self.assertIn("No repository: implement the authorized change in place", build)
-        self.assertIn("do not spawn the worktree-only builder", build)
-        self.assertIn("stop at the local commit", build)
+        self.assertIn("No repository:** the caller resolves step 1's scope", build)
+        self.assertIn("Skip the builder/spawn and steps 4–6", build)
+        self.assertIn("without a commit or PR", build)
+        self.assertIn("No usable remote:** the caller resolves scope on a local task branch", build)
+        self.assertIn("make/check step 4's commit, then stop before 5–6", build)
+        self.assertIn("Only `gh` is unavailable:** use the normal builder through step 4", build)
+        self.assertIn("All prerequisites available:** follow every numbered step", build)
         review = split(COMMANDS / "review.md")[1]
         self.assertIn("offer to\n   review named files or a pasted patch instead", review)
 

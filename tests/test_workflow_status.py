@@ -67,8 +67,10 @@ class WorkflowStatusTests(unittest.TestCase):
         self.assertIn("0/1 returned", text)
 
     def test_restarted_key_does_not_keep_an_old_result(self):
-        self.journal([{"type": "result", "key": "k", "agentId": "one", "result": "abc"},
+        self.journal([{"type": "started", "key": "k", "agentId": "one"},
+                      {"type": "result", "key": "k", "agentId": "one", "result": "abc"},
                       {"type": "started", "key": "k", "agentId": "one"}])
+        self.assertEqual(STATUS.read_journal(self.run), (["k"], {}, {"one": "pending"}))
         self.assertIn("0/1 returned", self.report())
         self.assertIn("pending;", self.report())
 
