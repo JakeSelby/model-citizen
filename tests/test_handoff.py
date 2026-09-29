@@ -232,7 +232,7 @@ class GitignoreSyncTests(unittest.TestCase):
 class DocumentedCountTests(unittest.TestCase):
     def test_readme_uses_generated_inventory(self):
         text = (REPO / "README.md").read_text()
-        self.assertIn("harness catalog", text)
+        self.assertIn("citizen catalog", text)
         self.assertNotRegex(text, r"\*\*(?:Rules|Skills|Stances)\*\* \([0-9]")
 
     def test_handoff_documentation_describes_shared_storage_and_migration(self):

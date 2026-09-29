@@ -1,6 +1,6 @@
 # BMad repository governance
 
-This file is the single policy source loaded by agent-harness's BMad workflow customizations.
+This file is the single policy source loaded by Model Citizen's BMad workflow customizations.
 The repository instructions remain authoritative when they are stricter.
 
 - **Authority is split between the issue and its story file.**
@@ -40,8 +40,8 @@ The repository instructions remain authoritative when they are stricter.
   then run `plan` and `apply` before implementation ownership begins.
 - Preserve issue and repository history. Add amendments rather than rewriting dated evidence, and
   do not replace original issue prose when maintaining traceability metadata.
-- Before review, run `python3 bin/harness lint`, `python3 -m unittest discover -s tests`, and
-  `bin/harness generate --check`. Never bypass hooks.
+- Before review, run `bin/citizen lint`, `python3 -m unittest discover -s tests`, and
+  `bin/citizen generate --check`. Never bypass hooks.
 - Ordinary issues and PRs use the repository's native voice without generated framework footers.
   README and planning documentation may credit BMad explicitly.
 
@@ -109,7 +109,7 @@ map and the derived sprint status through the merge drivers in `scripts/bmad_mer
   changed differently, or one ID reserved for two issues. The last keeps both entries, so the
   audit's duplicate checks still fail on it. Resolve by hand, then regenerate sprint status.
 
-`citizen worktree create` registers both drivers in the repository's git config each time it
+`bin/citizen worktree create` registers both drivers in the repository's git config each time it
 runs, writing only a value that differs from the one it expects. It registers them only in the
 repository the running `citizen` checkout belongs to, so another repository that ships a script of
 the same name never has its merges routed through it. To register them in an existing checkout, run:

@@ -19,7 +19,7 @@ by description, the harness arm read all 18 files itself in 10 API calls against
 **Reproducing it.** The replay calls a model and spends real usage, so it is run by hand:
 
 ```sh
-python3 scripts/cost_bench.py replay --model <id> --raw /tmp/replay-raw   # 7 tasks x 2 arms x 2 reps
+python3 scripts/cost_bench.py replay --model <id> --tag <ref> --exploratory --raw /tmp/replay-raw   # 7 tasks x 2 arms x 2 reps
 grep -o '"name": *"Agent"' /tmp/replay-raw/*.json | wc -l                 # spawns, both arms
 ```
 
@@ -51,8 +51,8 @@ same rate before, during and after the hook existed: **3.2 hits per 100 turns be
 **Reproducing it.** Hits come from the local ledger, and a rescan rebuilds them from transcripts:
 
 ```sh
-bin/harness usage --rescan --days 30 --rules   # backfill, then hits per detector
-bin/harness usage --rules --by stance          # the same, per dimension=variant
+bin/citizen usage --rescan --days 30 --rules   # backfill, then hits per detector
+bin/citizen usage --rules --by stance          # the same, per dimension=variant
 ```
 
 The detector is `transcript-hygiene/model-wrote-no-cap` today; `--rules` folds the old id into the
