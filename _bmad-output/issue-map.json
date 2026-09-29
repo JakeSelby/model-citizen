@@ -6618,6 +6618,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B126",
+      "github_number": 868,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/868",
+      "title": "grade-bash falls back to its most permissive threshold on an unknown autonomy variant",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B126.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S266",
       "github_number": 874,
       "github_url": "https://github.com/JakeSelby/agent-harness/issues/874",
@@ -6823,6 +6836,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B127",
+      "github_number": 919,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/919",
+      "title": "config set refuses a switch that repairs a selection the resolver already refuses",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B127.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
