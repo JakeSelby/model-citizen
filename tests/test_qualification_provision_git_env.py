@@ -70,6 +70,22 @@ class ProvisionGitEnvironmentTests(unittest.TestCase):
         self.assertIn("GIT_REPORTED_SELECTOR", names)
         self.assertIn("GIT_DIR", names)
 
+        with mock.patch.object(self.provision, "LOCAL_GIT_VARIABLES", names), \
+                mock.patch.dict(os.environ, {"GIT_REPORTED_SELECTOR": "inherited"}):
+            child = self.provision.run([sys.executable, "-c",
+                                       "import os; print(os.environ.get('GIT_REPORTED_SELECTOR', 'absent'))"])
+        self.assertEqual(child.returncode, 0, child.stderr)
+        self.assertEqual(child.stdout.strip(), "absent")
+
+    def test_discovery_failures_keep_known_selectors_and_have_a_deadline(self):
+        for failure in (OSError("git unavailable"), subprocess.TimeoutExpired("git", 5)):
+            with self.subTest(failure=type(failure).__name__), \
+                    mock.patch.object(self.provision.subprocess, "run", side_effect=failure) as run:
+                names = self.provision.repository_local_variables()
+            self.assertIn("GIT_DIR", names)
+            self.assertIn("GIT_WORK_TREE", names)
+            self.assertEqual(run.call_args.kwargs["timeout"], 5)
+
 
 if __name__ == "__main__":
     unittest.main()

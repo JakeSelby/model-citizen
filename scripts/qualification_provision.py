@@ -43,9 +43,12 @@ TIMEOUT = 600
 
 def repository_local_variables():
     """The variables Git treats as local to a repository, including stable fallbacks."""
-    listed = subprocess.run(["git", "rev-parse", "--local-env-vars"],
-                            capture_output=True, text=True, check=False)
-    names = set(listed.stdout.split()) if listed.returncode == 0 else set()
+    try:
+        listed = subprocess.run(["git", "rev-parse", "--local-env-vars"],
+                                capture_output=True, text=True, check=False, timeout=5)
+        names = set(listed.stdout.split()) if listed.returncode == 0 else set()
+    except (OSError, subprocess.TimeoutExpired):
+        names = set()
     return names | {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
                     "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"}
 
