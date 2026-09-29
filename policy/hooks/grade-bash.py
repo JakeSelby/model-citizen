@@ -318,7 +318,9 @@ def normalize(cmd):
     it — a SQL client — is graded on its contents."""
     text = cmd.replace("\r\n", "\n").replace("\r", "\n")
     text, bodies = _split_heredocs(text)
-    text = re.sub(r"\\\n", " ", text)
+    # A shell removes the pair before tokenization: `-\\\nC` is one `-C` option, not two
+    # words. Replacing it with whitespace would let a split spelling hide a governed option.
+    text = re.sub(r"\\\n", "", text)
     return _strip_comments(text), bodies
 
 
@@ -1051,6 +1053,14 @@ SAFE_VARIABLE_WORD_RE = re.compile(
     r'^(?:\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))|'
     r'"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")$')
 _UNSAFE_OPERANDS = object()
+# Assigning these names invokes shell semantics or changes later word expansion. Their values
+# cannot be treated as inert path strings, and an IFS change makes every later unquoted value
+# dependent on runtime splitting.
+SHELL_SPECIAL_ASSIGNMENTS = {
+    "BASHPID", "BASHOPTS", "DIRSTACK", "EPOCHREALTIME", "EPOCHSECONDS", "EUID",
+    "FUNCNAME", "GROUPS", "IFS", "LINENO", "PIPESTATUS", "PPID", "RANDOM", "SECONDS",
+    "SHELLOPTS", "UID",
+}
 
 
 def _static_dir(target, cwd):
@@ -1132,7 +1142,11 @@ def _operand_context(values, source):
         context[_UNSAFE_OPERANDS] = None
         return context
     for index, word in enumerate(words[:-1]):
-        if word != "-C":
+        try:
+            option = ro.tokenize(word)
+        except ValueError:
+            option = []
+        if option != ["-C"]:
             continue
         raw = words[index + 1]
         try:
@@ -1171,6 +1185,10 @@ def _assignment_contexts(text, parts):
         if not enabled or not assignments:
             # A command may change variable attributes, shell options, or whether a later
             # assignment succeeds. Once one runs, no later assignment is statically trusted.
+            enabled = False
+            values.clear()
+            continue
+        if any(match.group(1) in SHELL_SPECIAL_ASSIGNMENTS for match in matches):
             enabled = False
             values.clear()
             continue
@@ -1504,13 +1522,15 @@ def _unresolved_git_c_operands(command, cwd, depth=0):
     if depth >= MAX_DEPTH:
         return []
     text, _bodies = normalize(command)
-    stripped, _inners = _extract_subs(text)
+    stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
     if parts is None:
         return []
     contexts = _assignment_contexts(stripped, parts)
-    unresolved = []
+    unresolved, queue = [], list(inners)
     for tokens, variables in zip(parts, contexts):
+        for _ in range(min(sum(token.count(PLACEHOLDER) for token in tokens), len(queue))):
+            unresolved.extend(_unresolved_git_c_operands(queue.pop(0), cwd, depth + 1))
         body, _targets = _redirects(list(tokens))
         while body and ASSIGN_RE.match(body[0]):
             body = body[1:]
@@ -1529,6 +1549,9 @@ def _unresolved_git_c_operands(command, cwd, depth=0):
                 if DASH_C_RE.match(arg) and index + 2 < len(body):
                     unresolved.extend(_unresolved_git_c_operands(body[index + 2], cwd, depth + 1))
                     break
+            continue
+        if prog == "eval" and len(body) > 1:
+            unresolved.extend(_unresolved_git_c_operands(" ".join(body[1:]), cwd, depth + 1))
             continue
         if prog != "git":
             continue
@@ -1553,6 +1576,8 @@ def _unresolved_git_c_operands(command, cwd, depth=0):
         subcommand = args[i] if i < len(args) else ""
         if subcommand == "push":
             unresolved.append(cause)
+    for inner in queue:
+        unresolved.extend(_unresolved_git_c_operands(inner, cwd, depth + 1))
     return unresolved
 
 

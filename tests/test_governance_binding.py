@@ -443,6 +443,35 @@ class UnknownDirectory(Home):
         _answer, reason = self.bash(command)
         self.assertNotIn("Git -C operand", reason)
 
+    def test_continued_and_quoted_git_options_keep_operand_semantics(self):
+        cases = (
+            "WORKTREE=/unsafe; git -\\\nC '$WORKTREE' push",
+            "WORKTREE=/unsafe; git \"-C\" '~/beta' push",
+        )
+        for command in cases:
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_shell_special_assignments_never_supply_static_paths(self):
+        for command in ("SECONDS=6/2; git -C $SECONDS push",
+                        "IFS=/; WORKTREE=/unsafe; git -C $WORKTREE push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_eval_names_its_unresolved_git_operand(self):
+        answer, reason = self.bash("eval 'git -C $MISSING push'")
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$MISSING` could not be resolved", reason)
+
+    def test_substitution_operand_diagnostic_stays_with_its_push(self):
+        command = 'echo "$(git -C $FIRST push)"; git -C $SECOND push'
+        self.assertEqual(self.places(command), [("coding.git_push", None),
+                                                ("coding.git_push", None)])
+        answer, reason = self.bash(command)
+        self.assertEqual(answer, "ask")
+        self.assertIn("Git -C operand `$FIRST` could not be resolved", reason)
+        self.assertNotIn("`$SECOND`", reason)
+
     def test_a_literal_cd_still_resolves(self):
         answer, reason = self.bash("cd %s && git push" % self.other)
         self.assertEqual(answer, "ask")
