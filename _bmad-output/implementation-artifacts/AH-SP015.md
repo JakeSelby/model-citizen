@@ -23,6 +23,13 @@ The issue carries the summary, discussion and acceptance evidence; this file car
 This work item was authored as part of the repository's committed BMad planning system.
 <!-- bmad-sync:end -->
 
+## Delivery amendment — 2026-09-28 (#1061)
+
+Current delivery: **dated follow-up outside release milestones**. Earlier milestone references below are historical and superseded by [the roadmap amendment](../planning-artifacts/roadmap-2026-09-28.md). Capability status is unchanged.
+
+Removed from release milestones. #786 merged at 2026-09-25T02:42:14Z, so the initial two-week observation checkpoint is 2026-10-09T02:42:14Z. At that checkpoint, assess whether enough reviewed PRs exist and report the sample or a dated extension; do not manufacture a hit-rate conclusion. The issue remains open. No scheduled automation or assessment was run by this roadmap change.
+
+
 ## Question
 
 <!-- fill: the one question the spike answers, and the decision that waits on it. -->

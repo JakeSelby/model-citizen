@@ -1,0 +1,28 @@
+{
+  "baseline": {
+    "archive_sha256": "329c62c28c915dab217be25606d67462d1af4ed5f2fb88113a87f4ebd76f0ac0",
+    "commit": "8ce2a65d444051c0244b86ab36ea31df98094531",
+    "version": "0.9.0"
+  },
+  "candidate_commit": "af9e78640e576949f571e22ef716c6a54bd2b969",
+  "cases": [
+    {
+      "name": "clean-install-idempotent-uninstall",
+      "status": "passed"
+    },
+    {
+      "name": "upgrade-rollback-uninstall",
+      "status": "passed"
+    },
+    {
+      "name": "conflict-preservation",
+      "status": "passed"
+    }
+  ],
+  "environment": {
+    "machine": "arm64",
+    "platform": "darwin",
+    "python": "3.9.6"
+  },
+  "schema_version": 1
+}

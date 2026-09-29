@@ -1,1 +1,19 @@
-harness
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""Run the Model Citizen CLI under its public command name."""
+import importlib.machinery
+import importlib.util
+import sys
+from pathlib import Path
+
+
+path = Path(__file__).resolve().with_name("harness")
+loader = importlib.machinery.SourceFileLoader("model_citizen_harness", str(path))
+spec = importlib.util.spec_from_loader(loader.name, loader)
+module = importlib.util.module_from_spec(spec)
+loader.exec_module(module)
+globals().update({name: value for name, value in vars(module).items()
+                  if not name.startswith("__")})
+
+if __name__ == "__main__":
+    sys.exit(main())

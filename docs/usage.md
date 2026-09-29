@@ -11,18 +11,18 @@ The `usage-log` hook runs on `SessionEnd` and keeps one record per session in
 call, no service, no account, and nothing beyond the session id, the repository directory name,
 the branch, model ids and token counts. Sending those rows to an observability backend is
 opt-in, off by default and described in [telemetry.md](telemetry.md); the ledger stays the
-record and the backend is a copy that `citizen usage export --since` can rebuild.
+record and the backend is a copy that `bin/citizen usage export --since` can rebuild.
 
 ## Which rules fired
 
-The same report that sums the tokens scores the rules. `bin/harness usage --rules` counts
+The same report that sums the tokens scores the rules. `bin/citizen usage --rules` counts
 detector hits per rule over the window instead of tokens, and `citizen --help` lists it beside
 the token groupings.
 
 ```sh
-bin/harness usage --rules                      # hits per detector over the last 30 days
-bin/harness usage --rules --by repo            # sessions, hits and the top three per repo
-bin/harness usage --rules --by stance          # the same, per dimension=variant
+bin/citizen usage --rules                      # hits per detector over the last 30 days
+bin/citizen usage --rules --by repo            # sessions, hits and the top three per repo
+bin/citizen usage --rules --by stance          # the same, per dimension=variant
 ```
 
 Three groupings and no more: `rule`, the default, one line per registry id; `repo`, one line
@@ -144,8 +144,8 @@ same slots and the row already carries each of them for a reader who wants them 
 session row, whose runtime reports cumulative snapshots rather than a figure per record, carries
 the string `"unknown"` rather than `1.0`, which would claim a measurement nobody made. A
 subagent row, a worker row and a row written before this release carry **no such key at all**,
-and a reader — `citizen usage` included — reads that absence as unknown for the same reason.
-The footer figure `citizen usage` prints is the window's raw sum over its counted sum: each
+and a reader — `bin/citizen usage` included — reads that absence as unknown for the same reason.
+The footer figure `bin/citizen usage` prints is the window's raw sum over its counted sum: each
 row's ratio weighted by the deduplicated tokens that row contributed to the columns above it,
 which under `--by day` are its in-window slices and not its whole total. The OTLP export carries
 a row's own value as the `raw_vs_deduped` attribute, and a row without the key exports none. The token totals **include the
@@ -224,7 +224,7 @@ no model judges the return here. These rows
 carry the same tokens a second time, attributed, which is why no grouping sums both them and
 their session.
 
-**`kind: "worker"`** — one row per completed `citizen role run` worker, with the role name as
+**`kind: "worker"`** — one row per completed `bin/citizen role run` worker, with the role name as
 `agent_type`. A worker is an isolated CLI session; its runtime reports what the run cost in the
 envelope or event stream the adapter already reads, and `workers.py` writes those totals into
 its `status.json`. A runtime that reports none leaves the fields unknown rather than zero.
@@ -253,7 +253,7 @@ small. Only the **first** `session_meta` is this rollout's own — a thread that
 parent's history carries the parent's further down the file.
 
 **A Codex parent's tokens do not include its children's**, which is the opposite of the Claude
-Code rule above, so `citizen usage` sums Codex subagent rows and skips Claude Code ones. The
+Code rule above, so `bin/citizen usage` sums Codex subagent rows and skips Claude Code ones. The
 evidence is the corpus of 438 rollouts this was built from: of the 21 parent threads with both
 a typed total and children with one, four report fewer tokens than their own children sum to,
 2.0M against 30.6M in the widest case. A total that included its children could not be smaller
@@ -266,7 +266,7 @@ with `total_tokens` alone and every typed field zero (85 of 107 top-level Deskto
 here). That row keeps `total`, is marked `partial`, and leaves the typed fields unknown, so the
 report excludes it rather than reading a real session as free.
 
-Codex capture travels through `citizen usage --rescan` rather than through the hook. The
+Codex capture travels through `bin/citizen usage --rescan` rather than through the hook. The
 lifecycle coordinator does register `SessionEnd`, but whether the payload Codex sends names the
 rollout file has not been observed here — no Codex CLI was installed on the machine this was
 measured on, and nothing in the rollouts or `~/.codex/logs_*.sqlite` records a hook payload.
@@ -419,7 +419,7 @@ that prompt would lose its line in silence.
 Both files hold counts and agent type names only — no prompt text, no command text, no agent
 output — and an agent type that is not a plain name is recorded as `other`. A session's files
 are swept once a day, together and only when the newest of them has gone a fortnight untouched,
-never the running session's; `citizen uninstall` removes the directory.
+never the running session's; `bin/citizen uninstall` removes the directory.
 
 The two offsets are what keep the hot path cheap: each prompt reads the transcript and the
 journal from where it left off, so a long session's subagent total can only ever grow.
@@ -442,7 +442,7 @@ file per session naming the agent
 definitions that session's registry held, which is the floor under whether an unnamed spawn can be
 routed to a band worker — see [runtime controls](runtime-controls.md). It holds agent names and a
 timestamp, nothing about the work; the files are owner-only in an owner-only directory, swept
-after a fortnight of not being used, and removed by `citizen uninstall`.
+after a fortnight of not being used, and removed by `bin/citizen uninstall`.
 
 ### Adherence events
 
@@ -457,7 +457,8 @@ says: a ledger it cannot write is skipped in silence.
 The response is read from the observation ledger (`observation.jsonl`). A session that ends
 within three prompts of the line followed it; one that carries on past them did not. Until the
 observation entry point is registered in live sessions, that ledger holds no rows, so every
-emission is answered `unknown` with reason `unobserved` once it is a day old.
+emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
+writes the answers that are due, one per emission, and says nothing about them.
 
 ## The decision log
 
@@ -598,22 +599,22 @@ The read is the last 256 KiB of the file, so it costs the same on a transcript o
 claim older than that window reads as `no_claim` rather than as the wrong turn's words.
 
 ```sh
-bin/harness usage --by decision        # counts, outcome rates and the unlabelled share per point
+bin/citizen usage --by decision        # counts, outcome rates and the unlabelled share per point
 ```
 
 The **unlabelled share** is the column to read first: an outcome rate over the two decisions
 that happened to be labelled is not evidence about the point.
 
-An `intent-overlap` row is an edit the write-intent check warned on or denied, and `citizen intent
+An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
 `coordination.repeat_overlap` in `config.json` chooses whether a repeated overlap is denied
-(`deny`, the default) or only warned (`warn`); `citizen intent --help` has the commands.
+(`deny`, the default) or only warned (`warn`); `bin/citizen intent --help` has the commands.
 
 ```sh
-bin/harness usage --conflicts          # landing merge conflicts and intent overlaps per week
+bin/citizen usage --conflicts          # landing merge conflicts and intent overlaps per week
 ```
 
-`citizen decisions eval` replays the labelled rows of this file through a question pack and
+`bin/citizen decisions eval` replays the labelled rows of this file through a question pack and
 reports how closely the judgment tracked them, with a threshold fitted per decision point. What
 it measures, what it writes and what its labels do not prove are in
 [runtime controls](runtime-controls.md).
@@ -625,7 +626,7 @@ writes one `kind: "decision"` row into the usage ledger beside the session rows,
 prices it from the same table:
 
 ```sh
-bin/harness usage --by provider        # calls, statuses, tokens, dollars and latency per point
+bin/citizen usage --by provider        # calls, statuses, tokens, dollars and latency per point
 ```
 
 The row names the decision point, the mode it ran under, the status, the requested and returned
@@ -651,7 +652,7 @@ Four things are worth reading off it:
   `policy/prices.json` or overridden under `prices` in `config.json`.
 - **The returned model id may differ from the requested one,** which is why both are on the row:
   a report priced at the model the harness asked for would be priced at the wrong rate.
-  `citizen doctor` prints the pinned model and what answered last.
+  `bin/citizen doctor` prints the pinned model and what answered last.
 
 These rows are counted on this report alone. Their tokens were spent by the harness asking a
 question rather than by the session, so adding them to a day, a repo or a model grouping would
@@ -660,15 +661,15 @@ charge a session for a bill it did not run up.
 ## Reading it
 
 ```sh
-bin/harness usage                      # last 30 days, grouped by day
-bin/harness usage --days 7 --by repo
-bin/harness usage --by model           # a session using two models groups under both, joined
-bin/harness usage --by role            # per agent type: runs, p50/p75/p90 output, p50/p75 usd
-bin/harness usage --by stance --stance cost   # tokens per variant of one stance dimension
-bin/harness usage --by profile         # tokens per profile fingerprint; older rows unattributed
-bin/harness usage --by decision        # hook decisions and their outcomes, above
-bin/harness usage --by provider        # decision-provider calls, priced, above
-bin/harness usage --rescan             # re-read transcripts in the window first, then report
+bin/citizen usage                      # last 30 days, grouped by day
+bin/citizen usage --days 7 --by repo
+bin/citizen usage --by model           # a session using two models groups under both, joined
+bin/citizen usage --by role            # per agent type: runs, p50/p75/p90 output, p50/p75 usd
+bin/citizen usage --by stance --stance cost   # tokens per variant of one stance dimension
+bin/citizen usage --by profile         # tokens per profile fingerprint; older rows unattributed
+bin/citizen usage --by decision        # hook decisions and their outcomes, above
+bin/citizen usage --by provider        # decision-provider calls, priced, above
+bin/citizen usage --rescan             # re-read transcripts in the window first, then report
 ```
 
 `--by role` reads the subagent and worker rows. A row with a `workflow` directory is grouped under
@@ -782,14 +783,14 @@ The same figures ride on an exported row as `harness.usd`, computed by the same 
 and the export hook both load `policy/hooks/pricing.py` rather than either one holding a second
 copy of the rates. What an exported dollar figure means is in [telemetry.md](telemetry.md).
 
-Prices go stale silently while the report keeps printing dollars, so `citizen doctor` names the
+Prices go stale silently while the report keeps printing dollars, so `bin/citizen doctor` names the
 newest `as_of` in the table and warns when it is over 90 days old. Re-read each entry's `source`
 and update the file; that is the whole maintenance cost, and it names a real failure mode.
 
 ### Re-seeding budgets
 
 A cost variant's per-role budgets are measured, not guessed, so they go stale as roles change.
-Run `bin/harness usage --rescan --by role` over a window wide enough to hold a few dozen runs,
+Run `bin/citizen usage --rescan --by role` over a window wide enough to hold a few dozen runs,
 read the p75 column for the role — the shipped figures are that point on the curve — and write it
 into your variant's row as `budget_output_tokens` and `budget_tool_calls`. A role still marked
 `n<30` has not earned a re-seed; widen the window or leave the figure where it is.
@@ -812,7 +813,7 @@ treat the sentence above as a thing to check in your own data rather than as an 
 prefix survived the session, and that is the thing `primitives/rules/cache-hygiene.md` actually
 asks for: a mid-task change to the tool set, the MCP server list, the model or the effort dial
 turns the next turn's cache reads into cache writes, and the only visible symptom is a larger
-bill. `bin/harness usage --by prefix` reports the miss ratio per session:
+bill. `bin/citizen usage --by prefix` reports the miss ratio per session:
 
 ```
 miss = cache_write / (cache_read + cache_write)
@@ -911,7 +912,7 @@ do backfill.
 | `commits/missing-trailer` | commits | a commit message with no `Co-Authored-By:` line |
 
 A rule with nothing a transcript can decide opts out by name in `OPT_OUT`, with the reason;
-`citizen lint` fails on a rule file that has neither a detector nor an opt-out.
+`bin/citizen lint` fails on a rule file that has neither a detector nor an opt-out.
 
 Every detector reads a tool call as the model wrote it. A transcript records the model's
 `tool_use` input, while a `PreToolUse` hook's `updatedInput` is written to a separate
@@ -926,10 +927,10 @@ the old id reports under the new one and the series does not split.
 ### Reading the report
 
 ```sh
-bin/harness usage --rules                      # hits per detector over the last 30 days
-bin/harness usage --rules --by repo            # sessions, hits and the top three per repo
-bin/harness usage --rules --by stance          # the same, per dimension=variant
-bin/harness usage --rescan --days 30 --rules   # backfill from the transcripts, then report
+bin/citizen usage --rules                      # hits per detector over the last 30 days
+bin/citizen usage --rules --by repo            # sessions, hits and the top three per repo
+bin/citizen usage --rules --by stance          # the same, per dimension=variant
+bin/citizen usage --rescan --days 30 --rules   # backfill from the transcripts, then report
 ```
 
 The groupings and the two annotations are in [which rules fired](#which-rules-fired) above.

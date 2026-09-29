@@ -1,6 +1,6 @@
 ---
 description: Review the branch's diff in two fresh contexts — scope against the spec, then quality — and report findings only.
-argument-hint: [base ref, default main] [optional spec: issue number, plan path or PR number]
+argument-hint: "[base ref, default main] [optional spec: issue number, plan path or PR number]"
 ---
 
 # Review

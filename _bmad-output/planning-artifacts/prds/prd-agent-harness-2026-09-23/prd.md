@@ -11,6 +11,8 @@ sources:
   - addendum.md
 ---
 
+> Current delivery assignments: [Delivery roadmap amendment — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # PRD: Model Citizen
 
 ## 0. Document purpose
@@ -1976,3 +1978,9 @@ answer.
 - §4.6 FR-32: the nudge's starting thresholds are recalibrated from ledger data before 0.15.
 - §4.9 FR-45: the `harness bmad` alias is removed in 0.14.
 - §5 NFR-16: 250 ms p95 per hook is a starting bound, to be confirmed by the first measurement.
+
+## Delivery roadmap amendment — 2026-09-28
+
+Current assignments are Measured v0.15.0, Studio v0.16.0, Composable v0.17.0 and Real work v0.18.0. This supersedes the earlier roadmap/version annotations, while preserving requirement IDs and capability meaning. FR-71–74 bot work moves to 0.18; the measured MVP and proof gate remain after 0.15. Independent FR-75–84 Studio work follows landed 0.15; four-arm/layer-swap and composition/judge interfaces follow in 0.17, factorial/proposal and field/Codex interfaces in 0.18. Studio design work pending in #961/#962, including any already planned AI assessment, is preserved rather than overwritten here.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
