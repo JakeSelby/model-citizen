@@ -999,7 +999,21 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     row's loaded surface (`SURFACE_FIELDS`) is compared with its arm's first run that reported
     one; a difference is recorded on the row as `surface_drift` and stops the set once that row
     is written, unless the stamp says `surface_drift_allowed`. A run whose stream reports another
-    effort than the pinned one stops the set whatever the stamp says."""
+    effort than the pinned one stops the set whatever the stamp says.
+
+    A saved result is created exclusively before probes or model calls, so an existing path can
+    never mix attempts from two cohorts."""
+    if out is None:
+        return _replay(tasks, opts, launch, None)
+    try:
+        sink = open(str(out), "x", encoding="utf-8")
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing to append to existing saved results: %s" % out)
+    with sink:
+        return _replay(tasks, opts, launch, sink)
+
+
+def _replay(tasks, opts, launch, sink):
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     arms.admit_pair(opts["arms"]["bare"], opts["arms"]["harness"])
@@ -1025,9 +1039,9 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
             row["surface_drift"] = surface_drift(firsts.setdefault(arm, surface), surface)
         spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
         rows.append(row)
-        if out:
-            with open(str(out), "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(row, sort_keys=True) + "\n")
+        if sink is not None:
+            sink.write(json.dumps(row, sort_keys=True) + "\n")
+            sink.flush()
         where = "the %s arm's run of %s rep %d" % (arm, task["id"], rep)
         if row.get("observed_effort") is not None and row["observed_effort"] != row["effort"]:
             raise SystemExit("cost-bench: stopping the set: %s ran at effort %s, pinned %s"
@@ -1230,7 +1244,10 @@ def cmd_summarise(args):
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
         plot = Path(args.plot).expanduser()
-        if plot.resolve() == path.resolve():
+        same_file = plot.resolve() == path.resolve()
+        if plot.exists():
+            same_file = same_file or plot.samefile(path)
+        if same_file:
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json

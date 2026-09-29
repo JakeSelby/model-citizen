@@ -4,9 +4,11 @@ task-clustered intervals, the verdict and the Pareto view. No test here launches
 calls a model. Run: python3 -m unittest discover tests"""
 import io
 import json
+import os
 import random
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -61,6 +63,40 @@ class BootstrapTests(unittest.TestCase):
         rows = rows_for({"a": {"bare": [(True, 1.0)], "harness": [(True, 1.0)]}, "b": {"bare": [(True, 1.0)]}})
         with self.assertRaisesRegex(ValueError, "task b has attempts in one arm only"):
             STATS.analyse(rows)
+
+    def test_verdict_and_magnitude_use_unrounded_bootstrap_bounds(self):
+        for cost, verdict, claim in ((0.85004, STATS.SUPPORTED, "cheaper"),
+                                     (0.99996, STATS.SUPPORTED, "cheaper"),
+                                     (1.00004, STATS.NOT_SUPPORTED, None)):
+            with self.subTest(cost=cost):
+                rows = rows_for({"a": {"bare": [(True, 1.0)] + [(True, 0.0)] * 4,
+                                               "harness": [(True, cost)] + [(True, 0.0)] * 4}},
+                                long=("a",))
+                got = STATS.analyse(rows, resamples=100)
+                self.assertEqual((got["verdict"], got["claim"]), (verdict, claim))
+                self.assertAlmostEqual(got["ratio_interval"][0], cost)
+                self.assertEqual(got["ratio_interval"][0], got["ratio_interval"][1])
+                self.assertIn("[%r, %r]" % tuple(got["ratio_interval"]), STATS.render(got))
+
+    def test_pass_rate_margin_uses_unrounded_bounds(self):
+        cells = {"a": {"bare": (10000, 10000, 10000),
+                       "harness": (61252.8, 87504, 100000)}}
+        ratio_ci, diff_ci, _ = STATS.bootstrap(cells, ["a"], resamples=100)
+        self.assertGreater(diff_ci[0], -0.125)
+        self.assertLess(diff_ci[0], -0.1249)
+        self.assertEqual(STATS.decide(0.7, ratio_ci, diff_ci, ratio_ci, True)[0], STATS.SUPPORTED)
+
+    def test_nearest_rank_uses_the_exact_025_rank_for_ten_thousand_samples(self):
+        values = list(range(10000))
+        self.assertEqual(STATS._rank(values, (1 - STATS.CONFIDENCE) / 2), 249)
+
+    def test_resamples_must_be_a_non_boolean_integer_of_at_least_two(self):
+        cells = {"a": {"bare": [1.0, 1, 1], "harness": [0.5, 1, 1]}}
+        for value in (True, False, 1, 0, -1, 2.0, "100"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "integer of at least 2"):
+                    STATS.bootstrap(cells, ["a"], resamples=value)
+
 
 
 class CostOfPassTests(unittest.TestCase):
@@ -122,6 +158,13 @@ class UndefinedRatioTests(unittest.TestCase):
         self.assertNotEqual(got["verdict"], STATS.SUPPORTED)
         self.assert_never_zero_or_infinite(got)
 
+    def test_a_real_zero_cost_ratio_remains_zero(self):
+        rows = rows_for(cheaper_set(tasks=3, trials=5, harness_cost=0.0), long=("t2",))
+        got = STATS.analyse(rows, resamples=300)
+        self.assertEqual(got["ratio"], 0.0)
+        self.assertEqual(got["ratio_interval"], [0.0, 0.0])
+        self.assertEqual(got["claim"], "at least 15% cheaper")
+
 
 class WilsonTests(unittest.TestCase):
     def test_bounds_match_known_values(self):
@@ -142,10 +185,11 @@ class VerdictTests(unittest.TestCase):
     decide = staticmethod(STATS.decide)
 
     def test_supported_needs_both_conditions_and_claims_a_magnitude_only_at_or_below_085(self):
-        self.assertEqual(self.decide(0.8, [0.7, 0.95], [-0.1, 0.1]),
+        self.assertEqual(self.decide(0.8, [0.7, 0.95], [-0.1, 0.1], [0.7, 0.95], True),
                          (STATS.SUPPORTED, "both conditions of the decision rule hold", "cheaper"))
-        self.assertEqual(self.decide(0.7, [0.6, 0.85], [-0.1, 0.1])[2], "at least 15% cheaper")
-        self.assertEqual(self.decide(0.7, [0.6, 0.851], [-0.1, 0.1])[2], "cheaper")
+        self.assertEqual(self.decide(0.7, [0.6, 0.85], [-0.1, 0.1], [0.6, 0.8], True)[2],
+                         "at least 15% cheaper")
+        self.assertEqual(self.decide(0.7, [0.6, 0.851], [-0.1, 0.1], [0.6, 0.8], True)[2], "cheaper")
 
     def test_not_supported_when_the_data_rule_the_claim_out(self):
         self.assertEqual(self.decide(1.2, [1.0, 1.4], [-0.1, 0.1])[0], STATS.NOT_SUPPORTED)
@@ -180,7 +224,20 @@ class VerdictTests(unittest.TestCase):
     def test_an_unmarked_set_says_no_task_is_long(self):
         got = STATS.analyse(rows_for(cheaper_set(tasks=3)), resamples=200)
         self.assertIsNone(got["long"])
+        self.assertIsNone(got["claim"])
         self.assertIn("no task is marked long", STATS.render(got))
+
+    def test_fewer_than_five_trials_is_exploratory_and_cannot_prove_sm2(self):
+        got = STATS.analyse(rows_for(cheaper_set(tasks=3, trials=4), long=("t2",)), resamples=200)
+        self.assertFalse(got["sm2_eligible"])
+        self.assertEqual((got["verdict"], got["claim"]), (STATS.INCONCLUSIVE, None))
+        self.assertIn("exploratory diagnostic only", got["limitation"])
+        self.assertIn("SM-2 eligibility: exploratory only", STATS.render(got))
+
+    def test_five_trials_is_eligible_for_the_sm2_verdict(self):
+        got = STATS.analyse(rows_for(cheaper_set(tasks=3, trials=5), long=("t2",)), resamples=200)
+        self.assertTrue(got["sm2_eligible"])
+        self.assertEqual(got["verdict"], STATS.SUPPORTED)
 
 
 class ParetoTests(unittest.TestCase):
@@ -223,6 +280,18 @@ class ParetoTests(unittest.TestCase):
                 BENCH.main(["summarise", "--results", str(path), "--plot", str(path), "--resamples", "100"])
             self.assertEqual(path.read_bytes(), before)
 
+    def test_plot_cannot_overwrite_a_hardlink_to_its_source_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / BENCH.RESULTS
+            plot = Path(tmp) / "pareto.svg"
+            BENCH.write_jsonl(path, rows_for(cheaper_set(tasks=2, trials=2)))
+            os.link(path, plot)
+            before = path.read_bytes()
+            with self.assertRaisesRegex(SystemExit, "must differ"):
+                BENCH.main(["summarise", "--results", str(path), "--plot", str(plot),
+                            "--resamples", "100"])
+            self.assertEqual(path.read_bytes(), before)
+
     def test_summarise_writes_a_standalone_plot_when_requested(self):
         with tempfile.TemporaryDirectory() as tmp:
             rows = rows_for(cheaper_set(tasks=2, trials=2))
@@ -250,6 +319,98 @@ class RederivationTests(unittest.TestCase):
             rows, _ = BENCH.replay([TASK], options(tmp, reps=1), Launch(["garbage"] * 2))
         self.assertEqual([r["outcome"] for r in rows], ["fail", "fail"])
         self.assertEqual([r["task_long"] for r in rows], [False, False])
+
+    def test_nonempty_saved_results_are_refused_before_probes_or_model_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / BENCH.RESULTS
+            out.write_text('{"existing": true}\n', encoding="utf-8")
+            before = out.read_bytes()
+            launch = Launch([])
+            with self.assertRaisesRegex(SystemExit, "refusing to append"):
+                BENCH.replay([TASK], options(tmp, reps=1), launch, out)
+            self.assertEqual((launch.probes, launch.calls), ([], []))
+            self.assertEqual(out.read_bytes(), before)
+
+    def test_duplicate_and_mismatched_trial_ids_are_refused(self):
+        duplicate = rows_for({"a": {"bare": [(True, 1.0)], "harness": [(True, 0.5)]}})
+        duplicate.append(dict(duplicate[0]))
+        with self.assertRaisesRegex(ValueError, "duplicates task"):
+            STATS.analyse(duplicate)
+        mismatched = rows_for({"a": {"bare": [(True, 1.0)], "harness": [(True, 0.5)]}})
+        mismatched[1]["rep"] = 2
+        with self.assertRaisesRegex(ValueError, "different trial ids"):
+            STATS.analyse(mismatched)
+
+    def test_tasks_must_share_the_same_fixed_sample_trial_ids(self):
+        rows = rows_for(cheaper_set(tasks=2))
+        for row in rows:
+            if row["task"] == "t1":
+                row["rep"] += 1
+        with self.assertRaisesRegex(ValueError, "tasks have different trial ids"):
+            STATS.analyse(rows)
+
+    def test_boolean_costs_and_overflowing_ratios_are_refused(self):
+        rows = rows_for(cheaper_set(tasks=1))
+        rows[0]["cost_usd"] = True
+        with self.assertRaisesRegex(ValueError, "boolean cost_usd"):
+            STATS.analyse(rows)
+        rows = rows_for(cheaper_set(tasks=1, bare_cost=1e-300, harness_cost=1e300))
+        with self.assertRaisesRegex(ValueError, "ratio is non-finite"):
+            STATS.analyse(rows)
+
+    def test_difference_rounds_once_after_subtracting_raw_rates(self):
+        rows = rows_for({"a": {"bare": [(True, 1)] + [(False, 1)] * 6,
+                              "harness": [(True, 1)] * 2 + [(False, 1)] * 5}})
+        self.assertEqual(STATS.analyse(rows, resamples=20)["difference"], 0.1429)
+
+    def test_results_are_exclusively_claimed_before_any_launch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / BENCH.RESULTS
+            launch = Launch([])
+            opts = options(tmp)
+            def competing_replay(*args):
+                with self.assertRaisesRegex(SystemExit, "existing saved results"):
+                    BENCH.replay([TASK], opts, launch, out)
+                return [], False
+            with mock.patch.object(BENCH, "_replay", side_effect=competing_replay) as run:
+                self.assertEqual(BENCH.replay([TASK], opts, launch, out), ([], False))
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual((launch.probes, launch.calls), ([], []))
+            self.assertEqual(out.read_bytes(), b"")
+
+    def test_trial_ids_must_be_positive_non_boolean_integers(self):
+        base = {"task": "a", "arm": "bare", "passed": True, "cost_usd": 1.0}
+        for trial in (True, False, 0, -1, 1.0, "1"):
+            with self.subTest(trial=trial):
+                with self.assertRaisesRegex(ValueError, "invalid trial id"):
+                    STATS.attempts([dict(base, rep=trial)])
+
+    def test_a_one_shot_iterable_keeps_validated_error_counts(self):
+        rows = rows_for({"a": {"bare": [(None, 1), (True, 1)],
+                              "harness": [(True, 0.5), (True, 0.5)]}})
+        expected = STATS.analyse(rows, resamples=20)
+        self.assertEqual(expected["arms"]["bare"]["errors"], 1)
+        self.assertEqual(STATS.analyse(iter(rows), resamples=20), expected)
+
+    def test_saved_status_fields_must_be_typed_and_consistent(self):
+        base = {"task": "a", "arm": "bare", "rep": 1, "error": False, "passed": True,
+                "outcome": "pass", "cost_usd": 1.0, "task_long": False}
+        cases = [({"error": 0}, "non-boolean error"),
+                 ({"passed": 1}, "non-boolean passed"),
+                 ({"outcome": True}, "invalid outcome"),
+                 ({"outcome": "fail"}, "contradictory outcome"),
+                 ({"error": True}, "both an error and a pass"),
+                 ({"task_long": 1}, "non-boolean task_long")]
+        for changes, message in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    STATS.attempts([dict(base, **changes)])
+
+    def test_a_task_must_have_one_consistent_long_marker(self):
+        rows = rows_for({"a": {"bare": [(True, 1.0)], "harness": [(True, 0.5)]}})
+        rows[1]["task_long"] = True
+        with self.assertRaisesRegex(ValueError, "inconsistent task_long"):
+            STATS.attempts(rows)
 
     def test_summarise_re_derives_every_figure_from_the_saved_rows(self):
         rows = rows_for(cheaper_set(tasks=3, trials=2), long=("t2",))
@@ -295,8 +456,14 @@ class RederivationTests(unittest.TestCase):
                                             "row 1 has a non-finite or negative cost_usd"):
                     STATS.attempts([dict(row, cost_usd=cost)])
 
+    def test_a_finite_row_set_cannot_overflow_to_a_non_finite_aggregate(self):
+        rows = rows_for({"a": {"bare": [(True, 1e308), (True, 1e308)],
+                                "harness": [(True, 1.0), (True, 1.0)]}})
+        with self.assertRaisesRegex(ValueError, "non-finite aggregate cost"):
+            STATS.analyse(rows)
+
     def test_the_history_row_carries_the_sm2_result_and_the_ledger_prints_it(self):
-        rows = rows_for(cheaper_set(tasks=3, trials=2))
+        rows = rows_for(cheaper_set(tasks=3, trials=5))
         for r in rows:
             r.update(date="2026-01-01", harness_version="9.9.9", harness_sha="a" * 40, tag="v9.9.9",
                      model="claude-test", cli_version="1.0", cost_normalised_usd=r["cost_usd"])
