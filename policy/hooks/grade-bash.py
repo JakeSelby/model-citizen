@@ -61,6 +61,7 @@ Behaviour:
 
 Test: echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' | python3 grade-bash.py
 """
+import bisect
 import fnmatch
 import importlib.util
 import json
@@ -163,6 +164,12 @@ SHELLS = {"bash", "sh", "zsh", "ksh", "mksh", "dash", "csh", "tcsh", "fish"}
 SHELL_RUNNERS = SHELLS | {"eval", "ssh"}
 # What a pipe from a group, subshell or loop carries: text this hook does not read.
 COMPOUND = "compound"
+# Text on a standard input this hook does not read (`_grade_streams`), and text the line spells
+# out that a filter or a `printf` directive then reshapes past what the hook models.
+UNKNOWN = object()
+RESHAPED = object()
+# A file copied from any file a line wrote, as a `cp` from a glob or variable writes (`_wild`).
+ANY_FILE = object()
 HERE_STRING_RE = re.compile(r"^\d*<<<$")
 # The names under which a program reads its standard input as a file.
 STDIN_PATHS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
@@ -188,21 +195,35 @@ PROGRAM_FLAGS = {
              {"-ExecutionPolicy", "-ep", "-WorkingDirectory", "-wd"}),
 }
 DEFAULT_PROGRAM_FLAGS = ({"-c", "-e", "-E", "--eval"}, set())
-# Interpreters that read a program from standard input only when a program-file option says so.
-PROGRAM_FILE_FLAGS = {name: ("-f", "--file") for name in ("awk", "gawk", "mawk", "nawk", "sed",
-                                                          "gsed")}
-PROGRAM_FILE_FLAGS.update({name: ("-f", "--file", "--makefile")
-                           for name in ("make", "gmake", "bmake")})
+# Options whose value is a file the interpreter runs as its program.
+PROGRAM_FILE_VALUES = {"pwsh": {"-f", "-File", "-file"}, "php": {"-f"}}
+# Families whose short options cluster as getopt reads them, so `perl -ne` reads like `-n -e`.
+CLUSTERED = {"python", "perl", "ruby"}
+# Interpreters that read a program file only through an option, by name: (the option letters
+# whose value is a program file, the long options that are, the other letters that take a value,
+# the letters whose optional value is only the rest of their cluster).
+PROGRAM_FILE_OPTIONS = {name: ("fEi", ("--file", "--exec", "--include"), "vFl", "")
+                        for name in ("awk", "gawk", "mawk", "nawk")}
+PROGRAM_FILE_OPTIONS.update({name: ("f", ("--file",), "e", "") for name in ("sed", "gsed")})
+MAKES = {"make", "gmake", "bmake"}
+PROGRAM_FILE_OPTIONS.update({name: ("f", ("--file", "--makefile"), "CIoW", "jl") for name in MAKES})
+# The files `make` runs when no option names one.
+DEFAULT_MAKEFILES = ("GNUmakefile", "makefile", "Makefile")
 # A word naming an interpreter, for text that does not decompose.
 INTERPRETER_WORD_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:python|pypy|perl|ruby|node|php|"
                                  r"lua|tclsh|osascript|Rscript|pwsh|deno|bun|[gmn]?awk|g?sed|"
                                  r"[gb]?make)[\w.]*(?=[\s;&|)`]|$)")
-# A string in program text: single-, double- or backtick-quoted, on one line but for backticks.
-LITERAL_RE = re.compile(r"'((?:[^'\\\n]|\\.)*)'|\"((?:[^\"\\\n]|\\.)*)\"|`((?:[^`\\]|\\.)*)`")
+# The characters that open a string in program text (`_literals`).
+QUOTE_RE = re.compile(r"['\"`]")
 # How many lines and strings of an interpreter's program `_grade_program` grades as shell text;
 # past these it scans the rest.
 PROGRAM_CHECKS = 64
-PRINTF_SPEC_RE = re.compile(r"%(?:%|[-+ #0']*(?:\*|\d+)?(?:\.(?:\*|\d*))?[a-zA-Z])")
+# How far `_statement` looks either way for the lines an open bracket joins to one.
+STATEMENT_LINES = 16
+STATEMENT_CHARS = 4096
+PRINTF_SPEC_RE = re.compile(r"%(?:%|([-+ #0']*)(\*|\d+)?(?:\.(\*|\d*))?([a-zA-Z]))")
+# The widest field `_printf` pads, and the longest text it writes; past these it reads as unknown.
+PRINTF_WIDTH = 4096
 PRINTF_ESCAPE_RE = re.compile(r"\\(0[0-7]{0,3}|[1-7][0-7]{0,2}|x[0-9a-fA-F]{1,2}|.)", re.S)
 PRINTF_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f", "v": "\v",
                   "\\": "\\", "e": "\x1b", "E": "\x1b", "'": "'", '"': '"'}
@@ -1807,51 +1828,179 @@ def _grade_bodies(bodies, runs, cwd, depth, programs=False):
 
 def _program_family(word):
     """The interpreter family the command word `word` names, as `PROGRAM_FLAGS` and
-    `PROGRAM_FILE_FLAGS` key it, or None."""
+    `PROGRAM_FILE_OPTIONS` key it, or None."""
     name = word.rpartition("/")[2]
-    if name in PROGRAM_FILE_FLAGS:
+    if name in PROGRAM_FILE_OPTIONS:
         return name
     match = INTERPRETER_RE.match(name)
     return INTERPRETER_FAMILY.get(match.group(1), match.group(1)) if match else None
 
 
-def _reads_program(family, args):
-    """Whether an interpreter of `family` given `args` reads its program from standard input:
-    awk, sed and make only when their program-file option names it; deno and bun when an operand
-    does; any other when no script operand or program option comes first, or one names it. A
-    program option with no value may take one from `xargs`, so it counts."""
-    if family in PROGRAM_FILE_FLAGS:
-        for i, a in enumerate(args):
-            for flag in PROGRAM_FILE_FLAGS[family]:
-                if a == flag:
-                    value = args[i + 1] if i + 1 < len(args) else "-"
-                elif a.startswith(flag) and len(a) > len(flag) and (
-                        not flag.startswith("--") or a[len(flag)] == "="):
-                    value = a[len(flag):].lstrip("=")
-                else:
-                    continue
-                if value in STDIN_PATHS:
-                    return True
-        return False
+def _option_files(args, letters, longs, values, optional):
+    """The values of the program-file options in `args` as getopt reads them, so `-f x`, `-fx`,
+    `-sf x` and `--file=x` all name `x`; one with no value left may take it from `xargs`, which
+    reads as standard input. Options after operands count, as GNU tools permute them."""
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a == "--":
+            break
+        if a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name in longs:
+                if not eq:
+                    value = args[i] if i < len(args) else "-"
+                    i += 1
+                out.append(value)
+            continue
+        if not a.startswith("-") or a == "-":
+            continue
+        for k in range(1, len(a)):
+            letter = a[k]
+            if letter in optional:
+                break
+            if letter in letters or letter in values:
+                value = a[k + 1:]
+                if not value:
+                    value = args[i] if i < len(args) else "-"
+                    i += 1
+                if letter in letters:
+                    out.append(value)
+                break
+    return out
+
+
+def _program_source(family, args):
+    """Where an interpreter of `family` given `args` reads its program: ("stdin", []),
+    ("inline", []) from an option's value or an operand, ("file", [paths]), or ("module",
+    [name]) for `python -m`. Awk, sed and make read a file only through their program-file
+    option, and make its default makefiles without one; deno and bun an operand; any other the
+    first operand unless a program option comes first. A program option with no value may take
+    one from `xargs`, so it reads as standard input."""
+    if family in PROGRAM_FILE_OPTIONS:
+        files = _option_files(args, *PROGRAM_FILE_OPTIONS[family])
+        if any(f in STDIN_PATHS for f in files):
+            return "stdin", []
+        if files:
+            return "file", files
+        return ("file", list(DEFAULT_MAKEFILES)) if family in MAKES else ("inline", [])
     if family in ("deno", "bun"):
-        return any(a in STDIN_PATHS for a in args)
+        if any(a in STDIN_PATHS for a in args):
+            return "stdin", []
+        words = [a for a in args if not a.startswith("-")]
+        words = words[1:] if words[:1] == ["run"] else words
+        return ("file", words[:1]) if words else ("inline", [])
     evals, values = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)
+    files = PROGRAM_FILE_VALUES.get(family, set())
+
+    def given(flag, value):
+        if value is None or value in STDIN_PATHS:
+            return "stdin", []
+        if flag in files or flag == "--":
+            return "file", [value]
+        return ("module", [value]) if (family, flag) == ("python", "-m") else ("inline", [])
+
     i = 0
     while i < len(args):
         a = args[i]
+        after = args[i + 1] if i + 1 < len(args) else None
         if a in STDIN_PATHS:
-            return True
-        if a == "--" or a in evals:
-            return i + 1 >= len(args) or args[i + 1] in STDIN_PATHS
+            return "stdin", []
+        if a == "--" or a in evals or a in files:
+            return given(a, after)
         if not a.startswith("-"):
-            return False  # a script file
+            return "file", [a]
         name, eq, value = a.partition("=")
-        if eq and name in evals:
-            return value in STDIN_PATHS
-        if not a.startswith("--") and a[:2] in evals:
-            return a[2:] in STDIN_PATHS
+        if eq and (name in evals or name in files):
+            return given(name, value)
+        if not a.startswith("--"):
+            if family in CLUSTERED:
+                for k in range(1, len(a)):
+                    flag = "-" + a[k]
+                    if flag in values:
+                        i += 0 if a[k + 1:] else 1
+                        break
+                    if flag in evals or flag in files:
+                        return given(flag, a[k + 1:] or after)
+            elif a[:2] in evals or a[:2] in files:
+                return given(a[:2], a[2:])
         i += 2 if a in values else 1
-    return True
+    return "stdin", []
+
+
+def _reads_program(family, args):
+    """Whether an interpreter of `family` given `args` reads its program from standard input
+    (`_program_source`)."""
+    return _program_source(family, args)[0] == "stdin"
+
+
+def _shell_source(args):
+    """Where a shell given `args` reads its commands: ("inline", [text]) from `-c`, ("stdin",
+    []) with `-s` or no operand, or ("file", [script]) from its first operand."""
+    inline, i = False, 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--", "-"):
+            i += 1
+            break
+        if a.startswith("--"):
+            i += 2 if a in ("--rcfile", "--init-file") else 1
+            continue
+        if len(a) < 2 or a[0] not in "-+":
+            break
+        inline = inline or (a[0] == "-" and "c" in a)
+        if a[0] == "-" and "s" in a and not inline:
+            return "stdin", []
+        i += 2 if ("o" in a or "O" in a) else 1
+    if i >= len(args):
+        return ("inline", []) if inline else ("stdin", [])
+    return ("inline", [args[i]]) if inline else ("file", [args[i]])
+
+
+def _run_files(tokens, depth=0):
+    """The words of the simple command `tokens` that may name a file it runs: its command word
+    past assignments and wrappers, and the script a shell or interpreter reads its program from
+    (`_shell_source`, `_program_source`), never the data arguments after it. `python -m x` runs
+    `x.py`, and the commands of a shell's `-c` text are read the same way."""
+    tokens, _written = _redirects(list(tokens))
+    for _ in range(MAX_DEPTH):
+        while tokens and ASSIGN_RE.match(tokens[0]):
+            tokens = tokens[1:]
+        if not tokens:
+            return []
+        prog = tokens[0].rpartition("/")[2]
+        if len(tokens) > 1 and (prog, tokens[1]) in RUNNERS:
+            tokens = strip_options(tokens[2:], ())
+        elif prog == "env":
+            tokens = strip_options(_env_split(tokens[1:]) or [], WRAPPERS[prog])
+        elif prog in WRAPPERS:
+            tokens = strip_options(tokens[1:], WRAPPERS[prog])
+            if prog == "timeout" and tokens:
+                tokens = tokens[1:]
+        elif prog in ("sudo", "doas", "xargs", "parallel"):
+            tokens = strip_options(tokens[1:], SUDO.get(prog, XARGS_VALUE_FLAGS))
+        else:
+            break
+    if not tokens:
+        return []
+    out, name = [tokens[0]], tokens[0].rpartition("/")[2].lstrip("=")
+    if name in (".", "source"):
+        return out + tokens[1:2]
+    if name in SHELLS:
+        kind, words = _shell_source(tokens[1:])
+        if kind == "inline" and words and depth < MAX_DEPTH:
+            for part in segments(words[0]) or []:
+                out += _run_files(part, depth + 1)
+        return out + (words if kind == "file" else [])
+    family = _program_family(tokens[0])
+    if family:
+        kind, words = _program_source(family, tokens[1:])
+        if kind == "file":
+            out += words
+        elif kind == "module":
+            out.append(words[0].rpartition(".")[2] + ".py")
+    return out
 
 
 def _interprets_input(tokens):
@@ -1889,14 +2038,15 @@ def _interprets_input(tokens):
     return True
 
 
-def _grade_program(text, cwd, depth):
+def _grade_program(text, cwd, depth, skip=None):
     """The grade of `text` read as its program by an interpreter this hook cannot parse, such as
     Python, awk or make: unknown, graded 1, and higher when the text names a command that grades
     higher, since the program may run it. Each line, each quoted string on it and a line's
-    strings joined by spaces (`["git", "push"]`) is graded as shell text when it names a program
-    the grader knows, `PROGRAM_CHECKS` of them at most; the whole text is scanned for grade-3
-    families and a push, which covers what any one line or string of it would show a scan.
-    Linear in the length of the text."""
+    strings joined by spaces (`["git", "push"]`), or a statement's when an open bracket carries
+    it over several lines (`_statement`), is graded as shell text when it names a program the
+    grader knows, `PROGRAM_CHECKS` of them at most, `skip` never, as its caller grades it; the
+    whole text is scanned for grade-3 families and a push, which covers what any one line or
+    string of it would show a scan. Linear in the length of the text."""
     best = max(_scan_text(text), (1, "", "", "opaque"), key=lambda h: h[0])
     checks, line_end = 0, -1
     for match in _named(text):
@@ -1904,13 +2054,18 @@ def _grade_program(text, cwd, depth):
             break
         if match.start() < line_end:
             continue  # a line already graded
+        line_start = text.rfind("\n", 0, match.start()) + 1
         line_end = text.find("\n", match.end())
         line_end = len(text) if line_end < 0 else line_end
-        line = text[text.rfind("\n", 0, match.start()) + 1:line_end]
-        strings = [a or b or c for a, b, c in LITERAL_RE.findall(line)]
+        line = text[line_start:line_end]
+        strings = _literals(line)
         candidates = [line] + strings + ([" ".join(strings)] if len(strings) > 1 else [])
+        before, after = _statement(text, line_start, line_end)
+        if before or after:
+            candidates.append(" ".join([s for each in before for s in _literals(each)] + strings
+                                       + [s for each in after for s in _literals(each)]))
         for candidate in candidates:
-            if next(_named(candidate), None) is None:
+            if candidate == skip or next(_named(candidate), None) is None:
                 continue
             checks += 1
             if checks > PROGRAM_CHECKS:
@@ -1920,6 +2075,54 @@ def _grade_program(text, cwd, depth):
             if hit[0] > best[0]:
                 best = hit
     return best
+
+
+def _statement(text, start, end):
+    """(the lines before, the lines after) the line `text[start:end]` that an open bracket joins
+    to it as one statement, as in `run(['git',\\n 'push'])`, looking `STATEMENT_LINES` lines and
+    `STATEMENT_CHARS` characters either way. Brackets are counted from the first line looked at,
+    strings and comments included: an approximation that costs a bounded read per line."""
+    head = text[max(0, start - STATEMENT_CHARS):start].split("\n")[:-1]
+    if start > STATEMENT_CHARS:
+        head = head[1:]  # a line cut short
+    tail = text[end + 1:end + 1 + STATEMENT_CHARS].split("\n") if end < len(text) else []
+    if end + 1 + STATEMENT_CHARS < len(text):
+        tail = tail[:-1]
+    lines = head[-STATEMENT_LINES:] + [text[start:end]] + tail[:STATEMENT_LINES]
+    here, depth, opens = len(head[-STATEMENT_LINES:]), 0, []
+    for line in lines:
+        opens.append(depth)
+        depth = max(0, depth + sum(line.count(c) for c in "([{")
+                    - sum(line.count(c) for c in ")]}"))
+    first = max(i for i in range(here + 1) if not opens[i])
+    last = next((i for i in range(here + 1, len(lines)) if not opens[i]), len(lines))
+    return lines[first:here], lines[here + 1:last]
+
+
+def _literals(line):
+    """The quoted strings of the one line `line`, as a scan from its start reads them: a string
+    opens at a quote and closes at the next quote of its kind that no backslash escapes, and one
+    that does not close is passed over. Whether a quote is escaped depends only on the run of
+    backslashes right before it, so each close is found by a search rather than by a scan from
+    every quote, and the reading is linear in the length of the line."""
+    starts, closes = [], {q: [] for q in "'\"`"}
+    for match in QUOTE_RE.finditer(line):
+        at = before = match.start()
+        while before and line[before - 1] == "\\":
+            before -= 1
+        starts.append(at)
+        if not (at - before) % 2:
+            closes[line[at]].append(at)
+    out, pos = [], 0
+    for at in starts:
+        if at < pos:
+            continue
+        ends = closes[line[at]]
+        k = bisect.bisect_right(ends, at)
+        if k < len(ends):
+            out.append(line[at + 1:ends[k]])
+            pos = ends[k] + 1
+    return out
 
 
 def _named(text):
@@ -1946,35 +2149,97 @@ def _unescape(text):
 
 def _printf(fmt, args):
     """What `printf fmt args…` writes: each conversion takes the next argument, `%b` with its
-    escapes interpreted, and the format repeats while arguments remain."""
-    out = []
+    escapes interpreted, with its flags, width and precision, `*` taking them from an argument,
+    and the format repeats while arguments remain. `RESHAPED` for a directive this hook does not
+    model, or a field or text too wide to build."""
+    out, size = [], 0
     for _ in range(PROGRAM_CHECKS):
         used, pos = 0, 0
         for match in PRINTF_SPEC_RE.finditer(fmt):
-            out.append(_unescape(fmt[pos:match.start()]))
+            literal = fmt[pos:match.start()]
+            if "%" in literal:
+                return RESHAPED
+            out.append(_unescape(literal))
+            size += len(out[-1])
             pos = match.end()
-            spec = match.group(0)
-            if spec == "%%":
+            if match.group(0) == "%%":
                 out.append("%")
                 continue
+            flags, width, precision, conv = match.groups()
+            taken = []
+            for part in (width, precision):
+                if part == "*":
+                    taken.append(args[used] if used < len(args) else "0")
+                    used += 1
             value = args[used] if used < len(args) else ""
             used += 1
-            out.append(_unescape(value) if spec.endswith("b") else value)
+            field = _printf_field(flags, width, precision, conv, taken, value)
+            if field is None:
+                return RESHAPED
+            out.append(field)
+            size += len(field)
+            if size > SCAN_CAP:
+                return RESHAPED
+        if "%" in fmt[pos:]:
+            return RESHAPED
         out.append(_unescape(fmt[pos:]))
+        size += len(out[-1])
+        if size > SCAN_CAP:
+            return RESHAPED
         args = args[used:]
         if not used or not args:
             break
     return "".join(out)
 
 
-def _output_text(tokens, incoming):
+def _printf_field(flags, width, precision, conv, taken, value):
+    """One conversion of `printf`, or None when this hook does not model it: `%s`, `%b` and `%c`,
+    and a number whose argument reads as one. `taken` holds the `*` width and precision."""
+    try:
+        if width == "*":
+            width = int(taken.pop(0) or 0)
+        if precision == "*":
+            precision = int(taken.pop(0) or 0)
+        width, precision = int(width or 0), None if precision is None else int(precision or 0)
+    except ValueError:
+        return None
+    if width < 0:
+        flags, width = flags + "-", -width
+    if width > PRINTF_WIDTH or "'" in flags:
+        return None
+    if conv in "sbc":
+        text = _unescape(value) if conv == "b" else value[:1] if conv == "c" else value
+        if precision is not None and conv != "c":
+            text = text[:precision]
+        return text.ljust(width) if "-" in flags else text.rjust(width)
+    if conv not in "diouxXeEfFgG" or (precision or 0) > PRINTF_WIDTH:
+        return None
+    try:
+        if conv in "diouxX":
+            number = int(value, 8) if re.match(r"^[+-]?0[0-7]+$", value) else int(value or "0", 0)
+            if number < 0 and conv in "ouxX":
+                return None
+        else:
+            number = float(value or 0)
+    except ValueError:
+        return None
+    spec = "%" + flags + str(width or "") + ("" if precision is None else "." + str(precision))
+    return (spec + ("d" if conv == "u" else conv)) % number
+
+
+def _output_text(tokens, incoming, written):
     """The text the simple command `tokens` writes to its standard output when this hook can read
-    it: an `echo` or `printf`'s words, or `incoming`, the text on its standard input, through a
-    `cat` or `tee` that passes it on. An `echo` is read with and without its escapes, as shells
-    differ on them. None when it cannot be read."""
+    it: an `echo` or `printf`'s words, `builtin` or `command` in front of either, or through a
+    `cat` or `tee`, `incoming`, the text on its standard input, and the text this line wrote to
+    each file a `cat` names. An `echo` is read with and without its escapes, as shells differ on
+    them. None when it cannot be read, `RESHAPED` when `printf` builds it past what is modelled."""
     tokens, _written = _redirects(list(tokens))
     while tokens and ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
+    while tokens and tokens[0] in ("builtin", "command"):
+        tokens = tokens[1:]
+        while tokens and tokens[0] in ("-p", "--"):
+            tokens = tokens[1:]
     if not tokens:
         return None
     prog, args = tokens[0].rpartition("/")[2], tokens[1:]
@@ -1990,23 +2255,67 @@ def _output_text(tokens, incoming):
         if not args or args[0].startswith("-v"):
             return None
         return _printf(args[0], args[1:])
-    if prog == "tee" or (prog == "cat" and all(a in ("-", "-u") for a in args)):
+    if prog == "tee":
         return incoming
+    if prog == "cat" and not any(a.startswith("-") and a not in ("-", "-u") for a in args):
+        files = [a for a in args if a != "-u"] or ["-"]
+        return _concat([incoming if a == "-" else _file_text(written, a) for a in files])
     return None
 
 
-def _grade_input(tokens, incoming, whole, cwd, depth):
+def _concat(texts):
+    """`texts` one after another: the text when each is known, `RESHAPED` when each is known or
+    reshaped, else None."""
+    if all(isinstance(t, str) for t in texts):
+        return "".join(texts)
+    if all(isinstance(t, str) or t is RESHAPED for t in texts):
+        return RESHAPED
+    return None
+
+
+def _wild(word):
+    """Whether a variable, substitution or glob in `word` may expand to any file name."""
+    return any(c in word for c in "$`*?[") or PLACEHOLDER in word
+
+
+def _written_names(written, word):
+    """The names of the files in `written` the word `word` may name: its base name, or every one
+    when it is `_wild`."""
+    name = word.rpartition("/")[2]
+    if name in written:
+        return [name]
+    return list(written) if _wild(word) else []
+
+
+def _file_text(written, word):
+    """What this line wrote to the file `word` names (`_concat`), or None, as for a `_wild` word
+    or a copy of one."""
+    name = word.rpartition("/")[2]
+    if name not in written or ANY_FILE in written[name]:
+        return None
+    return _concat(list(written[name]))
+
+
+def _grade_input(tokens, incoming, unread, cwd, depth):
     """The grade of `incoming` fed to the standard input of the simple command `tokens`: as the
     commands it holds for a shell, by `_grade_program` for another interpreter, and as the
-    arguments of the command an `xargs` runs. Text from a group or loop (`COMPOUND`) is not read,
-    so the whole line `whole` is graded as a program in its place."""
-    known = incoming != COMPOUND
-    if _runs_input(tokens):
-        return grade_text(incoming, cwd, depth + 1) if known else _grade_program(whole, cwd, depth)
-    if _interprets_input(tokens):
-        return _grade_program(incoming if known else whole, cwd, depth)
+    arguments of the command an `xargs` runs. Text this hook cannot read (`UNKNOWN`) is graded by
+    `unread()`, the line's own text read as a program; text the line spells out and a filter or
+    a `printf` directive then reshapes (`RESHAPED`) is graded that way and at least 2, as the
+    hook cannot vouch for what it becomes."""
+    shell = _runs_input(tokens)
+    if shell or _interprets_input(tokens):
+        if isinstance(incoming, str):
+            return (grade_text(incoming, cwd, depth + 1) if shell
+                    else _grade_program(incoming, cwd, depth))
+        hit = unread()
+        if incoming is RESHAPED and hit[0] < 2:
+            clean = _redirects(list(tokens))[0]
+            hit = (2, clean[0].rpartition("/")[2] if clean else "", "", "opaque")
+        return hit
     clean, _written = _redirects(list(tokens))
-    if known and clean and clean[0].rpartition("/")[2] in ("xargs", "parallel"):
+    if isinstance(incoming, str) and clean and clean[0].rpartition("/")[2] in ("xargs",
+                                                                               "parallel"):
         rest = strip_options(clean[1:], XARGS_VALUE_FLAGS)
         if rest:
             return grade_tokens(rest + incoming.split(), cwd, depth + 1)
@@ -2015,54 +2324,96 @@ def _grade_input(tokens, incoming, whole, cwd, depth):
 
 def _grade_streams(linked, whole, cwd, depth):
     """(the worst grade of the text the simple commands `linked` hand one another, whether a file
-    this line writes is then run). Text reaches a command's standard input from a here-string or
-    a pipe, and `_grade_input` grades it; what flows through a pipe is known from an `echo`, a
-    `printf`, or a `cat` or `tee` passing either on. A file is run when a command word names it,
-    or a shell or interpreter is handed it, as `./x.sh`, `sh x.sh` or `python3 x.py` are; the
-    readable text written to it is then graded as a script and as a program. Files match by base
-    name, so a same-named file elsewhere counts too, and the order of the writes is not modelled."""
-    best, outputs, written = (0, None, None, None), [], {}
+    this line writes is then run). Text reaches a command's standard input from a here-string, a
+    `<` or a pipe, and `_grade_input` grades it; what flows through a pipe is known from an
+    `echo`, a `printf`, or a `cat` or `tee` passing either on or reading a file this line wrote.
+    A filter the hook does not model reshapes known text, and a group, loop or other command
+    hands on text it cannot read. A file is run when a command word names it, or a shell or
+    interpreter is handed it as its script (`_run_files`), as `./x.sh`, `sh x.sh` or `python3
+    x.py` are, or reads it on its standard input; the text written to it, a copy's included, is
+    then graded as a script and as a program. Files match by base name, so a same-named file
+    elsewhere counts too, and the order of the writes is not modelled."""
+    best, outputs, sourced_out, written, runs = (0, None, None, None), [], [], {}, []
+    unread_hit, executed = [], False
+
+    def unread():
+        # Below 2 it adds nothing to the grade each command of the line has of its own.
+        if not unread_hit:
+            hit = _grade_program(whole, cwd, depth, skip=whole)
+            unread_hit.append(hit if hit[0] > 1 else (0, None, None, None))
+        return unread_hit[0]
+
     for tokens, fed in linked:
-        incoming = None
+        incoming, sourced, redirected = None, False, []
+        if fed is not None:
+            known = fed != COMPOUND and outputs[fed] is not None
+            incoming = outputs[fed] if known else UNKNOWN
+            sourced = fed != COMPOUND and sourced_out[fed]
         for i, token in enumerate(tokens[:-1]):
             if HERE_STRING_RE.match(token):
-                incoming = tokens[i + 1] + "\n"
-        if incoming is None and fed is not None:
-            incoming = COMPOUND if fed == COMPOUND else outputs[fed]
+                incoming, sourced = tokens[i + 1] + "\n", False
+            elif token == "<" and not (i and tokens[i - 1].isdigit() and tokens[i - 1] != "0"):
+                text = _file_text(written, tokens[i + 1]) if written else None
+                incoming = UNKNOWN if text is None else text
+                sourced = bool(_written_names(written, tokens[i + 1]))
+                redirected = tokens[i + 1:i + 2]
+        clean, targets = _redirects(list(tokens))
+        prog = clean[0].rpartition("/")[2] if clean else ""
         if incoming is not None:
-            hit = _grade_input(tokens, incoming, whole, cwd, depth)
+            hit = _grade_input(tokens, incoming, unread, cwd, depth)
             if hit[0] > best[0]:
                 best = hit
-        out = _output_text(tokens, incoming)
+            if sourced and (_runs_input(tokens) or _interprets_input(tokens)):
+                executed = True
+                runs += redirected
+            if isinstance(incoming, str) and prog in ("xargs", "parallel"):
+                runs += _run_files(clean + incoming.split())
+            elif isinstance(incoming, str) and len(incoming) <= SCAN_CAP and _runs_input(tokens):
+                runs += [w for part in segments(incoming) or [] for w in _run_files(part)]
+        out = _output_text(tokens, incoming, written)
+        if out is None and incoming is not None and incoming is not UNKNOWN:
+            out = RESHAPED
         outputs.append(out)
-        clean, targets = _redirects(list(tokens))
+        sourced_out.append(sourced or (prog == "cat" and any(
+            _written_names(written, a) for a in clean[1:])))
         text = out
-        if clean and clean[0].rpartition("/")[2] == "tee":
+        if prog == "tee":
             targets = targets + operands(clean[1:])
             text = incoming
         for target in targets:
             if target and not target.startswith("/dev/"):
-                written.setdefault(target.rpartition("/")[2], []).append(text)
+                written.setdefault(target.rpartition("/")[2], {})[text] = None
+        words = operands(clean[1:]) if prog in ("cp", "mv", "ln", "install") else []
+        if len(words) > 1 and written and words[-1].rpartition("/")[2]:
+            # Texts are kept once per file, and a copy from a `_wild` word stands for any file
+            # this line wrote, so a chain of copies cannot compound.
+            copy = written.setdefault(words[-1].rpartition("/")[2], {})
+            for word in words[:-1]:
+                if _wild(word):
+                    copy[ANY_FILE] = None
+                else:
+                    copy.update(written.get(word.rpartition("/")[2], {}))
     if not written:
-        return best, False
-    executed = False
-    for tokens, _fed in linked:
-        clean, _targets = _redirects(list(tokens))
-        while clean and ASSIGN_RE.match(clean[0]):
-            clean = clean[1:]
-        if not clean:
+        return best, executed
+    names = set()
+    for word in runs + [w for tokens, _fed in linked for w in _run_files(tokens)]:
+        names.update(_written_names(written, word))
+    texts = {t: None for name in names for t in written[name]}
+    if ANY_FILE in texts:
+        texts = {t: None for each in written.values() for t in each}
+    for text in texts:
+        executed = True
+        if text is ANY_FILE:
             continue
-        words = [clean[0]]
-        if _runs_input(clean) or _program_family(clean[0]):
-            words += clean[1:]
-        for word in words:
-            for text in written.get(word.rpartition("/")[2], ()):
-                executed = True
-                if text is None or text == COMPOUND:
-                    continue
-                for hit in (grade_text(text, cwd, depth + 1), _grade_program(text, cwd, depth)):
-                    if hit[0] > best[0]:
-                        best = hit
+        if isinstance(text, str):
+            hits = (grade_text(text, cwd, depth + 1), _grade_program(text, cwd, depth))
+        elif text is RESHAPED:
+            hits = ((2, "a reshaped script", "", "opaque"), unread())
+        else:
+            hits = (unread(),)
+        for hit in hits:
+            if hit[0] > best[0]:
+                best = hit
     return best, executed
 
 
