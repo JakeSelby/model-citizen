@@ -480,6 +480,28 @@ observation entry point is registered in live sessions, that ledger holds no row
 emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
 
+`bin/citizen usage --by adherence` reports two figures per recommendation kind, in two sections
+that are never added together. **Adherence (Measured)** gives, per kind and profile fingerprint,
+the emitted, followed, not followed, unknown and pending counts and the rate, followed over
+followed plus not followed, with a 95% Wilson interval; with nothing judged it prints "no judged
+emissions", not 0%, and a row with no fingerprint is also marked unattributed. **If followed
+(Soft estimate)** prices what following the advice might have saved, with its estimator named.
+Every number carries its label, and `--json` gives each figure as an object with its `label`, `n`,
+`interval` and `estimator`, with unknown values `null`. `--rules`, `--stance` and `--rescan` are
+refused with it.
+
+The estimator for `fresh-session` is **carried-context reprice** (PRD FR-85). It prices only
+emissions the ledger answers `not_followed`, from that session's own transcript, found as
+`<session_id>.jsonl` under the Claude Code projects folder and read through the rebuild report's
+parser. The context carried past a fresh start is the context at the nudge less the session's
+first-call context. The calls after the nudge, up to the first compaction, are priced as recorded
+and again as if the session had restarted there: the first as a cold start, later reads and
+rebuild writes smaller by the carried context. The saving is the difference, signed, and reads "at
+most", since nothing measures a handoff. An unpriced model is counted apart and a transcript that
+is gone is counted as transcript missing; neither is priced at $0. Host sessions are exploratory,
+so the figure is never evidence under `docs/evidence-standard.md`, and while the observation entry
+point is unregistered every emission is `unknown` and the estimate is empty.
+
 ## The decision log
 
 `~/.local/state/agent-harness/decisions.jsonl`, beside the ledger and written by the same
@@ -693,6 +715,7 @@ bin/citizen usage --by stance --stance cost   # tokens per variant of one stance
 bin/citizen usage --by profile         # tokens per profile fingerprint; older rows unattributed
 bin/citizen usage --by decision        # hook decisions and their outcomes, above
 bin/citizen usage --by provider        # decision-provider calls, priced, above
+bin/citizen usage --by adherence       # advice followed, and a soft if-followed estimate, above
 bin/citizen usage --rescan             # re-read transcripts in the window first, then report
 ```
 
