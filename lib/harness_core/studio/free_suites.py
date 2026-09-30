@@ -97,9 +97,12 @@ _DISCOVERY_CACHE: Dict[Path, Tuple[Tuple[Tuple[str, int, int], ...], str]] = {}
 
 
 def _tests_fingerprint(target: Path) -> Tuple[Tuple[str, int, int], ...]:
-    """Name, modification time and size of every file under ``tests/``."""
+    """Name, modification time and size of every file discovery imports: ``tests/`` and the
+    ``lib/`` package the test modules load at import time."""
     entries = []
-    for directory, subdirectories, files in os.walk(target / "tests"):
+    for directory, subdirectories, files in (
+        walked for root in ("tests", "lib") for walked in os.walk(target / root)
+    ):
         subdirectories[:] = sorted(name for name in subdirectories if name != "__pycache__")
         for name in sorted(files):
             path = Path(directory) / name

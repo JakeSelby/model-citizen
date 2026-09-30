@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Unit-test discovery is reused while the target's ``tests/`` tree is unchanged."""
+"""Unit-test discovery is reused while the target's ``tests/`` and ``lib/`` trees are unchanged."""
 import json
 import os
 import subprocess
@@ -57,6 +57,16 @@ class DiscoveryCacheTests(unittest.TestCase):
         (self.root / "tests" / "test_other.py").write_text("# two\n", encoding="utf-8")
         free_suites.discover_unit_tests(self.root)
         self.assertEqual(len(self.calls), 3)
+
+    def test_a_changed_library_file_discovers_again(self):
+        library = self.root / "lib" / "harness_core"
+        library.mkdir(parents=True)
+        module = library / "module.py"
+        module.write_text("broken = (\n", encoding="utf-8")
+        free_suites.discover_unit_tests(self.root)
+        module.write_text("fixed = True\n", encoding="utf-8")
+        free_suites.discover_unit_tests(self.root)
+        self.assertEqual(len(self.calls), 2)
 
     def test_a_failed_discovery_is_not_reused(self):
         self.outputs = [None, [CASE]]
