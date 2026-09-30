@@ -67,6 +67,9 @@ ORACLES = Path("benchmarks") / "oracles"
 HISTORY = Path("benchmarks") / "history.jsonl"
 HISTORY_MD = Path("benchmarks") / "history.md"
 ARMS = arms.ARMS
+# Every arm a replay row can declare: a `--raw` directory names no set, so `detect --raw` reads
+# a one-policy pair's reference and treatment streams beside the bare and harness ones.
+DETECT_ARMS = tuple(dict.fromkeys(ARMS + replay_pair.ARMS))
 SNAPSHOT_BRANCH = "main"
 # This repository's own gate, as AGENTS.md names it: a snapshot must pass it before any arm runs.
 # Each command runs in a container of the bare arm, where `python3` is the image's own.
@@ -2119,7 +2122,7 @@ def cmd_detect(args):
             raise SystemExit("cost-bench: %s is not a directory" % raw)
         if (raw / DETECTIONS).exists() and not args.overwrite:
             raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
-        rows, runs = replay_detect.detect_dir(raw, ARMS, cli_messages, module)
+        rows, runs = replay_detect.detect_dir(raw, DETECT_ARMS, cli_messages, module)
         write_jsonl(raw / DETECTIONS, rows)
         unread = replay_detect.unreadable(rows, lambda r: r["source"])
         print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))

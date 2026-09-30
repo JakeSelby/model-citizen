@@ -224,7 +224,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   runtime remains intact.
 - **Which rules fired is read from the saved streams, with no model call.** `detect --raw <dir>`
   runs every detector in `policy/hooks/rule-detectors.py` over each `<task>-<arm>-<rep>.json`
-  in the directory and writes `detections.jsonl` there: one row per run per detector, with the
+  in the directory, a one-policy pair's `reference` and `treatment` arms included, and writes `detections.jsonl` there: one row per run per detector, with the
   detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
   call, counted from 1, and a tool result takes the turn of the call that asked for it. A
   subagent's own messages are not the run's, though its return is. Every detector runs in both
