@@ -15,9 +15,10 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen upgrade [--dry-run]
     citizen uninstall
     citizen lint    [PATH]
-    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan] [--json]
+    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix|rebuild] [--stance NAME] [--rescan] [--json]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
+    citizen evidence verify BUNDLE [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen worktree create NAME [REPO] [--branch BRANCH] [--base BASE] [--no-fetch]
@@ -61,7 +62,7 @@ from harness_core import reconcile, lifecycle, tasks, compatibility, workers, in
 from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
-from harness_core import codex_client, keychain, collisions, importer, cache_prefix
+from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
 from harness_core import intents, observation
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -5212,12 +5213,34 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
         return 2
+    if by == "rebuild" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # The report reads transcripts on every run, so a ledger rescan would be accepted and
+        # ignored; it is refused like the other options that do not apply.
+        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules, --stance "
+              "and --rescan do not apply", file=sys.stderr)
+        return 2
     if stance and by != "stance":
         print("usage --stance applies only to --by stance", file=sys.stderr)
         return 2
     if rules_mode and by == "day":
         by = "rule"
     rescan_result = None
+    if by == "rebuild":
+        # This view reads the request stream itself, so each invocation is already a rescan.
+        # It does not need or mutate the coarser session ledger.
+        result = rebuilds.analyse(claude_projects_root(),
+                                  time.time() - max(args.days, 0) * 86400,
+                                  args.days, load_prices(load_config()), pricing)
+        if json_output:
+            groups = [dict({"scope": name}, **result["scopes"][name])
+                      for name in ("long", "all")]
+            return usage_json("rebuild", "rebuild", args.days, groups,
+                              files=result["files"], shortfall_tokens=result["shortfall_tokens"],
+                              long_session_calls=result["long_session_calls"],
+                              rescan="direct transcript scan")
+        for line in rebuilds.render(result):
+            say(line)
+        return 0
     if getattr(args, "rescan", False):
         hook = REPO / "claude" / "hooks" / "usage-log.py"
         out = subprocess.run([sys.executable, str(hook), "--rescan", str(args.days)], capture_output=True, text=True)
@@ -5848,6 +5871,35 @@ def cmd_tiers(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_evidence(args: argparse.Namespace) -> int:
+    """Re-derive a local evidence bundle; saved commands and cached success are never trusted."""
+    if args.action != "verify":
+        raise SystemExit("evidence needs the verify action")
+    import importlib.util
+
+    path = REPO / "scripts" / "evidence_bundle.py"
+    spec = importlib.util.spec_from_file_location("harness_evidence_bundle", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    result = module.verify(Path(args.bundle))
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    elif result["ok"]:
+        print("evidence bundle {}: verified; 12/12 evidence-standard items pass".format(
+            result["bundle_id"]))
+        # An unrecorded observation is reported as unknown, never as verified parity.
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation)
+    else:
+        print("evidence bundle {}: verification failed".format(result.get("bundle_id") or args.bundle),
+              file=sys.stderr)
+        for error in result["errors"]:
+            print("  " + error, file=sys.stderr)
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation, file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
 def program_name(argv0: Optional[str] = None) -> str:
     """The name usage text shows: `citizen` or its alias `harness` as invoked, else `citizen`."""
     name = os.path.basename(sys.argv[0] if argv0 is None else argv0)
@@ -5928,7 +5980,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "profile"],
+                                    "provider", "prefix", "rebuild", "profile"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")
@@ -6084,6 +6136,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--release-check", action="store_true", help="fail unless every release target has native evidence")
     p.set_defaults(func=cmd_compatibility)
+
+    p = sub.add_parser("evidence", help="verify a local published evidence bundle offline")
+    evidence_sub = p.add_subparsers(dest="action", required=True)
+    verify = evidence_sub.add_parser("verify", help="re-derive every declared figure and card")
+    verify.add_argument("bundle", help="bundle directory; no saved command is executed")
+    verify.add_argument("--json", action="store_true", help="emit the machine-readable result")
+    verify.set_defaults(func=cmd_evidence)
 
     p = sub.add_parser("freeze", help="show runtime source drift from the frozen release commit")
     p.add_argument("--json", action="store_true")

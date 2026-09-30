@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-29"
+generated: "2026-09-30"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -225,7 +225,7 @@ development_status:
   ah-t025-enrich-story-files-delivered-work-without-an: done
 
   ah-e013-measurement-the-cost-benchmark-detector: in-progress
-  ah-b095-the-delegation-stance-never-fires-zero-subagent: backlog
+  ah-b095-the-delegation-stance-never-fires-zero-subagent: ready-for-dev
   ah-b117-adherence-emissions-are-never-settled-in-a-live: done
   ah-b119-the-harness-arm-s-image-holds-a-checkout-with: ready-for-dev
   ah-s138-record-the-first-live-cost-replay-results: done
@@ -264,7 +264,7 @@ development_status:
   ah-d011-decide-whether-a-red-smoke-tier-blocks-the: done
   ah-s209-compatibility-catalog-an-explicit-waiver-for-a: ready-for-dev
   ah-s214-acceptance-runner-use-the-codex-session-login-in: done
-  ah-s243-proof-set-1-the-proof-bundle-harness-evidence: backlog
+  ah-s243-proof-set-1-the-proof-bundle-harness-evidence: ready-for-dev
   ah-t013-amend-the-0-12-0-release-notes-with-the-work: done
 
   ah-e015-guardrails-and-runtime-parity-close-the-gaps: in-progress
@@ -490,6 +490,7 @@ development_status:
   ah-b132-usage-feed-prices-a-workflow-tool-agent-against: ready-for-dev
   ah-b133-fix-coordination-let-a-subagent-write-paths-its: ready-for-dev
   ah-b135-an-escaped-quote-inside-hides-a-later-git-push: ready-for-dev
+  ah-b143-test-usage-json-s-multiday-test-fails-when-a-run: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
