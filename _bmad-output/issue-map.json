@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 148,
+    "bug": 149,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -8354,6 +8354,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B145.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B148",
+      "github_number": 1113,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1113",
+      "title": "grade-bash follows cd into the wrong directory for builtin, eval, CDPATH, HOME and physical forms",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B148.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
