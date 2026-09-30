@@ -712,6 +712,29 @@ sampling and completion claims are unreleased (#574, #593).
 - Each row's `input` is capped at 2 KiB. The log stays local, is not part of export, and stops when
   `telemetry.decisions` is off.
 
+#### FR-85: Soft-estimate report
+`citizen usage --by adherence` must report, per recommendation kind, the adherence rate as a measured
+figure with a 95% Wilson interval, and what following the advice would have saved as a soft estimate
+from a named estimator, never pooled with a measured figure (AD-12). The estimator for the fresh-session
+nudge is **carried-context reprice**:
+- **Inputs:** the adherence ledger's emissions answered `not_followed`, the session's main transcript,
+  the cache-rebuild breaks and causes attributed from it (#748), and the dated price table (FR-24).
+- **Assumption:** the same later turns, in a session reset at the nudge with no handoff. The fresh
+  session starts from the session's own first-call context, so the figure is a saving of at most the
+  amount shown.
+- **Method:** the context carried past the session's first call is removed from every call after the
+  nudge, up to the first compaction; the first such call is repriced as a cold start and a rebuild
+  writes less by the carried context. The saving is signed and never clipped at zero.
+
+**Status:** planned (v0.15.0, #798).
+
+**Consequences (testable):**
+- Every figure carries its estimand label; summing figures with different labels is refused, and no
+  total spans the measured and soft sections.
+- A kind with no judged emission prints no rate rather than 0%; a kind with no estimator is unmeasured.
+- An emission whose horizon holds an unpriced model is counted as unpriced, and one whose transcript
+  cannot be read as transcript missing; neither is priced at $0.
+
 ### 4.6 Cost posture and delegation
 
 **Description:** The `cost` stance resolves to a cost posture: a capability class, an effort level and a

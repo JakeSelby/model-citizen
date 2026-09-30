@@ -14,11 +14,15 @@ Standard library only, and no model call: every figure here re-derives from `res
 """
 import math
 import random
+import sys
 from fractions import Fraction
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from harness_core.intervals import Z95, wilson  # noqa: E402,F401  re-exported for callers
 
 ARMS = ("bare", "harness")
 CONFIDENCE = 0.95
-Z95 = 1.959963984540054  # the two-sided 95% normal quantile
 DELTA = 0.125  # SM-2's non-inferiority margin on the pass-rate difference
 MAGNITUDE = 0.85  # "at least 15% cheaper" needs the ratio's upper bound at or below this
 SEED = 795
@@ -97,16 +101,6 @@ def cost_of_pass(cost, passes):
     if cost is None or not passes:
         return None
     return cost / passes
-
-
-def wilson(passes, n, z=Z95):
-    """The Wilson score interval on a proportion, `(low, high)`; `(None, None)` for no attempts."""
-    if not n:
-        return None, None
-    p = passes / n
-    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
-    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
-    return max(0.0, centre - half), min(1.0, centre + half)
 
 
 def _cells(atts, arms=ARMS):

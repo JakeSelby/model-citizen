@@ -248,6 +248,9 @@ tag or a later task-manifest change fails closed instead of relying on the retir
 - **Hypothetical:** any figure that is computed rather than measured, such as a what-if price or a
   projected subset, is marked hypothetical where it appears.
 
+A figure a usage report labels soft estimate, such as `citizen usage --by adherence`'s if-followed
+saving, is hypothetical in this sense and never enters a proof set.
+
 ### 11. Field checks
 
 **What it is:** checks that matter once a comparison runs on real sessions rather than a replay.
