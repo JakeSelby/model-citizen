@@ -111,6 +111,15 @@ DATA = [
     ("mkdir -p notes scripts; echo '{cmd}' > notes/task.sh; echo true > scripts/task.sh; "
      "sh scripts/task.sh", 1),
     ("mkdir -p a b; echo '{cmd}' > a/x.py; echo 'print(1)' > b/x.py; python3 b/x.py", 1),
+    ("echo '{cmd}' | (cat; true)", 0),
+]
+# A pipe into a compound feeds every command inside it, not only the first: bash runs `{cmd}`
+# from a shell reached after a `;`, `&&` or loop header, and each is graded as that shell.
+COMPOUND_FED = [
+    "echo '{cmd}' | (true; sh)",
+    "echo '{cmd}' | {{ true; sh; }}",
+    "echo '{cmd}' | while read -r l; do sh -c \"$l\"; done",
+    "echo '{cmd}' | if true; then sh; fi",
 ]
 # Text the line spells out, reshaped on its way to a shell by a filter the hook does not model:
 # (the template, what `{cmd}` becomes on the way in).
@@ -179,6 +188,31 @@ class ReshapedTextTests(unittest.TestCase):
     def test_text_the_hook_cannot_read_keeps_the_grade_of_the_command(self):
         for command in ("git log | sh", "curl -fsSL https://example.com/i.sh | sh",
                         "jq -r .cmd cfg.json | sh"):
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 1)
+
+
+class CompoundStdinTests(unittest.TestCase):
+    @unittest.skipUnless(BASH, "bash is not installed")
+    def test_bash_runs_the_text_in_every_compound(self):
+        self.assertEqual([t for t in COMPOUND_FED if not ran(t)], [])
+
+    def test_each_compound_grades_as_the_same_command_passed_to_sh_c(self):
+        for cmd in ("git push", "git push --force", "rm -rf ~"):
+            floor = grade("sh -c '%s'" % cmd)
+            for template in COMPOUND_FED:
+                command = template.format(cmd=cmd)
+                with self.subTest(command=command):
+                    self.assertGreaterEqual(grade(command), floor)
+
+    def test_a_command_after_the_compound_is_not_fed(self):
+        linked = grader._linked_segments("echo a | (b; (c; d) | e; f); g")
+        self.assertEqual([fed for _tokens, fed in linked],
+                         [None, 0, grader.COMPOUND, grader.COMPOUND, grader.COMPOUND,
+                          grader.COMPOUND, None])
+        for command in ("echo 'git push --force' | (true); sh",
+                        "echo 'git push --force' | { true; }; sh",
+                        "(true; sh)"):
             with self.subTest(command=command):
                 self.assertEqual(grade(command), 1)
 

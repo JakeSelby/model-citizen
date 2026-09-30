@@ -164,6 +164,11 @@ SHELLS = {"bash", "sh", "zsh", "ksh", "mksh", "dash", "csh", "tcsh", "fish"}
 SHELL_RUNNERS = SHELLS | {"eval", "ssh"}
 # What a pipe from a group, subshell or loop carries: text this hook does not read.
 COMPOUND = "compound"
+COMPOUND_OPEN = {"{", "if", "while", "until", "for", "select", "case"}
+COMPOUND_CLOSE = {"}", "fi", "done", "esac"}
+# The opening words each closing word ends.
+COMPOUND_MATCH = {"}": ("{",), "fi": ("if",), "done": ("while", "until", "for", "select"),
+                  "esac": ("case",)}
 # Text on a standard input this hook does not read (`_grade_streams`), and text the line spells
 # out that a filter or a `printf` directive then reshapes past what the hook models.
 UNKNOWN = object()
@@ -1002,26 +1007,45 @@ def segments(text):
 def _linked_segments(text):
     """[(simple command, what feeds its standard input)] as `segments` splits `text`, or None.
     What feeds it is the index of the command piped into it, `COMPOUND` for a pipe from a
-    group, subshell or loop, or None. A `(` or `{` after the pipe leaves its first command fed."""
+    group, subshell or loop, or None. A `(` or `{` after the pipe leaves its first command fed,
+    and every later command inside that compound reads what the first left of the pipe, graded
+    as `COMPOUND`, as bash gives each of them the compound's standard input."""
     text = " ; ".join(text.split("\n"))
     try:
         tokens = ro.tokenize(text)
     except ValueError:
         return None
-    out, cur, skipping, fed = [], [], False, None
+    # Per open compound, its opening word and `COMPOUND` when a pipe feeds it, else None.
+    out, cur, skipping, fed, groups = [], [], False, None, []
+
+    def opened(word):
+        groups.append((word, COMPOUND if fed is not None or (groups and groups[-1][1])
+                       else None))
+
+    def closed(words):
+        if groups and groups[-1][0] in words:
+            groups.pop()
+        return groups[-1][1] if groups else None
+
     for token in tokens:
         if token in ro.ALWAYS_DELIM:
             if cur:
                 out.append((cur, fed))
             if token in ("|", "|&"):
                 fed = len(out) - 1 if cur else COMPOUND
-            elif token != "(":
-                fed = None
+            elif token == "(":
+                opened(token)
+            else:
+                fed = closed(("(",)) if token == ")" else groups[-1][1] if groups else None
             cur, skipping = [], False
             continue
         if skipping:
             continue
         if not cur:
+            if token in COMPOUND_OPEN:
+                opened(token)
+            elif token in COMPOUND_CLOSE:
+                fed = closed(COMPOUND_MATCH[token])
             if token in ro.WORD_DROP or token in ro.WORD_COND or token == "!":
                 continue
             if token in ro.WORD_HEADER:  # `for x in *` names data, not commands
@@ -2821,8 +2845,6 @@ def _isolating(text):
         return True
 
 
-COMPOUND_OPEN = {"{", "if", "while", "until", "for", "select", "case"}
-COMPOUND_CLOSE = {"}", "fi", "done", "esac"}
 LIST_ENDS = {"&&", "||", ";", ";;", "&"}
 
 
