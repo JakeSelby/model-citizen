@@ -67,6 +67,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -152,6 +153,25 @@ WRAPPERS = {
     "npx": ("--package", "-p"),
     "uvx": ("--from", "-p"),
 }
+# Every option each of these wrappers takes, GNU's and BSD's: (short letters that take a value,
+# short letters that take none, long options that take a value, long options that take none).
+# An option outside its entry makes the command it wraps unknown (`_unwrap`).
+WRAPPER_OPTIONS = {
+    "timeout": ("ks", "fpv", ("--kill-after", "--signal"),
+                ("--foreground", "--preserve-status", "--verbose")),
+    "time": ("fo", "ahlpqv", ("--format", "--output"),
+             ("--append", "--portability", "--quiet", "--verbose")),
+    "nice": ("n", "", ("--adjustment",), ()),
+    "nohup": ("", "", (), ()),
+    "stdbuf": ("eio", "", ("--error", "--input", "--output"), ()),
+    "command": ("", "pvV", (), ()),
+    "exec": ("a", "cl", (), ()),
+    "noglob": ("", "", (), ()),
+    "env": ("CLPSUu", "0iv", ("--chdir", "--split-string", "--unset"),
+            ("--ignore-environment", "--null", "--debug", "--list-signal-handling",
+             "--block-signal", "--default-signal", "--ignore-signal")),
+}
+NICE_LEGACY_RE = re.compile(r"^-[-+]?\d+$")
 # Runners that execute the rest of the line in a managed environment, like `npx`.
 RUNNERS = {("bundle", "exec"), ("poetry", "run"), ("uv", "run"), ("pipx", "run"),
            ("pnpm", "dlx"), ("pnpm", "exec"), ("yarn", "dlx"), ("yarn", "exec"),
@@ -1112,6 +1132,97 @@ def strip_options(args, value_flags):
     return args[i:]
 
 
+def _unwrap(prog, args):
+    """(the command a wrapper in `WRAPPERS` runs, what of it this hook could not read or None,
+    whether it may run in another directory). Options are read from `WRAPPER_OPTIONS`; an option
+    not listed there, an `env -S` string holding a quote, a backslash or a `$` (which env
+    interprets itself) is named as unread, and the command
+    returned is then only the likeliest reading. `env` takes every word holding a `=` as an
+    assignment, whatever its name, so `env 'X%=1' rm -rf /` runs the `rm`."""
+    if prog not in WRAPPER_OPTIONS:  # `npx` and `uvx`: past options and assignments, as before
+        rest = strip_options(args, WRAPPERS[prog])
+        while rest and ASSIGN_RE.match(rest[0]):
+            rest = rest[1:]
+        return rest, None, False
+    shorts, flags, longs, long_flags = WRAPPER_OPTIONS[prog]
+    args, unread, moved, i = list(args), None, False, 0
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if prog == "env" and a == "-":  # the same as `-i`
+            i += 1
+            continue
+        if not a.startswith("-") or a == "-":
+            break
+        if prog == "nice" and NICE_LEGACY_RE.match(a):
+            i += 1
+            continue
+        split = None
+        if a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name in longs:
+                if not eq:
+                    value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+                if name == "--split-string":
+                    split = value
+                moved = moved or name == "--chdir"
+            elif name not in long_flags:
+                unread = unread or "%s %s" % (prog, name)
+            i += 1
+        else:
+            for j, letter in enumerate(a[1:]):
+                if letter in shorts:
+                    value = a[j + 2:]
+                    if not value:
+                        value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+                    if letter == "S":
+                        split = value
+                    moved = moved or letter == "C"
+                    break
+                if letter not in flags:
+                    unread = unread or "%s -%s" % (prog, letter)
+                    break
+            i += 1
+        if split is not None and prog == "env":
+            if any(c in split for c in "\\'\"$"):
+                unread = unread or "env -S"
+                try:
+                    words = shlex.split(split)
+                except ValueError:
+                    words = split.split()
+            else:
+                words = split.split()
+            args, i = words + args[i:], 0
+    rest = args[i:]
+    if prog == "env":
+        while rest and "=" in rest[0]:
+            rest = rest[1:]
+    elif prog == "timeout":
+        rest = rest[1:]  # the duration
+    return rest, unread, moved
+
+
+def _runner_readings(rest):
+    """Each way the words after a runner such as `uv run` may begin the command it runs. Its
+    options are not modelled, so each one without a `=` may or may not take the next word."""
+    starts, seen, readings = [0], set(), []
+    while starts:
+        p = starts.pop()
+        if p in seen or p >= len(rest):
+            continue
+        seen.add(p)
+        word = rest[p]
+        if ASSIGN_RE.match(word) or (word.startswith("-") and "=" in word):
+            starts.append(p + 1)
+        elif word.startswith("-") and word != "-":
+            starts.extend((p + 1, p + 2))
+        else:
+            readings.append(rest[p:])
+    return sorted(readings, key=len, reverse=True)
+
+
 def _joined(args, limit=2):
     return " ".join(operands(args)[:limit])
 
@@ -1393,7 +1504,27 @@ NAME_BEFORE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678
 
 
 def grade_tokens(tokens, cwd, depth):
-    """(grade, verb, target, family) for one simple command."""
+    """(grade, verb, target, family) for one simple command. One that redirects into a file
+    grades at least 1 whatever it runs, since bash opens the file before it starts a wrapper:
+    `nice -n 5 echo x > f` writes `f`."""
+    hit = _grade_tokens(tokens, cwd, depth)
+    if hit[0] == 0:
+        wrote = [t for t in _redirects(list(tokens))[1] if t and t != "/dev/null"]
+        if wrote:
+            return 1, "redirect to", wrote[-1], None
+    return hit
+
+
+def _runner(readings, cwd, depth):
+    """The worst grade over the readings `_runner_readings` gives of a runner's command."""
+    if len(readings) == 1:
+        return grade_tokens(readings[0], cwd, depth)
+    if depth >= MAX_DEPTH:
+        return _scan(" ".join(readings[0]))
+    return max((grade_tokens(r, cwd, depth + 1) for r in readings), key=lambda h: h[0])
+
+
+def _grade_tokens(tokens, cwd, depth):
     tokens, written = _redirects(tokens)
     wrote = ""
     for target in written:
@@ -1415,11 +1546,9 @@ def grade_tokens(tokens, cwd, depth):
     if PLACEHOLDER in head or head.startswith("$"):
         return _scan(text)  # the program comes from a substitution or a variable
     if (prog, ops[0] if ops else "") in RUNNERS:
-        rest = args[args.index(ops[0]) + 1:]
-        while rest and (rest[0].startswith("-") or ASSIGN_RE.match(rest[0])):
-            rest = rest[1:]
-        if rest:
-            return grade_tokens(rest, cwd, depth)
+        readings = _runner_readings(args[args.index(ops[0]) + 1:])
+        if readings:
+            return _runner(readings, cwd, depth)
     if prog == "cargo" and ops[:1] == ["run"] and "--" in args:
         rest = args[args.index("--") + 1:]
         if rest:
@@ -1453,14 +1582,12 @@ def grade_tokens(tokens, cwd, depth):
             return 3, "xargs rm -rf", "", "delete"
         return _inner_tokens(rest, cwd, depth)
     if prog in WRAPPERS:
-        rest = strip_options(args, WRAPPERS[prog])
-        while rest and ASSIGN_RE.match(rest[0]):
-            rest = rest[1:]
-        if prog == "timeout" and rest:
-            rest = rest[1:]  # the duration
-        if rest:
-            return grade_tokens(rest, cwd, depth)
-        return 1, prog, "", None
+        rest, unread, _moved = _unwrap(prog, args)
+        hit = grade_tokens(rest, cwd, depth) if rest else (1, prog, "", None)
+        if unread and hit[0] < 3:
+            # What the wrapper runs is not known, so it may be anything: never let it through.
+            return 3, unread, "", "opaque"
+        return hit
     if prog == "git":
         return _git(args, cwd)
     if prog == "gh":
@@ -3321,23 +3448,19 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
     prog, args = body[0].rpartition("/")[2], body[1:]
     ops = operands(args)
     written = _written(prog, args, targets, cwd)
-    inner = None
+    inner, readings = None, []
     if depth < MAX_DEPTH:
         if prog in WRAPPERS:
-            if prog == "env" and any(a in ("-C", "--chdir") or a.startswith("--chdir=")
-                                     for a in args):
+            rest, _unread, chdir = _unwrap(prog, args)
+            if chdir:
                 cwd = None  # `env -C` moves the inner command; no literal is trusted here
-            rest = strip_options(args, WRAPPERS[prog])
-            while rest and ASSIGN_RE.match(rest[0]):
-                rest = rest[1:]
-            inner = ("tokens", rest[1:] if prog == "timeout" else rest)
+            inner = ("tokens", rest)
         elif prog in SUDO:
             inner = ("tokens", strip_options(args, SUDO[prog]))
         elif (prog, ops[0] if ops else "") in RUNNERS:
-            rest = args[args.index(ops[0]) + 1:]
-            while rest and (rest[0].startswith("-") or ASSIGN_RE.match(rest[0])):
-                rest = rest[1:]
-            inner = ("tokens", rest)
+            # Every reading is governed, as every one is graded (`_runner`).
+            readings = _runner_readings(args[args.index(ops[0]) + 1:])
+            inner = ("tokens", readings[0]) if readings else None
         elif prog in SHELLS:
             for i, a in enumerate(args):
                 if DASH_C_RE.match(a) and i + 1 < len(args):
@@ -3353,7 +3476,9 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
             if _moves_cd_resolution(tokens):  # and `env CDPATH=w bash -c '…'` its CDPATH
                 variables = dict(variables or {})
                 variables[_CD_UNKNOWN] = True
-            found = _governed(inner[1], cwd, depth + 1, variables, causes)
+            found = []
+            for reading in readings or [inner[1]]:
+                found.extend(_governed(reading, cwd, depth + 1, variables, causes))
         else:
             # An inner shell inherits HOME: from this line, or from an assignment prefixed to
             # the command that runs it, as `HOME=x bash -c '…'` and `env HOME=x sh -c '…'` do.
