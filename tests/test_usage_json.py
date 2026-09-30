@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Machine-readable usage reports use the same aggregates as the text reports."""
 import argparse
+import calendar
 import contextlib
 import io
 import json
@@ -214,8 +215,14 @@ class JsonReportTests(unittest.TestCase):
                 self.assertEqual(report["totals"]["tokens"]["input"], 200)
                 self.assertEqual(report["raw_vs_deduped"]["ratio"], 1.5)
 
+    def test_multiday_session_still_counts_once_after_the_clock_passes_midnight(self):
+        """A run that starts before midnight UTC and reaches this test after it (#1117)."""
+        next_day = calendar.timegm(time.strptime(NOW, "%Y-%m-%dT%H:%M:%SZ")) + 86400
+        with mock.patch.object(time, "time", return_value=next_day):
+            self.test_multiday_session_counts_once_per_group_and_once_in_total()
+
     def test_multiday_session_counts_once_per_group_and_once_in_total(self):
-        yesterday = time.strftime("%Y-%m-%d", time.gmtime(time.time() - 86400))
+        yesterday = time.strftime("%Y-%m-%d", time.gmtime(calendar.timegm(time.strptime(NOW[:10], "%Y-%m-%d")) - 86400))
         slice_ = {"input": None, "output": 5, "cache_read": None, "cache_write": 0}
         long_run = session(models=["unknown"], input=None, cache_read=None,
                            days={yesterday: dict(slice_), NOW[:10]: dict(slice_)})
