@@ -8347,6 +8347,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B145",
+      "github_number": 1112,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1112",
+      "title": "Offline rule detection skips a one-policy pair's reference and treatment streams",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B145.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B143",
       "github_number": 1117,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1117",

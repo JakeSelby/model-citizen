@@ -493,6 +493,7 @@ development_status:
   ah-b142-grade-bash-timing-tests-fail-on-wall-clock-under: ready-for-dev
   ah-b143-test-usage-json-s-multiday-test-fails-when-a-run: ready-for-dev
   ah-b144-a-non-finite-deduplication-ratio-counts-as: ready-for-dev
+  ah-b145-offline-rule-detection-skips-a-one-policy-pair-s: ready-for-dev
   ah-b146-a-here-document-body-that-a-shell-runs-is-graded: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
