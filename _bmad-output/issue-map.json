@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 136,
+    "bug": 144,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -8315,6 +8315,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B135.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B143",
+      "github_number": 1117,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1117",
+      "title": "test_usage_json's multiday test fails when a run crosses midnight UTC",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B143.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
