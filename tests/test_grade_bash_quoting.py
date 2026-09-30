@@ -17,10 +17,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 import unittest
 
-from test_grade_bash import CWD, grade, grader, pre_tool_use_timeout
+from test_grade_bash import CWD, cpu_seconds, grade, grader, pre_tool_use_timeout
 from test_governance_binding import Home, make_repo
 
 ro = grader.ro
@@ -278,16 +277,11 @@ class MongoTests(unittest.TestCase):
 
 class ScalingTests(unittest.TestCase):
     """As `test_grading_a_hundred_kilobyte_command_stays_well_inside_the_hook_timeout`: the best
-    of several runs, inside a tenth of the hook timeout, and a quarter-size run that bounds the
-    growth, which a quadratic reading would push past eightfold."""
+    of several batches in CPU time, inside a tenth of the hook timeout, and a quarter-size run
+    that bounds the growth, which a quadratic reading would push past eightfold."""
 
-    def best(self, function, argument, runs=3):
-        times = []
-        for _ in range(runs):
-            start = time.perf_counter()
-            function(argument)
-            times.append(time.perf_counter() - start)
-        return min(times)
+    def best(self, function, argument):
+        return cpu_seconds(lambda: function(argument))
 
     def assert_linear(self, function, make):
         budget = pre_tool_use_timeout() / 10
