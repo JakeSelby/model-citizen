@@ -170,6 +170,12 @@ UNKNOWN = object()
 RESHAPED = object()
 # A file copied from any file a line wrote, as a `cp` from a glob or variable writes (`_wild`).
 ANY_FILE = object()
+# A line that may change its directory, and the commands that may move, copy or link a file it
+# wrote or change its directory by being sourced: a file it runs then matches one it wrote by
+# base name alone (`_Written`).
+DIR_CHANGE_RE = re.compile(r"\b(?:cd|pushd|popd|chdir)\b|--directory\b|(?<!\S)-[A-Za-z]*[CD]")
+RELOCATORS = {"cp", "mv", "ln", "install", "rsync", "ditto", "tar", "unzip", "cpio", "pax", "git",
+              ".", "source"}
 HERE_STRING_RE = re.compile(r"^\d*<<<$")
 # The names under which a program reads its standard input as a file.
 STDIN_PATHS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
@@ -1916,13 +1922,16 @@ def _program_source(family, args):
             return given(name, value)
         if not a.startswith("--"):
             if family in CLUSTERED:
+                step = 1
                 for k in range(1, len(a)):
                     flag = "-" + a[k]
                     if flag in values:
-                        i += 0 if a[k + 1:] else 1
+                        step = 1 if a[k + 1:] else 2
                         break
                     if flag in evals or flag in files:
                         return given(flag, a[k + 1:] or after)
+                i += step
+                continue
             elif a[:2] in evals or a[:2] in files:
                 return given(a[:2], a[2:])
         i += 2 if a in values else 1
@@ -1984,23 +1993,34 @@ def _run_files(tokens, depth=0):
             break
     if not tokens:
         return []
-    out, name = [tokens[0]], tokens[0].rpartition("/")[2].lstrip("=")
+    out, name = [_searched(tokens[0])], tokens[0].rpartition("/")[2].lstrip("=")
     if name in (".", "source"):
-        return out + tokens[1:2]
+        return out + [_searched(w) for w in tokens[1:2]]
     if name in SHELLS:
         kind, words = _shell_source(tokens[1:])
         if kind == "inline" and words and depth < MAX_DEPTH:
             for part in segments(words[0]) or []:
                 out += _run_files(part, depth + 1)
-        return out + (words if kind == "file" else [])
+        return out + ([_searched(w) for w in words] if kind == "file" else [])
     family = _program_family(tokens[0])
     if family:
         kind, words = _program_source(family, tokens[1:])
         if kind == "file":
             out += words
         elif kind == "module":
-            out.append(words[0].rpartition(".")[2] + ".py")
+            out.append(_Searched(words[0].rpartition(".")[2] + ".py"))
     return out
+
+
+class _Searched(str):
+    """A file name a shell looks up on `PATH`, or a module Python looks up on its path: any file
+    of that base name the line wrote may be the one run (`_written_names`)."""
+
+
+def _searched(word):
+    """`word` as `_Searched` when it names no directory, as a command word, a sourced file or a
+    shell's script does, since the shell then looks it up on `PATH`."""
+    return word if "/" in word else _Searched(word)
 
 
 def _interprets_input(tokens):
@@ -2151,7 +2171,7 @@ def _printf(fmt, args):
     """What `printf fmt args…` writes: each conversion takes the next argument, `%b` with its
     escapes interpreted, with its flags, width and precision, `*` taking them from an argument,
     and the format repeats while arguments remain. `RESHAPED` for a directive this hook does not
-    model, or a field or text too wide to build."""
+    model, a field or text too wide to build, or arguments left after `PROGRAM_CHECKS` repeats."""
     out, size = [], 0
     for _ in range(PROGRAM_CHECKS):
         used, pos = 0, 0
@@ -2189,6 +2209,8 @@ def _printf(fmt, args):
         args = args[used:]
         if not used or not args:
             break
+    else:
+        return RESHAPED
     return "".join(out)
 
 
@@ -2278,22 +2300,48 @@ def _wild(word):
     return any(c in word for c in "$`*?[") or PLACEHOLDER in word
 
 
+class _Written(dict):
+    """The files a line writes, each by its path as written and normalized, with the texts
+    written to it; `names` holds the paths under each base name, and `loose()` whether the line
+    may change its directory or move a file, so a path it runs can name a file it wrote under
+    another path."""
+
+    def __init__(self, loose):
+        super().__init__()
+        self.names, self.loose = {}, loose
+
+    def texts(self, path):
+        """The texts written to `path`, which is then among the files written."""
+        key = os.path.normpath(path)
+        if key not in self:
+            self[key] = {}
+            self.names.setdefault(key.rpartition("/")[2], []).append(key)
+        return self[key]
+
+
 def _written_names(written, word):
-    """The names of the files in `written` the word `word` may name: its base name, or every one
-    when it is `_wild`."""
-    name = word.rpartition("/")[2]
-    if name in written:
-        return [name]
-    return list(written) if _wild(word) else []
+    """The paths of the files in `written` the word `word` may name: every one when it is
+    `_wild`; each of its base name when it is `_Searched`, the line is `loose()`, or one of the
+    two paths starts at `~` or `/` and the other does not; else the same path, `./x` and `x`
+    being one."""
+    if _wild(word):
+        return list(written)
+    key = os.path.normpath(word)
+    same = written.names.get(key.rpartition("/")[2], [])
+    if not same or isinstance(word, _Searched) or written.loose():
+        return list(same)
+    return [k for k in same
+            if k == key or "~" in (k[:1], key[:1]) or (k[:1] == "/") != (key[:1] == "/")]
 
 
 def _file_text(written, word):
-    """What this line wrote to the file `word` names (`_concat`), or None, as for a `_wild` word
-    or a copy of one."""
-    name = word.rpartition("/")[2]
-    if name not in written or ANY_FILE in written[name]:
+    """What this line wrote to the files `word` may name (`_concat`), or None, as for a `_wild`
+    word or a copy of one."""
+    names = [] if _wild(word) else _written_names(written, word)
+    texts = {t: None for name in names for t in written[name]}
+    if not names or ANY_FILE in texts:
         return None
-    return _concat(list(written[name]))
+    return _concat(list(texts))
 
 
 def _grade_input(tokens, incoming, unread, cwd, depth):
@@ -2331,10 +2379,25 @@ def _grade_streams(linked, whole, cwd, depth):
     hands on text it cannot read. A file is run when a command word names it, or a shell or
     interpreter is handed it as its script (`_run_files`), as `./x.sh`, `sh x.sh` or `python3
     x.py` are, or reads it on its standard input; the text written to it, a copy's included, is
-    then graded as a script and as a program. Files match by base name, so a same-named file
-    elsewhere counts too, and the order of the writes is not modelled."""
-    best, outputs, sourced_out, written, runs = (0, None, None, None), [], [], {}, []
-    unread_hit, executed = [], False
+    then graded as a script and as a program. Files match by path (`_written_names`), by base name
+    where the line may change directory or move a file, and the order of the writes is not
+    modelled."""
+    best, outputs, sourced_out, runs = (0, None, None, None), [], [], []
+    unread_hit, executed, memo = [], False, {}
+
+    def run_lists():
+        if "runs" not in memo:
+            memo["runs"] = [_run_files(tokens) for tokens, _fed in linked]
+        return memo["runs"]
+
+    def loose():
+        if "loose" not in memo:
+            memo["loose"] = bool(DIR_CHANGE_RE.search(whole)) or any(
+                w.rpartition("/")[2] in RELOCATORS or _wild(w)
+                for words in run_lists() for w in words)
+        return memo["loose"]
+
+    written = _Written(loose)
 
     def unread():
         # Below 2 it adds nothing to the grade each command of the line has of its own.
@@ -2382,21 +2445,24 @@ def _grade_streams(linked, whole, cwd, depth):
             text = incoming
         for target in targets:
             if target and not target.startswith("/dev/"):
-                written.setdefault(target.rpartition("/")[2], {})[text] = None
+                written.texts(target)[text] = None
         words = operands(clean[1:]) if prog in ("cp", "mv", "ln", "install") else []
         if len(words) > 1 and written and words[-1].rpartition("/")[2]:
             # Texts are kept once per file, and a copy from a `_wild` word stands for any file
             # this line wrote, so a chain of copies cannot compound.
-            copy = written.setdefault(words[-1].rpartition("/")[2], {})
+            copy = written.texts(words[-1])
             for word in words[:-1]:
                 if _wild(word):
                     copy[ANY_FILE] = None
                 else:
-                    copy.update(written.get(word.rpartition("/")[2], {}))
+                    for name in _written_names(written, word):
+                        copy.update(written[name])
     if not written:
         return best, executed
+    if any(w.rpartition("/")[2] in RELOCATORS for w in runs):
+        memo["loose"] = True
     names = set()
-    for word in runs + [w for tokens, _fed in linked for w in _run_files(tokens)]:
+    for word in runs + [w for words in run_lists() for w in words]:
         names.update(_written_names(written, word))
     texts = {t: None for name in names for t in written[name]}
     if ANY_FILE in texts:

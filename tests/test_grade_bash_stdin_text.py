@@ -62,6 +62,13 @@ SHELL = [
     "echo '{cmd}' > x.sh; bash -c 'sh x.sh'",
     "echo '{cmd}' > x.sh; xargs sh <<< x.sh",
     "echo '{cmd}' > x.sh; bash -x x.sh",
+    "printf '%s\\n' " + "x " * 64 + "'{cmd}' | sh",
+    "echo '{cmd}' > ./task.sh; sh task.sh",
+    "mkdir -p notes; echo '{cmd}' > notes/task.sh; sh ./notes//task.sh",
+    "mkdir -p notes; echo '{cmd}' > notes/task.sh; cd notes; sh task.sh; mv ran.txt ..",
+    "mkdir -p notes; echo '{cmd}' > notes/task.sh; chmod +x notes/task.sh; "
+    "PATH=notes:$PATH task.sh",
+    "mkdir -p notes s; echo '{cmd}' > notes/task.sh; mv notes/task.sh s/; sh s/task.sh",
 ]
 # A program another interpreter reads, with the program each needs.
 PROGRAM = [
@@ -78,6 +85,9 @@ PROGRAM = [
     ("make -sf - <<'EOF'\nall:\n\t{cmd}\nEOF", "make"),
     ("printf 'all:\\n\\t{cmd}\\n' > Makefile; make -s", "make"),
     ("echo \"import os; os.system('{cmd}')\" > x.py; python3 -m x", "python3"),
+    ("echo \"import os; os.system('{cmd}')\" > x.py; python3 -W ignore x.py", "python3"),
+    ("echo \"system('{cmd}')\" > x.pl; perl -I lib x.pl", "perl"),
+    ("echo \"system('{cmd}')\" > x.rb; ruby -r json x.rb", "ruby"),
 ]
 GRADED = SHELL + [template for template, _program in PROGRAM]
 # Data: nothing runs `{cmd}`, and each keeps the grade it had.
@@ -98,6 +108,9 @@ DATA = [
     ("echo '{cmd}' > notes.txt; bash run.sh notes.txt", 1),
     ("cat > notes.md <<'EOF'\n{cmd}\nEOF\npython3 render.py notes.md", 1),
     ("cat <<'EOF' > out.md\n{cmd}\nEOF\nperl -ne print out.md", 1),
+    ("mkdir -p notes scripts; echo '{cmd}' > notes/task.sh; echo true > scripts/task.sh; "
+     "sh scripts/task.sh", 1),
+    ("mkdir -p a b; echo '{cmd}' > a/x.py; echo 'print(1)' > b/x.py; python3 b/x.py", 1),
 ]
 # Text the line spells out, reshaped on its way to a shell by a filter the hook does not model:
 # (the template, what `{cmd}` becomes on the way in).
@@ -193,6 +206,14 @@ class ProgramOperandTests(unittest.TestCase):
                          ["make", "GNUmakefile", "makefile", "Makefile"])
         self.assertEqual(run(["awk", "-f", "p.awk", "data"]), ["awk", "p.awk"])
 
+    def test_an_option_value_is_not_read_as_the_script(self):
+        run = grader._run_files
+        for tokens in (["python3", "-W", "ignore", "x.py"], ["python3", "-Wignore", "x.py"],
+                       ["python3", "-uW", "ignore", "x.py"], ["perl", "-I", "lib", "x.py"],
+                       ["ruby", "-r", "json", "x.py"], ["ruby", "-rjson", "x.py", "y"]):
+            with self.subTest(tokens=tokens):
+                self.assertEqual(run(tokens), [tokens[0], "x.py"])
+
     def test_combined_program_file_options_are_read(self):
         reads = grader._interprets_input
         self.assertEqual([t for t in (["make", "-sf", "-"], ["make", "-sf-"],
@@ -202,6 +223,43 @@ class ProgramOperandTests(unittest.TestCase):
         self.assertEqual([t for t in (["make", "-C", "-f"], ["make", "-j4"],
                                       ["perl", "-lne", "print"], ["python3", "-uc", "x"])
                           if reads(t)], [])
+
+
+class WrittenPathTests(unittest.TestCase):
+    def test_a_file_run_by_another_path_is_not_the_file_written(self):
+        for run in ("sh scripts/task.sh", "./scripts/task.sh", "sh notes/other/task.sh",
+                    "sh ../notes/task.sh"):
+            with self.subTest(run=run):
+                self.assertEqual(grade("echo 'git push --force' > notes/task.sh; " + run), 1)
+
+    def test_a_file_run_by_the_same_path_is_the_file_written(self):
+        for write, run in (("task.sh", "sh ./task.sh"), ("./task.sh", "sh task.sh"),
+                           ("notes/task.sh", "./notes/task.sh"),
+                           ("notes/x/../task.sh", "sh notes/task.sh"),
+                           ("notes/task.sh", "bash notes//task.sh")):
+            with self.subTest(write=write, run=run):
+                self.assertEqual(grade("echo 'git push --force' > %s; %s" % (write, run)), 3)
+
+    def test_an_uncertain_relation_matches_by_base_name(self):
+        # A directory change, a move, a PATH or module lookup, or a path from `/` or `~` against
+        # one from the line's directory: the file run may be the one written.
+        for write, run in (("notes/task.sh", "cd notes; sh task.sh"),
+                           ("notes/task.sh", "(cd notes && ./task.sh)"),
+                           ("notes/task.sh", "pushd notes; sh ./task.sh"),
+                           ("notes/task.sh", "env -C notes sh ./task.sh"),
+                           ("notes/Makefile", "make -C notes"),
+                           ("notes/task.sh", "mv notes scripts; sh scripts/task.sh"),
+                           ("notes/task.sh", "rsync -a notes/ s/; sh s/task.sh"),
+                           ("notes/task.sh", "cp notes/task.sh s/; sh s/task.sh"),
+                           ("notes/task.sh", "PATH=notes:$PATH task.sh"),
+                           ("notes/task.sh", "sh task.sh"),
+                           ("/tmp/w/task.sh", "sh ./task.sh"),
+                           ("task.sh", "sh /tmp/w/task.sh"),
+                           ("~/task.sh", "sh ./task.sh")):
+            with self.subTest(write=write, run=run):
+                self.assertEqual(grade("echo 'git push --force' > %s; %s" % (write, run)), 3)
+        self.assertEqual(grade("echo \"import os; os.system('git push --force')\" > pkg/mod.py; "
+                               "python3 -m pkg.mod"), 3)
 
 
 class StdinDataTests(unittest.TestCase):
@@ -246,6 +304,11 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual(printf("%*s|%-*s|", ["4", "a", "3", "b"]), "   a|b  |")
         self.assertEqual(printf("%x%x", ["221"]), "dd0")
         self.assertEqual(printf("%05.1f", ["2"]), "002.0")
+
+    def test_printf_arguments_past_the_repeat_cap_read_as_reshaped(self):
+        cap = grader.PROGRAM_CHECKS
+        self.assertEqual(grader._printf("%s ", ["x"] * cap), "x " * cap)
+        self.assertIs(grader._printf("%s ", ["x"] * cap + ["git push"]), grader.RESHAPED)
 
     def test_an_unmodelled_printf_directive_reads_as_reshaped(self):
         for fmt, args in (("%q", ["x"]), ("%(%s)T", ["0"]), ("%d", ["git"]),
