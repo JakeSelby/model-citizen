@@ -69,6 +69,7 @@ class Home(unittest.TestCase):
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
         isolate_home(self.home)
+        os.environ.pop("CDPATH", None)  # an inherited search path makes a relative `cd` unknown
         os.environ["HARNESS_STANCE_AUTONOMY"] = self.stance
         self.repo = make_repo(self.home / "alpha")
         grader._LEDGER[:] = []
