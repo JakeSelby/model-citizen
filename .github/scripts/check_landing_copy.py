@@ -2,6 +2,7 @@
 
 import json
 import importlib.util
+import math
 import os
 import re
 import subprocess
@@ -31,6 +32,12 @@ COST_CONTEXT = re.compile(
     r'|reduc\w*|cuts?|halve[sd]?)\b', re.IGNORECASE)
 PASS_RATE = re.compile(
     r'\b(?:improves?|raises?|increases?|boosts?|higher) (?:the )?(?:pass|success) rates?\b',
+    re.IGNORECASE)
+# The pass-rate twin of COST_CONTEXT: a percentage beside a pass, success or solve word is a
+# pass-rate claim whatever its phrasing, so "pass rate up 30%" and "solves 30% more tasks" take
+# the difference-interval path. A level such as "passes 95% of tasks" fails closed there too.
+PASS_CONTEXT = re.compile(
+    r'\b(?:pass(?:es|ed|ing)?|success\w*|succeed\w*|solv\w*|resolv\w*|accura\w*|correct\w*)\b',
     re.IGNORECASE)
 SPEED = re.compile(r'\b(?:faster|quicker|speeds? up|less time)\b', re.IGNORECASE)
 MEASURED = re.compile('|'.join((COST.pattern, PASS_RATE.pattern, SPEED.pattern,
@@ -80,16 +87,20 @@ def _is_cost_claim(text):
     return bool(COST.search(text) or (PERCENT.search(text) and COST_CONTEXT.search(text)))
 
 
-def _check_direction(field, text, derived):
-    """Refuse a directional claim the paired SM-2 result does not support, at every magnitude."""
+def _check_direction(field, text, derived, card):
+    """Refuse a directional claim the paired SM-2 result does not support, at every magnitude,
+    and a descriptive percentage that is not its bound card's figure."""
     sm2 = derived.get('sm2') if isinstance(derived, dict) else None
     sm2 = sm2 if isinstance(sm2, dict) else {}
-    amounts = [float(match.group(1)) for match in PERCENT.finditer(text)]
+    stated = [match.group(1) for match in PERCENT.finditer(text)]
+    amounts = [float(amount) for amount in stated]
+    cost = _is_cost_claim(text)
+    pass_rate = bool(PASS_RATE.search(text) or (amounts and PASS_CONTEXT.search(text)))
     if SPEED.search(text):
         raise ValueError('speed claim at {} has no re-derived time estimand to support it'.format(field))
     if re.search(MULTIPLIER, text, re.IGNORECASE):
         raise ValueError('multiplier claim at {} has no re-derived estimand to support it'.format(field))
-    if _is_cost_claim(text):
+    if cost:
         if sm2.get('verdict') != 'supported' or not sm2.get('claim'):
             raise ValueError('cost claim at {} is not supported by SM-2'.format(field))
         interval = sm2.get('ratio_interval')
@@ -100,7 +111,7 @@ def _check_direction(field, text, derived):
             if upper > 1 - amount / 100:
                 raise ValueError('cost magnitude {}% at {} exceeds the SM-2 interval'.format(
                     _format(amount), field))
-    if PASS_RATE.search(text):
+    if pass_rate:
         interval = sm2.get('difference_interval')
         lower = interval[0] if isinstance(interval, list) and len(interval) == 2 else None
         if not isinstance(lower, (int, float)) or lower <= 0:
@@ -109,6 +120,23 @@ def _check_direction(field, text, derived):
             if lower < amount / 100:
                 raise ValueError('pass-rate magnitude {}% at {} exceeds the SM-2 interval'.format(
                     _format(amount), field))
+    if stated and not cost and not pass_rate:
+        _check_descriptive(field, stated, card)
+
+
+def _check_descriptive(field, stated, card):
+    """Require each percentage to be the card's figure rounded to the precision it is stated at:
+    within half a unit in its last digit, so "12%" admits 11.5-12.5 and "12.5%" 12.45-12.55."""
+    figure = card.get('figure') if isinstance(card, dict) else None
+    value = figure.get('value') if isinstance(figure, dict) else None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError('percentage at {} has no numeric card figure to match'.format(field))
+    for amount in stated:
+        decimals = len(amount.partition('.')[2])
+        tolerance = 0.5 * 10 ** -decimals
+        if abs(float(amount) - value * 100) > tolerance + 1e-9:
+            raise ValueError('percentage {}% at {} is not the card figure {}%'.format(
+                amount, field, _format(value * 100)))
 
 
 def _format(amount):
@@ -162,7 +190,7 @@ def validate_product_claims(root=Path(__file__).resolve().parents[2]):
         if len(matches) != 1 or matches[0].get('verify_status') is not True \
                 or matches[0].get('claim') != text:
             raise ValueError('measured claim at {} has no exact verified evidence card'.format(field))
-        _check_direction(field, text, result.get('derived', {}))
+        _check_direction(field, text, result.get('derived', {}), matches[0])
     return 'Landing copy claims verified: {} measured claim(s).'.format(len(measured))
 
 

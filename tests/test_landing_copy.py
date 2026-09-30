@@ -97,9 +97,10 @@ class EvidenceClaimTests(unittest.TestCase):
         (self.root / 'product.json').write_text(json.dumps(product))
 
     @staticmethod
-    def result(text, ok=True, verdict='supported', claim='cheaper', upper=0.8, difference=(0.05, 0.2)):
-        return {'ok': ok, 'cards': [{'id': 'proof-card', 'claim': text,
-                                     'verify_status': True}],
+    def result(text, ok=True, verdict='supported', claim='cheaper', upper=0.8, difference=(0.05, 0.2),
+               figure=0.0):
+        return {'ok': ok, 'cards': [{'id': 'proof-card', 'claim': text, 'verify_status': True,
+                                     'figure': {'pointer': '/fallback/rate', 'value': figure}}],
                 'derived': {'sm2': {'verdict': verdict, 'claim': claim,
                                     'ratio_interval': [0.6, upper],
                                     'difference_interval': list(difference)}}}
@@ -216,8 +217,32 @@ class EvidenceClaimTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaisesRegex(ValueError, phrase):
                 self.check(text)
 
-    def test_a_descriptive_percentage_needs_only_its_verified_card(self):
-        self.assertIn('1 measured', self.check('Fallback trials: 0% of attempts.'))
+    def test_a_descriptive_percentage_must_be_its_card_figure_at_the_stated_precision(self):
+        for text, figure in (('Fallback trials: 0% of attempts.', 0.0),
+                             ('Fallback trials: 5% of attempts.', 0.05),
+                             ('Fallback trials: 12% of attempts.', 0.1249),
+                             ('Fallback trials: 12.5 percent of attempts.', 0.125)):
+            with self.subTest(text=text):
+                self.assertIn('1 measured', self.check(text, figure=figure))
+        for text, figure in (('Fallback trials: 50% of attempts.', 0.0),
+                             ('Fallback trials: 13% of attempts.', 0.1249),
+                             ('Fallback trials: 12.4% of attempts.', 0.125),
+                             ('Fallback trials: 5% of runs, 50% of attempts.', 0.05)):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'not the card figure'):
+                self.check(text, figure=figure)
+        for figure in (None, True, [0.0], float('nan')):
+            with self.subTest(figure=figure), self.assertRaisesRegex(ValueError, 'no numeric card figure'):
+                self.check('Fallback trials: 0% of attempts.', figure=figure)
+
+    def test_directional_pass_rate_wording_takes_the_difference_interval_path(self):
+        forms = ('Pass rate up 30%.', 'Passes 30% more tasks.', 'Solves 30% more tasks.',
+                 'Success rate rises by 30 percent.', 'Resolves 30% more issues.')
+        for text in forms:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'magnitude 30%'):
+                self.check(text, difference=(0.05, 0.2), figure=0.3)
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'wholly above 0'):
+                self.check(text, difference=(-0.1, 0.2), figure=0.3)
+        self.assertIn('1 measured', self.check('Solves 5% more tasks.', difference=(0.05, 0.2)))
 
 
 class EndToEndClaimTests(unittest.TestCase):
@@ -231,9 +256,16 @@ class EndToEndClaimTests(unittest.TestCase):
         self.fixture.setUp()
         self.addCleanup(self.fixture.tearDown)
 
-    def publish(self, text, change=None):
+    def publish(self, text, change=None, pointer=None):
         self.fixture._set_card_claim(text)
         index = self.fixture._index()
+        if pointer:
+            # A descriptive rate carries no interval of its own, so the card's interval is the point.
+            value = FIXTURE.EVIDENCE.verify(self.fixture.root)['derived']
+            for part in pointer.strip('/').split('/'):
+                value = value[part]
+            index['evidence_cards'][0]['figure'] = {'pointer': pointer, 'value': value}
+            index['evidence_cards'][0]['interval'] = {'pointer': pointer, 'value': value}
         if change:
             change(index)
         self.fixture._save_index(index)
@@ -244,14 +276,19 @@ class EndToEndClaimTests(unittest.TestCase):
         (self.root / 'product.json').write_text(json.dumps(product))
 
     def test_a_claim_bound_to_a_card_the_real_verifier_derives_is_admitted(self):
-        self.publish('Fallback trials: 0% of attempts.')
+        self.publish('Fallback trials: 0% of attempts.', pointer='/fallback/rate')
         self.assertIn('1 measured claim', checker.validate(['product.json'], '', root=self.root))
+
+    def test_a_percentage_that_is_not_the_real_card_figure_is_refused(self):
+        self.publish('Fallback trials: 50% of attempts.', pointer='/fallback/rate')
+        with self.assertRaisesRegex(ValueError, 'not the card figure 0%'):
+            checker.validate_product_claims(self.root)
 
     def test_a_stale_saved_verify_status_is_ignored(self):
         def tamper(index):
             index['evidence_cards'][0]['verify_status'] = True
             index['evidence_cards'][0]['figure']['value'] = 0.5
-        self.publish('Fallback trials: 0% of attempts.', tamper)
+        self.publish('Fallback trials: 0% of attempts.', tamper, pointer='/fallback/rate')
         with self.assertRaisesRegex(ValueError, 'does not verify'):
             checker.validate_product_claims(self.root)
 
