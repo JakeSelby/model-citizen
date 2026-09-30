@@ -26,18 +26,21 @@ class NonFiniteRatios(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
         prior_home = os.environ.get("HOME")
+        prior_harness_home = os.environ.get("HARNESS_HOME")
         prior_quiet = os.environ.pop("HARNESS_QUIET", None)
         os.environ["HOME"] = str(self.home)
-        self.addCleanup(self._restore, prior_home, prior_quiet)
+        os.environ["HARNESS_HOME"] = str(self.home)
+        self.addCleanup(self._restore, prior_home, prior_harness_home, prior_quiet)
         self.path = self.home / ".local" / "state" / "agent-harness" / "usage.jsonl"
         self.path.parent.mkdir(parents=True)
 
     @staticmethod
-    def _restore(prior_home, prior_quiet):
-        if prior_home is None:
-            os.environ.pop("HOME", None)
-        else:
-            os.environ["HOME"] = prior_home
+    def _restore(prior_home, prior_harness_home, prior_quiet):
+        for name, prior in (("HOME", prior_home), ("HARNESS_HOME", prior_harness_home)):
+            if prior is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = prior
         if prior_quiet is not None:
             os.environ["HARNESS_QUIET"] = prior_quiet
 
