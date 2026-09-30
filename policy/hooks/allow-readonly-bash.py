@@ -41,7 +41,7 @@ PLAIN = {
     "printenv", "basename", "dirname", "realpath", "readlink", "uniq", "cut",
     "tr", "jq", "column", "nl", "od", "strings", "md5", "md5sum",
     "shasum", "sha256sum", "diff", "cmp", "comm", "tac", "rev", "seq", "expr",
-    "cd", "arch", "nproc", "lsof", "ps", "top", "uptime",
+    "cd", "nproc", "lsof", "ps", "top", "uptime",
     "read", "fold", "paste", "join", "look", "hexdump", "base64", "cksum",
 }
 
@@ -569,9 +569,26 @@ def strip_redirects(tokens):
     return cleaned
 
 
+# Wrappers that run the command after their own words; `arch` runs one only when given any.
+WRAPPERS = ("timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob")
+# The most wrappers read in a row: a longer run is not approved.
+WRAP_CAP = 32
+
+
 def segment_ok(tokens):
     """True when a single simple command (already free of substitutions and of the
-    structural keywords) is read-only."""
+    structural keywords) is read-only. A run of wrappers is read in a loop, never by
+    recursion, so no run of them can exhaust the stack."""
+    for _ in range(WRAP_CAP):
+        verdict = _segment_step(tokens)
+        if not isinstance(verdict, list):
+            return verdict
+        tokens = verdict
+    return False
+
+
+def _segment_step(tokens):
+    """`segment_ok` for one command: True or False, or the words a wrapper runs."""
     tokens = strip_redirects(tokens)
     if not tokens:
         return False
@@ -597,8 +614,10 @@ def segment_ok(tokens):
     args = tokens[1:]
     if prog in NEVER:
         return False
-    if prog in ("timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob"):
-        return segment_ok(args[1:] if prog == "timeout" and args else args)
+    if prog in WRAPPERS:
+        return list(args[1:] if prog == "timeout" and args else args)
+    if prog == "arch":
+        return not args  # `arch -arm64 cmd` runs cmd
     if prog == "env":
         while args and ASSIGN_RE.match(args[0]):
             if not assignment_ok(args[0]):
@@ -606,7 +625,7 @@ def segment_ok(tokens):
             args = args[1:]
         if not args:
             return True
-        return not args[0].startswith("-") and segment_ok(args)
+        return False if args[0].startswith("-") else list(args)
     if prog == "export":
         return bool(args) and all(
             NAME_RE.match(a.split("=", 1)[0]) is not None and assignment_ok(a) for a in args)

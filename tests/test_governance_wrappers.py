@@ -113,5 +113,92 @@ class UnreadableFormsAreNeverPassedSilently(Fixture):
         self.assertEqual(grader.grade_text("uv run --with ruff ruff check", str(self.repo))[0], 1)
 
 
+POLICY = ".agent-harness/governance.json"
+STORE = "~/.local/state/agent-harness/approvals/%s.json" % SESSION
+
+
+class WrapperOutputFilesAreWrites(Fixture):
+    """`time -o f`, `script f`, `flock f` and `firejail --output=f` write f themselves."""
+
+    FORMS = ("nice time -o {} ls", "command time -o {} ls", "env time -o {} true",
+             "/usr/bin/time -o {} ls", "nice time --output={} ls", "command time -ao {} true",
+             "exec time -o {} ls", "time -p nice time -o {} ls", "\\time -o {} ls",
+             "script -q {} ls", "flock {} true", "firejail --output={} ls")
+
+    def test_a_governed_file_a_wrapper_writes_is_decided_as_a_redirect_to_it(self):
+        for form in self.FORMS:
+            for path in (POLICY, STORE):
+                command = form.format(path)
+                with self.subTest(command=command):
+                    self.assertEqual(self.decisions(command), ("ask", "deny"))
+            written = [p for e in grader.governed_text(form.format("out.txt"), str(self.repo))
+                       for p in e[3]]
+            self.assertIn(str(self.repo / "out.txt"), written, form)
+
+    def test_the_reserved_word_time_takes_no_output_file(self):
+        command = "time -o %s ls" % POLICY
+        self.assertEqual(grader.grade_text(command, str(self.repo))[0], 0)
+        self.assertNotIn("ask", self.decisions(command))
+
+
+class EveryWrappedPushIsDecided(Fixture):
+    PUSHES = ("nice nice nice nice nice git push", "nice " * 7 + "git push",
+              "env $X git push", "$X git push", "builtin command git push",
+              "builtin git push", "caffeinate git push", "caffeinate -i -t 5 git push",
+              "setsid -w git push", "flock /tmp/l git push", "flock -x /tmp/l -c 'git push'",
+              "script -q /dev/null git push", "sandbox-exec -n no-network git push",
+              "mise exec node@20 -- git push", "mise x -- git push", "pipenv run git push",
+              "bunx git push", "chrt -f 5 git push", "ionice -c 3 git push",
+              "taskset -c 1 git push", "unbuffer git push", "firejail --net=none git push",
+              "nix-shell -p git --run 'git push'", "poetry run git push", "pnpm exec git push",
+              "direnv exec . git push", "asdf exec git push", "doas git push",
+              "runuser -u x -- git push", "su -c 'git push'", "pkexec git push",
+              "arch -arm64 git push", "timeout -k 5 git push", "xargs git push",
+              "somewrapper --flag git push", "uv run " * 6 + "git push")
+
+    def test_a_push_behind_any_wrapper_asks_and_is_refused_where_nothing_can_prompt(self):
+        for command in self.PUSHES:
+            with self.subTest(command=command):
+                self.assertEqual(self.decisions(command), ("ask", "deny"))
+
+    def test_a_long_run_of_wrappers_is_unknown_not_an_error(self):
+        for command in ("nice " * 500 + "git push", "nice " * 3000 + "ls",
+                        "env " * 1000 + "true", "uv run " * 1000 + "ls",
+                        "nice X=1 " * 500 + "true"):
+            with self.subTest(command=command[:40]):
+                self.assertEqual(grader.grade_text(command, str(self.repo))[0], 3)
+                self.assertEqual(self.decisions(command), ("ask", "deny"))
+
+    def test_the_common_wrapped_forms_still_pass(self):
+        for command in ("env FOO=1 pytest", "timeout 60 npm test", "nice make", "uv run pytest -q",
+                        "uv run --frozen pytest", "command -v git", "caffeinate -i make",
+                        "nice git commit -m push", "nice time ls", "arch"):
+            with self.subTest(command=command):
+                self.assertFalse({"ask", "deny"} & set(self.decisions(command)))
+
+
+class ReadOnlyWrappers(Fixture):
+    def test_arch_is_read_only_only_with_no_command(self):
+        self.assertTrue(grader.ro.command_ok("arch"))
+        for command in ("arch -arm64 git push --force", "arch -x86_64 rm -rf /",
+                        "arch -arm64 tee %s" % POLICY, "arch -arm64 ls"):
+            with self.subTest(command=command):
+                self.assertFalse(grader.ro.command_ok(command))
+        self.assertEqual(self.decisions("arch -arm64 git push --force"), ("ask", "deny"))
+        self.assertEqual(self.decisions("arch -arm64 tee %s" % POLICY), ("ask", "deny"))
+
+    def test_a_long_run_of_read_only_wrappers_is_not_approved_and_does_not_raise(self):
+        self.assertTrue(grader.ro.command_ok("nice timeout 5 nice ls"))
+        self.assertFalse(grader.ro.command_ok("nice " * 1500 + "ls"))
+
+    def test_an_env_split_string_holding_a_comment_is_unknown(self):
+        for command in ("env -S'#' git push", "env -S'#' rm -rf /", "env -S '# c' git push",
+                        "env --split-string=# git push", "nice env -S'#' git push",
+                        "env -S'ls #' git push", "env -S'#' tee %s" % POLICY):
+            with self.subTest(command=command):
+                self.assertEqual(grader.grade_text(command, str(self.repo))[0], 3)
+                self.assertEqual(self.decisions(command), ("ask", "deny"))
+
+
 if __name__ == "__main__":
     unittest.main()
