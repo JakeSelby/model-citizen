@@ -90,6 +90,13 @@ CSH_RUN = [
     "cat <<'EOF' | tcsh\n{cmd}\nEOF",
 ]
 GRADED = RUN + ZSH_RUN + GLOB_RUN + ZSH_ONLY_RUN + CSH_RUN
+# A shell reading an unquoted body runs what bash left once it removed the escapes, so an escaped
+# substitution reaches it unescaped. The hook grades a substitution, not the command it holds,
+# below 3, so these are graded with a forced push only.
+ESCAPED_RUN = [
+    "bash <<EOF\necho \"\\$({cmd})\"\nEOF",
+    "bash <<EOF\necho \"\\`{cmd}\\`\"\nEOF",
+]
 
 # Templates whose body is data: nothing runs `{cmd}`.
 DATA = [
@@ -100,6 +107,9 @@ DATA = [
     "cat <<EOF\n\\$({cmd})\nEOF",
     "cat > notes.md <<'EOF'\n$({cmd})\nEOF",
     "printf '%s\\n' \"$(cat <<'EOF'\nfix: $({cmd})\nEOF\n)\"",
+    # `$$` is the shell's process ID, and a quoted body reaches the shell with its escapes.
+    "cat <<EOF\n$$({cmd})\nEOF",
+    "bash <<'EOF'\necho \"\\$({cmd})\"\nEOF",
 ]
 
 
@@ -135,6 +145,14 @@ class BodyRunsTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertFalse(ro.command_ok(command))
 
+    @unittest.skipUnless(BASH, "bash is not installed")
+    def test_a_shell_runs_an_escaped_substitution_of_an_unquoted_body(self):
+        self.assertEqual([t for t in ESCAPED_RUN if not ran(t)], [])
+
+    def test_an_escaped_substitution_a_shell_reads_is_graded(self):
+        commands = [t.format(cmd="git push --force") for t in ESCAPED_RUN]
+        self.assertEqual([(c, grade(c)) for c in commands if grade(c) != 3], [])
+
     def test_a_harmless_script_body_grades_as_the_shell_does(self):
         self.assertEqual(grade("bash <<'EOF'\necho hi\nEOF"), 1)
 
@@ -145,7 +163,8 @@ class BodyDataTests(unittest.TestCase):
         self.assertEqual([t for t in DATA if ran(t)], [])
 
     def test_a_push_in_a_data_body_is_not_graded(self):
-        for template, expected in zip(DATA, (0, 0, 0, 0, 0, 1, 1)):
+        self.assertEqual(len(DATA), 9)
+        for template, expected in zip(DATA, (0, 0, 0, 0, 0, 1, 1, 0, 1)):
             command = template.format(cmd="git push --force")
             with self.subTest(command=command):
                 self.assertEqual(grade(command), expected)
@@ -167,6 +186,7 @@ class UnreadableBodyTests(unittest.TestCase):
         self.assertEqual(read("a $(b) `c` \\$(d) $((1+2)) $\\\n(e)"), ["b", "c", "e"])
         self.assertEqual(read("$(( $(f) ))"), ["f"])
         self.assertEqual(read("plain text, $HOME and 'quotes'"), [])
+        self.assertEqual(read("$$(a) $$$(b) $\\\n$(c)"), ["b"])
 
     def test_a_substitution_the_shells_may_close_later_is_also_read_to_the_end(self):
         read = grader._body_substitutions
@@ -213,6 +233,7 @@ class BodyTimingTests(unittest.TestCase):
             lambda k: "cat <<EOF\n" + "$(a) x " * 2000 * k + "\nEOF",
             lambda k: "cat <<EOF\n" + "`a` $(b " * 2000 * k + "\nEOF",
             lambda k: "bash <<EOF\n" + "echo a\n" * 500 * k + "EOF",
+            lambda k: "bash <<EOF\n" + "echo \\$(a) \\` $$(\n" * 500 * k + "EOF",
         ]
         for make in cases:
             with self.subTest(sample=make(1)[:30]):

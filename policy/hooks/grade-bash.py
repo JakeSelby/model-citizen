@@ -171,6 +171,9 @@ BODY_SUB_CHECKS = 64
 UNSURE_SUB_RE = re.compile(r"(?<![^\s;&|()])(?:#|case(?![^\s;&|)]))|<<")
 # The backslashes bash removes from the text of a backtick substitution before running it.
 BACKTICK_ESCAPE_RE = re.compile(r"\\([\\`$])")
+# The backslashes bash removes from an unquoted here-document body as it expands it: before `$`,
+# a backtick, a backslash or a newline, which goes too.
+BODY_ESCAPE_RE = re.compile(r"\\([\\`$\n])")
 GIT_VALUE_GLOBALS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env")
 XARGS_VALUE_FLAGS = ("-I", "-i", "-n", "-P", "-L", "-s", "-d", "-a", "-E", "-e", "--replace",
@@ -1597,6 +1600,9 @@ def _body_substitutions(body):
         if c == "\\":
             i += 2
             continue
+        if text.startswith("$$", i):  # the shell's process ID, then plain text
+            i += 2
+            continue
         if text.startswith("$(", i):
             checks += 1
             if checks > BODY_SUB_CHECKS:
@@ -1660,13 +1666,20 @@ def _nested_texts(text, levels):
 def _grade_bodies(bodies, runs, cwd, depth):
     """The worst grade the here-document bodies can carry. An unquoted body's substitutions run
     as the shell expands it, a body a shell may read runs as a script, and each is graded as the
-    commands it holds; a body neither applies to is data, graded 0. What cannot be read for
-    sure is graded unknown, or as `_scan` finds it, never lower."""
+    commands it holds; a body neither applies to is data, graded 0. A shell reads an unquoted
+    body with the escapes bash removed while expanding it, so `\\$(x)` in it runs `x`: that
+    script is graded as well as the body as written. What cannot be read for sure is graded
+    unknown, or as `_scan` finds it, never lower."""
     best = (0, None, None, None)
     for body in bodies:
         hits = []
         if runs:
             hits.append(grade_text(body, cwd, depth + 1))
+            if not getattr(body, "quoted", True):
+                script = BODY_ESCAPE_RE.sub(
+                    lambda m: "" if m.group(1) == "\n" else m.group(1), body)
+                if script != body:
+                    hits.append(grade_text(script, cwd, depth + 1))
         if not getattr(body, "quoted", True):
             inners = _body_substitutions(body)
             texts = []
