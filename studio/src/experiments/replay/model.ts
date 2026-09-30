@@ -42,7 +42,7 @@ export type ReplayProgressRow = {
   task: string;
   arm: "bare" | "harness";
   repetition: number;
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "errored";
   passed: boolean | null;
   cost_usd: number | null;
 };
@@ -66,6 +66,7 @@ export type ReplayRunResult = {
     reported_spend_usd: number;
     spend_cap_usd: string;
     stopped_at_cap: boolean;
+    measures?: "source";
   };
 };
 
@@ -146,18 +147,31 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
   return errors;
 }
 
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+const refusals: Record<string, string> = {
+  replay_target_config_unsupported:
+    "A draft changed its configuration, but the benchmark builds the harness arm from the commit's defaults and cannot apply it. Checkpoint the change as source or restore the inherited configuration.",
+  replay_target_busy: "A draft is being saved. Preview again in a moment.",
+  replay_worktree_dirty:
+    "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
+  replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
+};
+
+export function replayErrorMessage(code: string): string {
+  return refusals[code] ?? code;
 }
 
-export function replayCommand(draft: ReplayLaunchInput | ReplayRequest): string {
-  const parts = ["citizen", "runs", "replay"];
-  draft.targets.forEach((target) => parts.push("--target", `${target.kind}:${target.ref}`));
-  parts.push("--model", draft.model, "--repetitions", String(draft.repetitions));
-  draft.tasks.forEach((task) => parts.push("--task", task));
-  parts.push("--max-budget-usd", draft.max_budget_usd, "--spend-cap", draft.spend_cap_usd);
-  if (draft.pre_registration) parts.push("--pre-registration", draft.pre_registration);
-  return parts.map(quote).join(" ");
+export const SOURCE_ONLY_NOTE =
+  "A replay measures source only: each harness arm runs its commit's defaults, so a draft's inherited configuration is not applied.";
+
+export function readinessSummary(errors: string[]): string {
+  if (!errors.length) return "Ready to preview.";
+  return `Replay is not ready: ${errors.length} ${errors.length === 1 ? "item needs" : "items need"} attention.`;
+}
+
+export function progressResult(row: ReplayProgressRow): string {
+  if (row.status === "errored") return "Errored";
+  if (row.passed === null) return "Pending";
+  return row.passed ? "Passed" : "Failed";
 }
 
 export function formatPercent(value: number | null): string {

@@ -939,9 +939,13 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     of it launches. Each arm's user must then be able to write a mounted snapshot. A red pre-flight then refuses the whole replay with exit 2 before any scored
     run launches, since spending on arms that cannot pass the gate buys a number nobody can read.
     Its own cost counts against the same cumulative cap."""
-    for arm in ARMS:
-        arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
-    probe_workdirs(tasks, opts, launch)
+    try:
+        for arm in ARMS:
+            arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
+        probe_workdirs(tasks, opts, launch)
+    except BaseException:
+        _write_spend_sidecar(out, opts, 0.0, 0.0, False)  # refused before any paid call
+        raise
     rows, spent, preflight_spent = [], 0.0, 0.0
     if not opts.get("skip_preflight"):
         checks, spent = preflight(tasks, opts, launch, lambda current: _write_spend_sidecar(

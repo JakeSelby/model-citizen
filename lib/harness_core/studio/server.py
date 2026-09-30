@@ -717,10 +717,13 @@ def _replay_preview(handler: Handler, route: Route) -> None:
     if request is None:
         return
     try:
-        payload = handler.server.mutations.call(
-            lambda: _replay_admission(handler).preview(request["request"]))
-    except replay.ReplayError:
-        handler._error(400, "replay_refused")
+        # Resolving builds both targets (clone and sandboxed sync); it stays off the one
+        # mutation thread so cancel and polling are never queued behind it.
+        admission = _replay_admission(handler)
+        resolved = admission.resolve(request["request"])
+        payload = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
+    except replay.ReplayError as exc:
+        handler._error(400, getattr(exc, "code", "replay_refused"))
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -734,10 +737,12 @@ def _replay_start(handler: Handler, route: Route) -> None:
         handler._error(400, "invalid_request")
         return
     try:
-        payload = handler.server.mutations.call(lambda: _replay_admission(handler).start(
-            request["request"], request["confirmation_token"]))
-    except replay.ReplayError:
-        handler._error(400, "replay_refused")
+        admission = _replay_admission(handler)
+        confirmed = admission.confirm(request["request"])
+        payload = handler.server.mutations.call(lambda: admission.start_confirmed(
+            confirmed, request["confirmation_token"]))
+    except replay.ReplayError as exc:
+        handler._error(400, getattr(exc, "code", "replay_refused"))
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -776,6 +781,7 @@ def _replay_result(handler: Handler, route: Route) -> None:
                     result = {name: summary[name] for name in (
                         "targets", "table", "spend_usd", "reported_spend_usd",
                         "spend_cap_usd", "stopped_at_cap")}
+                    result["measures"] = summary.get("measures", replay.MEASURES)
             return {"schema_version": 1,
                     "run": {"run_id": run["run_id"], "status": run["status"]},
                     "progress": progress, "result": result}
@@ -1503,7 +1509,7 @@ ROUTES = RouteRegistry((
           ("python3", "scripts/native_acceptance.py")),
     Route("GET", "/api/runs/replay/catalog", "application/json",
           REPLAY_CATALOG, _replay_catalog, None,
-          cli_command=("citizen", "runs", "replay", "--help")),
+          cli_command=replay.NATIVE_COMMAND + ("--help",)),
     Route("POST", "/api/runs/replay/preview", "application/json",
           REPLAY_PREVIEW, _replay_preview, None, "application/json",
           ("citizen", "runs", "spend-preview")),

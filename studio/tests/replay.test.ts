@@ -5,9 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
 import { loadReplayCatalog, loadReplayResult, startReplay } from "../src/experiments/replay/api.ts";
-import { ReplayPanel } from "../src/experiments/replay/ReplayPanel.tsx";
+import { ReplayPanel, ReplayReadiness } from "../src/experiments/replay/ReplayPanel.tsx";
 import {
-  formatCost, formatPercent, replayCommand, ReplayRequestGate, validateReplay,
+  formatCost, formatPercent, progressResult, readinessSummary, replayErrorMessage, ReplayRequestGate,
+  validateReplay,
   type ReplayLaunchInput, type ReplayRequest,
 } from "../src/experiments/replay/model.ts";
 
@@ -25,7 +26,6 @@ test("a replay requires two different explicit targets", () => {
   assert.deepEqual(validateReplay({ ...draft, targets: [draft.targets[0], draft.targets[0]] }), [
     "Choose two different targets.",
   ]);
-  assert.match(replayCommand(draft), /--target.*release:v0\.17\.0.*--target.*draft:cost-pass/);
 });
 
 test("release runs require evidence registration and the spend guard is checked locally", () => {
@@ -91,6 +91,8 @@ test("start sends the exact request with its one-use confirmation", async () => 
     globalThis.fetch = original;
   }
   assert.equal(calls[1].input, "/api/runs/replay/start");
+  assert.equal(calls[1].init?.method, "POST");
+  assert.equal(new Headers(calls[1].init?.headers).get("X-Studio-CSRF"), "csrf");
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
     request: resolved, confirmation_token: "confirm-once",
   });
@@ -106,7 +108,7 @@ test("catalog and result polling use fixed same-origin replay routes", async () 
     }
     if (path.endsWith("/catalog")) {
       return new Response(JSON.stringify({ schema_version: 1, tasks: [], target_kinds: [],
-        default_model: "claude-test", commands: { run: "citizen runs replay" } }), { status: 200 });
+        default_model: "claude-test", commands: { run: "python3 scripts/cost_bench.py replay" } }), { status: 200 });
     }
     return new Response(JSON.stringify({ schema_version: 1,
       run: { run_id: "run-1", status: "running" }, progress: [], result: null }), { status: 200 });
@@ -134,4 +136,73 @@ test("the panel renders the operational launch guard and per-arm result table", 
   assert.match(html, /Passed/);
   assert.match(html, /Cost per passed task/);
   assert.match(html, /100\.0%/);
+});
+
+function render(props: Record<string, unknown>): string {
+  return renderToStaticMarkup(h(MantineProvider, {}, h(ReplayPanel, { tasks: ["one"], ...props })));
+}
+
+test("the panel labels every control and captions its tables for assistive technology", () => {
+  const html = render({
+    progress: [{ target: resolvedRelease, task: "one", arm: "bare", repetition: 1,
+      status: "completed", passed: true, cost_usd: 0.25 }],
+    rows: [{ target: resolvedRelease, task: "one", arm: "harness", runs: 2,
+      passed: 2, pass_rate: 1, cost_per_passed: 0.5 }],
+  });
+  const inputs = [...html.matchAll(/<input\b[^>]*>/g)].map((match) => match[0])
+    .filter((tag) => !/type="hidden"/.test(tag));
+  assert.ok(inputs.length >= 8);
+  for (const input of inputs) {
+    const id = /\bid="([^"]+)"/.exec(input)?.[1];
+    assert.ok(id, `input without an id: ${input}`);
+    assert.match(html, new RegExp(`<label[^>]*for="${id}"`), `input ${id} has no label`);
+  }
+  assert.match(html, /aria-live="polite"/);
+  assert.equal([...html.matchAll(/<caption\b/g)].length, 2);
+  assert.equal([...html.matchAll(/<th\b/g)].length, 12);
+});
+
+test("an untouched empty form does not announce that the replay is not ready", () => {
+  const html = render({});
+  assert.doesNotMatch(html, /Replay is not ready/);
+  assert.doesNotMatch(html, /role="alert"/);
+});
+
+test("the panel never advertises a CLI command that does not exist", () => {
+  assert.doesNotMatch(render({}), /citizen runs replay/);
+  assert.match(render({}), /native benchmark commands appear once the preview resolves/);
+});
+
+test("an errored native row reads as errored, not completed and pending", () => {
+  const errored = { target: resolvedRelease, task: "one", arm: "bare" as const, repetition: 1,
+    status: "errored" as const, passed: null, cost_usd: null };
+  assert.equal(progressResult(errored), "Errored");
+  assert.equal(progressResult({ ...errored, status: "pending" }), "Pending");
+  const html = render({ progress: [errored] });
+  assert.match(html, /Errored/);
+  assert.doesNotMatch(html, /Pending/);
+});
+
+test("refusal codes become sentences a person can act on", () => {
+  assert.match(replayErrorMessage("replay_target_config_unsupported"), /configuration/);
+  assert.match(replayErrorMessage("replay_worktree_dirty"), /uncommitted changes/);
+  assert.equal(replayErrorMessage("unknown_code"), "unknown_code");
+});
+
+test("the not-ready list is announced politely through a stable count, never as an alert", () => {
+  const errors = ["Choose a model.", "Choose one or more unique tasks."];
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(ReplayReadiness, { errors })));
+  assert.doesNotMatch(html, /role="alert"/);
+  assert.match(html, /aria-live="polite"[^>]*>Replay is not ready: 2 items need attention\./);
+  assert.equal([...html.matchAll(/aria-live=/g)].length, 1);
+  assert.match(html, /<li>Choose a model\.<\/li>/);
+  assert.equal(readinessSummary(["one"]), "Replay is not ready: 1 item needs attention.");
+});
+
+test("the panel and its result say the replay measures source only", () => {
+  const html = render({ rows: [{ target: resolvedRelease, task: "one", arm: "harness", runs: 1,
+    passed: 1, pass_rate: 1, cost_per_passed: 0.5 }] });
+  assert.match(html, /measures source only/);
+  assert.match(html, /Source only: target configuration was not applied\./);
+  assert.match(replayErrorMessage("replay_target_busy"), /Preview again/);
 });

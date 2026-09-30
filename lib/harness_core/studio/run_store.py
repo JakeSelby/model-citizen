@@ -1703,7 +1703,17 @@ class RunStore:
                 raise RunStoreError("Studio sidecar run id does not match its directory")
             self.upsert(studio_record(record, authority or {}))
             imported += 1
+            if record.get("suite_id") == "live-replay":
+                self._import_replay_rows(run_id)
         return imported
+
+    def _import_replay_rows(self, run_id: str) -> None:
+        # Imported here because the replay adapter is built on this module.
+        from . import replay
+        try:
+            replay.index_run_directory(self, self.state_root / "runs" / run_id)
+        except replay.ReplayError as exc:
+            raise RunStoreError("Studio replay rows are invalid: " + run_id) from exc
 
     def reindex(self, repository: Path, runs_fd: int) -> Dict[str, Any]:
         """Transactionally rebuild the live index from verified authoritative files."""

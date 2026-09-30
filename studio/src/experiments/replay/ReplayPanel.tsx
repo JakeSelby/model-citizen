@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 
 import { previewReplay, startReplay } from "./api";
 import {
-  formatCost, formatPercent, replayCommand, validateReplay,
+  formatCost, formatPercent, progressResult, readinessSummary, replayErrorMessage, validateReplay,
+  SOURCE_ONLY_NOTE,
   ReplayRequestGate, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
   type ReplayTargetKind,
@@ -23,6 +24,17 @@ type Props = {
   onStarted?: (runId: string) => void;
 };
 
+/** The not-ready list without an assertive alert role: only the stable count is announced, and
+ * politely, so screen readers do not re-read the list on every keystroke. */
+export function ReplayReadiness({ errors }: { errors: string[] }) {
+  return (
+    <Alert color="yellow" role="group" aria-label="Replay readiness">
+      <Text aria-live="polite" aria-atomic="true" fw={600} size="sm">{readinessSummary(errors)}</Text>
+      <ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul>
+    </Alert>
+  );
+}
+
 export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = [], runStatus, onStarted }: Props) {
   const [draft, setDraft] = useState<ReplayLaunchInput>({
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
@@ -32,12 +44,14 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
   const [preview, setPreview] = useState<ReplayPreview | null>(null);
   const [message, setMessage] = useState("Choose two targets, tasks and one model.");
   const [busy, setBusy] = useState(false);
+  const [touched, setTouched] = useState(false);
   const requestGate = useRef(new ReplayRequestGate());
   const errors = validateReplay(draft);
 
   function updateDraft(next: ReplayLaunchInput) {
     if (!requestGate.current.beginEdit()) return;
     setDraft(next);
+    setTouched(true);
     setPreview(null);
     setBusy(false);
   }
@@ -59,7 +73,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
       setMessage(value.valid ? "Estimate and caps are ready for confirmation." : "Nothing started.");
     } catch (error) {
       if (!requestGate.current.accepts(generation)) return;
-      setMessage(error instanceof Error ? error.message : "Replay preview failed.");
+      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay preview failed.");
     } finally {
       if (requestGate.current.accepts(generation)) setBusy(false);
     }
@@ -77,7 +91,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
       onStarted?.(value.run_id);
     } catch (error) {
       if (!requestGate.current.acceptsPaid(generation)) return;
-      setMessage(error instanceof Error ? error.message : "Replay could not start.");
+      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay could not start.");
     } finally {
       if (requestGate.current.finishPaid(generation)) setBusy(false);
     }
@@ -89,6 +103,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
         <Text className="eyebrow">Experiments / Live replay</Text>
         <Title order={2}>Measure two explicit targets.</Title>
         <Text c="dimmed">Each target is built in its own isolated profile. The installed harness is not an implicit fallback.</Text>
+        <Text c="dimmed" size="sm">{SOURCE_ONLY_NOTE}</Text>
       </div>
       <Paper p="lg" withBorder>
         <Stack>
@@ -124,9 +139,14 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
           <TextInput label="Pre-registration" description="Required when either target is a release; only a release target enters benchmark history."
             value={draft.pre_registration} disabled={busy}
             onChange={(event) => updateDraft({ ...draft, pre_registration: event.currentTarget.value })} />
-          {errors.length > 0 && <Alert color="yellow" title="Replay is not ready"><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></Alert>}
+          {touched && errors.length > 0 && <ReplayReadiness errors={errors} />}
           <Text aria-live="polite" c="dimmed" size="sm">{message}</Text>
-          <Code block>{replayCommand(draft)}</Code>
+          {preview
+            ? <Stack gap={4}>
+                <Text size="sm">Native commands, one per target. The Studio gives target two only what target one left of the cap.</Text>
+                <Code block>{preview.command}</Code>
+              </Stack>
+            : <Text c="dimmed" size="sm">The native benchmark commands appear once the preview resolves both targets.</Text>}
           <Group justify="flex-end">
             <Button disabled={busy || errors.length > 0} loading={busy} variant="light" onClick={estimate}>Preview spend</Button>
             <Button disabled={busy || !preview?.valid || !preview.confirmation_token} loading={busy} onClick={start}>Confirm and run</Button>
@@ -158,14 +178,14 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
           <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Rep</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Status</Table.Th><Table.Th>Result</Table.Th><Table.Th>Cost</Table.Th></Table.Tr></Table.Thead>
           <Table.Tbody>{progress.map((row) => <Table.Tr key={`${row.target.kind}:${row.target.ref}:${row.task}:${row.repetition}:${row.arm}`}>
             <Table.Td>{row.target.ref}</Table.Td><Table.Td>{row.task}</Table.Td><Table.Td>{row.repetition}</Table.Td><Table.Td>{row.arm}</Table.Td><Table.Td>{row.status}</Table.Td>
-            <Table.Td>{row.passed === null ? "Pending" : row.passed ? "Passed" : "Failed"}</Table.Td><Table.Td>{formatCost(row.cost_usd)}</Table.Td>
+            <Table.Td>{progressResult(row)}</Table.Td><Table.Td>{formatCost(row.cost_usd)}</Table.Td>
           </Table.Tr>)}</Table.Tbody>
         </Table>
       </Table.ScrollContainer>}
       {rows.length > 0 && (
         <Table.ScrollContainer minWidth={720} type="native">
           <Table striped highlightOnHover>
-            <Table.Caption>Cost and pass rate by target, task and arm</Table.Caption>
+            <Table.Caption>Cost and pass rate by target, task and arm. Source only: target configuration was not applied.</Table.Caption>
             <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Cost per passed task</Table.Th><Table.Th>Pass rate</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>{rows.map((row) => <Table.Tr key={`${row.target.kind}:${row.target.ref}:${row.task}:${row.arm}`}>
               <Table.Td>{row.target.ref}</Table.Td><Table.Td>{row.task}</Table.Td><Table.Td>{row.arm}</Table.Td>
