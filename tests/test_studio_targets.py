@@ -220,6 +220,28 @@ except OSError:
         self.assertEqual((source / "primitives" / "new.md").read_text(), "new\n")
         self.assertEqual(git(source, "rev-parse", "HEAD"), result["revision"])
 
+    def test_clone_keeps_only_ancestor_tags_in_a_constant_number_of_ref_updates(self):
+        head = git(self.repo, "rev-parse", "HEAD")
+        git(self.repo, "tag", "v0.0.1")
+        git(self.repo, "switch", "--quiet", "-c", "side")
+        (self.repo / "side.txt").write_text("side\n", encoding="utf-8")
+        git(self.repo, "add", "side.txt")
+        git(self.repo, "commit", "--quiet", "-m", "side")
+        git(self.repo, "tag", "v0.0.2-side")
+        git(self.repo, "switch", "--quiet", "main")
+        for index in range(40):
+            git(self.repo, "branch", "extra-%02d" % index)
+
+        destination = self.root / "clone"
+        with mock.patch.object(targets.subprocess, "run", wraps=subprocess.run) as run:
+            targets._clone(self.repo, head, destination)
+        refs = git(destination, "for-each-ref", "--format=%(refname)").splitlines()
+        self.assertIn("refs/tags/v0.0.1", refs)
+        self.assertNotIn("refs/tags/v0.0.2-side", refs)
+        self.assertEqual([ref for ref in refs if not ref.startswith("refs/tags/")], [])
+        updates = [call for call in run.call_args_list if "update-ref" in call.args[0]]
+        self.assertLessEqual(len(updates), 1)
+
     def test_committed_and_untracked_symlinks_cannot_escape_the_immutable_clone(self):
         outside = self.root / "outside"
         outside.write_text("host data\n", encoding="utf-8")

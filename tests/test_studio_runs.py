@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -14,6 +15,7 @@ from unittest import mock
 
 from test_harness import REPO, harness
 from harness_core.studio import run_worker, runs
+from harness_core.studio import state as state_module
 from studio_target_support import FixtureTargetService
 
 
@@ -131,6 +133,62 @@ class StudioRunTests(unittest.TestCase):
         self.write_catalog([bad])
         with self.assertRaisesRegex(runs.RunError, "executable must be literal"):
             runs.SuiteCatalog.load(self.catalog_path)
+
+    def test_first_concurrent_lock_opens_do_not_fail_the_losing_creator(self):
+        for trial in range(40):
+            state = self.root / ("lock-race-%d" % trial)
+            supervisors = [runs.RunSupervisor(state, self.catalog_path) for _ in range(2)]
+            barrier = threading.Barrier(2)
+            failures = []
+
+            def enter(supervisor):
+                barrier.wait(timeout=5)
+                try:
+                    with supervisor.lock():
+                        pass
+                except runs.RunError as exc:
+                    failures.append(str(exc))
+
+            threads = [threading.Thread(target=enter, args=(item,)) for item in supervisors]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+            for supervisor in supervisors:
+                supervisor.close()
+            self.assertEqual(failures, [], "trial %d" % trial)
+
+    def test_open_shared_retries_only_a_non_exclusive_create_that_lost_a_race(self):
+        descriptor = os.open(str(self.root), os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, descriptor)
+        real_open = os.open
+        calls = []
+
+        def lose_once(name, flags, mode=0o777, *, dir_fd=None):
+            calls.append(name)
+            if len(calls) == 1:
+                raise FileNotFoundError(name)
+            return real_open(name, flags, mode, dir_fd=dir_fd)
+
+        create = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW
+        with mock.patch.object(state_module.os, "open", side_effect=lose_once):
+            os.close(state_module.open_shared("raced.lock", create, 0o600, dir_fd=descriptor))
+        self.assertEqual(calls, ["raced.lock", "raced.lock"])
+
+        for flags in (create | os.O_EXCL, os.O_RDONLY | os.O_NOFOLLOW):
+            with self.subTest(flags=flags), mock.patch.object(
+                    state_module.os, "open", side_effect=FileNotFoundError("absent")) as opened:
+                with self.assertRaises(FileNotFoundError):
+                    state_module.open_shared("absent", flags, 0o600, dir_fd=descriptor)
+                self.assertEqual(opened.call_count, 1)
+
+        missing = self.root / "removed"
+        missing.mkdir()
+        gone = os.open(str(missing), os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, gone)
+        missing.rmdir()
+        with self.assertRaises(FileNotFoundError):
+            state_module.open_shared("x.lock", create, 0o600, dir_fd=gone)
 
     def test_state_root_refuses_a_symlinked_component(self):
         target = self.root / "target"

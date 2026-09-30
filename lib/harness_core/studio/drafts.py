@@ -252,32 +252,41 @@ def _registered_worktrees(repo: Path) -> Iterable[Path]:
             yield path.resolve()
 
 
-def _state_path(worktree: Path) -> Optional[Path]:
-    """Return a registered worktree's draft state path, or None once it has no checkout.
+def _vanished(worktree: Path) -> bool:
+    return not (worktree / ".git").exists()
 
-    Every checkout of the repository shares one worktree list, so another process can remove or
-    still be creating an unrelated worktree between the listing and this probe. That worktree is
-    no draft to find; only a checkout that still exists and cannot be read is an error.
-    """
+
+def _state_path(worktree: Path) -> Optional[Path]:
+    """Return a registered worktree's draft state path, or None once it has no checkout."""
     try:
         return _paths(worktree)["state"]
     except DraftError:
-        if not (worktree / ".git").exists():
+        if _vanished(worktree):
             return None
         raise
 
 
-def find(repo: Path, name: str) -> Tuple[Path, Dict[str, Any]]:
+def _draft_worktrees(repo: Path) -> Iterable[Path]:
+    """Yield registered worktrees holding draft state, skipping any removed mid-scan.
+
+    Other sessions add and remove worktrees of a shared repository at any time, so one listed a
+    moment ago can be gone before its git directory resolves; only that failure is skipped. A
+    checkout that still exists and cannot be read is an error.
+    """
     for worktree in _registered_worktrees(repo):
         state_path = _state_path(worktree)
-        if state_path is None or not state_path.is_file():
-            continue
+        if state_path is not None and state_path.is_file():
+            yield worktree
+
+
+def find(repo: Path, name: str) -> Tuple[Path, Dict[str, Any]]:
+    for worktree in _draft_worktrees(repo):
         try:
             state = _read_state(worktree)
         except DraftError:
-            if (worktree / ".git").exists():
-                raise
-            continue
+            if _vanished(worktree):
+                continue
+            raise
         if state.get("name") == name or state.get("draft_id") == name:
             return worktree, state
     raise DraftError("not-found", "draft does not exist: " + name)
@@ -315,14 +324,11 @@ def describe(repo: Path, worktree: Path, state: Optional[Dict[str, Any]] = None)
 
 def list_drafts(repo: Path) -> List[Dict[str, Any]]:
     drafts: List[Dict[str, Any]] = []
-    for worktree in _registered_worktrees(repo):
-        state_path = _state_path(worktree)
-        if state_path is None or not state_path.is_file():
-            continue
+    for worktree in _draft_worktrees(repo):
         try:
             drafts.append(describe(repo, worktree))
         except DraftError:
-            if (worktree / ".git").exists():
+            if not _vanished(worktree):
                 raise
     return sorted(drafts, key=lambda item: (item["name"], item["draft_id"]))
 

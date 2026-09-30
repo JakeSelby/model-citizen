@@ -873,8 +873,8 @@ class RunSupervisor:
         directory = self._run_directory(run_id)
         descriptor = -1
         try:
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
-                                 0o600, dir_fd=directory)
+            descriptor = open_shared(name, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW,
+                                     0o600, directory)
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode):
                 raise RunError("run output is not a regular file")

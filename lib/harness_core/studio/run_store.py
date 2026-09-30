@@ -459,8 +459,8 @@ def _ensure_append(directory_fd: int, name: str, old_size: int, line: bytes) -> 
         raise RunStoreError("run append target exceeds the size limit: " + name)
     descriptor = -1
     try:
-        descriptor = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
-                             0o600, dir_fd=directory_fd)
+        descriptor = open_shared(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                                 0o600, directory_fd)
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise RunStoreError("run append target is not a regular file: " + name)

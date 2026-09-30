@@ -100,13 +100,14 @@ def _clone(repo: Path, revision: str, destination: Path) -> None:
     _run(["git", "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo),
           str(destination)], timeout=300)
     _git(destination, "checkout", "--quiet", "--detach", revision)
-    for ref in _git(destination, "for-each-ref", "--format=%(refname)").splitlines():
-        ancestor_tag = ref.startswith("refs/tags/") and subprocess.run(
-            ["git", "-C", str(destination), "merge-base", "--is-ancestor", ref, "HEAD"],
-            capture_output=True, timeout=120, check=False,
-        ).returncode == 0
-        if not ancestor_tag:
-            _git(destination, "update-ref", "-d", ref)
+    # One query and one batched delete: a shared repository carries hundreds of refs.
+    kept = set(_git(destination, "for-each-ref", "--merged=HEAD", "--format=%(refname)",
+                    "refs/tags").splitlines())
+    doomed = [ref for ref in _git(destination, "for-each-ref", "--format=%(refname)").splitlines()
+              if ref not in kept]
+    if doomed:
+        _git(destination, "update-ref", "--no-deref", "--stdin",
+             input_text="".join("delete " + ref + "\n" for ref in doomed))
     remotes = _git(destination, "remote").splitlines()
     for remote in remotes:
         _git(destination, "remote", "remove", remote)

@@ -38,14 +38,16 @@ def open_shared(name: str, flags: int, mode: int, dir_fd: int) -> int:
     On macOS, when two threads or processes race to `O_CREAT` the same absent name, the loser
     can fail with ENOENT although its directory is intact; a second attempt finds the file the
     winner created. Attempts back off exponentially from one millisecond, about 0.13 seconds
-    in all, so a slow winner is waited for; a directory that is really gone still fails.
+    in all, so a slow winner is waited for. Exclusive creates and plain opens are never retried,
+    and a directory that is really gone still fails.
     """
     delay = CREATE_RACE_FIRST_DELAY
     for attempt in range(CREATE_RACE_ATTEMPTS):
         try:
             return os.open(name, flags, mode, dir_fd=dir_fd)
         except FileNotFoundError:
-            if not flags & os.O_CREAT or attempt == CREATE_RACE_ATTEMPTS - 1:
+            if (not flags & os.O_CREAT or flags & os.O_EXCL
+                    or attempt == CREATE_RACE_ATTEMPTS - 1):
                 raise
         time.sleep(delay)
         delay *= 2
