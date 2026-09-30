@@ -370,6 +370,43 @@ def locked_context(repo: Path, name: str):
         yield worktree.resolve(), state, value
 
 
+def _config_value(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+        ) if path.is_file() else {}
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise DraftError("invalid-config", "draft configuration is unavailable") from exc
+    if not isinstance(value, dict):
+        raise DraftError("invalid-config", "draft configuration must be a JSON object")
+    return value
+
+
+def read_snapshot(repo: Path, name: str, operation: Callable[[Path, Dict[str, Any], Dict[str, Any]], Any],
+                  attempts: int = 40, delay: float = 0.05) -> Any:
+    """Run a read-only `operation(worktree, state, config)` without the writer lock.
+
+    A reader never makes a writer fail `busy`. The read is optimistic: it runs only while no save
+    journal is open, and its result counts only if the revision, HEAD and journal are unchanged
+    afterwards; otherwise it retries, and after `attempts` it reports `busy` itself.
+    """
+    worktree, _ = find(repo, name)
+    worktree = worktree.resolve()
+    paths = _paths(worktree)
+    for _attempt in range(attempts):
+        if not paths["journal"].exists():
+            state = _read_state(worktree)
+            if _revision(worktree) == state["revision"]:
+                result = operation(worktree, state, _config_value(paths["config"]))
+                after = _read_state(worktree)
+                if (not paths["journal"].exists() and after["revision"] == state["revision"]
+                        and _revision(worktree) == state["revision"]):
+                    return result
+        time.sleep(delay)
+    raise DraftError("busy", "the draft kept changing while it was read; retry")
+
+
 def checkpoint_config(repo: Path, name: str, base_revision: str, idempotency_key: str,
                       config: Dict[str, Any], check_command: Optional[List[str]] = None,
                       request_identity: Optional[str] = None) -> Dict[str, Any]:

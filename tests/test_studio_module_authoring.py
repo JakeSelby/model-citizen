@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -348,6 +349,41 @@ class DraftAuthoringTests(unittest.TestCase):
             self.assertTrue(upstream["original_available"])
             self.assertIn("+# upstream change in SKILL.md", upstream["diff"])
             self.assertIn("+# upstream change in " + other, upstream["diff"])
+
+    def test_a_concurrent_authoring_read_never_makes_a_draft_write_fail_busy(self):
+        with self.real_draft("authoring-concurrent") as (name, initial, _environment, _base):
+            entered, release = threading.Event(), threading.Event()
+            real_inventory = module_library.inventory
+            calls = []
+
+            def slow_inventory(*args, **kwargs):
+                calls.append(1)
+                if len(calls) == 1:
+                    entered.set()
+                    release.wait(30)
+                return real_inventory(*args, **kwargs)
+
+            results = {}
+            with mock.patch.object(module_library, "inventory", side_effect=slow_inventory):
+                reader = threading.Thread(target=lambda: results.update(
+                    library=module_authoring.library(ROOT, name)))
+                reader.start()
+                self.assertTrue(entered.wait(30))
+                try:
+                    written = drafts.checkpoint(
+                        ROOT, name, initial["revision"], "write-during-read",
+                        files={"concurrent.md": b"# Written while a read ran\n"},
+                        check_command=PASS,
+                    )
+                    also = module_authoring.read(ROOT, name)
+                finally:
+                    release.set()
+                    reader.join(60)
+            self.assertNotEqual(written["revision"], initial["revision"])
+            self.assertEqual(also["status"], "ready")
+            # The read that overlapped the write is retried against the new revision.
+            self.assertGreaterEqual(len(calls), 2)
+            self.assertIn("modules", results["library"])
 
     def test_manifest_checks_refuse_before_any_checkpoint(self):
         with self.real_draft("authoring-manifest") as (name, initial, _environment, _base):

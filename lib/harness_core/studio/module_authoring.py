@@ -413,20 +413,24 @@ def _refusal(exc: BaseException, base_revision: str = "") -> Dict[str, Any]:
 def read(repo: Path, name: str) -> Dict[str, Any]:
     """The draft's personal root, the templates, and the core modules a fork can start from."""
     repo = Path(repo).resolve()
+
+    def snapshot(worktree: Path, state: Dict[str, Any], raw_config: Dict[str, Any]) -> Dict[str, Any]:
+        mapped = module_editing._mapped_config(repo, worktree, raw_config)
+        own = _own_root(worktree, mapped)
+        forkable = [{"key": "core:" + kind + ":" + unit, "kind": kind, "name": unit}
+                    for kind in FORK_KINDS
+                    for unit in sorted(_existing(worktree, {"primitive_roots": []})[kind])
+                    if module_library.module_files(worktree / "primitives", kind, unit) is not None]
+        return {"status": "ready", "message": "Module templates are ready.",
+                "draft": {"name": state["name"], "revision": state["revision"]},
+                "root": None if own is None else {"id": own["id"], "label": own["label"]},
+                "offer": {"label": OWN_ROOT, "registers": "<checkout>/" + OWN_ROOT},
+                "templates": list(TEMPLATES), "forkable": forkable,
+                "nothing_applied": True, "error_code": ""}
+
+    # Reads never take the writer lock, so a save running beside them is never refused busy.
     try:
-        with drafts.locked_context(repo, name) as (worktree, state, raw_config):
-            mapped = module_editing._mapped_config(repo, worktree, raw_config)
-            own = _own_root(worktree, mapped)
-            forkable = [{"key": "core:" + kind + ":" + unit, "kind": kind, "name": unit}
-                        for kind in FORK_KINDS
-                        for unit in sorted(_existing(worktree, {"primitive_roots": []})[kind])
-                        if module_library.module_files(worktree / "primitives", kind, unit) is not None]
-            return {"status": "ready", "message": "Module templates are ready.",
-                    "draft": {"name": state["name"], "revision": state["revision"]},
-                    "root": None if own is None else {"id": own["id"], "label": own["label"]},
-                    "offer": {"label": OWN_ROOT, "registers": "<checkout>/" + OWN_ROOT},
-                    "templates": list(TEMPLATES), "forkable": forkable,
-                    "nothing_applied": True, "error_code": ""}
+        return drafts.read_snapshot(repo, name, snapshot)
     except (drafts.DraftError, module_editing.ModuleEditError) as exc:
         return {"status": "unavailable", "message": str(exc), "draft": {}, "root": None,
                 "offer": {}, "templates": [], "forkable": [], "nothing_applied": True,
@@ -437,8 +441,8 @@ def preview(repo: Path, name: str, request: Any) -> Dict[str, Any]:
     repo = Path(repo).resolve()
     try:
         normalized = _normalized(request)
-        with drafts.locked_context(repo, name) as (worktree, state, raw_config):
-            return _public(_plan(repo, worktree, state, raw_config, normalized))
+        return drafts.read_snapshot(repo, name, lambda worktree, state, raw_config: _public(
+            _plan(repo, worktree, state, raw_config, normalized)))
     except (AuthoringError, drafts.DraftError, module_editing.ModuleEditError) as exc:
         return _refusal(exc)
 
@@ -492,9 +496,12 @@ def save(repo: Path, name: str, base_revision: str, idempotency_key: str,
 def library(repo: Path, name: str) -> Dict[str, Any]:
     """The module library as the draft would resolve it, with draft paths made relative."""
     repo = Path(repo).resolve()
-    with drafts.locked_context(repo, name) as (worktree, _state, raw_config):
+
+    def snapshot(worktree: Path, _state: Dict[str, Any], raw_config: Dict[str, Any]):
         mapped = module_editing._mapped_config(repo, worktree, raw_config)
-        payload = module_library.inventory(worktree, mapped)
+        return worktree, module_library.inventory(worktree, mapped)
+
+    worktree, payload = drafts.read_snapshot(repo, name, snapshot)
     prefix = str(worktree) + os.sep
 
     def relative(value: str) -> str:
