@@ -28,10 +28,14 @@ from harness_core.studio import server  # noqa: E402
 from harness_core.studio import state_root  # noqa: E402
 from harness_core.studio.state import Store  # noqa: E402
 
+import draft_support  # noqa: E402
+
 
 class StudioSecurityFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        # A cleanup, not tearDown, so a draft cleanup a test registers runs while the home exists.
+        self.addCleanup(self.tmp.cleanup)
         self.home = Path(os.path.realpath(self.tmp.name)) / "home"
         self.home.mkdir()
         # The suite's isolation layer sets HARNESS_QUIET, which would silence --json output.
@@ -48,7 +52,6 @@ class StudioSecurityFixture(unittest.TestCase):
     def tearDown(self):
         subprocess.run([sys.executable, str(CLI), "studio", "stop", "--json"],
                        env=self.env, capture_output=True, text=True, timeout=5)
-        self.tmp.cleanup()
 
     def request(self, method, path, headers=None, body=None, host=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=15)
@@ -285,16 +288,13 @@ class HttpBoundaryTests(StudioSecurityFixture):
             [sys.executable, str(CLI), "draft", "create", name, "--json"],
             env=self.env, capture_output=True, text=True, timeout=30, check=True,
         )
+        draft_support.register_draft_cleanup(self, name, self.env)
         initial = json.loads(created.stdout)
         drafts.checkpoint(
             REPO, name, initial["revision"], "route-module",
             files={"developer-primitives/rules/route-module.md": b"# Route module\n"},
             check_command=[sys.executable, "-c", "raise SystemExit(0)"],
         )
-        self.addCleanup(lambda: subprocess.run(
-            [sys.executable, str(CLI), "draft", "discard", name, "--json"],
-            env=self.env, capture_output=True, text=True, timeout=15,
-        ))
         _issued, status, bootstrap_headers, _body = self.bootstrap(origin="null")
         self.assertEqual(status, 200)
         cookie = self.cookie(bootstrap_headers)

@@ -49,17 +49,22 @@ def discard_draft(
     attempts: int = 200,
     repo: Path = ROOT,
     missing_ok: bool = False,
+    cli: Path = CLI,
 ) -> None:
     """Stop any writer, discard ``name`` and assert nothing of it is left.
 
     ``stop`` runs first: a Studio server still finishing a save holds the draft's writer lock,
     and discard correctly refuses a draft that is mid-write. ``missing_ok`` is for a test that
-    may already have discarded the draft itself.
+    may already have discarded the draft itself. ``cli`` is the checkout's own entry point, for a
+    draft created in a linked worktree.
     """
     if missing_ok and not draft_branch_exists(name, repo) and not draft_worktree_registered(name, repo):
         if stop is not None:
             stop()
         return
+    # A quiet CLI prints nothing, which would hide a `busy` refusal from the retry below and
+    # the reason for any other refusal from the assertion.
+    env = {key: value for key, value in env.items() if key != "HARNESS_QUIET"}
     discarded = None
     try:
         if stop is not None:
@@ -68,7 +73,7 @@ def discard_draft(
         # A stop that raises (a Studio that will not exit) must not leave the branch behind.
         for _ in range(attempts):
             discarded = subprocess.run(
-                [sys.executable, str(CLI), "draft", "discard", name, "--json"],
+                [sys.executable, str(cli), "draft", "discard", name, "--json"],
                 cwd=repo, env=env, capture_output=True, text=True, timeout=30,
             )
             if discarded.returncode == 0 or '"code": "busy"' not in discarded.stdout:

@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -91,9 +92,48 @@ def _discover_unit_tests_in_process(root: Path) -> List[Dict[str, str]]:
     return [found[name] for name in sorted(found)]
 
 
+_DISCOVERY_GUARD = threading.Lock()
+_DISCOVERY_CACHE: Dict[Path, Tuple[Tuple[Tuple[str, int, int], ...], str]] = {}
+
+
+def _tests_fingerprint(target: Path) -> Tuple[Tuple[str, int, int], ...]:
+    """Name, modification time and size of every file under ``tests/``."""
+    entries = []
+    for directory, subdirectories, files in os.walk(target / "tests"):
+        subdirectories[:] = sorted(name for name in subdirectories if name != "__pycache__")
+        for name in sorted(files):
+            path = Path(directory) / name
+            try:
+                status = path.stat()
+            except OSError:
+                continue
+            entries.append((str(path.relative_to(target)), status.st_mtime_ns, status.st_size))
+    return tuple(entries)
+
+
 def discover_unit_tests(root: Path) -> List[Dict[str, str]]:
-    """Discover tests in a short-lived process with an isolated home profile."""
+    """Discover tests in a short-lived process, reusing the last result while ``tests/`` is
+    unchanged.
+
+    Discovery imports every test module and takes seconds, and both the catalog and every
+    unit-test launch need it; without the reuse a launch pays that cost again right after the
+    catalog it was chosen from.
+    """
     target = _root(root)
+    fingerprint = _tests_fingerprint(target)
+    with _DISCOVERY_GUARD:
+        cached = _DISCOVERY_CACHE.get(target)
+    if cached is not None and cached[0] == fingerprint:
+        return json.loads(cached[1])
+    value = _discover_unit_tests_in_subprocess(target)
+    # Keyed on the fingerprint taken before discovery, so an edit made during it misses next time.
+    with _DISCOVERY_GUARD:
+        _DISCOVERY_CACHE[target] = (fingerprint, json.dumps(value))
+    return value
+
+
+def _discover_unit_tests_in_subprocess(target: Path) -> List[Dict[str, str]]:
+    """Discover tests in a short-lived process with an isolated home profile."""
     with tempfile.TemporaryDirectory() as temporary:
         profile = os.path.realpath(temporary)
         environment = dict(os.environ)

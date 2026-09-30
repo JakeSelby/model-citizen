@@ -151,6 +151,13 @@ class DraftCleanupTests(unittest.TestCase):
             draft_support.discard_draft(self, self.name, self.env, attempts=2)
         self.assertTrue(draft_support.draft_branch_exists(self.name))
 
+    def test_cleanup_sees_a_busy_refusal_from_a_quiet_environment(self):
+        self._hold_lock()
+        quiet = dict(self.env, HARNESS_QUIET="1")
+        with self.assertRaisesRegex(AssertionError, "busy"):
+            draft_support.discard_draft(self, self.name, quiet, attempts=2)
+        self.assertTrue(draft_support.draft_branch_exists(self.name))
+
     def test_cleanup_discards_even_when_stopping_the_studio_raises(self):
         def stop():
             raise subprocess.TimeoutExpired("studio", 10)
