@@ -98,11 +98,11 @@ class EvidenceClaimTests(unittest.TestCase):
 
     @staticmethod
     def result(text, ok=True, verdict='supported', claim='cheaper', upper=0.8, difference=(0.05, 0.2),
-               figure=0.0):
+               figure=0.0, lower=0.6):
         return {'ok': ok, 'cards': [{'id': 'proof-card', 'claim': text, 'verify_status': True,
                                      'figure': {'pointer': '/fallback/rate', 'value': figure}}],
                 'derived': {'sm2': {'verdict': verdict, 'claim': claim,
-                                    'ratio_interval': [0.6, upper],
+                                    'ratio_interval': [lower, upper],
                                     'difference_interval': list(difference)}}}
 
     def check(self, text, **result):
@@ -243,6 +243,35 @@ class EvidenceClaimTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'wholly above 0'):
                 self.check(text, difference=(-0.1, 0.2), figure=0.3)
         self.assertIn('1 measured', self.check('Solves 5% more tasks.', difference=(0.05, 0.2)))
+
+    def test_a_grouped_percentage_is_read_whole_and_never_as_its_suffix(self):
+        with self.assertRaisesRegex(ValueError, 'magnitude 1000%'):
+            self.check('Improves pass rate by 1,000%.', difference=(0.05, 0.2))
+        with self.assertRaisesRegex(ValueError, 'not the card figure'):
+            self.check('Fallback trials: 1,000% of attempts.', figure=0.0)
+        with self.assertRaisesRegex(ValueError, 'not the card figure'):
+            self.check('Fallback trials: .5% of attempts.', figure=0.05)
+        self.assertIn('1 measured', self.check('Fallback trials: 1,000% of attempts.', figure=10.0))
+        for text in ('Fallback trials: 12,34% of attempts.', 'Fallback trials: 1,0000% of attempts.',
+                     'Fallback trials: 1.5.3% of attempts.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'not a well-formed number'):
+                self.check(text, figure=0.0)
+
+    def test_a_stated_direction_the_interval_contradicts_is_refused_before_the_magnitude(self):
+        for text in ('Costs 20% more.', 'Spend rises 20%.', 'Raises the bill by 20 percent.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'states an increase'):
+                self.check(text, upper=0.8)
+        for text in ('Pass rate falls by 5%.', 'Solves 5% fewer tasks.', 'Lowers the pass rate by 5%.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'states a decrease'):
+                self.check(text, difference=(0.05, 0.2))
+
+    def test_the_mirror_directions_are_refused_as_contradictions_too(self):
+        for text in ('Costs 20% less.', 'The harness is cheaper.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'states a decrease'):
+                self.check(text, lower=1.1, upper=1.3)
+        for text in ('Improves pass rate by 5%.', 'Solves 5% more tasks.'):
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, 'states an increase'):
+                self.check(text, difference=(-0.2, -0.05))
 
 
 class EndToEndClaimTests(unittest.TestCase):

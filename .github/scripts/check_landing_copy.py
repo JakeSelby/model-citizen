@@ -16,9 +16,12 @@ CAPABILITY_ROOTS = ('bin/', 'lib/', 'adapters/', 'primitives/', 'policy/')
 PRODUCT = 'product.json'
 ESCAPE = re.compile(r'^\s*Landing copy:\s*(.+?)\s*$', re.MULTILINE)
 MINIMUM_REASON = 20
-# A percentage is a number followed by `%` or `percent`; `\b` cannot follow `%`, so the end is
-# a lookahead instead. A multiplier such as `2x` or `3×` is a measured magnitude too.
-PERCENT = re.compile(r'(\d+(?:\.\d+)?)\s*(?:%|percent\b)', re.IGNORECASE)
+# A percentage is a number followed by `%` or `percent`. The token takes the whole run of digits,
+# commas and points, so "1,000%" is never read as its suffix "000%"; a run that is not a plain or
+# comma-grouped number is refused rather than guessed at. A multiplier such as `2x` or `3×` is a
+# measured magnitude too.
+PERCENT = re.compile(r'(\.?\d(?:[\d,.]*\d)?)\s*(?:%|percent\b)', re.IGNORECASE)
+NUMBER = re.compile(r'(?:\d{1,3}(?:,\d{3})+|\d*)(?:\.\d+)?')
 MULTIPLIER = r'\b\d+(?:\.\d+)?(?:x|\s*×)(?![\w])'
 COST = re.compile(
     r'\b(?:cheaper|less expensive|savings?|saved|saves|(?:reduces?|lowers?|cuts?|halves)'
@@ -38,6 +41,17 @@ PASS_RATE = re.compile(
 # the difference-interval path. A level such as "passes 95% of tasks" fails closed there too.
 PASS_CONTEXT = re.compile(
     r'\b(?:pass(?:es|ed|ing)?|success\w*|succeed\w*|solv\w*|resolv\w*|accura\w*|correct\w*)\b',
+    re.IGNORECASE)
+# The direction a claim states, read over the whole string as the context patterns are: a word
+# of the opposite direction anywhere refuses the claim, so a mixed sentence is under-counted
+# rather than admitted. "up to" bounds a magnitude and states no direction.
+RISE = re.compile(
+    r'\b(?:more|higher|greater|up(?!\s+to\b)|ris(?:e|es|en|ing)|rose|increas\w*|gr[eo]ws?|growing'
+    r'|grown|climb\w*|jump\w*|doubl\w*|tripl\w*|pricier|extra|improv\w*|rais\w*|boost\w*|gain\w*'
+    r'|better)\b', re.IGNORECASE)
+FALL = re.compile(
+    r'\b(?:less|fewer|lower\w*|drops?|dropp\w*|falls?|fell|fallen|down|declin\w*|decreas\w*'
+    r'|reduc\w*|cuts?|halve[sd]?|shrink\w*|shr[au]nk|worse|los(?:e|es|ing|t)|regress\w*)\b',
     re.IGNORECASE)
 SPEED = re.compile(r'\b(?:faster|quicker|speeds? up|less time)\b', re.IGNORECASE)
 MEASURED = re.compile('|'.join((COST.pattern, PASS_RATE.pattern, SPEED.pattern,
@@ -92,7 +106,12 @@ def _check_direction(field, text, derived, card):
     and a descriptive percentage that is not its bound card's figure."""
     sm2 = derived.get('sm2') if isinstance(derived, dict) else None
     sm2 = sm2 if isinstance(sm2, dict) else {}
-    stated = [match.group(1) for match in PERCENT.finditer(text)]
+    stated = []
+    for match in PERCENT.finditer(text):
+        if not NUMBER.fullmatch(match.group(1)):
+            raise ValueError('percentage {}% at {} is not a well-formed number'.format(
+                match.group(1), field))
+        stated.append(match.group(1).replace(',', ''))
     amounts = [float(amount) for amount in stated]
     cost = _is_cost_claim(text)
     pass_rate = bool(PASS_RATE.search(text) or (amounts and PASS_CONTEXT.search(text)))
@@ -100,6 +119,12 @@ def _check_direction(field, text, derived, card):
         raise ValueError('speed claim at {} has no re-derived time estimand to support it'.format(field))
     if re.search(MULTIPLIER, text, re.IGNORECASE):
         raise ValueError('multiplier claim at {} has no re-derived estimand to support it'.format(field))
+    if cost:
+        _refuse_contrary(field, 'cost', sm2.get('ratio_interval'), 1, rises=RISE.search(text),
+                         falls=FALL.search(text) or COST.search(text))
+    if pass_rate:
+        _refuse_contrary(field, 'pass-rate', sm2.get('difference_interval'), 0,
+                         rises=RISE.search(text) or PASS_RATE.search(text), falls=FALL.search(text))
     if cost:
         if sm2.get('verdict') != 'supported' or not sm2.get('claim'):
             raise ValueError('cost claim at {} is not supported by SM-2'.format(field))
@@ -122,6 +147,21 @@ def _check_direction(field, text, derived, card):
                     _format(amount), field))
     if stated and not cost and not pass_rate:
         _check_descriptive(field, stated, card)
+
+
+def _refuse_contrary(field, kind, interval, pivot, rises, falls):
+    """Refuse a claim whose stated direction is the opposite of an interval wholly on one side
+    of `pivot`, before any magnitude is compared: "costs 20% more" against a ratio wholly below 1
+    would otherwise pass as the reduction the bound checks assume."""
+    if not isinstance(interval, list) or len(interval) != 2 or any(
+            isinstance(bound, bool) or not isinstance(bound, (int, float)) for bound in interval):
+        return
+    if rises and interval[1] < pivot:
+        raise ValueError('{} claim at {} states an increase; the SM-2 interval is wholly below {}'.format(
+            kind, field, pivot))
+    if falls and interval[0] > pivot:
+        raise ValueError('{} claim at {} states a decrease; the SM-2 interval is wholly above {}'.format(
+            kind, field, pivot))
 
 
 def _check_descriptive(field, stated, card):
