@@ -307,6 +307,25 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   proof or saving claim. No task is marked yet.
 - **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.
+- **Whether delegation fired is reported under SM-2, as adherence, not as the result.** Each row
+  records `spawn_offered` (the `init` event listed `Agent` or `Task`), `spawns` (spawn calls whose
+  result is not an error, made on the main thread or inside a spawned subagent, never inside a
+  `Workflow` agent), `gather_calls` (`Read`, `Grep` and `Glob` calls in every thread),
+  `absorbed_calls` (those inside a counted spawn's thread) and `workflow_launches`, which are
+  reported beside spawns and never counted as one.
+  Output that cannot show a call, such as a lone result, leaves all four counts `null`, never 0.
+  `summarise` then prints one verdict per task, and under `--json` adds it as a `delegation` key:
+  `fired`, `declined-below-break-even`, `missed-above-break-even`, `not-offered` or `unknown`.
+  Rows carrying `error`, such as a timeout or an effort mismatch, are left out and counted. A
+  task's size is the median of the clean bare runs' gather calls, unknown unless each reported one.
+  Fired means a spawn in at least 75% of the clean harness runs, the share #513 registers, and
+  fewer than four clean harness runs read `unknown`. The break-even is FR-34's 7.6 absorbed calls,
+  hypothetical; `--break-even` overrides it and the report labels it an override. Missing data
+  reads `unknown`, never a decline. The block's `registered` is true only when every row came from
+  a run that named a pre-registration; otherwise each verdict prints as exploratory. The registered
+  reading that closes #429 is #1104. The mean cost of spawning and non-spawning runs is shown beside the verdict and is
+  descriptive, not causal. The same block is in each history row under `delegation`. The rules
+  are in `scripts/delegation_verdict.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
   days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.
