@@ -67,6 +67,7 @@ class PrefixedAndExpandedCd(Fixture):
                         "time -p builtin cd ../beta; git push",
                         "command -- cd ../beta; git push",
                         "command -p -- cd ../beta; git push",
+                        "command -pp cd ../beta; git push",
                         "builtin -- cd ../beta; git push",
                         "\\time cd ../beta; git push",
                         "'time' cd ../beta; git push",
@@ -88,13 +89,22 @@ class PrefixedAndExpandedCd(Fixture):
         for command in ("cd .agent-harness; x=1 time cd ..; echo {} > governance.json",
                         "cd .agent-harness; \\time cd ..; echo {} > governance.json",
                         "command -- cd .agent-harness; echo {} > governance.json",
-                        "cd .agent-harness; true || cd ..; echo {} > governance.json"):
+                        "cd .agent-harness; true || cd ..; echo {} > governance.json",
+                        "cd .agent-harness; true ||\ncd ..\necho {} > governance.json",
+                        "cd .agent-harness; command -pp cd ..; echo {} > governance.json"):
             with self.subTest(command=command):
                 found = grader.governed_text(command, str(self.repo))
                 self.assertTrue(grader._policy_hits(command, found), command)
 
     def test_command_v_is_not_a_directory_change(self):
         self.assertEqual(self.places("command -v cd; git -C ../beta push"), [str(self.beta)])
+
+    def test_command_with_a_printing_or_invalid_option_letter_runs_no_cd(self):
+        for command in ("command -pv cd ../beta; git push",
+                        "command -pV cd ../beta; git push",
+                        "command -px cd ../beta; git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.places(command), [str(self.repo)], command)
 
     def test_a_policy_write_after_builtin_cd_is_a_level_one_action(self):
         answer, reason = self.bash("builtin cd .agent-harness && echo {} > governance.json")
@@ -153,11 +163,47 @@ class CdThatMayNotRun(Fixture):
             with self.subTest(command=command):
                 self.assert_unknown(command)
 
+    def test_a_cd_on_the_line_after_a_list_or_pipe_operator_may_not_run(self):
+        for command in ("false &&\ncd ../beta\ngit push",
+                        "true ||\ncd ../beta\ngit push",
+                        "true |\ncd ../beta\ngit push",
+                        "true |&\ncd ../beta\ngit push",
+                        "true ||\n\ncd ../beta\ngit push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
     def test_a_command_past_a_list_operator_after_a_cd_is_unknown(self):
         for command in ("cd ../beta || git push",
                         "cd ../beta && true || git push"):
             with self.subTest(command=command):
                 self.assert_unknown(command)
+
+    def test_a_command_that_runs_only_where_the_cd_succeeded_is_there(self):
+        for command in ("if cd ../beta; then git push; fi",
+                        "if true && cd ../beta; then true; git push; fi",
+                        "[ -d ../beta ] && cd ../beta && git push",
+                        "true && cd ../beta && true && git push",
+                        "true || true && cd ../beta && git push",
+                        "true && cd .. && cd beta && git push",
+                        "true && cd ../beta && { git push; }"):
+            with self.subTest(command=command):
+                self.assert_beta(command)
+
+    def test_a_command_that_may_run_where_the_cd_failed_is_unknown(self):
+        for command in ("true && ! cd ../beta && git push",
+                        "true && time ! cd ../beta && git push",
+                        "true || cd ../beta && git push",
+                        "cd ../alpha || true && cd ../beta && git push",
+                        "if ! cd ../beta; then git push; fi",
+                        "if cd ../beta || true; then git push; fi",
+                        "if cd ../beta; true; then git push; fi",
+                        "if cd ../beta; then true || cd ..; git push; fi",
+                        "for d in x; do true && cd ../beta && git push; done",
+                        "for d in x; do if cd ../beta; then git push; fi; done"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+        self.assertEqual(self.places("if cd ../beta; then git push; fi; git push"),
+                         [str(self.beta), None])
 
     def test_a_cd_that_leads_its_list_is_followed(self):
         for command in ("cd ../beta && git push",

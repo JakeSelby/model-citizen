@@ -1970,8 +1970,9 @@ ASSIGNING_BUILTINS = {"declare", "typeset", "export", "local", "readonly", "read
                       "getopts", "mapfile", "readarray", "let", "unset", "vared"}
 # A command word bash may expand into another, `cd` or `eval` included: `$c` or `c?`, when it
 # has no `/`, since a word with a `/` names a file, never a builtin; a brace expansion such as
-# `{cd,../d}` always, since it splits into words before the `/`.
-DYNAMIC_HEAD_RE = re.compile(r"[$`*?\[]")
+# `{cd,../d}` always, since it splits into words before the `/`. A `[` is a glob only with a `]`
+# after it, so `[` and `[[` are themselves.
+DYNAMIC_HEAD_RE = re.compile(r"[$`*?]|\[.*\]")
 
 
 def _command_word(tokens):
@@ -1983,7 +1984,8 @@ def _command_word(tokens):
     `time` after a redirect are the reserved word to bash and a command to zsh. `builtin` runs
     the builtin in both shells; `builtin --`, `command`, `noglob` and `nocorrect` are read
     differently by the two, so what follows them is not certain. `command -v cd` prints and runs
-    nothing, so it is the command `command`, and `builtin -p cd` fails in both. The lexer drops
+    nothing, so it is the command `command`, as is `command -pv cd`; bash reads bundled and
+    repeated option letters, so `command -pp cd` runs the cd. `builtin -p cd` fails in both. The lexer drops
     quoting, so `_bare_times` must also hold for a leading `time` to be the reserved word."""
     tokens = list(tokens)
     body, sure = _redirects(tokens)[0], True
@@ -2011,8 +2013,8 @@ def _command_word(tokens):
                 if rest[0] == "--":
                     rest = rest[1:]
                     break
-                if rest[0] != "-p":
-                    return body[0], body[1:], True
+                if not re.fullmatch(r"-p+", rest[0]):
+                    return body[0], body[1:], True  # `-v`, `-pV` print; `-x` and `-` run no cd
                 rest = rest[1:]
             body, sure = rest, False
         else:
@@ -2170,6 +2172,7 @@ def _isolating(text):
 COMPOUND_OPEN = {"{", "if", "while", "until", "for", "select", "case"}
 COMPOUND_CLOSE = {"}", "fi", "done", "esac"}
 LIST_ENDS = {"&&", "||", ";", ";;", "&"}
+LOOP_OPEN = {"while", "until", "for", "select"}
 
 
 def _unquoted_structure(text):
@@ -2205,6 +2208,20 @@ def _unquoted_structure(text):
     return "".join(out)
 
 
+CONTINUED_RE = re.compile(r"(?:&&|\|\||\|&?)\s*$")
+
+
+def _structure_line(text):
+    """`_unquoted_structure(text)` on one line: a newline reads as `;`, except after `&&`, `||`,
+    `|` or `|&`, where bash continues the list or pipeline on the next line, blank lines
+    included, so a `cd d` on the line after `false &&` does not run."""
+    lines = _unquoted_structure(text).split("\n")
+    out = lines[0]
+    for line in lines[1:]:
+        out += (" " if CONTINUED_RE.search(out) else " ; ") + line
+    return out
+
+
 def _confined(text):
     """Per simple command of `segments(text)`, whether a `cd` there is confined to it, or None
     when the walk cannot place the line's structure and each `cd` falls back to `_isolating`.
@@ -2214,7 +2231,7 @@ def _confined(text):
     background job is confined. A `cd` inside a brace group, conditional or loop keeps the
     line-wide rule, because such a construct may itself be a pipeline element."""
     try:
-        tokens = ro.tokenize(" ; ".join(_unquoted_structure(text).split("\n")))
+        tokens = ro.tokenize(_structure_line(text))
     except ValueError:
         return None
     # [(pipeline index, paren depth, compound depth)] per segment; per pipeline, whether it is
@@ -2272,22 +2289,61 @@ def _confined(text):
 
 def _list_places(text):
     """Per simple command of `segments(text)`, (whether it may not run when its AND-OR list
-    does, the list it is in, whether it runs only past a `||` of that list), or None when the
-    walk cannot place the line's structure.
+    does, the list it is in, whether it runs only past a `||` of that list, the chains it runs
+    only through, its own chain), or None when the walk cannot place the line's structure.
 
     A command after `&&` or `||`, negated with `!`, or inside a conditional, loop or `case` may
     not run, or may run where a `cd` before it failed: `true || cd d` stays put, and `cd d || x`
     runs `x` where `cd d` did not go. The first command of a list always runs, and so does one
-    in a brace group or subshell that does, whose `;` does not end the list around it."""
+    in a brace group or subshell that does, whose `;` does not end the list around it.
+
+    A chain holds pipelines each of which runs only when every one before it in the chain ran
+    and succeeded. A list's first pipeline, and one after `||`, starts a chain; one after `&&`
+    joins the chain of the pipeline before it, unless that one ran only past a `||`, as the
+    `c` of `a || b && c` runs where `b` never did. A command runs only through its pipeline's
+    chain, the chains of the pipelines holding it, and, in the `then` part of an `if`, the chain
+    of its condition's last pipeline: `git push` in `[ -d d ] && cd d && git push` and in
+    `if cd d; then git push; fi` runs only where the `cd` went. A negated command has no chain
+    of its own, since it runs its successors when it fails, and inside a loop, where a later
+    pass may start where an earlier one moved, a command has none and runs through none."""
     try:
-        tokens = ro.tokenize(" ; ".join(_unquoted_structure(text).split("\n")))
+        tokens = ro.tokenize(_structure_line(text))
     except ValueError:
         return None
     places, ops, lists, cur, skipping, negated = [], [], 0, [], False, False
     groups = []  # (opening word, whether what it holds may not run), innermost last
+    # Per open compound, innermost last: the chains all it holds runs through (None in a loop),
+    # and its list state — the operator before the pipeline to come, whether that pipeline has
+    # begun, the chain it is in, the chain a pipeline after `&&` joins, whether it is negated.
+    frames = [{"base": frozenset(), "through": frozenset(), "after": None, "begun": False,
+               "chain": None, "joinable": None, "negated": False}]
+    chains = [0]
 
     def enclosed():
         return bool(ops) or negated or bool(groups and groups[-1][1])
+
+    def begin():
+        frame = frames[-1]
+        if frame["begun"]:
+            return
+        if frame["after"] == "&&" and frame["joinable"] is not None:
+            chain = frame["joinable"]
+        else:
+            chains[0] += 1
+            chain = chains[0]
+        frame.update(chain=chain, joinable=None if frame["after"] == "||" else chain,
+                     begun=True)
+
+    def new_list(frame, after=None):
+        frame.update(after=after, begun=False, negated=False)
+
+    def enter(word):
+        begin()
+        outer = frames[-1]
+        base = (None if word in LOOP_OPEN or outer["through"] is None
+                else outer["through"] | {outer["chain"]})
+        frames.append({"word": word, "base": base, "through": base, "after": None,
+                       "begun": False, "chain": None, "joinable": None, "negated": False})
 
     for token in tokens:
         if token in ro.ALWAYS_DELIM:
@@ -2296,36 +2352,59 @@ def _list_places(text):
             cur, skipping = [], False
             if token in ("&&", "||"):
                 ops.append(token)
+                new_list(frames[-1], token)
             elif token == "(":
+                enter(token)
                 groups.append((token, enclosed()))
                 ops, negated = [], False
             elif token == ")":
                 if groups and groups[-1][0] == "(":
                     groups.pop()
+                    frames.pop()
                 elif not groups or groups[-1][0] != "case":  # a `case` pattern ends at `)`
                     return None
+                else:
+                    new_list(frames[-1])
             elif token in (";", "&", ";;"):
                 ops, lists = [], lists + (not groups)
+                new_list(frames[-1])
             continue
         if skipping:
             continue
         if not cur:
+            frame = frames[-1]
             if token in COMPOUND_OPEN:
+                enter(token)
                 groups.append((token, token != "{" or enclosed()))
                 ops, negated = [], False
             elif token in COMPOUND_CLOSE:
                 if not groups or groups[-1][0] == "(":
                     return None
                 groups.pop()
+                frames.pop()
+            elif token == "then" and frame.get("word") == "if":
+                frame["through"] = (frame["base"] | {frame["joinable"]}
+                                    if frame["base"] is not None
+                                    and frame["joinable"] is not None else frame["base"])
+                new_list(frame)
+            elif token in ("elif", "else", "do"):
+                frame["through"] = frame["base"]
+                new_list(frame)
             if token == "!":
-                negated = True
+                begin()
+                frames[-1]["negated"] = negated = True
                 continue
             if token in ro.WORD_DROP or token in ro.WORD_COND:
                 continue
             if token in ro.WORD_HEADER:
                 skipping = True
                 continue
-            opened = (enclosed(), lists, "||" in ops)
+            begin()
+            frame = frames[-1]
+            through = frame["through"]
+            opened = (enclosed(), lists, "||" in ops,
+                      frozenset() if through is None else through | {frame["chain"]},
+                      None if through is None or frame["negated"] else frame["chain"])
             negated = False
         cur.append(token)
     if cur:
@@ -2545,7 +2624,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
         confined = [None] * len(parts)
     places = _list_places(stripped)
     if places is None or len(places) != len(parts):
-        places = [(True, None, True)] * len(parts)  # every `cd` may not run
+        places = [(True, None, True, frozenset(), None)] * len(parts)  # every `cd` may not run
     plain_times = _bare_times(stripped, parts)
     queue = list(inners)
     found = []
@@ -2561,12 +2640,17 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
                                        home_unknown=moved, cd_unknown=_cd_unknown(variables))
                          or [(SHELL, _scan(inner)[0], where, [])])
 
-    here, moved_in = cwd, None
-    for tokens, alone, variables, (may_skip, in_list, past_or) in zip(
+    # `pending` is (where the last `cd` goes when it runs, its chain) for a `cd` that may not
+    # run: a command that runs only through that chain runs there, as `_list_places` says.
+    here, moved_in, pending = cwd, None, None
+    for tokens, alone, variables, (may_skip, in_list, past_or, through, own) in zip(
             parts, confined, assignment_contexts, places):
         # Past a `||` in the list of a `cd`, the command runs where that `cd` failed, or where
         # a command after it failed: `cd d || x` runs `x` where `cd d` did not go.
-        at = None if past_or and in_list == moved_in else here
+        if pending is not None and pending[1] in through:
+            at = pending[0]
+        else:
+            at = None if past_or and in_list == moved_in else here
         substitutions(sum(t.count(PLACEHOLDER) for t in tokens), at, variables)
         _targets = _redirects(list(tokens))[1]
         word, args, sure = _command_word(tokens)
@@ -2583,27 +2667,31 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             # A confined `cd` leaves the directory unknown, not unchanged: zsh runs a
             # pipeline's last element in the current shell, so `x | cd d` moves it there. So
             # does one that may not run, as `true || cd d` does not.
-            if (alone or not sure or may_skip or head == "popd"
+            if (alone or not sure or head == "popd"
                     or any(a.startswith("-") for a in args) or len(args) > 1):
-                here = None
+                dest = None
             elif head == "pushd" and not args:
-                here = None  # swaps with the directory stack, which this walk does not hold
+                dest = None  # swaps with the directory stack, which this walk does not hold
             elif (args[0] if args else "~").startswith("~") and (
                     _home_unknown(variables) or (not args and _mentions_home(tokens))):
                 # HOME may have been reassigned earlier in the line, or for this `cd` alone,
                 # as `HOME=x cd` goes to x; bash expands a `~` operand before that assignment.
-                here = None
+                dest = None
             elif args and not _cd_certain(args[0]) and (
                     _cd_unknown(variables) or _moves_cd_resolution(tokens)):
-                here = None  # CDPATH, as `CDPATH=w cd b`, or a physical `..`
+                dest = None  # CDPATH, as `CDPATH=w cd b`, or a physical `..`
             elif args and args[0].startswith("~") and QUOTED_TILDE_RE.search(stripped):
-                here = None  # bash keeps a quoted tilde-prefix literal; zsh expands `~"/x"`
+                dest = None  # bash keeps a quoted tilde-prefix literal; zsh expands `~"/x"`
             else:
-                here = _static_dir(args[0] if args else "~", here)
+                dest = _static_dir(args[0] if args else "~", at)
+            here = None if may_skip else dest
+            # `time ! cd d` is negated inside the command, so its successors run where it failed.
+            pending = ((dest, own) if may_skip and dest is not None and own is not None
+                       and "!" not in tokens else None)
             continue
         found.extend(_governed(tokens, at, depth, variables, causes))
         if _runs_unseen(tokens):
-            here = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
+            here = pending = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
     # Any the segments did not account for: fail closed, HOME included.
     substitutions(len(queue), None, {_HOME_UNKNOWN: True, _CD_UNKNOWN: True})
     return found
