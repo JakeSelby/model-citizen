@@ -264,6 +264,9 @@ DOCKER_EXEC_VALUE_FLAGS = ("-e", "--env", "-u", "--user", "-w", "--workdir",
 SSH_VALUE_FLAGS = ("-p", "-i", "-l", "-o", "-F", "-L", "-R", "-D", "-b", "-c", "-E", "-J", "-W")
 SCAN_CAP = 16384
 TOO_LONG = (3, "command too long to grade", "", "opaque")
+UNREADABLE = (3, "command the grader could not read", "", "opaque")
+PREFIX_CHAIN = (3, "command behind too many prefixes to grade", "", "opaque")
+_AGAIN = object()  # `_grade_step`: look through to the tokens that follow
 SQL_RE = re.compile(
     r"\b(DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW|ROLE|USER)|TRUNCATE(?:\s+TABLE)?|"
     r"DELETE\s+FROM)\s+(?:IF\s+EXISTS\s+)?([`\"\w.]+)", re.I)
@@ -1393,7 +1396,20 @@ NAME_BEFORE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345678
 
 
 def grade_tokens(tokens, cwd, depth):
-    """(grade, verb, target, family) for one simple command."""
+    """(grade, verb, target, family) for one simple command.
+
+    A wrapper or runner is looked through in a loop, never by recursion; a command behind more
+    of them than `ro.MAX_PREFIXES` is graded 3, as text too long to grade is."""
+    for _ in range(ro.MAX_PREFIXES + 1):
+        found = _grade_step(tokens, cwd, depth)
+        if found[0] is not _AGAIN:
+            return found
+        tokens = found[1]
+    return PREFIX_CHAIN
+
+
+def _grade_step(tokens, cwd, depth):
+    """`grade_tokens` for one command word, or (`_AGAIN`, the tokens a wrapper runs)."""
     tokens, written = _redirects(tokens)
     wrote = ""
     for target in written:
@@ -1419,11 +1435,11 @@ def grade_tokens(tokens, cwd, depth):
         while rest and (rest[0].startswith("-") or ASSIGN_RE.match(rest[0])):
             rest = rest[1:]
         if rest:
-            return grade_tokens(rest, cwd, depth)
+            return _AGAIN, rest
     if prog == "cargo" and ops[:1] == ["run"] and "--" in args:
         rest = args[args.index("--") + 1:]
         if rest:
-            return grade_tokens(rest, cwd, depth)
+            return _AGAIN, rest
     if prog == "ssh":
         rest = strip_options(args, SSH_VALUE_FLAGS)
         if len(rest) > 1:  # the first operand is the host; the rest runs on it
@@ -1459,7 +1475,7 @@ def grade_tokens(tokens, cwd, depth):
         if prog == "timeout" and rest:
             rest = rest[1:]  # the duration
         if rest:
-            return grade_tokens(rest, cwd, depth)
+            return _AGAIN, rest
         return 1, prog, "", None
     if prog == "git":
         return _git(args, cwd)
@@ -1563,8 +1579,14 @@ def grade_text(cmd, cwd="", depth=0):
     """(grade, verb, target, family) for a whole command line: the maximum over its parts.
 
     A command that is not read-only and names the approvals store grades 3, whatever else it
-    does: an approval must come from the user's prompt, never from a write the agent makes."""
-    best = _grade_text(cmd, cwd, depth)
+    does: an approval must come from the user's prompt, never from a write the agent makes.
+    Text whose reading raises, as a parser bug would, grades 3: it is never passed unread."""
+    try:
+        best = _grade_text(cmd, cwd, depth)
+    except Exception:
+        if depth:
+            raise
+        return UNREADABLE
     if depth == 0 and 0 < best[0] < 3 and approvals is not None and approvals.mentions_store(cmd):
         return 3, "write to", "the approvals store", "approvals"
     return best
@@ -2627,6 +2649,9 @@ _HOME_UNKNOWN = object()
 # A context key: True once a `cd` may resolve other than logically against the working
 # directory, through CDPATH or a physical-path option; `_cd_certain` names what still resolves.
 _CD_UNKNOWN = object()
+# A context key: True once a `cd` itself may not move where it says, because the line defines a
+# function, which may be named `cd`, or set a trap, an alias or `enable`; `_resets_cd` names them.
+_CD_UNTRUSTED = object()
 # The value of a variable assigned something the resolver cannot read, such as `$(pwd)/x` or
 # `-x`: the variable is known to be set, to a value that is not, so it resolves to nothing.
 _UNKNOWN_VALUE = object()
@@ -2768,6 +2793,14 @@ def _mentions_home(tokens):
 # Options that make `cd` resolve `..` physically: bash's `set -P` or `set -o physical`, and
 # zsh's `set -w`, `chase_links` and `chase_dots`, which zsh spells with any case and underscores.
 PHYSICAL_OPTION_RE = re.compile(r"^[-+][A-Za-z]*[Pw]|physical|chase_?(?:links|dots)", re.I)
+# `shopt -s cdable_vars` or zsh's `setopt cdablevars`: a `cd name` that finds no directory goes
+# to the value of the variable `name`.
+CDABLE_OPTION_RE = re.compile(r"cd_?able_?vars", re.I)
+# A function defined at a command position, `f() {`, `f ()` or `function f`, outside quotes as
+# `_unquoted_structure` leaves them. zsh's anonymous `() { … }` runs at once, as walked.
+FUNCTION_DEF_RE = re.compile(
+    r"(?:^|[;&|(){}\n]|(?<![^\s;&|(){}])(?:then|do|else|elif|time|!))\s*"
+    r"(?:function\s+[^\s;&|()<>]|[^\s;&|(){}<>'\"$`=]+\s*\(\s*\))")
 # A word naming CDPATH anywhere: `CDPATH=w`, `${CDPATH:=w}`, `declare -n r=CDPATH`.
 CDPATH_WORD_RE = re.compile(r"(?<![A-Za-z0-9_])CDPATH(?![A-Za-z0-9_])")
 # Builtins that assign the variable an argument names, which may be CDPATH behind a `$v`.
@@ -2856,7 +2889,7 @@ def _moves_cd_resolution(tokens):
     """Whether a simple command may change how a later `cd` resolves its operand: it names
     CDPATH, as `CDPATH=w`, `export CDPATH`, `: ${CDPATH:=w}` or `CDPATH=w cd b` do, an assigning
     builtin names a variable through an expansion, as `read $v` may, or it sets a physical-path
-    option with `set` or `setopt`."""
+    or `cdable_vars` option with `set`, `setopt` or `shopt`, or one it names by an expansion."""
     if any(CDPATH_WORD_RE.search(token) for token in tokens):
         return True
     word, args, _sure = _command_word(tokens)
@@ -2865,7 +2898,45 @@ def _moves_cd_resolution(tokens):
     if word in ASSIGNING_BUILTINS and any(
             PLACEHOLDER in n or any(c in n for c in "$`") for n in names):
         return True
-    return word in ("set", "setopt") and any(PHYSICAL_OPTION_RE.search(a) for a in args)
+    return word in ("set", "setopt", "shopt") and any(
+        PHYSICAL_OPTION_RE.search(a) or CDABLE_OPTION_RE.search(a) or PLACEHOLDER in a
+        or any(c in a for c in "$`") for a in args)
+
+
+def _sources(tokens):
+    """Whether a simple command reads a script into this shell, as `. ./s.sh` and `source s.sh`
+    do: the script may change the directory, so what follows runs where it left off. A `cd`
+    after it is still followed, as `source .venv/bin/activate && cd d` is."""
+    return _command_word(tokens)[0] in (".", "source")
+
+
+def _resets_cd(tokens):
+    """Whether a simple command may make every later `cd` go elsewhere, or a later command run
+    in another directory: a trap other than on EXIT, which runs its text before a command
+    (`DEBUG`), after a failure (`ERR`) or a return (`RETURN`), where `cd` moves this shell; an
+    alias, which may name `cd`; or `enable` with a name, since `enable -n cd` leaves `cd` the
+    program, which moves nothing. A trap that prints, as `trap -p`, or resets, as `trap - INT`
+    or `trap INT`, or ignores, as `trap '' INT`, runs no text."""
+    word, args, _sure = _command_word(tokens)
+    if word == "enable":
+        return any(not a.startswith("-") for a in args)
+    if word == "alias":
+        return any("=" in a for a in args)
+    if word != "trap":
+        return False
+    if args[:1] == ["--"]:
+        args = args[1:]
+    elif args[:1] and args[0].startswith("-") and args[0] != "-":
+        return False  # `-l` and `-p` print
+    if len(args) < 2 or args[0] in ("-", ""):
+        return False
+    return any(sig.upper() not in ("EXIT", "0") for sig in args[1:])
+
+
+def _defines_function(text):
+    """Whether `text` defines a shell function: one named `cd`, `pushd` or `builtin` changes
+    what every later `cd` does, and any may be called where the walk does not look."""
+    return bool(FUNCTION_DEF_RE.search(_unquoted_structure(text)))
 
 
 def _cd_unknown(variables):
@@ -3362,7 +3433,8 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
                      or _mentions_home(tokens))
             found = governed_text(inner[1], cwd, depth + 1, causes=causes, home_unknown=moved,
                                   cd_unknown=(_cd_unknown(variables)
-                                              or _moves_cd_resolution(tokens)))
+                                              or _moves_cd_resolution(tokens)),
+                                  cd_untrusted=bool(variables.get(_CD_UNTRUSTED)))
         if found:
             return [(c, max(g, grade), d, w + written) for c, g, d, w in found]
     if prog == "git":
@@ -3378,7 +3450,7 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
 
 
 def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=False,
-                  cd_unknown=False):
+                  cd_unknown=False, cd_untrusted=False):
     """[(action class, grade, directory, paths written)] for every simple command in `cmd`, in
     execution order, or None when the text does not decompose.
 
@@ -3397,7 +3469,8 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     long for `_readings` to read is not walked and is that one entry, at grade 3. `causes` is
     filled as `_governed` describes. With `home_unknown`, HOME may have changed before `cmd`
     runs, so no `~` in it is expanded; with `cd_unknown`, CDPATH or a physical-path option may
-    be set, so only a `cd` `_cd_certain` accepts is followed."""
+    be set, so only a `cd` `_cd_certain` accepts is followed; with `cd_untrusted`, `cd` may not
+    be the builtin, or a trap may move the shell, so no `cd` is followed, as `_resets_cd` says."""
     if depth >= MAX_DEPTH:
         return None
     texts, _bodies = _readings(cmd)
@@ -3405,11 +3478,12 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     if texts is None:  # too long to decompose: unplaced, and graded as `_scan` grades it
         texts = [_outer(cmd)[0]]  # bodies removed where placed; `_scan(cmd)` reads them all
     elif len(texts) == 1:
-        return _walk(texts[0], cwd, depth, isolated, causes, home_unknown, cd_unknown)
+        return _walk(texts[0], cwd, depth, isolated, causes, home_unknown, cd_unknown,
+                     cd_untrusted)
     else:
         for text in texts:
-            found.extend(_walk(text, cwd, depth, isolated, causes, home_unknown, cd_unknown)
-                         or [])
+            found.extend(_walk(text, cwd, depth, isolated, causes, home_unknown, cd_unknown,
+                               cd_untrusted) or [])
     if not found:
         pushes = any("git" in chunk and "push" in chunk
                      for text in texts for chunk in SCAN_SPLIT.split(text.lower()))
@@ -3420,8 +3494,14 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     return [(action, grade, None, written) for action, grade, _where, written in found]
 
 
-def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=False):
-    """`governed_text` for one normalized reading."""
+def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=False,
+          cd_untrusted=False):
+    """`governed_text` for one normalized reading.
+
+    A line that defines a function follows none of its `cd`s: the function may be `cd`
+    itself, and its body, walked here as if it ran at once, runs where it is called. From a
+    command `_resets_cd` names, no `cd` is followed and the directory is unknown; after one
+    `_sources` names, it is unknown until the next `cd`."""
     stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
     if parts is None:
@@ -3437,6 +3517,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
     queue = list(inners)
     found = []
     assignment_contexts = _assignment_contexts(stripped, parts, home_unknown, cd_unknown)
+    untrusted = cd_untrusted or _defines_function(stripped)
 
     def substitutions(count, where, variables):
         # A substitution runs in a subshell of this one, with its HOME.
@@ -3445,12 +3526,13 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
         for _ in range(min(count, len(queue))):
             inner = queue.pop(0)
             found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes,
-                                       home_unknown=moved, cd_unknown=_cd_unknown(variables))
+                                       home_unknown=moved, cd_unknown=_cd_unknown(variables),
+                                       cd_untrusted=untrusted)
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     # `pending` is (where the last `cd` goes when it runs, its chain) for a `cd` that may not
     # run: a command that runs only through that chain runs there, as `_list_places` says.
-    here, moved_in, pending = cwd, None, None
+    here, moved_in, pending = (None if untrusted else cwd), None, None
     for tokens, alone, variables, (may_skip, in_list, past_or, through, own) in zip(
             parts, confined, assignment_contexts, places):
         # Past a `||` in the list of a `cd`, the command runs where that `cd` failed, or where
@@ -3475,7 +3557,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             # A confined `cd` leaves the directory unknown, not unchanged: zsh runs a
             # pipeline's last element in the current shell, so `x | cd d` moves it there. So
             # does one that may not run, as `true || cd d` does not.
-            if (alone or not sure or head == "popd"
+            if (alone or not sure or untrusted or head == "popd"
                     or any(a.startswith("-") for a in args) or len(args) > 1):
                 dest = None
             elif head == "pushd" and not args:
@@ -3497,9 +3579,15 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             pending = ((dest, own) if may_skip and dest is not None and own is not None
                        and "!" not in tokens else None)
             continue
+        if untrusted:
+            variables = dict(variables or {})
+            variables[_CD_UNTRUSTED] = True
         found.extend(_governed(tokens, at, depth, variables, causes))
-        if _runs_unseen(tokens):
-            here = pending = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
+        if _runs_unseen(tokens) or _sources(tokens):
+            here = pending = None  # `eval cd d`, `{cd,d}`, `$c d` or `. s.sh` may move it
+        if _resets_cd(tokens):
+            untrusted = True  # a DEBUG trap runs before the very next command
+            here = pending = None
     # Any the segments did not account for: fail closed, HOME included.
     substitutions(len(queue), None, {_HOME_UNKNOWN: True, _CD_UNKNOWN: True})
     return found
@@ -3757,12 +3845,16 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
     try:
         found = governed_text(command, cwd, causes=unresolved_git_c)
     except Exception:
-        found, unresolved_git_c = None, []
+        # A walk that raises places nothing: the line runs in a directory not known, a push
+        # when it names one, as `governed_text` places a line it cannot decompose.
+        pushes = bool(re.search(r"\bgit\b[^;&|]*\bpush\b", command))
+        found, unresolved_git_c = None, [None] if pushes else []
     walked = found is not None
     if not found or max(entry[1] for entry in found) <= 0:
         # The grader graded the line above 0 yet no segment carries that grade: govern the whole
         # line at its grade rather than let the walk find nothing to ask about.
-        found = (found or []) + [(SHELL, grade, cwd, [])]
+        action = PUSH if not walked and unresolved_git_c else SHELL
+        found = (found or []) + [(action, grade, cwd if walked else None, [])]
     hits = _policy_hits(command, found, walked)
     if hits:
         _log(FILE_WRITE, None, POLICY_LEVEL, grade, "ask", name, event, runtime)

@@ -497,6 +497,7 @@ development_status:
   ah-b146-a-here-document-body-that-a-shell-runs-is-graded: ready-for-dev
   ah-b147-grade-bash-grades-text-fed-to-a-shell-or: ready-for-dev
   ah-b148-grade-bash-follows-cd-into-the-wrong-directory: ready-for-dev
+  ah-b150-grade-bash-misses-directory-changes-from-sourced: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
