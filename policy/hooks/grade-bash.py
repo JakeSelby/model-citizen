@@ -167,7 +167,11 @@ SQL_RE = re.compile(
     r"\b(DROP\s+(?:TABLE|DATABASE|SCHEMA|INDEX|VIEW|ROLE|USER)|TRUNCATE(?:\s+TABLE)?|"
     r"DELETE\s+FROM)\s+(?:IF\s+EXISTS\s+)?([`\"\w.]+)", re.I)
 ALTER_DROP_RE = re.compile(r"\bALTER\s+TABLE\s+([`\"\w.]+)[\s\S]{0,200}?\bDROP\b", re.I)
-MONGO_RE = re.compile(r"\bdb(?:\.\w+)*\.(dropDatabase|drop|deleteMany|remove)\s*\(")
+# The call only: the `db.…` chain before it is checked by `_mongo`, walking back, because a
+# regex that matches the chain backtracks quadratically on a body of repeated `db.`.
+MONGO_CALL_RE = re.compile(r"\.(dropDatabase|drop|deleteMany|remove)\s*\(")
+SQL_CLIENT_RE = re.compile(r"(?<![\w.-])(?:psql|mysql|mariadb|sqlite3|mongosh|mongo|"
+                           r"clickhouse-client)(?![\w.-])")
 SQL_CLIENTS = {"psql", "mysql", "mariadb", "sqlite3", "mongosh", "mongo", "clickhouse-client"}
 CLOUD = {"aws", "gcloud", "az", "doctl", "flyctl"}
 CLOUD_G3 = {"delete", "terminate", "destroy", "purge", "remove"}
@@ -253,40 +257,350 @@ def strip_marker(cmd):
     return stripped, stripped != cmd
 
 
-def _split_heredocs(text):
-    """Text without the body of every here-document. A body is data: the shell expands a
-    variable in an unquoted one but never runs its lines, and a quoted body is not even
-    expanded. Bodies go before continuations are joined, so a body line ending in a backslash
-    cannot swallow the delimiter."""
-    lines = text.split("\n")
-    out, bodies = [], []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        out.append(line)
-        match = HEREDOC_RE.search(line)
-        i += 1
-        if not match:
+HEREDOC_WORD_END = set(" \t\n;&|()<>")
+# A substitution holding a here-document is checked against bash 3.2's reading, which finds
+# its closing parenthesis without skipping the body. Each check can read to the end of the text,
+# so past this many, or in a text longer than `HEREDOC_CHECKED_LENGTH`, the line is uncertain.
+HEREDOC_SUB_CHECKS = 8
+HEREDOC_CHECKED_LENGTH = 65536
+# A word that opens an array subscript `a[…]` or a compound assignment `a=(…)` / `a+=(…)`.
+ARRAY_OPEN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[|\+?=\()")
+IDENT_START = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_")
+COMMAND_OPENERS = {"if", "then", "else", "elif", "do", "while", "until", "time", "!", "{"}
+
+
+def _command_position(text, i):
+    """Whether bash surely reads the word at text[i] where a command or assignment begins: first
+    in the text, or after an unescaped newline, `;`, `&`, `|` or `(` that is no redirection, or
+    after a word such as `then` that opens a command. After an assignment or `declare` bash may
+    still take one, so those, like anything else, are not sure."""
+    j = i - 1
+    while j >= 0 and text[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if j and text[j - 1] == "\\":
+        return False
+    if text[j] in "\n;(":
+        return True
+    if text[j] in "&|":
+        return not j or text[j - 1] not in "<>"
+    k = j
+    while k >= 0 and j - k < 6 and text[k] not in HEREDOC_WORD_END:
+        k -= 1
+    return text[k + 1:j + 1] in COMMAND_OPENERS and (k < 0 or text[k] in HEREDOC_WORD_END)
+
+
+def _heredoc_word(text, i):
+    """(delimiter, quoted, end, certain) for the here-document word starting at text[i], or None
+    when there is none. bash takes the word as written and quote-removed, expanding nothing: the
+    body of `<<E"OF"` ends at `EOF`, and any quoted part leaves the body unexpanded. A `$` or
+    backtick, a `$'…'` or `$"…"` string, a newline or a continuation in the word, or a quote
+    left open is read differently by shells and versions, so the word is not certain."""
+    out, quoted, certain, n = [], False, True, len(text)
+    start = i
+    while i < n and text[i] not in HEREDOC_WORD_END:
+        c = text[i]
+        if c == "\\":
+            if i + 1 >= n or text[i + 1] == "\n":
+                certain = False
+                i += 2
+                continue
+            out.append(text[i + 1])
+            quoted = True
+            i += 2
             continue
-        delimiter, body = match.group(2), []
-        while i < len(lines) and lines[i].strip() != delimiter:
-            body.append(lines[i])
+        if c in "'\"":
+            j = i + 1
+            while j < n and text[j] != c:
+                j += 2 if c == '"' and text[j] == "\\" else 1
+            content = text[i + 1:j]
+            if c == '"':
+                if "$" in content or "`" in content:
+                    certain = False
+                content = re.sub(r'\\([$`"\\])', r"\1", content)
+            if j >= n or "\n" in content:
+                certain = False
+            out.append(content)
+            quoted = True
+            i = j + 1
+            continue
+        if c in "$`":
+            certain = False
+            if text.startswith("$'", i):
+                j = ro._ansi_end(text, i) or n
+                out.append(text[i + 2:j - 1])
+                quoted = True
+                i = j
+                continue
+            if text.startswith('$"', i):
+                i += 1  # read here as the double-quoted string alone
+                continue
+        out.append(c)
+        i += 1
+    if i == start:
+        return None
+    return "".join(out), quoted, min(i, n), certain
+
+
+def _heredoc_bodies(text, i, pending):
+    """(index after the bodies, [(body, delimiter line)]) for the here-documents `pending`, whose
+    bodies start at text[i]. A body ends at the first line that is exactly its delimiter, after
+    `<<-` strips its leading tabs. In a body whose delimiter is unquoted, a line ending in an odd
+    number of backslashes continues onto the next, as bash reads it: `a\\` then `EOF` is `aEOF`,
+    and a lone `\\` then `EOF` is the delimiter. A body never ended runs to the end of the text."""
+    n, found = len(text), []
+    for delimiter, strip_tabs, quoted in pending:
+        lines = []
+        while i < n:
+            start = i
+            parts = []
+            while True:
+                end = text.find("\n", i)
+                end = n if end < 0 else end
+                line = text[i:end]
+                i = min(end + 1, n)
+                backslashes = len(line) - len(line.rstrip("\\"))
+                if not quoted and backslashes % 2 and i < n and end < n:
+                    parts.append(line[:-1])
+                    continue
+                parts.append(line)
+                break
+            logical = "".join(parts)
+            if (logical.lstrip("\t") if strip_tabs else logical) == delimiter:
+                found.append(("\n".join(lines), text[start:i]))
+                break
+            lines.append(text[start:i].rstrip("\n"))
+        else:
+            found.append(("\n".join(lines), ""))
+    return i, found
+
+
+def _split_heredocs(text):
+    """(text without the body of every here-document, the bodies, whether every here-document
+    operator and delimiter was placed for sure). A body is data: the shell expands a variable in
+    an unquoted one but never runs its lines, and a quoted body is not even expanded.
+
+    An operator is a `<<` or `<<-` bash would read as one: unquoted, outside a comment, not the
+    `<<<` of a here-string, not a shift inside `$((…))`, `((…))` or `$[…]`, and not inside an
+    array subscript or compound assignment that starts a command. Its body starts after the next
+    newline bash reads as a token in the construct that holds the operator: one a continuation
+    does not end, and not one inside a substitution, an expansion or a subscript, which bash
+    reads to its close first. The body ends at the delimiter line `_heredoc_bodies` finds, which
+    leaves the text as a bare newline, so no quote or backslash in it reaches the lines after.
+
+    Not certain: a delimiter `_heredoc_word` cannot read for sure, a `<<` inside `${…}`, an
+    arithmetic expression that does not close as one, a construct left open, a here-document
+    whose substitution closes before its body starts, one whose line ends inside a nested
+    construct, which bash 3.2 reads as above and later versions are not checked on, one after
+    a subscript or compound assignment that may be an assignment, and one inside a `$(…)` whose
+    closing parenthesis bash 3.2, matching it without skipping the body, would place elsewhere.
+    The caller then also reads the text with no body removed and keeps the worse grade.
+
+    Linear: text past `SCAN_CAP` outside the bodies is returned unread, for the caller to refuse
+    by its length, and the bash 3.2 check runs a bounded number of times."""
+    if "<<" not in text:
+        return text, [], True
+    out, bodies, pending, certain = [], [], [], True
+    stack, checks, skipped, i, n = [["top"]], 0, 0, 0, len(text)
+    has_case, unsure = CASE_WORD_RE.search(text) is not None, None
+    # The `top` or `sub` frame that holds each run of `pending`, as [frame, index of its first
+    # entry], innermost last: an operator's body starts only at a newline in its own frame.
+    holders = []
+    while i < n:
+        if i - skipped > SCAN_CAP:  # too long to grade: the caller refuses the text by its length
+            out.append(text[i:])
+            return "".join(out), bodies, False
+        frame = stack[-1]
+        state, c = frame[0], text[i]
+        if c == "\n" and pending and state in ("top", "sub", "arith", "brace", "index",
+                                                "compound"):
+            owner = stack[-2] if state == "compound" else frame
+            first = holders[-1][1] if holders and holders[-1][0] is owner else len(pending)
+            ready = pending[first:]
+            if first:
+                certain = False
+            if ready:
+                del pending[first:]
+                holders.pop()
+                out.append(c)
+                start = i + 1
+                i, found = _heredoc_bodies(text, start, ready)
+                skipped += i - start
+                for body, delimiter_line in found:
+                    bodies.append(body)
+                    if delimiter_line.endswith("\n"):
+                        out.append("\n")
+                        skipped -= 1
+                continue
+        if state == "single":
+            if c == "'":
+                stack.pop()
+            out.append(c)
             i += 1
-        if i < len(lines):
-            out.append(lines[i])
+            continue
+        if state == "comment":
+            if c == "\n":
+                stack.pop()
+                continue
+            out.append(c)
             i += 1
-        bodies.append("\n".join(body))
-    return "\n".join(out), bodies
+            continue
+        if c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if state == "ansi":
+            if c == "'":
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        if state == "backtick":  # opaque here: bash finds its end without reading the body
+            if c == "`":
+                stack.pop()
+            out.append(c)
+            i += 1
+            continue
+        step, opens = 1, None
+        if unsure and c == unsure and state in ("top", "sub"):
+            unsure = None
+        if state in ("top", "sub") and c in IDENT_START and (i == 0 or text[i - 1]
+                                                            in HEREDOC_WORD_END):
+            opens = ARRAY_OPEN_RE.match(text, i)
+        if text.startswith("$$", i):
+            step = 2
+        elif text.startswith("$[", i):
+            step = 2
+            stack.append(["index", 0])
+        elif text.startswith("$((", i) or (state != "double" and text.startswith("((", i)):
+            step = 3 if c == "$" else 2
+            stack.append(["arith", 0, c == "$"])
+        elif text.startswith("$(", i) or (state in ("top", "sub")
+                                           and text.startswith(("<(", ">("), i)):
+            step = 2
+            stack.append(["sub", 0, i + 1, False])
+        elif text.startswith("${", i):
+            step = 2
+            stack.append(["brace"])
+        elif c == "`":
+            stack.append(["backtick"])
+        elif state == "double":
+            if c == '"':
+                stack.pop()
+        elif text.startswith(("$'", '$"'), i):
+            step = 2
+            stack.append(["ansi" if text[i + 1] == "'" else "double"])
+        elif c in "'\"":
+            stack.append(["single" if c == "'" else "double"])
+            if state == "brace":
+                certain = False
+        elif opens:
+            # bash reads `a[…]` as a subscript and `a=(…)` as a compound assignment, neither
+            # holding a here-document, where an assignment can start; elsewhere `a[1<<2]` holds
+            # one. Where that is not sure, a `<<` before the close is read both ways.
+            if _command_position(text, i) and not has_case:
+                step = opens.end() - i
+                stack.append(["index", 0] if opens.group(1) == "[" else ["compound"])
+            else:
+                step = opens.start(1) - i
+                unsure = "]" if opens.group(1) == "[" else ")"
+        elif state == "index":
+            if c == "[":
+                frame[1] += 1
+            elif c == "]":
+                if frame[1]:
+                    frame[1] -= 1
+                else:
+                    stack.pop()
+        elif state == "compound" and c == ")":
+            stack.pop()
+        elif state == "brace":
+            if c == "}":
+                stack.pop()
+            elif text.startswith("<<", i):
+                certain = False
+        elif text.startswith("<<<", i):
+            step = 3
+        elif text.startswith("<<", i) and state not in ("arith", "compound"):
+            if unsure:
+                certain = False
+            j = i + 2
+            strip_tabs = text.startswith("-", j)
+            j += 1 if strip_tabs else 0
+            while j < n and text[j] in " \t":
+                j += 1
+            word = _heredoc_word(text, j)
+            if word is None:
+                certain = False
+                step = 2
+            else:
+                delimiter, quoted, step, sure = word
+                step -= i
+                certain = certain and sure
+                if not holders or holders[-1][0] is not frame:
+                    holders.append([frame, len(pending)])
+                pending.append((delimiter, strip_tabs, quoted))
+                if state == "sub":
+                    frame[3] = True
+        elif c == "#" and state != "arith" and (i == 0 or text[i - 1] in WORD_START):
+            stack.append(["comment"])
+        elif c == "(" and state in ("sub", "arith"):
+            frame[1] += 1
+        elif c == ")" and state in ("sub", "arith") and frame[1]:
+            frame[1] -= 1
+        elif c == ")" and state == "arith":
+            if text.startswith("))", i):
+                step = 2
+                stack.pop()
+            else:  # not arithmetic after all: bash reads a subshell or a substitution
+                certain = False
+                stack.pop()
+                if frame[2]:
+                    stack.append(["sub", 0, i, False])
+        elif c == ")" and state == "sub":
+            stack.pop()
+            if pending:
+                certain = False
+                if holders and holders[-1][0] is frame:  # its bodies start in the parent
+                    if len(holders) > 1 and holders[-2][0] is stack[-1]:
+                        holders.pop()
+                    else:
+                        holders[-1][0] = stack[-1]
+            if frame[3]:
+                # bash 3.2 closes the substitution where a quote-aware match does, which a `)` in
+                # the body can move and run the lines after it; where the match finds no close,
+                # 3.2 stops on a syntax error and runs nothing more.
+                checks += 1
+                if checks > HEREDOC_SUB_CHECKS or n > HEREDOC_CHECKED_LENGTH:
+                    certain = False
+                elif ro._match_paren(text, frame[2]) not in (i, None):
+                    certain = False
+        out.append(text[i:i + step])
+        i += step
+    if len(stack) > 1 and any(f[0] != "comment" for f in stack[1:]):
+        certain = False
+    return "".join(out), bodies, certain
 
 
 def _strip_comments(text):
     """Text without its `#` comments, with quote state carried across newlines, so a `#` inside
-    a multi-line quoted string stays and a comment outside one takes the rest of its line."""
+    a multi-line quoted string stays and a comment outside one takes the rest of its line. An
+    ANSI-C `$'…'` string is copied whole: its `\\'` does not end it."""
     out = []
     sq = dq = False
     i, n = 0, len(text)
     while i < n:
         c = text[i]
+        if not sq and text.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        if not (sq or dq) and text.startswith("$'", i):
+            end = ro._ansi_end(text, i) or n
+            out.append(text[i:end])
+            i = end
+            continue
         if sq:
             sq = c != "'"
         elif dq:
@@ -323,25 +637,36 @@ def normalize(cmd):
     return texts[0], bodies
 
 
+def _unix(cmd):
+    return cmd.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _outer(cmd):
-    """(the shell text with here-document bodies split out, the bodies)."""
-    return _split_heredocs(cmd.replace("\r\n", "\n").replace("\r", "\n"))
+    """(the shell text with here-document bodies split out, the bodies, whether every
+    here-document was placed for sure)."""
+    return _split_heredocs(_unix(cmd))
 
 
 def _readings(cmd):
-    """([shell text, …], here-document bodies): one reading, or two when `_join_continuations`
-    cannot place a backslash-newline with certainty — its own, then every pair removed, as the
-    hook read continuations before it modelled quoting. A caller grades the worse reading and
-    takes no directory from either.
+    """([shell text, …], here-document bodies): one reading, or more when a construct cannot be
+    placed with certainty. A here-document `_split_heredocs` cannot place adds the text with no
+    body removed; a backslash-newline `_join_continuations` cannot place adds, per text, the
+    text with every pair removed, as the hook read continuations before it modelled quoting. A
+    caller grades the worse reading and takes no directory from any: with more than one, the
+    texts may even be equal.
 
-    The texts are None when the shell text, bodies excluded, is longer than `SCAN_CAP`: the
-    caller grades it too long without decomposing it, because the lexer and the substitution
-    walk are not linear in its length and a hook that runs past its timeout fails open."""
-    text, bodies = _outer(cmd)
-    if len(text) > SCAN_CAP:
+    The texts are None when a text to read, bodies excluded where they were placed, is longer
+    than `SCAN_CAP`: the caller grades it too long without decomposing it, because the lexer and
+    the substitution walk are not linear in its length and a hook that runs past its timeout
+    fails open."""
+    text, bodies, placed = _outer(cmd)
+    bases = [text] if placed else [text, _unix(cmd)]
+    if any(len(base) > SCAN_CAP for base in bases):
         return None, bodies
-    joined, certain = _join_continuations(text)
-    texts = [joined] if certain else [joined, text.replace("\\\n", "")]
+    texts = []
+    for base in bases:
+        joined, certain = _join_continuations(base)
+        texts.extend([joined] if certain else [joined, base.replace("\\\n", "")])
     return [_strip_comments(each) for each in texts], bodies
 
 
@@ -394,6 +719,10 @@ def _join_continuations(text):
             i += 1
             continue
         opener = text[i:i + 2]
+        if opener == "$$":  # one parameter: a quote after it is a plain one, not `$'…'`
+            out.append(opener)
+            i += 2
+            continue
         if char in "$<>" and text[i + 1:i + 3] == "\\\n":
             certain = False
         if opener == "$(" or (state not in ("double", "brace") and opener in ("<(", ">(")):
@@ -455,20 +784,24 @@ def _join_continuations(text):
 
 def _scan(text):
     """The fallback for text this hook cannot decompose: a grade-3 verb family in any one of
-    its separator-free chunks, or grade 1. Linear in the length of the text, and the text it
+    its separator-free chunks, else a push at grade 2 when one chunk names `git` and `push`, as
+    `governed_text` counts it, or grade 1. Linear in the length of the text, and the text it
     reads is capped, because a hook that runs past its timeout fails open."""
     if len(text) > SCAN_CAP:
         return TOO_LONG
-    for chunk in SCAN_SPLIT.split(text.lower()):
+    chunks = SCAN_SPLIT.split(text.lower())
+    for chunk in chunks:
         for needles, verb, family in SCAN:
             if all(needle in chunk for needle in needles):
                 return 3, verb, "", family
+    if any("git" in chunk and "push" in chunk for chunk in chunks):
+        return 2, "git push", "", "remote"
     return 1, "", "", "opaque"
 
 
 def _extract_subs(cmd):
     """(text with every substitution replaced by a placeholder, the inner texts). The text is
-    None when a substitution never closes."""
+    None when a substitution or an ANSI-C `$'…'` string never closes."""
     out, inners = [], []
     i, n = 0, len(cmd)
     sq = dq = False
@@ -479,6 +812,17 @@ def _extract_subs(cmd):
             if c == "'":
                 sq = False
             i += 1
+            continue
+        if cmd.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        if not dq and cmd.startswith("$'", i):
+            end = ro._ansi_end(cmd, i)
+            if end is None:
+                return None, inners
+            out.append(cmd[i:end])
+            i = end
             continue
         if c == "'" and not dq:
             sq = True
@@ -788,9 +1132,25 @@ def _sql(text):
     match = ALTER_DROP_RE.search(text)
     if match:
         return 3, "ALTER TABLE DROP", match.group(1).strip("`\""), "database"
-    match = MONGO_RE.search(text)
-    if match:
-        return 3, "db.%s()" % match.group(1), "", "database"
+    method = _mongo(text)
+    if method:
+        return 3, "db.%s()" % method, "", "database"
+    return None
+
+
+def _mongo(text):
+    """The destructive method of the first `db.<name>….<method>(` call in `text`, or None: what
+    `\\bdb(?:\\.\\w+)*\\.(method)\\s*\\(` finds, in linear time. Each call is preceded by a run of
+    word characters and dots that ends at a `(` or earlier, so the walks back never overlap."""
+    for match in MONGO_CALL_RE.finditer(text):
+        start = match.start()
+        while start and (text[start - 1] == "." or text[start - 1] == "_"
+                         or text[start - 1].isalnum()):
+            start -= 1
+        names = text[start:match.start()].split(".")
+        for index, name in enumerate(names):
+            if name == "db" and all(names[index + 1:]):
+                return match.group(1)
     return None
 
 
@@ -1039,7 +1399,7 @@ def grade_text(cmd, cwd="", depth=0):
 
 
 def _grade_text(cmd, cwd, depth):
-    if depth == 0 and ro.command_ok(cmd):
+    if depth == 0 and len(cmd) <= ro.MAX_LENGTH and ro.command_ok(cmd):
         return 0, None, None, None
     if depth >= MAX_DEPTH:
         return _scan(cmd)
@@ -1063,7 +1423,9 @@ def _grade_reading(text, bodies, cwd, depth):
     parts = segments(stripped) if stripped is not None else None
     if parts is None:
         return max(best, _scan(text), key=lambda h: h[0])
-    if bodies and any(seg and seg[0].rpartition("/")[2] in SQL_CLIENTS for seg in parts):
+    # A SQL client named anywhere, a substitution included, since a body inside `$(…)` is
+    # split out of the outer text before its command is graded.
+    if bodies and SQL_CLIENT_RE.search(text):
         for body in bodies:  # the shell does not run a body, but a SQL client interprets it
             hit = _sql(body)
             if hit and hit[0] > best[0]:
@@ -1208,6 +1570,13 @@ SHELL_SPECIAL_ASSIGNMENTS = {
 }
 
 
+# A tilde next to a quote, a backslash or a `$`, or any ANSI-C string, anywhere in the line: a `cd`
+# operand the tokenizer returns as `~/x` may have been written `"~/x"`, `~"/x"`, `~$''/x` or
+# `$'\x7e/x'`, which bash does not expand to the home directory, so no `~` operand of the line
+# resolves.
+QUOTED_TILDE_RE = re.compile(r"[\\'\"]~|~[\\'\"$]|\$'")
+
+
 def _static_dir(target, cwd):
     """The directory a `cd`, `pushd` or `-C` to `target` reaches, or None when it cannot be known
     without running the line: `-`, a variable, a substitution, `~user`, a glob."""
@@ -1222,8 +1591,11 @@ def _source_segments(text):
     """Semicolon-separated source segments, retaining quote and escape provenance.
 
     Anything with shell control flow, a pipeline, a background job or a subshell is outside
-    the static assignment model. Returning None disables assignment resolution for the line.
+    the static assignment model, and so is an ANSI-C `$'…'` string, which this reader does not
+    follow. Returning None disables assignment resolution for the line.
     """
+    if "$'" in text:
+        return None
     out, current, quote, i = [], [], "", 0
     while i < len(text):
         char = text[i]
@@ -1251,7 +1623,10 @@ def _source_segments(text):
 
 
 def _source_words(text):
-    """Shell words as written, quotes included; None when an operator is present."""
+    """Shell words as written, quotes included; None when an operator or an ANSI-C `$'…'`
+    string is present."""
+    if "$'" in text:
+        return None
     words, word, quote, i = [], [], "", 0
     while i < len(text):
         char = text[i]
@@ -1418,6 +1793,16 @@ def _unquoted_structure(text):
             nxt = text[i + 1]
             out.append(c + ("_" if nxt in ro.OPERATOR_CHARS else nxt))
             i += 2
+            continue
+        if quote != "'" and text.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        if not quote and text.startswith("$'", i):
+            end = ro._ansi_end(text, i) or len(text)
+            out.append("$'" + "".join("_" if ch in ro.OPERATOR_CHARS else ch
+                                      for ch in text[i + 2:end]))
+            i = end
             continue
         if quote and c == quote:
             quote = ""
@@ -1671,7 +2056,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     texts, _bodies = _readings(cmd)
     found = []
     if texts is None:  # too long to decompose: unplaced, and graded as `_scan` grades it
-        texts = [_outer(cmd)[0]]
+        texts = [_outer(cmd)[0]]  # bodies removed where placed; `_scan(cmd)` reads them all
     elif len(texts) == 1:
         return _walk(texts[0], cwd, depth, isolated, causes, home_unknown)
     else:
@@ -1734,6 +2119,8 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False):
                 here = None  # swaps with the directory stack, which this walk does not hold
             elif (args[0] if args else "~").startswith("~") and _home_unknown(variables):
                 here = None  # HOME may have been reassigned earlier in the line
+            elif args and args[0].startswith("~") and QUOTED_TILDE_RE.search(stripped):
+                here = None  # bash keeps a quoted tilde-prefix literal; zsh expands `~"/x"`
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue

@@ -131,6 +131,11 @@ _PLACEHOLDER = "__ROSUB__"  # stands in for a verified substitution; never a rea
 # Redirection tokens that are safe on their own: input redirects (their operand is
 # read, never written) and fd duplication.
 READ_REDIRECTS = {"<", "<<", "<<<", "<&"}
+# A here-document operator anywhere in the text, `<<<` aside. Matched on the raw text, inside
+# quotes too: refusing a quoted `<<` costs a prompt, missing a real one approves its body's lines.
+HEREDOC_OPERATOR = re.compile(r"(?<!<)<<(?!<)")
+# The longest command this hook reads; a longer one falls through unread.
+MAX_LENGTH = 10000
 WRITE_REDIRECTS = re.compile(r"^\d*(?:&?>>?[!|]?|>&|<>)$")
 PUNCTUATION_RUN = re.compile(r"^\d*[<>&|]+!?$")
 
@@ -154,12 +159,77 @@ def _operators(run):
     return out
 
 
-def tokenize(cmd):
+def _ansi_end(s, i):
+    """The index just past the ANSI-C string `$'…'` opening at s[i], or None when it never
+    closes. Inside it a backslash escapes the next character, so `\\'` is a quote and not its
+    end, unlike in a single-quoted string."""
+    j, n = i + 2, len(s)
+    while j < n:
+        if s[j] == "\\":
+            j += 2
+        elif s[j] == "'":
+            return j + 1
+        else:
+            j += 1
+    return None
+
+
+ANSI_ESCAPES = {"a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "n": "\n", "r": "\r",
+                "t": "\t", "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?"}
+ANSI_HEX = {"x": 2, "u": 4, "U": 8}
+
+
+def _ansi_decode(body):
+    """The text of an ANSI-C string's body, its escapes decoded as bash 5 does, cut at the first
+    NUL: bash drops the rest of the string, and a command's arguments end there anyway, so
+    `$'push\\0x'` is `push`. Raises ValueError on an escape that names no character."""
+    out, i, n = [], 0, len(body)
+    while i < n:
+        c = body[i]
+        if c != "\\" or i + 1 >= n:
+            out.append(c)
+            i += 1
+            continue
+        e = body[i + 1]
+        if e in ANSI_ESCAPES:
+            out.append(ANSI_ESCAPES[e])
+            i += 2
+        elif e in "01234567":
+            j = i + 1
+            while j < n and j < i + 4 and body[j] in "01234567":
+                j += 1
+            out.append(chr(int(body[i + 1:j], 8) & 0xFF))
+            i = j
+        elif e in ANSI_HEX:
+            j = i + 2
+            while j < n and j < i + 2 + ANSI_HEX[e] and body[j] in "0123456789abcdefABCDEF":
+                j += 1
+            if j == i + 2:
+                out.append(body[i:j])
+            else:
+                out.append(chr(int(body[i + 2:j], 16)))  # ValueError past the Unicode range
+            i = j
+        elif e == "c" and i + 2 < n:
+            out.append(chr(ord(body[i + 2]) & 0x1F))
+            i += 3
+        else:
+            out.append(body[i:i + 2])
+            i += 2
+    return "".join(out).split("\x00", 1)[0]
+
+
+def tokenize(cmd, strict=False):
     """The words and operators of `cmd`, as POSIX `shlex` with `punctuation_chars` splits them,
     except that an unquoted run of operator characters is split into its operators. `shlex`
     returns such a run as one token, so `(true);` ended in `);`, which is not a delimiter.
     A quoted or escaped operator character is part of a word. Raises ValueError on an unclosed
-    quote or a trailing backslash, as `shlex` does."""
+    quote or a trailing backslash, as `shlex` does.
+
+    Unlike `shlex` it reads bash's `$'…'`, decoding its escapes, and `$"…"`, as a double-quoted
+    string: `$'-delete'` is the word `-delete`. `$$` is one parameter, so the quote after it is
+    an ordinary one. With `strict` it raises ValueError instead on an ANSI-C string holding a
+    backslash, whose decoding can differ between shells and versions, and on `$"…"`, whose
+    text a message catalog may replace."""
     tokens = []
     word = None  # None: no word in progress; "" is an empty quoted word
     i, n = 0, len(cmd)
@@ -205,6 +275,23 @@ def tokenize(cmd):
                 raise ValueError("No closing quotation")
             word = (word or "") + "".join(buf)
             i = j + 1
+        elif c == "$" and cmd.startswith("$$", i):
+            word = (word or "") + "$$"
+            i += 2
+        elif c == "$" and cmd.startswith("$'", i):
+            end = _ansi_end(cmd, i)
+            if end is None:
+                raise ValueError("No closing quotation")
+            body = cmd[i + 2:end - 1]
+            if strict and "\\" in body:
+                raise ValueError("ANSI-C escape")
+            word = (word or "") + _ansi_decode(body)
+            i = end
+        elif c == "$" and cmd.startswith('$"', i):
+            if strict:
+                raise ValueError("locale-translated string")
+            word = word or ""
+            i += 1  # the double-quoted string that follows is read as one
         else:
             word = (word or "") + c
             i += 1
@@ -555,7 +642,8 @@ def segment_ok(tokens):
 
 
 def _match_paren(s, start):
-    """s[start] == '('. Return the index of the matching ')', or None. Quote-aware."""
+    """s[start] == '('. Return the index of the matching ')', or None. Quote-aware, ANSI-C
+    `$'…'` strings included."""
     depth = 0
     i = start
     n = len(s)
@@ -572,6 +660,14 @@ def _match_paren(s, start):
             if c == '"':
                 dq = False
         else:
+            if c == "$" and s.startswith("$$", i):
+                i += 2
+                continue
+            if c == "$" and s.startswith("$'", i):
+                i = _ansi_end(s, i)
+                if i is None:
+                    return None
+                continue
             if c == "'":
                 sq = True
             elif c == '"':
@@ -605,6 +701,17 @@ def _strip_subs(cmd, depth):
             if c == "'":
                 sq = False
             i += 1
+            continue
+        if c == "$" and cmd.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        if c == "$" and not dq and cmd.startswith("$'", i):
+            end = _ansi_end(cmd, i)
+            if end is None:
+                return None
+            out.append(cmd[i:end])
+            i = end
             continue
         if c == "'" and not dq:
             sq = True
@@ -660,31 +767,45 @@ def _strip_subs(cmd, depth):
     return "".join(out)
 
 
-def _strip_comment(line):
-    """`line` without its trailing bash comment: an unquoted `#` at the start of a
-    word. Substitutions are already placeholders, so only quotes need tracking."""
-    sq = dq = False
-    i = 0
-    n = len(line)
+def _strip_comments(text):
+    """`text` without its bash comments: an unquoted `#` at the start of a word, to the end of
+    its line. Quote state carries across newlines, as bash reads it, so a `#` on a later line
+    of a quoted string is text and a quote inside a comment opens nothing. Substitutions are
+    already placeholders, so only quotes, ANSI-C `$'…'` strings included, need tracking."""
+    out, quote, i, n = [], None, 0, len(text)
     while i < n:
-        c = line[i]
-        if sq:
-            sq = c != "'"
-        elif dq:
+        c = text[i]
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif quote == '"':
             if c == "\\":
-                i += 1
-            elif c == '"':
-                dq = False
+                out.append(text[i:i + 2])
+                i += 2
+                continue
+            if c == '"':
+                quote = None
         elif c == "\\":
-            i += 1
-        elif c == "'":
-            sq = True
-        elif c == '"':
-            dq = True
-        elif c == "#" and (i == 0 or line[i - 1] in " \t;|&()"):
-            return line[:i]
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        elif c == "$" and text.startswith("$$", i):
+            out.append("$$")
+            i += 2
+            continue
+        elif c == "$" and text.startswith("$'", i):
+            end = _ansi_end(text, i) or n
+            out.append(text[i:end])
+            i = end
+            continue
+        elif c in "'\"":
+            quote = c
+        elif c == "#" and (i == 0 or text[i - 1] in " \t\n;|&()"):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        out.append(c)
         i += 1
-    return line
+    return "".join(out)
 
 
 def _header_ok(tokens):
@@ -699,21 +820,22 @@ def _header_ok(tokens):
 
 
 def command_ok(cmd, depth=0):
-    if depth > 6 or len(cmd) > 10000:
+    if depth > 6 or len(cmd) > MAX_LENGTH:
         return False
     cmd = _strip_subs(cmd, depth)
     if cmd is None:
         return False
-    # A newline separates commands for bash but is whitespace to `tokenize`, so each
-    # line loses its comment and the lines are joined with `;`. `tokenize` knows no
+    # A newline separates commands for bash but is whitespace to `tokenize`, so the text
+    # loses its comments and the lines are joined with `;`. `tokenize` knows no
     # comments: a `#` inside a word is part of the word, as in bash. A backslash
-    # continuation is not modelled and falls through.
-    if re.search(r"\\\r?\n", cmd):
+    # continuation and a here-document, whose body bash does not read as commands, are
+    # not modelled and fall through.
+    if re.search(r"\\\r?\n", cmd) or HEREDOC_OPERATOR.search(cmd):
         return False
     cmd = cmd.replace("\r\n", "\n").replace("\r", "\n")
-    cmd = " ; ".join(_strip_comment(line) for line in cmd.split("\n"))
+    cmd = " ; ".join(_strip_comments(cmd).split("\n"))
     try:
-        tokens = tokenize(cmd)
+        tokens = tokenize(cmd, strict=True)
     except ValueError:
         return False
     segments = []

@@ -247,7 +247,7 @@ development_status:
   ah-s253-record-the-cli-s-own-account-of-the-loaded: done
   ah-s254-price-every-rule-stance-variant-skill-and-agent: done
   ah-s255-replay-stored-transcripts-through-the-rule: ready-for-dev
-  ah-s256-run-every-hook-against-recorded-tool-calls-under: backlog
+  ah-s256-run-every-hook-against-recorded-tool-calls-under: ready-for-dev
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: backlog
   ah-s258-nudge-delegation-from-the-existing-detector: ready-for-dev
   ah-s259-per-rule-cost-attribution-across-the-whole: backlog
@@ -489,6 +489,7 @@ development_status:
   ah-b131-the-compaction-detector-counts-a-miss-under-a: ready-for-dev
   ah-b132-usage-feed-prices-a-workflow-tool-agent-against: ready-for-dev
   ah-b133-fix-coordination-let-a-subagent-write-paths-its: ready-for-dev
+  ah-b135-an-escaped-quote-inside-hides-a-later-git-push: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
