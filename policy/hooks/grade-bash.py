@@ -3118,10 +3118,12 @@ def _list_places(text):
     places, ops, lists, cur, skipping, negated = [], [], 0, [], False, False
     groups = []  # (opening word, whether what it holds may not run), innermost last
     # Per open compound, innermost last: the chains all it holds runs through (None in a loop),
-    # and its list state — the operator before the pipeline to come, whether that pipeline has
-    # begun, the chain it is in, the chain a pipeline after `&&` joins, whether it is negated.
-    frames = [{"base": frozenset(), "through": frozenset(), "after": None, "begun": False,
-               "chain": None, "joinable": None, "negated": False}]
+    # whether it opened past a `||`, as the `{ x; }` of `cd d || { x; }` runs only where `cd d`
+    # failed, and its list state — the operator before the pipeline to come, whether that
+    # pipeline has begun, the chain it is in, the chain a pipeline after `&&` joins, whether it
+    # is negated.
+    frames = [{"base": frozenset(), "through": frozenset(), "past_or": False, "after": None,
+               "begun": False, "chain": None, "joinable": None, "negated": False}]
     chains = [0]
 
     def enclosed():
@@ -3147,7 +3149,8 @@ def _list_places(text):
         outer = frames[-1]
         base = (None if word in LOOP_OPEN or outer["through"] is None
                 else outer["through"] | {outer["chain"]})
-        frames.append({"word": word, "base": base, "through": base, "after": None,
+        frames.append({"word": word, "base": base, "through": base,
+                       "past_or": "||" in ops or outer["past_or"], "after": None,
                        "begun": False, "chain": None, "joinable": None, "negated": False})
 
     for token in tokens:
@@ -3207,7 +3210,7 @@ def _list_places(text):
             begin()
             frame = frames[-1]
             through = frame["through"]
-            opened = (enclosed(), lists, "||" in ops,
+            opened = (enclosed(), lists, "||" in ops or frame["past_or"],
                       frozenset() if through is None else through | {frame["chain"]},
                       None if through is None or frame["negated"] else frame["chain"])
             negated = False

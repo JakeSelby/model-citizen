@@ -14,7 +14,9 @@ Bash stays put for `x=1 time cd b`, `\\time cd b`, `time time cd b`, `builtin ti
 `builtin -p cd b`, `>f time cd b`, `! time cd b` and `true || cd b`, and goes to `b` for
 `command -- cd b`, `builtin -- cd b`, `: ${CDPATH:=w}; cd b` (to `w/b`) and
 `cd b || cd x`; zsh stays put for `time -p cd b`, `command -- cd b` and `builtin -- cd b`, and
-goes to `b` for `>f time cd b` and `! time cd b`.
+goes to `b` for `>f time cd b` and `! time cd b`. `cd b || { pwd; }`, `cd b || ( pwd )` and
+`cd b || if true; then pwd; fi` print nothing, and the starting directory when `b` is missing;
+their `&&` forms print `b`.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -27,6 +29,7 @@ from test_governance_binding import Home, grader, make_repo
 class Fixture(Home):
     def setUp(self):
         super().setUp()
+        os.environ.pop("CDPATH", None)  # an inherited search path would move `cd ../beta`
         self.configure("local")
         self.beta = make_repo(self.home / "beta", branch="trunk")
         self.user_policy({"defaults": {"coding.git_push": 2}})
@@ -180,7 +183,12 @@ class CdThatMayNotRun(Fixture):
 
     def test_a_command_past_a_list_operator_after_a_cd_is_unknown(self):
         for command in ("cd ../beta || git push",
-                        "cd ../beta && true || git push"):
+                        "cd ../beta && true || git push",
+                        "cd ../beta || { git push; }",
+                        "cd ../beta || ( git push )",
+                        "cd ../beta || if true; then git push; fi",
+                        "cd ../beta || { true; { git push; }; }",
+                        "cd ../beta && true || { git push; }"):
             with self.subTest(command=command):
                 self.assert_unknown(command)
 
@@ -191,7 +199,10 @@ class CdThatMayNotRun(Fixture):
                         "true && cd ../beta && true && git push",
                         "true || true && cd ../beta && git push",
                         "true && cd .. && cd beta && git push",
-                        "true && cd ../beta && { git push; }"):
+                        "true && cd ../beta && { git push; }",
+                        "cd ../beta && { git push; }",
+                        "cd ../beta && ( git push )",
+                        "cd ../beta && if true; then git push; fi"):
             with self.subTest(command=command):
                 self.assert_beta(command)
 
