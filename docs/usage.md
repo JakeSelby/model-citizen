@@ -502,8 +502,8 @@ a context token.
 ```
 
 `module` names the hook that owns the decision, as `hooks/<id>`: `grade-bash`, `stop-gate` and
-`brief-guard` their own, and the band routing row and the `integration-descriptor` notice
-`hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
+`brief-guard` their own, and the band routing row, the `delegation-nudge` row and the
+`integration-descriptor` notice `hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
 launch guard name `null`, because no hook id switches them off, and so does any other point no
 hook owns, such as `decision-provider`.
 `POINT_MODULES` in `decisions.py` is the map.
@@ -519,13 +519,14 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
 | `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
+| `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |
 | `evasion-deny` | `deny`, on a re-spawn of already-refused work | not labelled yet |
 | `role-confinement` | `deny`, on a native spawn naming a constrained role, by `subagent_type` or a `harness-role:` line; `input` leads with the role and which of the two named it | not labelled yet |
 | `framework-spawn` | `deny`, when a framework descriptor maps a spawn to a constrained role | not labelled yet |
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
 | `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
-| `workflow-launch` | `allow` or `deny`, on every `Workflow` tool launch | not labelled yet |
+| `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a

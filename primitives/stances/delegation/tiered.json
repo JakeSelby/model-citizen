@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "threshold": 3,
+  "message": "This session has crossed the multi-file reading threshold. Spawn worker-a for the remaining bounded read-only gathering and cap its return at 400 words."
+}

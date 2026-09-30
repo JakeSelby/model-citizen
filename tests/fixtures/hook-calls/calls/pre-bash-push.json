@@ -1,0 +1,14 @@
+{
+ "about": "A push to a feature branch: reaches past the workspace.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "git push origin feature-branch"
+  }
+ }
+}
