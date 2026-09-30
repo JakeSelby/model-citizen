@@ -8321,6 +8321,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B144",
+      "github_number": 1091,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1091",
+      "title": "A non-finite deduplication ratio counts as measured in usage totals",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B144.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B145",
       "github_number": 1112,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1112",
@@ -8341,6 +8354,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B143.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B142",
+      "github_number": 1122,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1122",
+      "title": "grade-bash timing tests fail on wall-clock under parallel suites",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B142.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
