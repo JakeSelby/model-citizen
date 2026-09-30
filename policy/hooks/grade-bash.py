@@ -14,9 +14,11 @@ Behaviour:
     the missed prompt native gives today, and the corpus grows from each miss.
   - The text is normalised before anything else — backslash continuations joined where bash
     joins them, quoted heredoc bodies and comments dropped — so a `#` comment or a here-document
-    cannot hide the verb or break the parse with an unbalanced quote or backtick. When the text still does not parse, the
-    raw text is scanned for grade-3 verb families rather than graded 1: an unparseable command
-    that says `--force` or `rm -rf` is irreversible whatever the rest of it is.
+    cannot hide the verb or break the parse with an unbalanced quote or backtick. A body is then
+    graded as the commands it holds where the shell runs them: the substitutions of an unquoted
+    body, and the whole of one a shell reads (`_grade_bodies`). When the text still does not
+    parse, the raw text is scanned for grade-3 verb families rather than graded 1: an
+    unparseable command that says `--force` or `rm -rf` is irreversible whatever the rest is.
   - `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` and command-substitution bodies grade 3 when
     their inner text carries a grade-3 verb, else 1; the read-only hook refuses them all anyway.
   - The autonomy stance sets the threshold: `execute` gates grade 3, `confirm-writes` grade 2 and
@@ -153,6 +155,13 @@ SUDO = {"sudo": ("-u", "-g", "-U", "--user", "--group", "-p", "--prompt"),
         "doas": ("-u", "-C"),
         "su": ("-c", "-s", "--shell", "--command")}
 SHELLS = {"bash", "sh", "zsh", "ksh", "dash"}
+# A word naming one of these makes any here-document body on the line a script (`_runs_input`).
+SHELL_RUNNERS = SHELLS | {"eval", "ssh"}
+SHELL_WORD_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:bash|sh|zsh|ksh|dash|eval|ssh|source|\.)"
+                           r"(?=[\s;&|)`]|$)")
+# How many substitutions `_body_substitutions` reads in one unquoted body before it calls the
+# body unreadable: each can read to the end of the body.
+BODY_SUB_CHECKS = 64
 GIT_VALUE_GLOBALS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env")
 XARGS_VALUE_FLAGS = ("-I", "-i", "-n", "-P", "-L", "-s", "-d", "-a", "-E", "-e", "--replace",
@@ -343,6 +352,18 @@ def _heredoc_word(text, i):
     return "".join(out), quoted, min(i, n), certain
 
 
+class Body(str):
+    """A here-document body. `quoted` when its delimiter was, so the shell expands nothing in it:
+    an unquoted body runs its `$(…)` and backtick substitutions even when it is only data."""
+    quoted = True
+
+
+def _body(text, quoted):
+    body = Body(text)
+    body.quoted = quoted
+    return body
+
+
 def _heredoc_bodies(text, i, pending):
     """(index after the bodies, [(body, delimiter line)]) for the here-documents `pending`, whose
     bodies start at text[i]. A body ends at the first line that is exactly its delimiter, after
@@ -368,18 +389,18 @@ def _heredoc_bodies(text, i, pending):
                 break
             logical = "".join(parts)
             if (logical.lstrip("\t") if strip_tabs else logical) == delimiter:
-                found.append(("\n".join(lines), text[start:i]))
+                found.append((_body("\n".join(lines), quoted), text[start:i]))
                 break
             lines.append(text[start:i].rstrip("\n"))
         else:
-            found.append(("\n".join(lines), ""))
+            found.append((_body("\n".join(lines), quoted), ""))
     return i, found
 
 
 def _split_heredocs(text):
     """(text without the body of every here-document, the bodies, whether every here-document
-    operator and delimiter was placed for sure). A body is data: the shell expands a variable in
-    an unquoted one but never runs its lines, and a quoted body is not even expanded.
+    operator and delimiter was placed for sure). Each body is a `Body` that knows whether its
+    delimiter was quoted; which parts of it run is `_grade_bodies`'s call.
 
     An operator is a `<<` or `<<-` bash would read as one: unquoted, outside a comment, not the
     `<<<` of a here-string, not a shift inside `$((…))`, `((…))` or `$[…]`, and not inside an
@@ -629,8 +650,8 @@ def _strip_comments(text):
 def normalize(cmd):
     """(shell text, here-document bodies). Bodies come out first, then continuations are
     joined, then comments are dropped, so nothing can hide a verb behind a `#`, inside a body,
-    or behind a line continuation. A body is data to the shell; only a client that interprets
-    it — a SQL client — is graded on its contents."""
+    or behind a line continuation. What in a body runs is graded by `_grade_bodies`, and a SQL
+    client's body by `_sql`."""
     texts, bodies = _readings(cmd)
     if texts is None:
         return _strip_comments(_outer(cmd)[0]), bodies
@@ -1421,6 +1442,9 @@ def _grade_reading(text, bodies, cwd, depth):
         if hit[0] > best[0]:
             best = hit
     parts = segments(stripped) if stripped is not None else None
+    if bodies:
+        runs = _feeds_shell(text, parts, inners, depth)
+        best = max(best, _grade_bodies(bodies, runs, cwd, depth), key=lambda h: h[0])
     if parts is None:
         return max(best, _scan(text), key=lambda h: h[0])
     # A SQL client named anywhere, a substitution included, since a body inside `$(…)` is
@@ -1434,6 +1458,132 @@ def _grade_reading(text, bodies, cwd, depth):
         hit = grade_tokens(tokens, cwd, depth)
         if hit[0] > best[0]:
             best = hit
+        if best[0] == 3:
+            break
+    return best
+
+
+def _runs_input(tokens):
+    """Whether the simple command `tokens` may run its standard input or an argument as shell
+    text: a shell, `eval`, `ssh`, or a `.` or `source` at its head, past assignments and
+    wrappers, or a head that a substitution or a variable supplies."""
+    tokens, _written = _redirects(list(tokens))
+    if any(t.rpartition("/")[2] in SHELL_RUNNERS for t in tokens):
+        return True
+    for _ in range(MAX_DEPTH):
+        while tokens and ASSIGN_RE.match(tokens[0]):
+            tokens = tokens[1:]
+        if not tokens:
+            return False
+        head = tokens[0]
+        if PLACEHOLDER in head or head.startswith("$") or head in (".", "source"):
+            return True
+        prog = head.rpartition("/")[2]
+        if prog in WRAPPERS:
+            tokens = strip_options(tokens[1:], WRAPPERS[prog])
+        elif prog in ("xargs", "parallel"):
+            tokens = strip_options(tokens[1:], XARGS_VALUE_FLAGS)
+        else:
+            return False
+    return True
+
+
+def _feeds_shell(text, parts, inners, depth):
+    """Whether a shell may run a here-document body of `text`: some simple command in it, a
+    substitution's included, is one `_runs_input` names. Which body reaches which command is not
+    modelled, so one such command makes every body a script. Text that does not decompose is
+    searched for the names instead."""
+    if parts is None:
+        return SHELL_WORD_RE.search(text) is not None
+    if any(_runs_input(tokens) for tokens in parts):
+        return True
+    if depth >= MAX_DEPTH:
+        return bool(inners)
+    for inner in inners:
+        stripped, nested = _extract_subs(inner)
+        if _feeds_shell(inner, segments(stripped) if stripped is not None else None, nested,
+                        depth + 1):
+            return True
+    return False
+
+
+def _body_substitutions(body):
+    """The texts the shell runs while it expands an unquoted here-document body, or None when
+    they cannot be read for sure. Quotes are literal in a body, so `'$(x)'` runs `x`; a
+    backslash escapes `$`, a backtick and itself, and removes a newline, so `$\\` then `(x)`
+    runs `x` too. A `$((…))` is arithmetic whose own substitutions the walk still finds; a
+    `$((` that does not close as one is a substitution, as bash 3.2 reads `$((x) )`."""
+    out, i, n = [], 0, len(body)
+    while i < n:
+        if body[i] == "\\":
+            if body.startswith("\n", i + 1):
+                i += 2
+                continue
+            out.append(body[i:i + 2])
+            i += 2
+            continue
+        out.append(body[i])
+        i += 1
+    text = "".join(out)
+    if "$(" not in text and "`" not in text:
+        return []
+    if len(text) > HEREDOC_CHECKED_LENGTH:
+        return None
+    inners, checks, i, n = [], 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if text.startswith("$(", i):
+            checks += 1
+            if checks > BODY_SUB_CHECKS:
+                return None
+            if text.startswith("$((", i):
+                k = ro._match_paren(text, i + 2)
+                if k is not None and text.startswith(")", k + 1):
+                    i += 3
+                    continue
+            j = ro._match_paren(text, i + 1)
+            if j is None:
+                return None
+            inners.append(text[i + 2:j])
+            i = j + 1
+            continue
+        if c == "`":
+            j = i + 1
+            while j < n and text[j] != "`":
+                j += 2 if text[j] == "\\" else 1
+            if j >= n:
+                return None
+            inners.append(text[i + 1:j])
+            i = j + 1
+            continue
+        i += 1
+    if len(inners) > BODY_SUB_CHECKS or sum(len(inner) for inner in inners) > SCAN_CAP:
+        return None
+    return inners
+
+
+def _grade_bodies(bodies, runs, cwd, depth):
+    """The worst grade the here-document bodies can carry. An unquoted body's substitutions run
+    as the shell expands it, a body a shell may read runs as a script, and each is graded as the
+    commands it holds; a body neither applies to is data, graded 0. What cannot be read for
+    sure is graded unknown, or as `_scan` finds it, never lower."""
+    best = (0, None, None, None)
+    for body in bodies:
+        hits = []
+        if runs:
+            hits.append(grade_text(body, cwd, depth + 1))
+        if not getattr(body, "quoted", True):
+            inners = _body_substitutions(body)
+            if inners is None:
+                hits.append(max(_scan(body), (1, "", "", "opaque"), key=lambda h: h[0]))
+            else:
+                hits.extend(grade_text(inner, cwd, depth + 1) for inner in inners)
+        for hit in hits:
+            if hit[0] > best[0]:
+                best = hit
         if best[0] == 3:
             break
     return best
