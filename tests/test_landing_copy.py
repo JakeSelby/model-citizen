@@ -285,12 +285,17 @@ class EndToEndClaimTests(unittest.TestCase):
             checker.validate_product_claims(self.root)
 
     def test_a_stale_saved_verify_status_is_ignored(self):
+        # The saved status says the card failed, but its figure still matches the derived value.
+        # The verifier must recompute the status, so the card verifies and its claim is admitted.
         def tamper(index):
-            index['evidence_cards'][0]['verify_status'] = True
-            index['evidence_cards'][0]['figure']['value'] = 0.5
+            index['evidence_cards'][0]['verify_status'] = False
         self.publish('Fallback trials: 0% of attempts.', tamper, pointer='/fallback/rate')
-        with self.assertRaisesRegex(ValueError, 'does not verify'):
-            checker.validate_product_claims(self.root)
+        saved = json.loads((self.root / 'proof/bundle.json').read_text())
+        self.assertIs(False, saved['evidence_cards'][0]['verify_status'])
+        result = checker._verify_bundle(self.root / 'proof')
+        self.assertTrue(result['ok'], result['errors'])
+        self.assertIs(True, result['cards'][0]['verify_status'])
+        self.assertIn('1 measured claim', checker.validate(['product.json'], '', root=self.root))
 
     def test_a_cost_claim_the_real_sm2_result_does_not_support_is_refused(self):
         self.publish('The harness is 10% cheaper.')
