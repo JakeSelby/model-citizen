@@ -72,6 +72,8 @@ python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registrati
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
+python3 scripts/cost_bench.py replay --model <id> --pair benchmarks/ablations/<name>.json \
+    --exploratory --dry-run                                            # a one-policy pair's three arms and schedule
 python3 scripts/cost_bench.py detect --raw <dir>                     # which rules fired in each saved stream; calls no model
 python3 scripts/cost_bench.py detect --backfill <root>               # the same beside every results.jsonl under root
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
@@ -148,7 +150,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
   manifest digest, ref and commit.
-- **A run is `docker run --rm` with two scoped mounts.** The task's snapshot is mounted at `/work`, which
+- **A run is `docker run --rm` with two scoped mounts**, except a pair's harness arms, which are
+  kept until their ledger is copied out (see [Pairs](#pairs)). The task's snapshot is mounted at `/work`, which
   has no instruction file above it. A fresh run-owned `observations/` directory is mounted at
   `/observations`; it is the only other host path. Each native session gets a different empty
   directory outside protected host paths, with one ledger and error file. The host then retains
@@ -349,6 +352,56 @@ turn cap, the stop gate, web access, `usage-prices` and hook capture. Each is fi
 above, and no result has been taken since. The arms have since moved from host profiles to
 containers, which starts a new series. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
 figure to rely on today.
+
+### Pairs
+
+`replay --pair <manifest>` judges one policy change on what the whole task costs. It runs one
+harness image twice, as a reference arm and a treatment arm that differ in one session-scoped
+selection, with the bare arm beside them in every trial.
+
+- **An ablation manifest declares the pair.** `benchmarks/ablations/<name>.json`, schema 1, holds
+  `name`, `tag` (one release tag or full commit), `factor`, and the `reference` and `treatment`
+  values. The factor is a `HARNESS_STANCE_<DIMENSION>` variable or `HARNESS_MODE`, and each harness
+  arm is given its value by value; `null` leaves the tag's default. The two values must differ. A
+  change that exists only at build time cannot be a pair factor.
+- **Three arms, the lead rotating.** Every trial runs bare, reference and treatment, and the arm
+  that goes first rotates through all three across trials, so none always runs on another's warm
+  cache. Each row names its `arm`, the `ablation` it answers (name, digest, schema and its
+  `factors`, a list) and the `selection` its arm ran with, so a design of more factors writes the
+  same row keys. `summarise` recognises a pair by its `ablation`, so a pair stopped at its spend
+  cap before every arm ran is still reported as a pair, each unfinished trial named.
+- **Parity is checked before launch and after the run.** Before anything is spent, the two
+  harness arms' launch specs (image id, declaration and manifest digests, commit, model, run cap,
+  command line, environment by value, network, proxy, credential name, protocol stamp, and the
+  task file and price table digests) must differ in the factor and nothing else, and this
+  checkout's resolver must give the two selections different profile fingerprints; either
+  refusal names every difference. `replay --pair` launches both harness arms from one image
+  record with `--stance-cost` refused, so the spec check holds by construction there; it guards
+  arm records assembled any other way, such as ones read back from the arms directory. After the run, `summarise` compares each trial's loaded surface
+  between reference and treatment, and exits 1 naming each trial that differs.
+- **Decision calls are copied out, never mounted in.** A harness arm's container is kept after it
+  exits; its usage ledger is copied out with `docker cp`, then the container is removed by name,
+  on a timeout too. With observation on, the session's native streams are archived after that
+  removal, so both the ledger copy and the observation archive run on every outcome. Only `kind: "decision"` rows are kept, in `decisions/` beside the results.
+  Every row records `decision_ledger`: `read`, `absent` for the bare arm, or `unknown: <reason>`
+  when the copy failed, which is never read as no calls. The egress rule is unchanged, so a call
+  to a remote decision provider cannot complete from an arm; its row, if any, is unpriced, and the
+  report labels it `blocked by egress` when the row records a network failure.
+- **Costing.** Per arm, `summarise` reports attempts, passes with a Wilson interval, pooled
+  Cost-of-Pass for workers alone and with the arm's decision calls, total and per-attempt wall
+  time, and `respawns_up` (a brief spawned again on a stronger model class, ranked by the classes
+  in `adapters/claude-code/bindings.json`) with `spawns_unranked`. A decision row joins its attempt
+  by session id; one from another session still counts in its arm and is named unmatched. Each is
+  priced from `policy/prices.json`; an unpriced call or an unread ledger leaves the with-decisions
+  figure undefined and is named, never zero. Decision latency ran inside the arm's wall time, so it
+  is reported as a share of it and never added.
+- **Intervals, no verdict.** Treatment over reference, and each harness arm over bare, carry the
+  paired, task-clustered intervals SM-2 uses, on worker cost and on cost with decisions, beside a
+  three-arm Pareto view. No SM-2 verdict is printed: its decision rule is defined for harness
+  against bare.
+- **A pair writes `results.jsonl` and no history row**, whose series is harness against bare.
+  `--spend-cap` is required for a live pair, since the default is sized for two arms;
+  `--stance-cost` is refused, and `--tag`, if given, must be the manifest's.
 
 ## Limits
 
