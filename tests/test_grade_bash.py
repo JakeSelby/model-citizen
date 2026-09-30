@@ -12,6 +12,7 @@ import importlib.util
 import json
 import math
 import os
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -44,22 +45,36 @@ def pre_tool_use_timeout():
                for runtime in ("claude-code", "codex"))
 
 
-def cpu_seconds(call, batches=5, batch_seconds=0.02):
-    """The CPU seconds one `call()` costs this process: the best of `batches` batches, each
-    repeating the call until it has run about `batch_seconds`, so a call of a few microseconds
-    is not lost in the clock's resolution. CPU time rather than wall time, so time spent waiting
-    for a core on a loaded machine is not charged to the code under test."""
-    start = time.process_time()
-    call()
-    once = time.process_time() - start
-    repeats = max(1, math.ceil(batch_seconds / max(once, 1e-6)))
-    best = once
-    for _ in range(batches):
+def cpu_growth(large, small, pairs=11, batch_seconds=0.01, floor=1e-9):
+    """How the CPU cost of a call grows with its input: `(seconds, ratio)`, where `seconds` is
+    the best per-call CPU time of `large()` and `ratio` is the median over `pairs` of `large()`'s
+    per-call cost over `small()`'s, each timed in a batch of about `batch_seconds`.
+
+    CPU time rather than wall time, so waiting for a core is not charged. The two batches of a
+    pair run back to back, in alternating order, and the ratio is taken per pair: a machine
+    whose cores differ in speed can move this process between a fast and a slow core under
+    load, which changes both calls' cost alike within a pair but not across a best-of-each.
+    The median discards the pairs a migration split. `floor` bounds `small()`'s cost from below
+    for a call too cheap to time."""
+    calls = (large, small)
+    repeats = []
+    for call in calls:
+        call()
         start = time.process_time()
-        for _ in range(repeats):
-            call()
-        best = min(best, (time.process_time() - start) / repeats)
-    return best
+        call()
+        once = time.process_time() - start
+        repeats.append(max(1, math.ceil(batch_seconds / max(once, 1e-6))))
+    best, ratios = math.inf, []
+    for pair in range(pairs):
+        cost = [0.0, 0.0]
+        for index in ((0, 1) if pair % 2 == 0 else (1, 0)):
+            start = time.process_time()
+            for _ in range(repeats[index]):
+                calls[index]()
+            cost[index] = (time.process_time() - start) / repeats[index]
+        best = min(best, cost[0])
+        ratios.append(cost[0] / max(cost[1], floor))
+    return best, statistics.median(ratios)
 
 
 def grade(command):
@@ -440,16 +455,16 @@ class GradeTests(unittest.TestCase):
         # A PreToolUse hook past its registered timeout fails open, and every PreToolUse policy
         # shares that one timeout, so the grader gets a tenth of it. The quarter-size run bounds
         # the growth: linear grading quadruples, a quadratic scan grows sixteenfold and fails here
-        # long before it would outgrow the budget. `cpu_seconds` measures the grader rather than
+        # long before it would outgrow the budget. `cpu_growth` measures the grader rather than
         # the machine's load.
         budget = pre_tool_use_timeout() / 10
         for suffix in ("", ' "unbalanced'):
             long, short = ("echo " + "push " * n + suffix for n in (20000, 5000))
-            full = cpu_seconds(lambda: grader.grade_text(long, CWD))
-            quarter = cpu_seconds(lambda: grader.grade_text(short, CWD))
+            full, growth = cpu_growth(lambda: grader.grade_text(long, CWD),
+                                      lambda: grader.grade_text(short, CWD))
             with self.subTest(unbalanced=bool(suffix)):
                 self.assertLess(full, budget)
-                self.assertLess(full / quarter, 8)
+                self.assertLess(growth, 8)
 
     def _record(self, name, commands):
         """The length of every text `grader.<name>` received while grading and governing

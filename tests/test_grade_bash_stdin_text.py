@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_grade_bash import CWD, cpu_seconds, grade, grader, pre_tool_use_timeout
+from test_grade_bash import CWD, cpu_growth, grade, grader, pre_tool_use_timeout
 
 ro = grader.ro
 BASH = shutil.which("bash")
@@ -380,10 +380,12 @@ class StdinTimingTests(unittest.TestCase):
         ]
         for make in cases:
             with self.subTest(sample=make(1)[:30]):
-                full = cpu_seconds(lambda: grader.grade_text(make(4), CWD), batches=3)
-                quarter = cpu_seconds(lambda: grader.grade_text(make(1), CWD), batches=3)
+                large, small = make(4), make(1)
+                full, growth = cpu_growth(lambda: grader.grade_text(large, CWD),
+                                          lambda: grader.grade_text(small, CWD),
+                                          pairs=7, floor=1e-4)
                 self.assertLess(full, budget)
-                self.assertLess(full / max(quarter, 1e-4), 8)
+                self.assertLess(growth, 8)
 
     def test_an_unclosed_quote_run_is_read_in_linear_time(self):
         # One line of escaped quotes that never close: a scan from each quote to the end of the
@@ -393,11 +395,12 @@ class StdinTimingTests(unittest.TestCase):
         def make(size):
             return ("python3 - <<'EOF'\nimport os; os.system('git push')\n# git '"
                     + "\\'" * (size // 2) + "\nEOF")
-        full = cpu_seconds(lambda: grader.grade_text(make(200_000), CWD), batches=3)
-        quarter = cpu_seconds(lambda: grader.grade_text(make(50_000), CWD), batches=3)
-        self.assertEqual(grade(make(200_000)), 2)
+        large, small = make(200_000), make(50_000)
+        full, growth = cpu_growth(lambda: grader.grade_text(large, CWD),
+                                  lambda: grader.grade_text(small, CWD), pairs=7, floor=1e-4)
+        self.assertEqual(grade(large), 2)
         self.assertLess(full, budget)
-        self.assertLess(full / max(quarter, 1e-4), 8)
+        self.assertLess(growth, 8)
 
 
 if __name__ == "__main__":

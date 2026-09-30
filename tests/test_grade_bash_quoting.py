@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 import unittest
 
-from test_grade_bash import CWD, cpu_seconds, grade, grader, pre_tool_use_timeout
+from test_grade_bash import CWD, cpu_growth, grade, grader, pre_tool_use_timeout
 from test_governance_binding import Home, make_repo
 
 ro = grader.ro
@@ -276,19 +276,18 @@ class MongoTests(unittest.TestCase):
 
 
 class ScalingTests(unittest.TestCase):
-    """As `test_grading_a_hundred_kilobyte_command_stays_well_inside_the_hook_timeout`: the best
-    of several batches in CPU time, inside a tenth of the hook timeout, and a quarter-size run
-    that bounds the growth, which a quadratic reading would push past eightfold."""
-
-    def best(self, function, argument):
-        return cpu_seconds(lambda: function(argument))
+    """As `test_grading_a_hundred_kilobyte_command_stays_well_inside_the_hook_timeout`: CPU time
+    by `cpu_growth`, inside a tenth of the hook timeout, and a quarter-size run that bounds the
+    growth, which a quadratic reading would push past eightfold."""
 
     def assert_linear(self, function, make):
         budget = pre_tool_use_timeout() / 10
-        full = self.best(function, make(4))
-        quarter = self.best(function, make(1))
+        large, small = make(4), make(1)
+        # Seven pairs rather than eleven: one here-document case costs about 0.2 s a call.
+        full, growth = cpu_growth(lambda: function(large), lambda: function(small),
+                                  pairs=7, floor=1e-4)
         self.assertLess(full, budget)
-        self.assertLess(full / max(quarter, 1e-4), 8)
+        self.assertLess(growth, 8)
 
     def test_a_body_of_repeated_db_is_scanned_in_linear_time(self):
         self.assert_linear(grader._sql, lambda k: "db." * 5000 * k)
