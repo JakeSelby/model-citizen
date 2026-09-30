@@ -149,6 +149,12 @@ class CdPath(Fixture):
         # option may be set, since it keeps one flag for both.
         self.assert_unknown("CDPATH=/nowhere; cd ../beta; git push")
 
+    def test_an_expansion_in_an_assigned_value_cannot_name_cdpath(self):
+        for command in ("export PATH=$HOME/bin:$PATH; cd ../beta; git push",
+                        "declare x=`pwd`; cd ../beta; git push"):
+            with self.subTest(command=command):
+                self.assert_beta(command)
+
 
 class CdThatMayNotRun(Fixture):
     def test_a_cd_after_a_list_operator_or_in_a_compound_leaves_the_directory_unknown(self):

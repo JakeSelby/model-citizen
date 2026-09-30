@@ -2055,8 +2055,10 @@ def _moves_cd_resolution(tokens):
     if any(CDPATH_WORD_RE.search(token) for token in tokens):
         return True
     word, args, _sure = _command_word(tokens)
+    # Only the name part of `name=value` can be CDPATH; `PATH=$PATH:x` cannot assign it.
+    names = [a.partition("=")[0] for a in args]
     if word in ASSIGNING_BUILTINS and any(
-            PLACEHOLDER in a or any(c in a for c in "$`") for a in args):
+            PLACEHOLDER in n or any(c in n for c in "$`") for n in names):
         return True
     return word in ("set", "setopt") and any(PHYSICAL_OPTION_RE.search(a) for a in args)
 
