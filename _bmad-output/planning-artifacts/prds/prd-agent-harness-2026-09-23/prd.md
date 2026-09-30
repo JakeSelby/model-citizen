@@ -1756,6 +1756,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - evaluation tiers (#510, #511, #512);
   - harness against bare at five or more trials, with confidence intervals (#559, #560);
   - the two-by-two unit design (#754) and per-rule attribution (#514);
+    (Correction 2026-09-29, #754: read this as the one-policy pair (#754) and the two-by-two unit design
+    (#797), as the 2026-09-24 sprint change proposal splits them.)
   - a scorecard, and soft estimates labelled as such;
   - delegation fixed or disproved (#429, #513);
   - the burndown bot (FR-71 to FR-74, #941), whose randomised stream feeds v0.17.0's field experiment;
