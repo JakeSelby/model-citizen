@@ -1819,6 +1819,9 @@ SAFE_VARIABLE_WORD_RE = re.compile(
 _UNSAFE_OPERANDS = object()
 # A context key: True once the line may have changed HOME, so no `~` is expanded after it.
 _HOME_UNKNOWN = object()
+# A context key: True once a `cd` may resolve other than logically against the working
+# directory, through CDPATH or a physical-path option; `_cd_certain` names what still resolves.
+_CD_UNKNOWN = object()
 # The value of a variable assigned something the resolver cannot read, such as `$(pwd)/x` or
 # `-x`: the variable is known to be set, to a value that is not, so it resolves to nothing.
 _UNKNOWN_VALUE = object()
@@ -1957,24 +1960,110 @@ def _mentions_home(tokens):
     return any(token == "HOME" or token.startswith(("HOME=", "HOME+=")) for token in tokens)
 
 
-def _assignment_contexts(text, parts, home_unknown=False):
+# Options that make `cd` resolve `..` physically: bash's `set -P` or `set -o physical`, and
+# zsh's `chase_links` and `chase_dots`, which zsh spells with any case and underscores.
+PHYSICAL_OPTION_RE = re.compile(r"^[-+][A-Za-z]*P|physical|chase_?(?:links|dots)", re.I)
+# A command word bash may expand into another, `cd` or `eval` included: `$c` or `c?`, when it
+# has no `/`, since a word with a `/` names a file, never a builtin; a brace expansion such as
+# `{cd,../d}` always, since it splits into words before the `/`.
+DYNAMIC_HEAD_RE = re.compile(r"[$`*?\[]")
+
+
+def _command_word(tokens):
+    """(the command word a simple command runs, as written, its arguments, whether bash and zsh agree it is that
+    command), past assignments and the prefixes that run a builtin in this shell: `builtin` and
+    `time` in both shells, and `command`, `noglob` and `nocorrect`, which zsh and bash read
+    differently, so what follows them is not certain. `command -v cd` prints and runs nothing,
+    so it is the command `command`."""
+    body, sure = _redirects(list(tokens))[0], True
+    while body and ASSIGN_RE.match(body[0]):
+        body = body[1:]
+    while body:
+        if body[0] in ("builtin", "time"):
+            body = body[1:]
+            while body and body[0] == "-p":
+                body = body[1:]
+        elif body[0] in ("command", "noglob", "nocorrect"):
+            rest = body[1:]
+            while rest and rest[0].startswith("-") and body[0] == "command":
+                if rest[0] != "-p":
+                    return body[0], body[1:], True
+                rest = rest[1:]
+            body, sure = rest, False
+        else:
+            break
+    if not body:
+        return "", [], sure
+    return body[0], body[1:], sure
+
+
+def _dynamic_head(word):
+    """Whether the command word `word` may expand into a builtin, as `$c` or `{cd,d}` can."""
+    return bool(BRACE_RE.search(word)) or ("/" not in word and (
+        PLACEHOLDER in word or bool(DYNAMIC_HEAD_RE.search(word))))
+
+
+def _runs_unseen(tokens):
+    """Whether a simple command runs text the static walk does not follow in this shell, so it
+    may change the directory, HOME, CDPATH or a shell option: `eval`, or a command word bash
+    expands, as `v=HOM; eval ${v}E=x` and `$c d` do."""
+    word = _command_word(tokens)[0]
+    return word.rpartition("/")[2] == "eval" or _dynamic_head(word)
+
+
+def _moves_cd_resolution(tokens):
+    """Whether a simple command may change how a later `cd` resolves its operand: it names
+    CDPATH, as `CDPATH=w`, `export CDPATH` or `CDPATH=w cd b` do, or it sets a physical-path
+    option with `set` or `setopt`."""
+    if any(token == "CDPATH" or token.startswith(("CDPATH=", "CDPATH+=")) for token in tokens):
+        return True
+    word, args, _sure = _command_word(tokens)
+    return word in ("set", "setopt") and any(PHYSICAL_OPTION_RE.search(a) for a in args)
+
+
+def _cd_unknown(variables):
+    """Whether a relative `cd` operand may not resolve against the working directory with `..`
+    taken logically: CDPATH is set here, in the hook's environment or earlier in the line, or a
+    physical-path option may be on. `_cd_certain` names the operands that still resolve."""
+    variables = variables or {}
+    return (bool(os.environ.get("CDPATH")) or bool(variables.get(_CD_UNKNOWN))
+            or "CDPATH" in variables)
+
+
+def _cd_certain(target):
+    """Whether `cd target` reaches the same directory under CDPATH and a physical-path option as
+    without them: bash searches CDPATH for an operand that starts with neither `/` nor a `.` or
+    `..` segment, and resolves `..` physically, so `/x`, `~/x` and `./x` are certain and `b` and
+    `l/..` are not."""
+    parts = target.split("/")
+    return ".." not in parts and (target.startswith(("/", "~")) or parts[0] == ".")
+
+
+def _assignment_contexts(text, parts, home_unknown=False, cd_unknown=False):
     """Static assignment values visible before each parsed command in a straight sequence.
 
     Each context also says whether HOME may have changed before its command, from
-    `home_unknown` or an earlier command naming HOME, so no later `~` is expanded."""
-    homes, home = [], home_unknown
+    `home_unknown` or an earlier command naming HOME, so no later `~` is expanded, and whether a
+    `cd` may resolve other than logically against the working directory, from `cd_unknown` or
+    an earlier command `_moves_cd_resolution` names. A command `_runs_unseen` may do both."""
+    homes, home, paths, path = [], home_unknown, [], cd_unknown
     for tokens in parts:
         homes.append(home)
-        home = home or _mentions_home(tokens)
+        paths.append(path)
+        unseen = _runs_unseen(tokens)
+        home = home or _mentions_home(tokens) or unseen
+        path = path or _moves_cd_resolution(tokens) or unseen
     values, contexts, enabled = {}, [], True
     sources = _source_segments(text)
     if sources is None or len(sources) != len(parts):
-        return [{_UNSAFE_OPERANDS: None, _HOME_UNKNOWN: moved} for moved in homes]
+        return [{_UNSAFE_OPERANDS: None, _HOME_UNKNOWN: moved, _CD_UNKNOWN: resolving}
+                for moved, resolving in zip(homes, paths)]
     reserved = ro.WORD_DROP | ro.WORD_COND | ro.WORD_HEADER
-    for tokens, source, moved in zip(parts, sources, homes):
+    for tokens, source, moved, resolving in zip(parts, sources, homes, paths):
         context = (_operand_context(values, source)
                    if enabled else {_UNSAFE_OPERANDS: None})
         context[_HOME_UNKNOWN] = moved
+        context[_CD_UNKNOWN] = resolving
         contexts.append(context)
         raw_words = _source_words(source)
         matches = [SAFE_ASSIGNMENT_RE.match(word) for word in (raw_words or [])]
@@ -2273,6 +2362,9 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
             if _mentions_home(tokens):  # `env HOME=x bash -c '…'` hands the shell that HOME
                 variables = dict(variables or {})
                 variables[_HOME_UNKNOWN] = True
+            if _moves_cd_resolution(tokens):  # and `env CDPATH=w bash -c '…'` its CDPATH
+                variables = dict(variables or {})
+                variables[_CD_UNKNOWN] = True
             found = _governed(inner[1], cwd, depth + 1, variables, causes)
         else:
             # An inner shell inherits HOME: from this line, or from an assignment prefixed to
@@ -2280,7 +2372,9 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
             variables = variables or {}
             moved = (_home_unknown(variables) or variables.get(_UNSAFE_OPERANDS, set()) is None
                      or _mentions_home(tokens))
-            found = governed_text(inner[1], cwd, depth + 1, causes=causes, home_unknown=moved)
+            found = governed_text(inner[1], cwd, depth + 1, causes=causes, home_unknown=moved,
+                                  cd_unknown=(_cd_unknown(variables)
+                                              or _moves_cd_resolution(tokens)))
         if found:
             return [(c, max(g, grade), d, w + written) for c, g, d, w in found]
     if prog == "git":
@@ -2295,7 +2389,8 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
     return [(SHELL, grade, cwd, written)]
 
 
-def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=False):
+def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=False,
+                  cd_unknown=False):
     """[(action class, grade, directory, paths written)] for every simple command in `cmd`, in
     execution order, or None when the text does not decompose.
 
@@ -2313,7 +2408,8 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     chunk of it names `git` and `push`, as `_scan` reads text it cannot decompose. A line too
     long for `_readings` to read is not walked and is that one entry, at grade 3. `causes` is
     filled as `_governed` describes. With `home_unknown`, HOME may have changed before `cmd`
-    runs, so no `~` in it is expanded."""
+    runs, so no `~` in it is expanded; with `cd_unknown`, CDPATH or a physical-path option may
+    be set, so only a `cd` `_cd_certain` accepts is followed."""
     if depth >= MAX_DEPTH:
         return None
     texts, _bodies = _readings(cmd)
@@ -2321,10 +2417,11 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     if texts is None:  # too long to decompose: unplaced, and graded as `_scan` grades it
         texts = [_outer(cmd)[0]]  # bodies removed where placed; `_scan(cmd)` reads them all
     elif len(texts) == 1:
-        return _walk(texts[0], cwd, depth, isolated, causes, home_unknown)
+        return _walk(texts[0], cwd, depth, isolated, causes, home_unknown, cd_unknown)
     else:
         for text in texts:
-            found.extend(_walk(text, cwd, depth, isolated, causes, home_unknown) or [])
+            found.extend(_walk(text, cwd, depth, isolated, causes, home_unknown, cd_unknown)
+                         or [])
     if not found:
         pushes = any("git" in chunk and "push" in chunk
                      for text in texts for chunk in SCAN_SPLIT.split(text.lower()))
@@ -2335,7 +2432,7 @@ def governed_text(cmd, cwd, depth=0, isolated=False, causes=None, home_unknown=F
     return [(action, grade, None, written) for action, grade, _where, written in found]
 
 
-def _walk(text, cwd, depth, isolated, causes, home_unknown=False):
+def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=False):
     """`governed_text` for one normalized reading."""
     stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
@@ -2347,7 +2444,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False):
         confined = [None] * len(parts)
     queue = list(inners)
     found = []
-    assignment_contexts = _assignment_contexts(stripped, parts, home_unknown)
+    assignment_contexts = _assignment_contexts(stripped, parts, home_unknown, cd_unknown)
 
     def substitutions(count, where, variables):
         # A substitution runs in a subshell of this one, with its HOME.
@@ -2356,40 +2453,47 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False):
         for _ in range(min(count, len(queue))):
             inner = queue.pop(0)
             found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes,
-                                       home_unknown=moved)
+                                       home_unknown=moved, cd_unknown=_cd_unknown(variables))
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     here = cwd
     for tokens, alone, variables in zip(parts, confined, assignment_contexts):
         substitutions(sum(t.count(PLACEHOLDER) for t in tokens), here, variables)
-        body, _targets = _redirects(list(tokens))
-        while body and ASSIGN_RE.match(body[0]):
-            body = body[1:]
-        head = body[0].rpartition("/")[2] if body else ""
+        _targets = _redirects(list(tokens))[1]
+        word, args, sure = _command_word(tokens)
+        head = word.rpartition("/")[2]
         if head in ("cd", "pushd", "popd"):
             # A directory change that also writes, through a redirect, is governed where it runs.
             moved_grade = grade_tokens(list(tokens), here or "", depth)[0]
             if moved_grade > 0:
                 found.append((SHELL, moved_grade, here, _written(head, [], _targets, here)))
-            args = body[1:]
             if alone is None:
                 alone = line_wide
             # A confined `cd` leaves the directory unknown, not unchanged: zsh runs a
             # pipeline's last element in the current shell, so `x | cd d` moves it there.
-            if alone or head == "popd" or any(a.startswith("-") for a in args) or len(args) > 1:
+            if (alone or not sure or head == "popd" or any(a.startswith("-") for a in args)
+                    or len(args) > 1):
                 here = None
             elif head == "pushd" and not args:
                 here = None  # swaps with the directory stack, which this walk does not hold
-            elif (args[0] if args else "~").startswith("~") and _home_unknown(variables):
-                here = None  # HOME may have been reassigned earlier in the line
+            elif (args[0] if args else "~").startswith("~") and (
+                    _home_unknown(variables) or (not args and _mentions_home(tokens))):
+                # HOME may have been reassigned earlier in the line, or for this `cd` alone,
+                # as `HOME=x cd` goes to x; bash expands a `~` operand before that assignment.
+                here = None
+            elif args and not _cd_certain(args[0]) and (
+                    _cd_unknown(variables) or _moves_cd_resolution(tokens)):
+                here = None  # CDPATH, as `CDPATH=w cd b`, or a physical `..`
             elif args and args[0].startswith("~") and QUOTED_TILDE_RE.search(stripped):
                 here = None  # bash keeps a quoted tilde-prefix literal; zsh expands `~"/x"`
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue
         found.extend(_governed(tokens, here, depth, variables, causes))
+        if _runs_unseen(tokens):
+            here = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
     # Any the segments did not account for: fail closed, HOME included.
-    substitutions(len(queue), None, {_HOME_UNKNOWN: True})
+    substitutions(len(queue), None, {_HOME_UNKNOWN: True, _CD_UNKNOWN: True})
     return found
 
 
