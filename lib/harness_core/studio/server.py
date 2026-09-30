@@ -23,7 +23,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (activity, auth, free_suites, live_updates, module_editing, module_library,
+from . import (activity, auth, drafts, free_suites, live_updates, module_authoring,
+               module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
@@ -1238,6 +1239,68 @@ def _draft_module_save(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _draft_authoring_read(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: module_authoring.read(
+        handler.server.repo_root, request["draft"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_authoring_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "request"))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"] \
+            or not isinstance(request["request"], dict):
+        handler._error(400, "invalid_request")
+        return
+    payload = module_authoring.preview(handler.server.repo_root, request["draft"], request["request"])
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_authoring_save(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "base_revision", "idempotency_key", "request"))
+    if request is None:
+        return
+    if any(not isinstance(request[name], str) or not request[name]
+           for name in ("draft", "base_revision", "idempotency_key")) \
+            or not isinstance(request["request"], dict):
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(lambda: module_authoring.save(
+        handler.server.repo_root, request["draft"], request["base_revision"],
+        request["idempotency_key"], request["request"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_library(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: module_authoring.library(
+            handler.server.repo_root, request["draft"],
+        ))
+    except (drafts.DraftError, module_editing.ModuleEditError) as exc:
+        handler._error(409, exc.code)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1327,6 +1390,26 @@ MODULE_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error", 
 MODULE_SAVE = ResponseSchema("json-object", MODULE_PREVIEW.fields +
                               (("saved", "boolean"), ("result", "object-or-null"),
                                ("saved_lint", "array")))
+AUTHORING_READ = ResponseSchema("json-object", (("status", "string"), ("message", "string"),
+                                                 ("draft", "object"), ("root", "object-or-null"),
+                                                 ("offer", "object"), ("templates", "array"),
+                                                 ("forkable", "array"),
+                                                 ("nothing_applied", "boolean"),
+                                                 ("error_code", "string")))
+AUTHORING_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error", "string"),
+                                                    ("error_code", "string"),
+                                                    ("base_revision", "string"),
+                                                    ("action", "string"),
+                                                    ("module", "object-or-null"),
+                                                    ("root", "object-or-null"),
+                                                    ("files", "array"),
+                                                    ("manifest", "object-or-null"),
+                                                    ("fork", "object-or-null"),
+                                                    ("config_changes", "array"),
+                                                    ("findings", "array"),
+                                                    ("nothing_applied", "boolean")))
+AUTHORING_SAVE = ResponseSchema("json-object", AUTHORING_PREVIEW.fields +
+                                 (("saved", "boolean"), ("result", "object-or-null")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1458,6 +1541,14 @@ ROUTES = RouteRegistry((
           _draft_module_preview, None, "application/json", module_editing.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/module/save", "application/json", MODULE_SAVE,
           _draft_module_save, None, "application/json", module_editing.CLI_COMMANDS["save"]),
+    Route("POST", "/api/configure/authoring/read", "application/json", AUTHORING_READ,
+          _draft_authoring_read, None, "application/json", module_authoring.CLI_COMMANDS["read"]),
+    Route("POST", "/api/configure/authoring/preview", "application/json", AUTHORING_PREVIEW,
+          _draft_authoring_preview, None, "application/json", module_authoring.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/authoring/save", "application/json", AUTHORING_SAVE,
+          _draft_authoring_save, None, "application/json", module_authoring.CLI_COMMANDS["save"]),
+    Route("POST", "/api/configure/authoring/library", "application/json", LIBRARY,
+          _draft_library, None, "application/json", module_authoring.CLI_COMMANDS["library"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

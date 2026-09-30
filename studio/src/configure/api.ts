@@ -1,5 +1,6 @@
 import type { ConfigureSchema, ValidationError } from "./model";
-import type { ModuleProjection as LibraryProjection, ProjectedModuleText } from "../library/model";
+import type { LibraryPayload, ModuleProjection as LibraryProjection, ProjectedModuleText } from "../library/model";
+import type { AuthoringPreview, AuthoringRead, AuthoringRequest, AuthoringSave } from "./authoringModel";
 
 export type DraftRead = {
   status: "ready" | "error" | "unavailable";
@@ -213,4 +214,24 @@ export async function saveDraftModule(
     draft, module, base_revision: baseRevision, source_digest: sourceDigest,
     idempotency_key: idempotencyKey, content,
   });
+}
+
+export async function loadAuthoring(draft: string): Promise<AuthoringRead> {
+  return post<AuthoringRead>("/api/configure/authoring/read", { draft });
+}
+
+export async function previewAuthoring(draft: string, request: AuthoringRequest): Promise<AuthoringPreview> {
+  return post<AuthoringPreview>("/api/configure/authoring/preview", { draft, request });
+}
+
+export async function saveAuthoring(
+  draft: string, baseRevision: string, idempotencyKey: string, request: AuthoringRequest,
+): Promise<AuthoringSave> {
+  return post<AuthoringSave>("/api/configure/authoring/save", {
+    draft, base_revision: baseRevision, idempotency_key: idempotencyKey, request,
+  });
+}
+
+export async function loadDraftLibrary(draft: string): Promise<LibraryPayload> {
+  return post<LibraryPayload>("/api/configure/authoring/library", { draft });
 }

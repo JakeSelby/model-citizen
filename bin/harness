@@ -82,6 +82,7 @@ from harness_core.studio import activity as studio_activity
 from harness_core.studio import settings as studio_settings
 from harness_core.studio import selection_editing as studio_selection_editing
 from harness_core.studio import module_editing as studio_module_editing
+from harness_core.studio import module_authoring as studio_module_authoring
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -3807,6 +3808,18 @@ def cmd_draft(args: argparse.Namespace) -> int:
                     repo, args.name, args.base_revision, args.idempotency_key,
                     integrations.read_json(args.changes),
                 )
+        elif args.action == "module" and args.module_action in ("templates", "plan", "add", "library"):
+            if args.module_action == "templates":
+                result = studio_module_authoring.read(repo, args.name)
+            elif args.module_action == "library":
+                result = studio_module_authoring.library(repo, args.name)
+            elif args.module_action == "plan":
+                result = studio_module_authoring.preview(repo, args.name, integrations.read_json(args.request))
+            else:
+                result = studio_module_authoring.save(
+                    repo, args.name, args.base_revision, args.idempotency_key,
+                    integrations.read_json(args.request),
+                )
         elif args.action == "module":
             if args.module_action == "read":
                 result = studio_module_editing.read(repo, args.name, args.module)
@@ -6577,6 +6590,32 @@ def main(argv: Optional[List[str]] = None) -> int:
     module_save.add_argument("--content", required=True, metavar="FILE")
     module_save.add_argument("--json", action="store_true")
     module_save.set_defaults(func=cmd_draft)
+    module_templates = module_sub.add_parser(
+        "templates", help="show the personal root, module templates and forkable core modules")
+    module_templates.add_argument("name")
+    module_templates.add_argument("--json", action="store_true")
+    module_templates.set_defaults(func=cmd_draft)
+    module_plan = module_sub.add_parser(
+        "plan", help="check a new or forked module and show what adding it would write")
+    module_plan.add_argument("name")
+    module_plan.add_argument("--request", required=True, metavar="FILE",
+                             help="JSON object: action add|fork, kind, name, description, source, create_root")
+    module_plan.add_argument("--json", action="store_true")
+    module_plan.set_defaults(func=cmd_draft)
+    module_add = module_sub.add_parser(
+        "add", help="checkpoint a new module from a template, or a fork of a core module")
+    module_add.add_argument("name")
+    module_add.add_argument("--request", required=True, metavar="FILE",
+                            help="JSON object: action add|fork, kind, name, description, source, create_root")
+    module_add.add_argument("--base-revision", required=True)
+    module_add.add_argument("--idempotency-key", required=True)
+    module_add.add_argument("--json", action="store_true")
+    module_add.set_defaults(func=cmd_draft)
+    module_library_parser = module_sub.add_parser(
+        "library", help="the module library as the draft resolves it, forks and upstream diffs included")
+    module_library_parser.add_argument("name")
+    module_library_parser.add_argument("--json", action="store_true")
+    module_library_parser.set_defaults(func=cmd_draft)
 
     p = sub.add_parser("remote-control", help="keep a Claude Code Remote Control server running per configured folder (macOS)")
     rc_sub = p.add_subparsers(dest="action", required=True)

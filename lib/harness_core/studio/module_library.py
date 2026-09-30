@@ -2,6 +2,7 @@
 """Read-only inventory for every module visible to Studio."""
 from __future__ import annotations
 
+import difflib
 import json
 import os
 import time
@@ -14,6 +15,11 @@ from harness_core import catalog
 SCHEMA_VERSION = 1
 CHARS_PER_TOKEN = 4.0
 KINDS = dict(catalog.KINDS, modes={"directory": "modes", "pattern": "*.json", "value": None})
+# A personal root records each core module it forked here, with the original's text at fork time.
+FORKS_FILE = "forks.json"
+FORK_KINDS = ("rules", "skills")
+MAX_FORK_FILES = 64
+MAX_FORK_FILE_BYTES = 512 * 1024
 
 
 def _config_and_selection(root: Path, supplied: Optional[Mapping[str, Any]] = None):
@@ -108,6 +114,85 @@ def _manifest(root_path: Path, kind: str, name: str) -> Optional[Dict[str, Any]]
     return value if isinstance(value, dict) else None
 
 
+def module_files(primitives: Path, kind: str, name: str) -> Optional[Dict[str, Path]]:
+    """The regular files one forkable module is made of, keyed by path inside the module.
+
+    None when the module is absent or is not a plain tree of bounded regular files.
+    """
+    if kind == "rules":
+        path = primitives / "rules" / (name + ".md")
+        return {name + ".md": path} if path.is_file() and not path.is_symlink() else None
+    if kind != "skills":
+        return None
+    directory = primitives / "skills" / name
+    if directory.is_symlink() or not (directory / "SKILL.md").is_file():
+        return None
+    found: Dict[str, Path] = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            return None
+        if path.is_dir():
+            continue
+        if not path.is_file() or path.stat().st_size > MAX_FORK_FILE_BYTES:
+            return None
+        found[path.relative_to(directory).as_posix()] = path
+        if len(found) > MAX_FORK_FILES:
+            return None
+    return found
+
+
+def module_texts(primitives: Path, kind: str, name: str) -> Optional[Dict[str, str]]:
+    files = module_files(primitives, kind, name)
+    if files is None:
+        return None
+    try:
+        return {relative: path.read_text(encoding="utf-8") for relative, path in files.items()}
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _forks(root_path: Path) -> Dict[str, Any]:
+    try:
+        data = json.loads((root_path / FORKS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) and data.get("schema_version") == 1 else {}
+
+
+def upstream_diff(recorded: Mapping[str, str], current: Optional[Mapping[str, str]],
+                  source: str) -> str:
+    """A unified diff from the original as forked to the core module as it is now."""
+    current = current or {}
+    chunks = []
+    for relative in sorted(set(recorded) | set(current)):
+        before, after = recorded.get(relative), current.get(relative)
+        if before == after:
+            continue
+        chunks.extend(difflib.unified_diff(
+            [] if before is None else before.splitlines(keepends=True),
+            [] if after is None else after.splitlines(keepends=True),
+            fromfile="forked/" + source + "/" + relative,
+            tofile="core/" + source + "/" + relative,
+        ))
+    return "".join(chunks)
+
+
+def _fork(core: Path, forks: Dict[str, Any], kind: str, name: str) -> Optional[Dict[str, Any]]:
+    """The provenance of a forked module and whether its core original has changed since."""
+    entry = (forks.get(kind) or {}).get(name) if isinstance(forks.get(kind), dict) else None
+    if not isinstance(entry, dict) or not isinstance(entry.get("source"), str):
+        return None
+    source_kind, _, source_name = entry["source"].partition("/")
+    recorded = entry.get("files") if isinstance(entry.get("files"), dict) else {}
+    recorded = {key: value for key, value in recorded.items()
+                if isinstance(key, str) and isinstance(value, str)}
+    current = module_texts(core, source_kind, source_name) if source_kind in FORK_KINDS else None
+    diff = upstream_diff(recorded, current, entry["source"])
+    return {"source": entry["source"], "version": str(entry.get("version", "")),
+            "revision": str(entry.get("revision", "")),
+            "upstream": {"changed": bool(diff), "missing": current is None, "diff": diff}}
+
+
 def _source_entries(root: Path, root_entry: Dict[str, Any], kind: str,
                     definition: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
     if not definition.get("directory") or not definition.get("pattern"):
@@ -150,7 +235,9 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
     resolved_config, selection = _config_and_selection(root, config)
     roots = _roots(root, resolved_config)
     modules: List[Dict[str, Any]] = []
+    core = (root / "primitives").resolve()
     for root_entry in roots:
+        forks = {} if root_entry["core"] else _forks(root_entry["path"])
         for kind, definition in KINDS.items():
             for source in _source_entries(root, root_entry, kind, definition):
                 path, name = source["path"], source["name"]
@@ -163,6 +250,7 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
                     "state": _state(kind, name, selection),
                     "collision": False,
                     "manifest": _manifest(root_entry["path"], kind, manifest_name),
+                    "fork": _fork(core, forks, kind, name) if forks else None,
                     "source": {"path": str(path),
                                "text": "" if metadata_only else _rendered(root, "source", path, name)},
                     "rendered": {"text": "" if metadata_only else _rendered(root, kind, path, name)},
@@ -184,7 +272,7 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
         modules.append({"key": "core:hooks:" + name, "name": name, "kind": "hooks",
                         "root": {"id": "core", "label": "Core", "path": str(root / "policy"), "core": True},
                         "state": _state("hooks", name, selection), "collision": False,
-                        "manifest": hook_manifests.get(name),
+                        "manifest": hook_manifests.get(name), "fork": None,
                         "source": {"path": str(path), "text": path.read_text(encoding="utf-8")},
                         "rendered": {"text": "Registered through the shared lifecycle adapter."},
                         "projections": _projection_paths("hooks", name, True),
