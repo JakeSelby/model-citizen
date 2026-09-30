@@ -791,6 +791,14 @@ then zero in 40 (#429). A PostToolUse nudge is planned (v0.15.0, #513).
 **Consequences (testable):**
 - On a benchmark task above the break-even, the harness arm spawns at least once under `cost=balanced`.
 
+*Amended 2026-09-29 (#429):* an absorbed call is a `Read`, `Grep` or `Glob` call made inside a
+subagent's thread, counted from the run's own stream. The 4.8 to 7.6 range comes from unpublished
+break-even notes. The replay's delegation verdict pre-registers 7.6, the top of the range, as a
+hypothetical figure until a registered run measures one. The consequence above is superseded: the
+stance fires when the harness arm spawns in at least the share #513 registers, three of four runs,
+on every task above the break-even, rather than once. A `Workflow` launch is reported beside spawns
+and not counted until #915 routes it. The status is settled at #429's close-out.
+
 ### 4.7 Guardrails
 
 **Description:** Guardrails sit wherever a deterministic check is cheap, and they leave the rest to
@@ -1856,6 +1864,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 - **SM-4 Mechanism fired:**
   - Measures spawns per run on tasks above the break-even.
   - No saving is credited to a mechanism unless the ledger rows show it fired.
+  - *Amended 2026-09-29 (#429):* replay rows in `results.jsonl` count as the rows that show it;
+    spawns per run on them are read through the per-task delegation verdict.
   - Validates FR-34.
 - **SM-5 Lifecycle integrity:**
   - Every supported target passes install, upgrade, repeat sync, rollback and uninstall with zero loss of

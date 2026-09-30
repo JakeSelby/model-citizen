@@ -225,7 +225,7 @@ development_status:
   ah-t025-enrich-story-files-delivered-work-without-an: done
 
   ah-e013-measurement-the-cost-benchmark-detector: in-progress
-  ah-b095-the-delegation-stance-never-fires-zero-subagent: backlog
+  ah-b095-the-delegation-stance-never-fires-zero-subagent: ready-for-dev
   ah-b117-adherence-emissions-are-never-settled-in-a-live: done
   ah-b119-the-harness-arm-s-image-holds-a-checkout-with: ready-for-dev
   ah-s138-record-the-first-live-cost-replay-results: done
