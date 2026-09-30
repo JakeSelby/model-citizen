@@ -143,12 +143,15 @@ class TokenizeTests(unittest.TestCase):
 
     def test_words_match_shlex_wherever_shlex_splits_operators_correctly(self):
         """A seeded sweep of short strings: wherever shlex returns no multi-operator run, the
-        tokens are identical, and both raise on the same inputs."""
+        tokens are identical, and both raise on the same inputs. A string with `$'` or `$"` is
+        skipped: bash reads an ANSI-C or locale string there, which shlex does not know."""
         rng = random.Random(896)
         alphabet = list("ab ;()|&<>'\"\\\t$#}{-=\n")
         compared = 0
         for _ in range(20000):
             text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 12)))
+            if "$'" in text or '$"' in text:
+                continue
             try:
                 expected = shlex_tokens(text)
             except ValueError:
