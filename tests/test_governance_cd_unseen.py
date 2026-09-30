@@ -19,7 +19,7 @@ from unittest import mock
 
 from test_governance_binding import SESSION, approvals, grader
 from test_governance_cd_forms import Fixture
-from test_grade_bash import cpu_seconds, pre_tool_use_timeout
+from test_grade_bash import cpu_growth, pre_tool_use_timeout
 
 ro = grader.ro
 
@@ -182,9 +182,10 @@ class LongPrefixChains(Fixture):
     def test_a_long_prefix_chain_grades_inside_the_hook_budget(self):
         budget = pre_tool_use_timeout() / 10
         command = "time " * 1000 + "git push --force"
-        seconds = cpu_seconds(lambda: (grader.grade_text(command, str(self.repo)),
-                                       grader.governed_text(command, str(self.repo))),
-                              batches=2)
+        seconds, _ratio = cpu_growth(
+            lambda: (grader.grade_text(command, str(self.repo)),
+                     grader.governed_text(command, str(self.repo))),
+            lambda: grader.grade_text("git push --force", str(self.repo)), pairs=3)
         self.assertLess(seconds, budget)
 
     def test_a_short_prefix_chain_is_still_looked_through(self):
