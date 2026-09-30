@@ -1,0 +1,3 @@
+{"arm": "bare", "cost_usd": 0.5, "harness_version": "1.0.0", "outcome": "pass", "rep": 1, "tag": "v1", "task": "gate-run"}
+{"arm": "harness", "cost_usd": 0.5, "harness_version": "1.0.0", "outcome": "pass", "rep": 1, "tag": "v1", "task": "gate-run"}
+{"arm": "harness", "cost_usd": 0.5, "harness_version": "1.0.0", "outcome": "pass", "rep": 2, "tag": "v1", "task": "gate-run"}

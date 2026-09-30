@@ -1,0 +1,14 @@
+{
+ "about": "A read-only search while planning.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "plan",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "grep -rn TODO src | head -20"
+  }
+ }
+}

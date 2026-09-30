@@ -11,8 +11,8 @@ rendered at sync time.
 pinned git ref of this repository, one history row per `--tag`. Nothing from the machine running
 it reaches either arm (`replay_arms.py`). It reads cost from the CLI's own JSON result and scores
 each run with a held-back check, itself run in a fresh container. It calls a model and spends real
-usage. `arms` builds and checks the arm images without calling a model. Reading and limits:
-docs/benchmarks.md.
+usage. `arms` builds and checks the arm images without calling a model, and `detect` reads which
+rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
 import datetime
@@ -25,6 +25,7 @@ import platform
 import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,10 +36,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 from harness_core import cache_prefix  # noqa: E402  the ledger's miss ratio, one definition
 from harness_core import catalog  # noqa: E402  the resolver the hooks load, for the profile fingerprint
+from harness_core import observation  # noqa: E402  the shared observer registration
+from harness_core import observer  # noqa: E402  benchmark-owned destination variables
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import replay_arms as arms  # noqa: E402  the containers every arm and every check runs in
 import experiment_protocol  # noqa: E402  the pre-registration gate; docs/evidence-standard.md
 import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
+import replay_detect  # noqa: E402  which rules fired, read from the saved streams
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -80,7 +84,8 @@ MODEL_USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "
 # refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
 # the harness arm's settings carry.
 NO_WEB = ("WebFetch", "WebSearch")
-ARM_SETTINGS = {"permissions": {"deny": list(NO_WEB)}}
+OBSERVER_COMMAND = arms.OBSERVER_COMMAND
+ARM_SETTINGS = arms.observer_settings()
 # The container is the fence: no host path but the snapshot, no way out but the model API. Inside
 # it the agent acts without prompts, as a headless run cannot answer one.
 PERMISSION_MODE = "bypassPermissions"
@@ -114,6 +119,7 @@ STREAM_FIELDS = ("first_call_cache_write", "first_call_context", "tool_counts", 
 INSTALLED_CHECKOUT = "/opt/model-citizen"
 CONTAMINATION_CONTROL = "installed-checkout-oracle-and-transcript-v1"
 RESULTS = "results.jsonl"
+DETECTIONS = replay_detect.DETECTIONS
 ENRICHED = "results.enriched.jsonl"
 
 
@@ -304,11 +310,145 @@ def scrubbed_env(extra=None, base=None):
     return env
 
 
-def arm_env(arm, stance_cost=None, proxy=None):
+def arm_env(arm, stance_cost=None, proxy=None, observation_run=None):
     """The variables one arm's container is given by value (`replay_arms.arm_env`): the same for
     both arms, bar the harness arm's stance override. The container's HOME is the image's own,
     and the credential goes by name alone, so neither is here."""
-    return arms.arm_env(proxy, stance_cost if arm != "bare" else None)
+    env = arms.arm_env(proxy, stance_cost if arm != "bare" else None)
+    if observation_run:
+        env.update({observer.LEDGER_ENV: observation_run["container_ledger"],
+                    observer.ERRORS_ENV: observation_run["container_errors"]})
+        if observation_run["profile"] is not None:
+            env[observer.PROFILE_ENV] = observation_run["profile"]
+    return env
+
+
+def prepare_observation_dir(out):
+    """Create this replay tag's new run-owned observation directory before a launch."""
+    root = Path(out).resolve()
+    target = root / "observations"
+    root.mkdir(parents=True, exist_ok=True)
+    try:  # one atomic create, so a concurrent run with the same tag is refused the same way
+        target.mkdir(mode=0o700)
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing existing observation output %s" % target)
+    (target / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
+    return target
+
+
+def observation_stem(name):
+    """A file-safe stem for one session name, injective: a name that needed rewriting carries
+    a hash of the original, so `a/b` and `a-b` never share observation files."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "-", name)
+    if safe == name:
+        return safe
+    return "%s-%s" % (safe, hashlib.sha256(name.encode("utf-8")).hexdigest()[:10])
+
+
+def refuse_observation_collisions(tasks, opts):
+    """Refuse, before any probe or model call, a plan whose sessions would share a stem."""
+    if not opts.get("observation_dir"):
+        return
+    names = ["preflight-%s" % arm for arm in ARMS]
+    names += ["%s-%s-%d" % (task["id"], arm, rep) for task, rep, arm in schedule(tasks, opts["reps"])]
+    seen = {}
+    for name in names:
+        stem = observation_stem(name)
+        if stem in seen:
+            raise SystemExit("cost-bench: refusing the replay: sessions %r and %r share observation files %s"
+                             % (seen[stem], name, stem))
+        seen[stem] = name
+
+
+def discard_observation(run):
+    """Remove one session's staging directory; its retained copy is already in the archive."""
+    if run:
+        shutil.rmtree(str(run["private"]), ignore_errors=True)
+
+
+def observation_run(opts, name, profile):
+    """The fresh host and container files for one real native session."""
+    root = opts.get("observation_dir")
+    if not root:
+        return None
+    stem = observation_stem(name)
+    archive = Path(root)
+    if any((archive / (stem + suffix)).exists() for suffix in (".jsonl", ".errors.jsonl")):
+        raise SystemExit("cost-bench: refusing existing observation files for %s" % stem)
+    try:
+        (archive / (stem + ".reserved")).touch(exist_ok=False)
+    except FileExistsError:
+        raise SystemExit("cost-bench: refusing repeated observation session %s" % stem)
+    # Only this session's empty output directory enters the container. The retained result
+    # directory may be in the host checkout, but no arm can read or alter it or another run.
+    # The stage is open to every user so the image's user can write it whatever its uid, as
+    # `replay_arms.open_for_image` does for the snapshot; it sits inside a private (0o700)
+    # parent, so no other host user can reach it, and `discard_observation` removes both.
+    private = Path(tempfile.mkdtemp(prefix="cost-observation-", dir=opts.get("tmp")))
+    stage = private / "out"
+    stage.mkdir()
+    (stage / arms.OBSERVATION_MARKER).write_text("cost-bench\n", encoding="utf-8")
+    os.chmod(str(stage), 0o777)
+    ledger, errors = stage / (stem + ".jsonl"), stage / (stem + ".errors.jsonl")
+    for path in (ledger, errors):
+        path.touch(mode=0o666, exist_ok=False)
+        os.chmod(str(path), 0o666)
+    return {"ledger": ledger, "errors": errors, "archive": archive, "mount": stage,
+            "private": private, "relative": "observations/" + ledger.name,
+            "container_ledger": arms.OBSERVATION_MOUNT + "/" + ledger.name,
+            "container_errors": arms.OBSERVATION_MOUNT + "/" + errors.name,
+            "profile": profile}
+
+
+def observation_result(run):
+    """Validate and retain each native stream independently, including collector failures."""
+    if not run:
+        return {"observation_ledger": None, "observation_rows": None,
+                "observation_errors": None}, None
+    counts, problems = {}, []
+    # The container has exited: close the stage before reading, then accept only regular files
+    # still owned by this user, which the observer's append into the pre-created file keeps.
+    os.chmod(str(run["mount"]), 0o700)
+    for key in ("ledger", "errors"):
+        path = run[key]
+        try:
+            info = os.lstat(str(path))
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("collector output is not a regular file")
+            if info.st_uid != os.getuid():
+                raise ValueError("collector output is not owned by the invoking user")
+            raw = path.read_bytes()
+            # Retain malformed output as evidence too; validation never rewrites its contents.
+            with (run["archive"] / path.name).open("xb") as archive:
+                archive.write(raw)
+            lines = raw.decode("utf-8").splitlines()
+            for line in lines:
+                row = json.loads(line)
+                valid = isinstance(row, dict) and row.get("runtime") == "claude-code" \
+                    and isinstance(row.get("ts"), str) and bool(row["ts"])
+                if key == "ledger":
+                    valid = valid and row.get("schema_version") == observer.SCHEMA_VERSION \
+                        and type(row.get("schema_version")) is int \
+                        and row.get("event") in observation.events("claude-code") \
+                        and "session_id" in row \
+                        and (row["session_id"] is None or isinstance(row["session_id"], str)) \
+                        and "profile_fingerprint" in row \
+                        and row["profile_fingerprint"] == run["profile"]
+                else:
+                    valid = valid and isinstance(row.get("error"), str) and bool(row["error"]) \
+                        and isinstance(row.get("detail"), str)
+                if not valid:
+                    raise ValueError("invalid observer row")
+            counts[key] = len(lines)
+        except (OSError, ValueError, UnicodeError) as exc:
+            counts[key] = None
+            problems.append("observation: unreadable %s output (%s)" % (key, type(exc).__name__))
+    if counts["errors"]:
+        problems.append("observation: %d collector error(s)" % counts["errors"])
+    if counts["ledger"] == 0:
+        problems.append("observation: no native events recorded")
+    return {"observation_ledger": run["relative"], "observation_rows": counts["ledger"],
+            "observation_errors": counts["errors"]}, "; ".join(problems) or None
 
 
 def arm_profile(arm, env, opts):
@@ -428,12 +568,15 @@ def mounted_snapshot(repo, sha, dest):
     return arms.open_for_image(snapshot(repo, sha, dest))
 
 
-def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run):
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, observation_run=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written."""
-    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"))
-    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name)
+    if arms.digest(ARM_SETTINGS) != record["declaration"].get("observer_settings_sha256"):
+        raise SystemExit("cost-bench: native observer settings differ from the declared inputs")
+    env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), observation_run)
+    command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
+                               observation_dir=observation_run["mount"] if observation_run else None)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -960,10 +1103,30 @@ def _partial_diagnostics(row, stdout):
     return row
 
 
+def save_stream(opts, task_id, arm, rep, stdout):
+    """Keep one run's stream under `--raw` as `<task>-<arm>-<rep>.json`, and, when the set keeps
+    a `streams` record, note it there with its digest as this run's own. The name carries no tag,
+    so the next tag's run of the same name overwrites it; detection reads a run only from the
+    stream the record names (`replay_detect.detect_saved`)."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    data = (stdout or "").encode("utf-8", errors="replace")
+    raw = Path(opts["raw"])
+    raw.mkdir(parents=True, exist_ok=True)
+    path = raw / replay_detect.raw_name(task_id, arm, rep)
+    path.write_bytes(data)
+    streams = opts.get("streams")
+    if streams is not None:
+        streams[(task_id, arm, rep)] = (path, hashlib.sha256(data).hexdigest())
+    return path
+
+
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
+    profile = arm_profile(arm, env, opts)
+    profile = arm_profile(arm, env, opts)
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
                rep=rep, passed=None, error=False,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
@@ -972,56 +1135,71 @@ def _attempt(task, rep, arm, opts, launch):
                init_surface_source=None, installed_checkout_reads=[],
                contamination_control=CONTAMINATION_CONTROL,
                surface_drift=[],
+               observation_ledger=None, observation_rows=None, observation_errors=None,
                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
-               profile_fingerprint=arm_profile(arm, env, opts),
+               profile_fingerprint=profile,
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
+    if opts.get("streams") is not None:
+        opts["streams"].pop((task["id"], arm, rep), None)
     workdir = Path(tempfile.mkdtemp(prefix="cost-replay-", dir=opts.get("tmp"))) / "repo"
+    observed = None
+
+    def finish(value):
+        fields, problem = observation_result(observed)
+        value.update(fields)
+        if problem:
+            prior = value.get("error_kind")
+            value.update(error=True, passed=None, error_kind="; ".join(x for x in (prior, problem) if x),
+                         cache_miss_ratio=None)
+        return value
+
     started = time.time()
     try:
+        observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
         try:
             done = launch_arm(record, workdir, arm_command("claude", opts["model"], prompt_of(task),
                                                            opts["run_cap"], task["max_turns"], effort),
-                              opts, container_name(task["id"], arm, rep), launch)
+                              opts, container_name(task["id"], arm, rep), launch, observed)
         except subprocess.TimeoutExpired as exc:
             partial = getattr(exc, "stdout", None)
             partial = partial if partial is not None else getattr(exc, "output", None)
             _partial_diagnostics(row, partial)
-            return dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
-                        wall_seconds=round(time.time() - started, 1))
+            return finish(dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
+                               wall_seconds=round(time.time() - started, 1)))
         row["wall_seconds"] = round(time.time() - started, 1)
         if opts.get("raw"):
-            Path(opts["raw"]).mkdir(parents=True, exist_ok=True)
-            (Path(opts["raw"]) / ("%s-%s-%d.json" % (task["id"], arm, rep))).write_text(done.stdout or "",
-                                                                                     encoding="utf-8")
+            save_stream(opts, task["id"], arm, rep, done.stdout)
         try:
             parsed = parse_result(done.stdout)
         except ValueError as exc:
             _partial_diagnostics(row, done.stdout)
-            return dict(row, error=True, error_kind="exit %s: %s" % (done.returncode, exc))
+            return finish(dict(row, error=True, error_kind="exit %s: %s" % (done.returncode, exc)))
         row.update(parsed["tokens"], cost_usd=parsed["cost_usd"], turns=parsed["turns"],
                    cost_normalised_usd=normalised_cost(parsed["cost_usd"], parsed["first_turns"], opts["prices"]),
                    **{field: parsed[field] for field in STREAM_FIELDS})
         if parsed["installed_checkout_reads"]:
-            return dict(row, error=True, error_kind="installed-checkout-read")
+            return finish(dict(row, error=True, error_kind="installed-checkout-read"))
         if parsed["observed_effort"] is not None and parsed["observed_effort"] != effort:
             # The stream says the run went at another effort than the one pinned: not this arm.
-            return dict(row, error=True, cache_miss_ratio=None,
-                        error_kind="effort: observed %s, pinned %s" % (parsed["observed_effort"], effort))
+            return finish(dict(row, error=True, cache_miss_ratio=None,
+                               error_kind="effort: observed %s, pinned %s"
+                               % (parsed["observed_effort"], effort)))
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
-            return dict(row, error=True, cache_miss_ratio=None,
-                        error_kind=parsed["subtype"] or "exit %s" % done.returncode)
+            return finish(dict(row, error=True, cache_miss_ratio=None,
+                               error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
             row["passed"] = bool(_scorer(opts, launch)(task, workdir, opts["repo"])[0])
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
-            return dict(row, error=True, error_kind="check: %s" % type(exc).__name__)
-        return row
+            return finish(dict(row, error=True, error_kind="check: %s" % type(exc).__name__))
+        return finish(row)
     finally:
         shutil.rmtree(str(workdir.parent), ignore_errors=True)  # removed, never reset
+        discard_observation(observed)
 
 
 def gate_output(stdout):
@@ -1068,18 +1246,22 @@ def preflight(tasks, opts, launch=subprocess.run):
     checks, spent = [], 0.0
     for arm in ARMS:
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
+        collector = None
         try:
             mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
+            env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"))
+            collector = observation_run(opts, "preflight-%s" % arm, arm_profile(arm, env, opts))
             command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, PREFLIGHT_CAP_USD,
                                   PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
-                                  container_name("preflight", arm), launch)
+                                  container_name("preflight", arm), launch, collector)
             except subprocess.TimeoutExpired:
                 spent += PREFLIGHT_CAP_USD
+                fields, problem = observation_result(collector)
                 checks.append({"arm": arm, "passed": False, "reply": "timeout", "cost_usd": None,
                                "effort": opts["arms"][arm]["declaration"]["effort"],
-                               "observed_effort": None})
+                               "observed_effort": None, **fields})
                 continue
             if opts.get("raw"):
                 raw = Path(opts["raw"]); raw.mkdir(parents=True, exist_ok=True)
@@ -1087,18 +1269,25 @@ def preflight(tasks, opts, launch=subprocess.run):
             reply = reply_text(done.stdout)
             try:
                 parsed = parse_result(done.stdout)
-                cost, observed = parsed["cost_usd"], parsed["observed_effort"]
+                cost, observed_effort = parsed["cost_usd"], parsed["observed_effort"]
             except ValueError:
-                cost, observed = None, None
+                cost, observed_effort = None, None
             effort = opts["arms"][arm]["declaration"]["effort"]
-            effort_matches = observed is None or observed == effort
+            effort_matches = observed_effort is None or observed_effort == effort
+            fields, observation_problem = observation_result(collector)
             spent += PREFLIGHT_CAP_USD if cost is None else cost
-            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches,
-                           "reply": (reply if effort_matches else
-                                     "observed effort %s, pinned %s" % (observed, effort)),
-                           "cost_usd": cost, "effort": effort, "observed_effort": observed})
+            # Every reason a preflight is red is named: an effort mismatch never hides a
+            # collector failure behind it.
+            problems = ([] if effort_matches else
+                        ["observed effort %s, pinned %s" % (observed_effort, effort)])
+            problems += [observation_problem] if observation_problem else []
+            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches
+                           and not observation_problem,
+                           "reply": "; ".join(problems) if problems else reply,
+                           "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
+            discard_observation(collector)
     return checks, spent
 
 
@@ -1144,6 +1333,7 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
 
 
 def _replay(tasks, opts, launch, sink):
+    refuse_observation_collisions(tasks, opts)
     for arm in ARMS:
         arms.admit(dict(opts["arms"][arm], protocol=opts["stamp"]))
     arms.admit_pair(opts["arms"]["bare"], opts["arms"]["harness"])
@@ -1265,23 +1455,27 @@ def verdict(summary):
     return ratio, "passed" if ratio <= THRESHOLD else "failed"
 
 
-def history_row(rows, series):
+def history_row(rows, series, detections=None):
     """One line for `history.jsonl`: a harness version against bare on the same day and model.
 
     It carries the per-task breakdown as well as the aggregate, because one task moving is the
-    usual shape of a regression and the aggregate alone cannot tell that from a broad one."""
+    usual shape of a regression and the aggregate alone cannot tell that from a broad one. With
+    the set's detections it also carries `mechanisms`, what fired in the harness arm per task."""
     first = rows[0]
     reported, normalised = summarise(rows), summarise(rows, "cost_normalised_usd")
     ratio, status = verdict(reported)
-    return {"date": first["date"], "series": series, "bucket": first.get("bucket", ""),
-            "predicted_ratio": first.get("predicted_ratio"),
-            "harness_version": first["harness_version"],
-            "harness_sha": first["harness_sha"], "tag": first["tag"], "model": first["model"],
-            "cli_version": first["cli_version"], "reps": max(r["rep"] for r in rows), "runs": len(rows),
-            "change_note": first.get("change_note", ""), "per_task": per_task(rows),
-            "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
-            "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
-            "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+    row = {"date": first["date"], "series": series, "bucket": first.get("bucket", ""),
+           "predicted_ratio": first.get("predicted_ratio"),
+           "harness_version": first["harness_version"],
+           "harness_sha": first["harness_sha"], "tag": first["tag"], "model": first["model"],
+           "cli_version": first["cli_version"], "reps": max(r["rep"] for r in rows), "runs": len(rows),
+           "change_note": first.get("change_note", ""), "per_task": per_task(rows),
+           "bare": reported["bare"], "harness": reported["harness"], "ratio": ratio,
+           "ratio_cache_normalised": verdict(normalised)[0], "cache_miss": cache_miss(rows),
+           "threshold": THRESHOLD, "status": status, "arms": arm_records(rows), "sm2": sm2(rows)}
+    if detections is not None:
+        row["mechanisms"] = replay_detect.mechanisms(detections)
+    return row
 
 
 def sm2(rows, seed=replay_stats.SEED, resamples=replay_stats.RESAMPLES):
@@ -1362,6 +1556,7 @@ def render_history(rows):
                          % (task or "n/a", usd(cell.get("bare")), usd(cell.get("harness")),
                             usd(cell.get("ratio")), usd(cell.get("bare_spread")),
                             usd(cell.get("harness_spread")), cell.get("n") or 0))
+        lines.extend(replay_detect.render_mechanisms(r.get("mechanisms") or {}))
     return "\n".join(lines) + "\n"
 
 
@@ -1568,6 +1763,7 @@ def replay_tag(tag, args, common, harness):
     series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
                             + b"|container").hexdigest()[:8]
     out = (common["out"] or ROOT / "benchmarks" / version) / tag
+    streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
         (parent / "home").mkdir()
@@ -1576,7 +1772,7 @@ def replay_tag(tag, args, common, harness):
                 "tag": tag, "reps": args.reps, "run_cap": args.run_cap, "spend_cap": args.spend_cap,
                 "prices": common["prices"], "arms": {"bare": common["bare"], "harness": harness},
                 "network": common["network"], "proxy": common["proxy"], "client_env": common["client_env"],
-                "stance_cost": args.stance_cost, "raw": args.raw, "tmp": args.tmp,
+                "stance_cost": args.stance_cost, "raw": args.raw, "streams": streams, "tmp": args.tmp,
                 "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
                 "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
                           "cli_version": common["cli_version"],
@@ -1586,9 +1782,16 @@ def replay_tag(tag, args, common, harness):
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
         out.mkdir(parents=True, exist_ok=True)
+        opts["observation_dir"] = prepare_observation_dir(out)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
+    detections = None
+    if args.raw and rows:
+        # Now, before the next tag's runs overwrite these streams under the same names, and only
+        # from the streams this tag's runs saved: a timeout saves none.
+        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
+        write_jsonl(out / DETECTIONS, detections)
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
@@ -1597,12 +1800,41 @@ def replay_tag(tag, args, common, harness):
     elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / "benchmarks"
         home_dir.mkdir(parents=True, exist_ok=True)
-        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series))
+        kept = upsert_history(home_dir / HISTORY.name, history_row(rows, series, detections))
         (home_dir / HISTORY_MD.name).write_text(render_history(kept), encoding="utf-8")
         print(json.dumps(kept[-1], indent=2))
     else:
         print("cost-bench: a partial set is not a history row; results are in %s" % out, file=sys.stderr)
     return 1 if stopped else 0
+
+
+def cmd_detect(args):
+    """Every rule detector over saved streams, calling no model: one `--raw` directory, or every
+    set under a `--backfill` root, whose `results.jsonl` files are read and never written."""
+    module = replay_detect.load_detectors()
+    if args.raw:
+        raw = Path(args.raw).expanduser()
+        if not raw.is_dir():
+            raise SystemExit("cost-bench: %s is not a directory" % raw)
+        if (raw / DETECTIONS).exists() and not args.overwrite:
+            raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
+        rows, runs = replay_detect.detect_dir(raw, ARMS, cli_messages, module)
+        write_jsonl(raw / DETECTIONS, rows)
+        unread = replay_detect.unreadable(rows, lambda r: r["source"])
+        print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))
+        return 0
+    root = Path(args.backfill).expanduser()
+    if not root.is_dir():
+        raise SystemExit("cost-bench: %s is not a directory" % root)
+    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite)
+    for target, runs, unread in report:
+        if runs is None:
+            print("cost-bench: %s exists, left alone; --overwrite replaces it" % target, file=sys.stderr)
+        else:
+            print("detected over %d run(s), %d without a readable stream, into %s" % (runs, unread, target))
+    if not report:
+        print("cost-bench: no %s under %s" % (RESULTS, root), file=sys.stderr)
+    return 0
 
 
 def cmd_arms(args):
@@ -1719,7 +1951,16 @@ def main(argv=None):
     where.add_argument("--config-dir", help="the profile those runs used; its files are measured now")
     where.add_argument("--inherited", action="store_true", help="those runs inherited ~/.claude (default)")
     back.add_argument("--in-place", action="store_true", help="also rewrite %s" % RESULTS)
+    detect = sub.add_parser("detect", help="run every rule detector over saved streams; calls no model")
+    source = detect.add_mutually_exclusive_group(required=True)
+    source.add_argument("--raw", help="a --raw directory; writes %s there" % DETECTIONS)
+    source.add_argument("--backfill", help="a root to search for %s files; writes %s beside each "
+                        "and never rewrites them" % (RESULTS, DETECTIONS))
+    detect.add_argument("--overwrite", action="store_true",
+                        help="replace a %s already there; without it one is left alone" % DETECTIONS)
     args = parser.parse_args(argv)
+    if args.command == "detect":
+        return cmd_detect(args)
     if args.command == "replay":
         return cmd_replay(args)
     if args.command == "backfill":

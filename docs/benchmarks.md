@@ -60,7 +60,7 @@ has no arm. Read the rows in order; none of them is a live measurement.
 ## Live replay
 
 `scripts/cost_bench.py replay` runs the pinned tasks in `benchmarks/tasks.json` headlessly in two
-fresh containers, one with Claude Code and nothing else and one with the harness at a pinned ref,
+fresh containers, one with Claude Code plus the shared observer and one with those plus the harness at a pinned ref,
 and scores each run with a check the agent never sees. It calls a model and spends real usage, so
 it is run by hand on a release candidate and never in CI. It needs Docker, and
 `CLAUDE_CODE_OAUTH_TOKEN` set as for the Linux qualification target.
@@ -72,6 +72,8 @@ python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registrati
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
+python3 scripts/cost_bench.py detect --raw <dir>                     # which rules fired in each saved stream; calls no model
+python3 scripts/cost_bench.py detect --backfill <root>               # the same beside every results.jsonl under root
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -84,7 +86,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
 - **Each arm is a fresh image from pinned inputs, and nothing from your machine reaches it.**
   Both are built by `scripts/replay-arm.Dockerfile` from the Linux qualification image's pinned
   base digest and `CLAUDE_CODE_VERSION`, read out of `scripts/linux-target.Dockerfile` so the two
-  cannot drift. `bare` is that base plus Claude Code, less the Codex client the base template
+  cannot drift. `bare` is that base plus Claude Code and the observation-only recorder, less the Codex client the base template
   ships, so no other agent client is on the path. `harness@<ref>` adds this repository at the
   ref's full commit, cloned into the build context and synced for the image's own user with no
   configuration, so the arm loads the ref's defaults. Your home directory, profile, personal layer,
@@ -102,8 +104,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   publishes no history row or claim.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
-  Dockerfile and the lister. The manifest is every file, link and directory under the image user's
-  home, Claude Code's managed settings and the harness checkout, each file by mode, size and
+  Dockerfile, the lister and the exact observer hook settings. The manifest is every file, link and directory under the image user's
+  home, Claude Code's managed settings, the observer install and the harness checkout, each file by mode, size and
   sha256 and each link by its target, with a summary of settings, hooks, rules, skills, agents and
   plugins, and every global npm package by name and version, where agent clients live. It is listed by `scripts/arm_manifest.py` in a fresh container with no network and no
   mount. Left out, and named in the manifest: npm's cache and logs, tool caches, and the
@@ -115,8 +117,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   image each arm will be.
 - **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
   recomputes the declaration and manifest digests and requires their known schemas. It refuses an
-  arm whose components are missing, duplicated or malformed; whose manifest holds a Claude Code
-  version, agent client or harness commit other than its declaration names; whose settings, hooks,
+  arm whose components are missing, duplicated or malformed; whose installed observer does not
+  match its declared sha256; whose manifest holds a Claude Code version, agent client or harness commit other than its declaration names; whose settings, hooks,
   rules, skills, agents, plugins or instruction files are not the declared harness's; whose
   recorded inputs name your home directory, this checkout or an ambient `CLAUDE_CONFIG_DIR`; whose
   declaration pins no reasoning effort; or whose run is neither pre-registered nor exploratory.
@@ -146,8 +148,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
   manifest digest, ref and commit.
-- **A run is `docker run --rm` with one mount.** The task's snapshot is mounted at `/work`, which
-  has no instruction file above it; nothing else from your machine is mounted. Every snapshot is
+- **A run is `docker run --rm` with two scoped mounts.** The task's snapshot is mounted at `/work`, which
+  has no instruction file above it. A fresh run-owned `observations/` directory is mounted at
+  `/observations`; it is the only other host path. Each native session gets a different empty
+  directory outside protected host paths, with one ledger and error file. The host then retains
+  those streams under the tag's output directory, which is never mounted into an arm. Every snapshot is
   made writable for any user, since the image's user id may differ from yours, and the images
   trust `/work` for git. Before anything is measured, each arm's container must write a mounted
   snapshot and have git read it, or the replay is refused with the reason. Every run, check and
@@ -156,7 +161,15 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
   `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
-  headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
+  headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch` and
+  register the same observation-only command in both arms.
+- **Native observations belong to the replay.** The fixed observer component is declared by its
+  source sha256, installed at the same path and compared by manifest parity in both arms. Each
+  preflight and scored launch receives container-only ledger, error and profile values; no host
+  home, profile or ordinary state path enters the container. Result rows name the ledger relative
+  to the tag output and record `observation_rows` and `observation_errors`. A missing ledger row or
+  any collector error makes the attempt an error without erasing its measured cost; the same
+  condition makes a preflight red. The recorder stays silent and rows remain identifier-only.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
   out. The only other container on it is `scripts/egress_proxy.py`, a standard-library CONNECT
   proxy run from the bare image. It listens only on its own address on that network, and is
@@ -206,6 +219,31 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   paths visible in tool inputs, not a complete filesystem-read audit: an unknown symlink, relative
   traversal or copied file may evade it. Prelaunch exclusion is the primary control. The installed
   runtime remains intact.
+- **Which rules fired is read from the saved streams, with no model call.** `detect --raw <dir>`
+  runs every detector in `policy/hooks/rule-detectors.py` over each `<task>-<arm>-<rep>.json`
+  in the directory and writes `detections.jsonl` there: one row per run per detector, with the
+  detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
+  call, counted from 1, and a tool result takes the turn of the call that asked for it. A
+  subagent's own messages are not the run's, though its return is. Every detector runs in both
+  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  with no model call, a stream that cannot be found, one found twice, and a detector that raised
+  are rows with `count` null and the reason in `error`: unknown, never zero. An existing
+  `detections.jsonl` is replaced only with `--overwrite`. With `--raw`, the replay does the same
+  after each tag's set, before the next tag's runs overwrite the streams, reading each run only
+  from the stream that run saved and still unchanged: stream names carry no tag, so a run that
+  saved none, a timeout among them, gets error rows rather than an earlier tag's stream. It
+  writes `detections.jsonl` beside that set's `results.jsonl`; its history row then carries
+  `mechanisms`, which detectors fired in the harness arm per task and in how many of its runs,
+  printed in `history.md` under the task lines. The mechanism record keeps each task's total run
+  count, each firing detector's measured-run denominator, and detector errors with their reasons,
+  so an unreadable stream cannot silently disappear from attribution. `detect --backfill <root>`
+  does it for sets already on disk: it finds every `results.jsonl` under the root, looks for each
+  row's stream in the same directory, a sibling `transcripts` or `raw` directory and their
+  subdirectories other than a nested set's, and writes `detections.jsonl` beside it, leaving an
+  existing one alone without `--overwrite`. A stream in a directory another set also searches,
+  as sibling tag sets sharing one `../raw` do, could be either set's, so both get error rows.
+  It reads `results.jsonl` and never writes it. The backfill of the evidence sets already on
+  disk is an owner-run step and has not been run yet.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its

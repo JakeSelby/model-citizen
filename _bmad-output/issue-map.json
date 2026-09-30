@@ -4,13 +4,13 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 134,
+    "bug": 136,
     "chore": 101,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 330,
-    "task": 38
+    "story": 331,
+    "task": 39
   },
   "items": [
     {
@@ -6618,6 +6618,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-T038",
+      "github_number": 867,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/867",
+      "title": "Register the zero-footprint observation recorder behind an opt-in",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T038.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B126",
       "github_number": 868,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/868",
@@ -6911,6 +6924,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C096.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S330",
+      "github_number": 915,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/915",
+      "title": "A Workflow script's agent() calls bypass band routing, and FR-30 tracks the gap under #576",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S330.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8276,6 +8302,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C095.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B135",
+      "github_number": 1088,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1088",
+      "title": "An escaped quote inside $'…' hides a later git push from grade-bash",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B135.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
