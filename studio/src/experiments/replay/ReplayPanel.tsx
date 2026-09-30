@@ -6,7 +6,8 @@ import { useRef, useState } from "react";
 
 import { previewReplay, startReplay } from "./api";
 import {
-  formatCost, formatPercent, progressResult, replayErrorMessage, validateReplay,
+  formatCost, formatPercent, progressResult, readinessSummary, replayErrorMessage, validateReplay,
+  SOURCE_ONLY_NOTE,
   ReplayRequestGate, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
   type ReplayTargetKind,
@@ -22,6 +23,17 @@ type Props = {
   runStatus?: string;
   onStarted?: (runId: string) => void;
 };
+
+/** The not-ready list without an assertive alert role: only the stable count is announced, and
+ * politely, so screen readers do not re-read the list on every keystroke. */
+export function ReplayReadiness({ errors }: { errors: string[] }) {
+  return (
+    <Alert color="yellow" role="group" aria-label="Replay readiness">
+      <Text aria-live="polite" aria-atomic="true" fw={600} size="sm">{readinessSummary(errors)}</Text>
+      <ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul>
+    </Alert>
+  );
+}
 
 export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = [], runStatus, onStarted }: Props) {
   const [draft, setDraft] = useState<ReplayLaunchInput>({
@@ -91,6 +103,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
         <Text className="eyebrow">Experiments / Live replay</Text>
         <Title order={2}>Measure two explicit targets.</Title>
         <Text c="dimmed">Each target is built in its own isolated profile. The installed harness is not an implicit fallback.</Text>
+        <Text c="dimmed" size="sm">{SOURCE_ONLY_NOTE}</Text>
       </div>
       <Paper p="lg" withBorder>
         <Stack>
@@ -126,7 +139,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
           <TextInput label="Pre-registration" description="Required when either target is a release; only a release target enters benchmark history."
             value={draft.pre_registration} disabled={busy}
             onChange={(event) => updateDraft({ ...draft, pre_registration: event.currentTarget.value })} />
-          {touched && errors.length > 0 && <Alert color="yellow" title="Replay is not ready"><ul>{errors.map((error) => <li key={error}>{error}</li>)}</ul></Alert>}
+          {touched && errors.length > 0 && <ReplayReadiness errors={errors} />}
           <Text aria-live="polite" c="dimmed" size="sm">{message}</Text>
           {preview
             ? <Stack gap={4}>
@@ -172,7 +185,7 @@ export function ReplayPanel({ tasks, defaultModel = "", rows = [], progress = []
       {rows.length > 0 && (
         <Table.ScrollContainer minWidth={720} type="native">
           <Table striped highlightOnHover>
-            <Table.Caption>Cost and pass rate by target, task and arm</Table.Caption>
+            <Table.Caption>Cost and pass rate by target, task and arm. Source only: target configuration was not applied.</Table.Caption>
             <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Cost per passed task</Table.Th><Table.Th>Pass rate</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>{rows.map((row) => <Table.Tr key={`${row.target.kind}:${row.target.ref}:${row.task}:${row.arm}`}>
               <Table.Td>{row.target.ref}</Table.Td><Table.Td>{row.task}</Table.Td><Table.Td>{row.arm}</Table.Td>

@@ -5,9 +5,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
 import { loadReplayCatalog, loadReplayResult, startReplay } from "../src/experiments/replay/api.ts";
-import { ReplayPanel } from "../src/experiments/replay/ReplayPanel.tsx";
+import { ReplayPanel, ReplayReadiness } from "../src/experiments/replay/ReplayPanel.tsx";
 import {
-  formatCost, formatPercent, progressResult, replayErrorMessage, ReplayRequestGate, validateReplay,
+  formatCost, formatPercent, progressResult, readinessSummary, replayErrorMessage, ReplayRequestGate,
+  validateReplay,
   type ReplayLaunchInput, type ReplayRequest,
 } from "../src/experiments/replay/model.ts";
 
@@ -186,4 +187,22 @@ test("refusal codes become sentences a person can act on", () => {
   assert.match(replayErrorMessage("replay_target_config_unsupported"), /configuration/);
   assert.match(replayErrorMessage("replay_worktree_dirty"), /uncommitted changes/);
   assert.equal(replayErrorMessage("unknown_code"), "unknown_code");
+});
+
+test("the not-ready list is announced politely through a stable count, never as an alert", () => {
+  const errors = ["Choose a model.", "Choose one or more unique tasks."];
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(ReplayReadiness, { errors })));
+  assert.doesNotMatch(html, /role="alert"/);
+  assert.match(html, /aria-live="polite"[^>]*>Replay is not ready: 2 items need attention\./);
+  assert.equal([...html.matchAll(/aria-live=/g)].length, 1);
+  assert.match(html, /<li>Choose a model\.<\/li>/);
+  assert.equal(readinessSummary(["one"]), "Replay is not ready: 1 item needs attention.");
+});
+
+test("the panel and its result say the replay measures source only", () => {
+  const html = render({ rows: [{ target: resolvedRelease, task: "one", arm: "harness", runs: 1,
+    passed: 1, pass_rate: 1, cost_per_passed: 0.5 }] });
+  assert.match(html, /measures source only/);
+  assert.match(html, /Source only: target configuration was not applied\./);
+  assert.match(replayErrorMessage("replay_target_busy"), /Preview again/);
 });

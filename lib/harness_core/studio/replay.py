@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import run_store, runs, spend_guard, targets
+from . import drafts, run_store, runs, spend_guard, targets
 
 TARGET_KINDS = frozenset(("installed", "release", "branch", "worktree", "draft"))
 ARM_NAMES = ("bare", "harness")
@@ -36,8 +36,9 @@ HISTORY_STAGE_PREFIX = ".studio-replay-history-stage-"
 MAX_SPEND_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 4 * 1024 * 1024
 # The digest AH-S301 records for a target with no configuration of its own. cost_bench builds the
-# harness arm from the commit's defaults, so this is the only configuration a replay can measure.
+# harness arm from the commit's defaults, so a replay measures source only; see `_refuse_edited_config`.
 DEFAULT_CONFIG_DIGEST = targets._config_digest({})
+MEASURES = "source"
 NATIVE_COMMAND = ("python3", "scripts/cost_bench.py", "replay")
 
 
@@ -178,13 +179,6 @@ class ReplayRequest:
             raise ReplayError("pre-registration must name a file")
         if any(target.kind == "release" for target in targets) and not registration:
             raise ReplayError("a release replay needs a pre-registration before it can write history")
-        for target in targets:
-            if target.config_digest not in (None, DEFAULT_CONFIG_DIGEST):
-                raise ReplayRefusal(
-                    "replay_target_config_unsupported",
-                    "replay target %s:%s carries its own configuration, but the benchmark builds "
-                    "the harness arm from the commit's defaults; checkpoint the change as source "
-                    "or clear the draft configuration" % (target.kind, target.ref))
         return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -303,7 +297,13 @@ class ReplayAdmission:
             try:
                 built = self.target_service.build(kind, ref, temporary / "target")
             except targets.TargetError as exc:
+                if isinstance(exc.__cause__, drafts.DraftError) and exc.__cause__.code == "busy":
+                    raise ReplayRefusal(
+                        "replay_target_busy",
+                        "draft %s is being saved; preview again in a moment" % ref) from exc
                 raise ReplayError(str(exc)) from exc
+            if kind == "draft":
+                self._refuse_edited_config(ref, built.get("config_digest"))
             if built.get("snapshot"):
                 # A dirty worktree resolves to a commit that exists only in this disposable
                 # clone, and each snapshot is a new commit, so the benchmark could never run it.
@@ -320,6 +320,30 @@ class ReplayAdmission:
             return ReplayTarget.parse(resolved).as_dict()
         finally:
             shutil.rmtree(str(temporary), ignore_errors=True)
+
+    def _refuse_edited_config(self, name: str, digest: Any) -> None:
+        """Refuse a draft whose configuration was edited after it was created.
+
+        Every draft inherits the creator's live configuration, and the benchmark runs the harness
+        arm from the commit's defaults, so an inherited configuration is simply not measured. An
+        edited one is the change the user wants measured, and the arm cannot apply it. A draft
+        whose configuration is empty runs exactly as the arm does."""
+        if digest in (None, DEFAULT_CONFIG_DIGEST):
+            return
+        try:
+            worktree, _state = drafts.find(self.repository, name)
+            base_path = drafts._paths(worktree)["base_config"]  # written once, at create
+            base = (json.loads(base_path.read_text(encoding="utf-8"))
+                    if base_path.is_file() else {})
+            inherited = targets._config_digest(base) if isinstance(base, dict) else None
+        except (drafts.DraftError, targets.TargetError, OSError, ValueError) as exc:
+            raise ReplayError("draft configuration base is unreadable") from exc
+        if digest != inherited:
+            raise ReplayRefusal(
+                "replay_target_config_unsupported",
+                "draft %s changed its configuration, but the benchmark builds the harness arm "
+                "from the commit's defaults and cannot apply it; checkpoint the change as "
+                "source or restore the inherited configuration" % name)
 
     def resolve(self, value: Any) -> ReplayRequest:
         request = resolve_request(value, self._resolve)
@@ -673,6 +697,10 @@ def _verify_target_output(request: ReplayRequest, target: ReplayTarget, native_o
     _verify_target_rows(target, rows)
     _reconcile_target_rows(request, rows, complete=returncode == 0)
     spend = _read_spend(spend_path, target, request.max_budget_usd, remaining, rows)
+    if (returncode != 0 and not rows and spend["charged_spend_usd"] == 0
+            and not spend["stopped_at_cap"]):
+        # cost_bench writes a zero sidecar when arm admission or the workdir probe refuses.
+        raise _NothingSpent("replay target was refused before any spend (exit %s)" % returncode)
     if spend["stopped_at_cap"] != (returncode == 1):
         raise ReplayError("replay spend sidecar does not match the native exit status")
     if returncode in (0, 1) and not rows and not spend["stopped_at_cap"]:
@@ -861,7 +889,7 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
                                                 if len(mine) == 1 else 0.0)})
     summary = {
         "schema_version": 1, "targets": [target.as_dict() for target in request.targets],
-        "model": request.model, "repetitions": request.repetitions,
+        "measures": MEASURES, "model": request.model, "repetitions": request.repetitions,
         "tasks": list(request.tasks), "spend_usd": round(float(spent), 6),
         "reported_spend_usd": round(float(reported_spent), 6),
         "spend_cap_usd": request.spend_cap_usd, "stopped_at_cap": stopped,
@@ -906,7 +934,8 @@ def read_summary(path: Path) -> Dict[str, Any]:
     required = {"schema_version", "targets", "model", "repetitions", "tasks",
                 "spend_usd", "reported_spend_usd", "spend_cap_usd", "stopped_at_cap",
                 "result_files", "spend_files", "cases", "table"}
-    if (not isinstance(value, dict) or set(value) != required
+    if (not isinstance(value, dict) or set(value) - {"measures"} != required
+            or value.get("measures", MEASURES) != MEASURES
             or value.get("schema_version") != 1
             or not isinstance(value.get("targets"), list) or len(value["targets"]) != 2
             or not isinstance(value.get("table"), list)

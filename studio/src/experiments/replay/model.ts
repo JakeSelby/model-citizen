@@ -66,6 +66,7 @@ export type ReplayRunResult = {
     reported_spend_usd: number;
     spend_cap_usd: string;
     stopped_at_cap: boolean;
+    measures?: "source";
   };
 };
 
@@ -148,7 +149,8 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
 
 const refusals: Record<string, string> = {
   replay_target_config_unsupported:
-    "A target carries its own configuration, but the benchmark builds the harness arm from the commit's defaults. Checkpoint the change as source or clear the draft configuration.",
+    "A draft changed its configuration, but the benchmark builds the harness arm from the commit's defaults and cannot apply it. Checkpoint the change as source or restore the inherited configuration.",
+  replay_target_busy: "A draft is being saved. Preview again in a moment.",
   replay_worktree_dirty:
     "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
   replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
@@ -156,6 +158,14 @@ const refusals: Record<string, string> = {
 
 export function replayErrorMessage(code: string): string {
   return refusals[code] ?? code;
+}
+
+export const SOURCE_ONLY_NOTE =
+  "A replay measures source only: each harness arm runs its commit's defaults, so a draft's inherited configuration is not applied.";
+
+export function readinessSummary(errors: string[]): string {
+  if (!errors.length) return "Ready to preview.";
+  return `Replay is not ready: ${errors.length} ${errors.length === 1 ? "item needs" : "items need"} attention.`;
 }
 
 export function progressResult(row: ReplayProgressRow): string {

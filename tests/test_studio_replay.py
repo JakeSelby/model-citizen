@@ -86,6 +86,7 @@ class StudioReplayTests(unittest.TestCase):
         self.assertEqual([call[0][call[0].index("--tag") + 1] for call in calls],
                          ["a" * 40, "b" * 40])
         self.assertEqual(summary["targets"], request()["targets"])
+        self.assertEqual(summary["measures"], "source")
         self.assertEqual(len(summary["table"]), 8)
         self.assertEqual(len(summary["cases"]), 18)
         self.assertTrue(all(item["status"] == "completed" for item in summary["cases"]))
@@ -711,14 +712,6 @@ class SnapshotTargetService(FixtureTargetService):
         return dict(super().build(kind, ref, destination), snapshot=kind == "worktree")
 
 
-class ConfiguredDraftService(FixtureTargetService):
-    def build(self, kind, ref, destination):
-        built = super().build(kind, ref, destination)
-        if kind == "draft":
-            built["config_digest"] = "f" * 64
-        return built
-
-
 class RecordingMutations:
     """A mutation owner that records whether work ran inside it."""
     active = False
@@ -732,24 +725,11 @@ class RecordingMutations:
 
 
 class ReplayReviewFixTests(unittest.TestCase):
-    def test_a_target_carrying_its_own_configuration_is_refused_with_a_named_reason(self):
-        configured = request(targets=[target("release", "v0.17.0", "a" * 40),
-                                      target("draft", "cost-pass", "a" * 40, "f" * 64)])
-        with self.assertRaises(replay.ReplayRefusal) as caught:
-            replay.ReplayRequest.parse(configured)
-        self.assertEqual(caught.exception.code, "replay_target_config_unsupported")
-        self.assertIn("draft:cost-pass", str(caught.exception))
-        supervisor = mock.Mock()
-        with tempfile.TemporaryDirectory() as temporary:
-            admission = replay.ReplayAdmission(
-                REPO, Path(temporary), supervisor, ConfiguredDraftService())
-            with self.assertRaises(replay.ReplayRefusal):
-                admission.preview(request(targets=[{"kind": "release", "ref": "v0.17.0"},
-                                                   {"kind": "draft", "ref": "cost-pass"}],
-                                          tasks=["link-alias"]))
-        supervisor.spend_preview.assert_not_called()
-        # A draft with no configuration of its own is measured exactly as its identity claims.
-        replay.ReplayRequest.parse(request())
+    def test_any_configuration_digest_parses_because_the_replay_measures_source_only(self):
+        parsed = replay.ReplayRequest.parse(request(targets=[
+            target("release", "v0.17.0", "a" * 40),
+            target("draft", "cost-pass", "a" * 40, "f" * 64)]))
+        self.assertEqual(parsed.targets[1].config_digest, "f" * 64)
 
     def test_a_dirty_worktree_target_is_refused_before_spend_preview(self):
         supervisor = mock.Mock()

@@ -781,6 +781,7 @@ def _replay_result(handler: Handler, route: Route) -> None:
                     result = {name: summary[name] for name in (
                         "targets", "table", "spend_usd", "reported_spend_usd",
                         "spend_cap_usd", "stopped_at_cap")}
+                    result["measures"] = summary.get("measures", replay.MEASURES)
             return {"schema_version": 1,
                     "run": {"run_id": run["run_id"], "status": run["status"]},
                     "progress": progress, "result": result}
