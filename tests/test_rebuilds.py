@@ -197,11 +197,14 @@ class FixtureAttributionTests(unittest.TestCase):
             for field in ("excess_usd", "known_spend_share", "cost_per_break"):
                 self.assertIsNone(row[field], (label, field))
         self.assertEqual(document["groups"][1]["unpriced_breaks"], 2)
-        for line in table.splitlines():
-            if line.startswith(("idle over 1h", "slash command /clear")):
-                self.assertNotIn("$0.00", line)
-                self.assertNotIn("0.0%", line)
-                self.assertEqual(line.split()[-3:-1], ["unpriced", "unpriced"])
+        # Only the all scope has rows; the long scope is empty for two-call sessions.
+        unpriced_rows = [line for line in table.splitlines()
+                         if line.startswith(("idle over 1h", "slash command /clear"))]
+        self.assertEqual(len(unpriced_rows), 2, table)
+        for line in unpriced_rows:
+            self.assertNotIn("$0.00", line)
+            self.assertNotIn("0.0%", line)
+            self.assertEqual(line.split()[-3:-1], ["unpriced", "unpriced"])
 
     def test_a_fully_priced_cause_keeps_its_dollars_and_share(self):
         rows = [assistant("a", "2026-09-29T10:00:00Z"), assistant("b", "2026-09-29T11:30:00Z")]
