@@ -579,11 +579,12 @@ def segment_ok(tokens):
     return segment_verdict(tokens) is True
 
 
-def segment_verdict(tokens):
-    """`segment_ok`, or None when the command is behind more than `MAX_PREFIXES` prefixes: a
-    caller that looks through a prefix itself must not read the shorter chain as read-only."""
+def segment_verdict(tokens, budget=MAX_PREFIXES):
+    """`segment_ok`, or None when the command is behind more than `budget` prefixes: a caller
+    that looks through a prefix itself passes what remains of `MAX_PREFIXES`, so the shorter
+    chain a later step sees is never read as read-only."""
     tokens = strip_redirects(tokens)  # all of them, the prefixed command's included
-    for step in range(MAX_PREFIXES + 1):
+    for step in range(max(budget, 0) + 1):
         verdict = _segment_step(tokens, step == 0)
         if not isinstance(verdict, list):
             return bool(verdict)

@@ -7,7 +7,9 @@ holding `b`, `x` and a script `s.sh` that runs `cd b`: `. ./s.sh` and `source s.
 `trap 'cd x' DEBUG; pwd` prints `x`; `trap 'cd x' EXIT; pwd` prints the start, the trap running
 only as the shell exits; `shopt -s cdable_vars; name=$PWD/x; cd name` goes to `x`, as zsh's
 `setopt cdAble_Vars` does; `enable -n cd; cd x` and `shopt -s expand_aliases; alias cd=:` then
-`cd x` on the next line stay put.
+`cd x` on the next line stay put. `trap 'shopt -s cdable_vars' DEBUG; b=../beta; cd b` goes to
+`../beta`; `trap 'export HOME=/h' DEBUG; cd ~/beta` and `trap 'x=1; HOME=/h' DEBUG; cd ~/beta`
+go to `/h/beta`; `trap 'set -e' DEBUG; cd ../beta` goes to `../beta`.
 
 Run: python3 -m unittest discover -s tests
 """
@@ -101,6 +103,26 @@ class UnseenDirectoryChanges(Fixture):
             with self.subTest(command=command):
                 self.assert_unknown(command)
 
+    def test_a_trap_that_assigns_home_or_changes_cd_resolution_is_not_inert(self):
+        for command in ("trap 'shopt -s cdable_vars' DEBUG; b=../beta; cd b; git push",
+                        "trap 'setopt cdablevars' DEBUG; b=../beta; cd b; git push",
+                        "trap 'set -o physical' DEBUG; cd ../beta/.; git push",
+                        "trap 'export HOME=%s' DEBUG; cd ~/beta; git push" % self.repo,
+                        "trap 'x=1; HOME=%s' DEBUG; cd ~/beta && git push" % self.repo):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+        self.assert_beta("trap 'set -e' DEBUG; cd ../beta && git push")
+
+    def test_a_sourced_script_or_moving_trap_leaves_home_and_cd_resolution_unknown(self):
+        for text in (". ./s.sh; true", "source s.sh; true", "trap 'cd ..' DEBUG; true"):
+            parts = grader.segments(text)
+            with self.subTest(text=text):
+                later = grader._assignment_contexts(text, parts)[-1]
+                self.assertTrue(later[grader._HOME_UNKNOWN])
+                self.assertTrue(later[grader._CD_UNKNOWN])
+        later = grader._assignment_contexts("echo hi; true", grader.segments("echo hi; true"))[-1]
+        self.assertFalse(later[grader._HOME_UNKNOWN] or later[grader._CD_UNKNOWN])
+
     def test_an_exit_trap_or_one_that_runs_no_text_keeps_the_cd(self):
         for command in ("trap 'echo bye' EXIT; cd ../beta && git push",
                         "trap 'echo bye' 0; cd ../beta && git push",
@@ -193,6 +215,19 @@ class LongPrefixChains(Fixture):
         self.assertTrue(ro.segment_ok(["time"] * ro.MAX_PREFIXES + ["ls"]))
         self.assertFalse(ro.segment_ok(["time"] * (ro.MAX_PREFIXES + 1) + ["ls"]))
         self.assertFalse(ro.segment_ok(["time"] * 5000 + ["ls"]))
+
+    def test_the_grader_counts_every_prefix_toward_the_cap(self):
+        # `exec` and `uv run` are looked through by the grader, the rest by the read-only reader.
+        for lead in ("", "exec ", "uv run ", "npx "):
+            for word in ("time", "nice"):
+                shown = lead.count(" ") - lead.count("run")
+                within = lead + (word + " ") * (ro.MAX_PREFIXES - shown) + "ls"
+                past = lead + (word + " ") * (ro.MAX_PREFIXES + 1 - shown) + "ls"
+                with self.subTest(lead=lead, word=word):
+                    self.assertEqual(grader.grade_text(within, str(self.repo))[0], 0)
+                    self.assertEqual(grader.grade_text(past, str(self.repo))[:2],
+                                     grader.PREFIX_CHAIN[:2])
+                    self.assertEqual(self.bash(past)[0], "ask")
 
 
 class UnreadableCommands(Fixture):

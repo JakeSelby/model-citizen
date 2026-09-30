@@ -1402,8 +1402,8 @@ def grade_tokens(tokens, cwd, depth):
     of them than `ro.MAX_PREFIXES`, counted from any word, is graded 3, as text too long to
     grade is, and names the file a redirect on it writes."""
     wrote = []
-    for _ in range(ro.MAX_PREFIXES + 1):
-        found = _grade_step(tokens, cwd, depth, wrote)
+    for step in range(ro.MAX_PREFIXES + 1):
+        found = _grade_step(tokens, cwd, depth, wrote, ro.MAX_PREFIXES - step)
         if found[0] is not _AGAIN:
             return found
         tokens = found[1]
@@ -1414,9 +1414,10 @@ def _prefix_chain(wrote):
     return PREFIX_CHAIN[:2] + (wrote[0] if wrote else "",) + PREFIX_CHAIN[3:]
 
 
-def _grade_step(tokens, cwd, depth, recorded):
+def _grade_step(tokens, cwd, depth, recorded, budget):
     """`grade_tokens` for one command word, or (`_AGAIN`, the tokens a wrapper runs). The files
-    its redirects write are appended to `recorded`, the steps before it included."""
+    its redirects write are appended to `recorded`, the steps before it included; `budget` is
+    how many more prefixes the read-only reader may look through."""
     tokens, written = _redirects(tokens)
     recorded.extend(t for t in written if t and t != "/dev/null")
     wrote = ""
@@ -1427,7 +1428,7 @@ def _grade_step(tokens, cwd, depth, recorded):
             wrote = target
     while tokens and ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
-    read_only = ro.segment_verdict(list(tokens)) if tokens else True
+    read_only = ro.segment_verdict(list(tokens), budget) if tokens else True
     if read_only is None:  # the shorter chain a later step sees must not pass as read-only
         return _prefix_chain(recorded)
     if read_only:
@@ -2937,16 +2938,18 @@ def _sources(tokens):
 
 def _inert(text, literal=False):
     """Whether shell text run later, as a trap's action or a function's body, leaves this
-    shell's directory and its `cd` alone: it names none of `MOVING_WORDS`, defines no function
-    and runs no command word the walk cannot read. A `literal` text, a trap's, holds no `$`,
-    backquote or substitution either, since those expand as the trap is set."""
+    shell's directory and its `cd` alone: it names none of `MOVING_WORDS`, defines no function,
+    runs no command word the walk cannot read, and neither assigns HOME nor changes how `cd`
+    resolves, as `export HOME=x` and `shopt -s cdable_vars` do. A `literal` text, a trap's,
+    holds no `$`, backquote or substitution either, since those expand as the trap is set."""
     if literal and (PLACEHOLDER in text or any(c in text for c in "$`")):
         return False
     if _defines_function(text):
         return False
     parts = segments(text)
     return parts is not None and not any(
-        _runs_unseen(tokens) or any(t in MOVING_WORDS for t in tokens) for tokens in parts)
+        _runs_unseen(tokens) or _moves_cd_resolution(tokens) or _mentions_home(tokens)
+        or any(t in MOVING_WORDS for t in tokens) for tokens in parts)
 
 
 def _resets_cd(tokens):
@@ -3052,12 +3055,13 @@ def _assignment_contexts(text, parts, home_unknown=False, cd_unknown=False):
     Each context also says whether HOME may have changed before its command, from
     `home_unknown` or an earlier command naming HOME, so no later `~` is expanded, and whether a
     `cd` may resolve other than logically against the working directory, from `cd_unknown` or
-    an earlier command `_moves_cd_resolution` names. A command `_runs_unseen` may do both."""
+    an earlier command `_moves_cd_resolution` names. A command that runs text the walk does not
+    read may do both: one `_runs_unseen` names, a sourced script, or a trap `_resets_cd` names."""
     homes, home, paths, path = [], home_unknown, [], cd_unknown
     for tokens in parts:
         homes.append(home)
         paths.append(path)
-        unseen = _runs_unseen(tokens)
+        unseen = _runs_unseen(tokens) or _sources(tokens) or _resets_cd(tokens)
         home = home or _mentions_home(tokens) or unseen
         path = path or _moves_cd_resolution(tokens) or unseen
     values, contexts, enabled = {}, [], True
