@@ -2,7 +2,7 @@
 title: Model Citizen product requirements
 status: final
 created: 2026-09-23
-updated: 2026-09-26
+updated: 2026-09-29
 supersedes: ../prd-agent-harness-2026-09-19/prd.md
 sources:
   - ../../source-ledger.md
@@ -663,8 +663,8 @@ slices, the harness version and the session effort. **Status:** implemented (0.1
 
 **Consequences (testable):**
 - Codex subagent threads are linked to their parents, and archived sessions are read.
-- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`
-  and `prefix`, and reports the deduplication ratio.
+- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`,
+  `prefix` and `rebuild`, and reports the deduplication ratio.
 - `--by role` marks any role with fewer than 30 samples.
 
 #### FR-24: Honest pricing

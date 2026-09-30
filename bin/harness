@@ -15,7 +15,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen upgrade [--dry-run]
     citizen uninstall
     citizen lint    [PATH]
-    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan] [--json]
+    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix|rebuild] [--stance NAME] [--rescan] [--json]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
@@ -61,7 +61,7 @@ from harness_core import reconcile, lifecycle, tasks, compatibility, workers, in
 from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
-from harness_core import codex_client, keychain, collisions, importer, cache_prefix
+from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
 from harness_core import intents, observation
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -5212,12 +5212,34 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
         return 2
+    if by == "rebuild" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # The report reads transcripts on every run, so a ledger rescan would be accepted and
+        # ignored; it is refused like the other options that do not apply.
+        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules, --stance "
+              "and --rescan do not apply", file=sys.stderr)
+        return 2
     if stance and by != "stance":
         print("usage --stance applies only to --by stance", file=sys.stderr)
         return 2
     if rules_mode and by == "day":
         by = "rule"
     rescan_result = None
+    if by == "rebuild":
+        # This view reads the request stream itself, so each invocation is already a rescan.
+        # It does not need or mutate the coarser session ledger.
+        result = rebuilds.analyse(claude_projects_root(),
+                                  time.time() - max(args.days, 0) * 86400,
+                                  args.days, load_prices(load_config()), pricing)
+        if json_output:
+            groups = [dict({"scope": name}, **result["scopes"][name])
+                      for name in ("long", "all")]
+            return usage_json("rebuild", "rebuild", args.days, groups,
+                              files=result["files"], shortfall_tokens=result["shortfall_tokens"],
+                              long_session_calls=result["long_session_calls"],
+                              rescan="direct transcript scan")
+        for line in rebuilds.render(result):
+            say(line)
+        return 0
     if getattr(args, "rescan", False):
         hook = REPO / "claude" / "hooks" / "usage-log.py"
         out = subprocess.run([sys.executable, str(hook), "--rescan", str(args.days)], capture_output=True, text=True)
@@ -5928,7 +5950,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "profile"],
+                                    "provider", "prefix", "rebuild", "profile"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")
