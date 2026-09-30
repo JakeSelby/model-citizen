@@ -42,7 +42,7 @@ export type ReplayProgressRow = {
   task: string;
   arm: "bare" | "harness";
   repetition: number;
-  status: "pending" | "completed";
+  status: "pending" | "completed" | "errored";
   passed: boolean | null;
   cost_usd: number | null;
 };
@@ -146,18 +146,22 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
   return errors;
 }
 
-function quote(value: string): string {
-  return `'${value.replaceAll("'", "'\\''")}'`;
+const refusals: Record<string, string> = {
+  replay_target_config_unsupported:
+    "A target carries its own configuration, but the benchmark builds the harness arm from the commit's defaults. Checkpoint the change as source or clear the draft configuration.",
+  replay_worktree_dirty:
+    "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
+  replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
+};
+
+export function replayErrorMessage(code: string): string {
+  return refusals[code] ?? code;
 }
 
-export function replayCommand(draft: ReplayLaunchInput | ReplayRequest): string {
-  const parts = ["citizen", "runs", "replay"];
-  draft.targets.forEach((target) => parts.push("--target", `${target.kind}:${target.ref}`));
-  parts.push("--model", draft.model, "--repetitions", String(draft.repetitions));
-  draft.tasks.forEach((task) => parts.push("--task", task));
-  parts.push("--max-budget-usd", draft.max_budget_usd, "--spend-cap", draft.spend_cap_usd);
-  if (draft.pre_registration) parts.push("--pre-registration", draft.pre_registration);
-  return parts.map(quote).join(" ");
+export function progressResult(row: ReplayProgressRow): string {
+  if (row.status === "errored") return "Errored";
+  if (row.passed === null) return "Pending";
+  return row.passed ? "Passed" : "Failed";
 }
 
 export function formatPercent(value: number | null): string {

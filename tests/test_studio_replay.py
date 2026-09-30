@@ -2,6 +2,7 @@
 import contextlib
 import json
 import os
+import shlex
 import shutil
 import tempfile
 import threading
@@ -26,7 +27,7 @@ def request(**changes):
     value = {
         "targets": [
             target("release", "v0.17.0", "a" * 40),
-            target("draft", "cost-pass", "b" * 40, "config-digest"),
+            target("draft", "cost-pass", "b" * 40, replay.DEFAULT_CONFIG_DIGEST),
         ],
         "model": "claude-test", "repetitions": 2, "tasks": ["one", "two"],
         "max_budget_usd": "2", "spend_cap_usd": "20",
@@ -114,14 +115,14 @@ class StudioReplayTests(unittest.TestCase):
         def resolve(kind, ref):
             calls.append((kind, ref))
             return target(kind, ref, "a" * 40 if kind == "release" else "b" * 40,
-                          "config-digest" if kind == "draft" else None)
+                          replay.DEFAULT_CONFIG_DIGEST if kind == "draft" else None)
 
         parsed = replay.resolve_request(unresolved, resolve)
         preview = replay.preview_payload([], parsed)
         self.assertEqual(calls, [("release", "v0.17.0"), ("draft", "cost-pass")])
         self.assertEqual([item["revision"] for item in preview["request"]["targets"]],
                          ["a" * 40, "b" * 40])
-        self.assertEqual(preview["request"]["targets"][1]["config_digest"], "config-digest")
+        self.assertEqual(preview["request"]["targets"][1]["config_digest"], replay.DEFAULT_CONFIG_DIGEST)
         self.assertEqual(len(replay.case_identities(parsed)), 18)
         launch = replay.launch_payload(parsed, "one-use-token")
         self.assertEqual(launch["targets"], preview["request"]["targets"])
@@ -136,7 +137,7 @@ class StudioReplayTests(unittest.TestCase):
         parsed = replay.resolve_request(
             unresolved, lambda kind, ref: target(
                 kind, ref, "a" * 40 if kind == "branch" else "b" * 40,
-                "config-digest" if kind == "draft" else None))
+                replay.DEFAULT_CONFIG_DIGEST if kind == "draft" else None))
         self.assertIsNone(parsed.pre_registration)
 
     def test_release_writes_project_history_while_draft_is_exploratory(self):
@@ -693,6 +694,308 @@ class StudioReplayTests(unittest.TestCase):
             finally:
                 supervisor.close()
         self.assertEqual(record["case_identities"], cases)
+
+
+
+def load_cost_bench():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "cost_bench_for_replay_tests", REPO / "scripts" / "cost_bench.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class SnapshotTargetService(FixtureTargetService):
+    def build(self, kind, ref, destination):
+        return dict(super().build(kind, ref, destination), snapshot=kind == "worktree")
+
+
+class ConfiguredDraftService(FixtureTargetService):
+    def build(self, kind, ref, destination):
+        built = super().build(kind, ref, destination)
+        if kind == "draft":
+            built["config_digest"] = "f" * 64
+        return built
+
+
+class RecordingMutations:
+    """A mutation owner that records whether work ran inside it."""
+    active = False
+
+    def call(self, callback):
+        self.active = True
+        try:
+            return callback()
+        finally:
+            self.active = False
+
+
+class ReplayReviewFixTests(unittest.TestCase):
+    def test_a_target_carrying_its_own_configuration_is_refused_with_a_named_reason(self):
+        configured = request(targets=[target("release", "v0.17.0", "a" * 40),
+                                      target("draft", "cost-pass", "a" * 40, "f" * 64)])
+        with self.assertRaises(replay.ReplayRefusal) as caught:
+            replay.ReplayRequest.parse(configured)
+        self.assertEqual(caught.exception.code, "replay_target_config_unsupported")
+        self.assertIn("draft:cost-pass", str(caught.exception))
+        supervisor = mock.Mock()
+        with tempfile.TemporaryDirectory() as temporary:
+            admission = replay.ReplayAdmission(
+                REPO, Path(temporary), supervisor, ConfiguredDraftService())
+            with self.assertRaises(replay.ReplayRefusal):
+                admission.preview(request(targets=[{"kind": "release", "ref": "v0.17.0"},
+                                                   {"kind": "draft", "ref": "cost-pass"}],
+                                          tasks=["link-alias"]))
+        supervisor.spend_preview.assert_not_called()
+        # A draft with no configuration of its own is measured exactly as its identity claims.
+        replay.ReplayRequest.parse(request())
+
+    def test_a_dirty_worktree_target_is_refused_before_spend_preview(self):
+        supervisor = mock.Mock()
+        with tempfile.TemporaryDirectory() as temporary:
+            admission = replay.ReplayAdmission(
+                REPO, Path(temporary), supervisor, SnapshotTargetService())
+            with self.assertRaises(replay.ReplayRefusal) as caught:
+                admission.preview(request(targets=[{"kind": "branch", "ref": "main"},
+                                                   {"kind": "worktree", "ref": "/tmp/wt"}],
+                                          tasks=["link-alias"], pre_registration=""))
+        self.assertEqual(caught.exception.code, "replay_worktree_dirty")
+        supervisor.spend_preview.assert_not_called()
+
+    def test_a_refusal_before_the_native_output_exists_charges_nothing(self):
+        parsed = replay.ReplayRequest.parse(request(tasks=["one"], repetitions=1))
+        for outcome in (SimpleNamespace(returncode=2), SimpleNamespace(returncode=1),
+                        RuntimeError("arm build failed")):
+            with self.subTest(outcome=repr(outcome)), tempfile.TemporaryDirectory() as temporary:
+                def launch(_command, **_kwargs):
+                    if isinstance(outcome, BaseException):
+                        raise outcome
+                    return outcome
+
+                with self.assertRaisesRegex(replay.ReplayExecutionError,
+                                            "before any spend") as caught:
+                    replay.execute(parsed, REPO, Path(temporary) / "out", launch)
+                summary = caught.exception.summary
+                self.assertEqual(summary["spend_usd"], 0.0)
+                self.assertFalse(summary["stopped_at_cap"])
+                self.assertTrue(all(item["spend_usd"] == 0.0 for item in summary["cases"]))
+                path = Path(temporary) / "result.json"
+                replay_runner.write_spend_result(path, "run-id", summary, "runner_failure")
+                self.assertEqual(json.loads(path.read_text())["spend_usd"], 0.0)
+
+    def test_independently_rounded_sidecar_and_row_sums_reconcile_within_one_unit(self):
+        parsed = replay.ReplayRequest.parse(request(tasks=["one"], repetitions=1))
+        preflight, costs = 0.3932551, {"bare": 0.4896935, "harness": 0.029575}
+
+        def launch(command, **_kwargs):
+            ref = command[command.index("--tag") + 1]
+            native = Path(command[command.index("--out") + 1]) / ref
+            native.mkdir(parents=True)
+            (native / replay.RESULTS_NAME).write_text("".join(
+                json.dumps(row(ref, "one", arm, 1, True, costs[arm])) + "\n"
+                for arm in replay.ARM_NAMES))
+            spent = 0.0 + preflight  # cost_bench's own float accumulation
+            for arm in replay.ARM_NAMES:
+                spent += costs[arm]
+            spend = native / replay.SPEND_NAME
+            spend.write_text(json.dumps({
+                "schema_version": 1, "tag": ref,
+                "run_cap_usd": float(command[command.index("--run-cap") + 1]),
+                "spend_cap_usd": float(command[command.index("--spend-cap") + 1]),
+                "preflight_spend_usd": round(preflight, 6),
+                "scored_spend_usd": round(spent - preflight, 6),
+                "charged_spend_usd": round(spent, 6), "stopped_at_cap": False}) + "\n")
+            spend.chmod(0o600)
+            return SimpleNamespace(returncode=0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            summary = replay.execute(parsed, REPO, Path(temporary) / "out", launch)
+        self.assertAlmostEqual(summary["spend_usd"], 2 * 0.912524, places=5)
+
+    def test_release_history_is_published_only_after_native_output_verifies(self):
+        parsed = replay.ReplayRequest.parse(request(tasks=["one"], repetitions=1))
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            (repository / "docs").mkdir()
+            (repository / "docs" / "pre-registration-template.md").write_text("plan\n")
+            history = repository / "benchmarks"
+            history.mkdir()
+            (history / "history.jsonl").write_text("")
+            (history / "history.md").write_text("before\n")
+            stale = history / (replay.HISTORY_STAGE_PREFIX + "killed")
+            stale.mkdir()
+
+            def launch(command, **_kwargs):
+                if "--history-dir" in command:
+                    stage = Path(command[command.index("--history-dir") + 1])
+                    (stage / "history.jsonl").write_text(json.dumps({"row": 1}) + "\n")
+                    (stage / "history.md").write_text("after\n")
+                ref = command[command.index("--tag") + 1]
+                # Rows claim another revision, so verification must refuse them.
+                write_native_result(command, [dict(row(ref, "one", arm, 1, True, 0.5),
+                                                   harness_sha="f" * 40)
+                                              for arm in replay.ARM_NAMES])
+                return SimpleNamespace(returncode=0)
+
+            with self.assertRaisesRegex(replay.ReplayExecutionError, "resolved target revision"):
+                replay.execute(parsed, repository, repository / "out", launch)
+            self.assertEqual((history / "history.md").read_text(), "before\n")
+            self.assertEqual((history / "history.jsonl").read_text(), "")
+            self.assertFalse(stale.exists())
+
+    def test_errored_native_rows_are_reported_as_errored_progress(self):
+        parsed = replay.ReplayRequest.parse(request(tasks=["one"], repetitions=1))
+        errored = dict(row("a" * 40, "one", "bare", 1, None, None), error="timeout")
+        progress = replay.progress_payload(parsed, {1: [errored]})
+        bare = next(item for item in progress if item["arm"] == "bare"
+                    and item["target"]["ref"] == "v0.17.0")
+        self.assertEqual((bare["status"], bare["passed"]), ("errored", None))
+
+    def test_indexed_rows_are_unique_per_run_and_rebuilt_from_the_run_folder(self):
+        selected = replay.ReplayRequest.parse(request(tasks=["one"], repetitions=1))
+
+        def launch(command, **_kwargs):
+            ref = command[command.index("--tag") + 1]
+            write_native_result(command, [row(ref, "one", arm, 1, True, 0.25)
+                                           for arm in replay.ARM_NAMES])
+            return SimpleNamespace(returncode=0)
+
+        launched = replay.launch_payload(selected, "unused", REPO)
+        cases = replay.case_identities(selected)
+        with tempfile.TemporaryDirectory() as temporary:
+            supervisor = runs.RunSupervisor(
+                Path(os.path.realpath(temporary)),
+                REPO / "policy" / "studio" / "replay-suite.json",
+                target_service=FixtureTargetService())
+            try:
+                run_ids = []
+                for _ in range(2):
+                    preview = supervisor.spend_preview(
+                        "live-replay", launched["parameters"], launched["target_kind"],
+                        launched["target_ref"], selected.max_budget_usd,
+                        selected.spend_cap_usd, "api_credit", case_identities=cases)
+                    with mock.patch.object(supervisor, "_admit_locked"):
+                        started = supervisor.start(
+                            "live-replay", launched["parameters"], launched["target_kind"],
+                            launched["target_ref"], confirmed=preview["confirmation_token"],
+                            max_budget_usd=selected.max_budget_usd,
+                            spend_cap_usd=selected.spend_cap_usd,
+                            pricing_source="api_credit", case_identities=cases)
+                    run_ids.append(started["run_id"])
+                    run_root = supervisor._run_path(started["run_id"]).parent
+                    summary = replay.execute(selected, REPO, run_root / "replay", launch)
+                    replay.index_native_rows(supervisor.history, run_root, summary)
+
+                def replay_rows():
+                    return sorted(run_id for (run_id,) in supervisor.history.connection.execute(
+                        "SELECT run_id FROM runs WHERE source_kind='benchmark-result' "
+                        "AND source_path LIKE 'runs/%'"))
+
+                indexed = replay_rows()
+                self.assertEqual(len(indexed), 8)
+                self.assertEqual(len(set(indexed)), 8)
+                with supervisor.history.connection:
+                    supervisor.history.connection.execute("DELETE FROM runs")
+                supervisor.reindex(REPO)
+                self.assertEqual(replay_rows(), indexed)
+            finally:
+                supervisor.close()
+
+    def test_preview_and_start_build_targets_outside_the_mutation_owner(self):
+        mutations = RecordingMutations()
+        builds = []
+
+        class Service(FixtureTargetService):
+            def build(self, kind, ref, destination):
+                builds.append(mutations.active)
+                return super().build(kind, ref, destination)
+
+        class Supervisor:
+            def spend_preview(self, *_args, **kwargs):
+                assert mutations.active
+                cases = kwargs["case_identities"]
+                return {"estimate": {"amount_usd": None, "basis": "no_history",
+                                     "sample_count": 0, "suite_id": "live-replay",
+                                     "case_count": len(cases)},
+                        "caps": {"max_budget_usd": "2", "spend_cap_usd": "20"},
+                        "pricing": {"source": "api_credit", "basis": "money charged"},
+                        "confirmation_required": True, "confirmation_token": "f" * 64,
+                        "cost_class": "spends_usage", "case_identities": cases}
+
+            def start(self, *_args, **_kwargs):
+                assert mutations.active
+                return {"run_id": "replay-run", "status": "queued"}
+
+        with tempfile.TemporaryDirectory() as temporary:
+            class Handler:
+                response = None
+                error = None
+
+                def __init__(self, body):
+                    self.request_json = body
+                    self.server = SimpleNamespace(
+                        repo_root=REPO, store=SimpleNamespace(path=Path(temporary)),
+                        run_supervisor=Supervisor(), target_service=Service(),
+                        mutations=mutations)
+
+                def _json(self, code, payload):
+                    self.response = (code, payload)
+
+                def _error(self, code, name):
+                    self.error = (code, name)
+
+            unresolved = request(targets=[{"kind": "release", "ref": "v0.17.0"},
+                                          {"kind": "draft", "ref": "cost-pass"}],
+                                 tasks=["link-alias"], repetitions=1)
+            previewed = Handler({"request": unresolved})
+            server._replay_preview(previewed, server.Route(
+                "POST", "/p", "application/json", server.REPLAY_PREVIEW,
+                server._replay_preview, None, "application/json", ("p",)))
+            self.assertIsNone(previewed.error)
+            started = Handler({"request": previewed.response[1]["request"],
+                               "confirmation_token": "f" * 64})
+            server._replay_start(started, server.Route(
+                "POST", "/s", "application/json", server.REPLAY_RUN,
+                server._replay_start, None, "application/json", ("s",)))
+            self.assertIsNone(started.error)
+        self.assertEqual(builds, [False] * 4)
+
+    def test_refusal_codes_reach_the_browser(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            handler = SimpleNamespace(
+                request_json={"request": request(
+                    targets=[{"kind": "branch", "ref": "main"},
+                             {"kind": "worktree", "ref": "/tmp/wt"}],
+                    tasks=["link-alias"], pre_registration="")},
+                server=SimpleNamespace(
+                    repo_root=REPO, store=SimpleNamespace(path=Path(temporary)),
+                    run_supervisor=mock.Mock(), target_service=SnapshotTargetService(),
+                    mutations=RecordingMutations()),
+                _json=mock.Mock(), _error=mock.Mock())
+            server._replay_preview(handler, None)
+        handler._error.assert_called_once_with(400, "replay_worktree_dirty")
+
+    def test_advertised_commands_exist_and_parse_as_the_native_replay(self):
+        route = next(item for item in server.ROUTES.entries
+                     if item.path == "/api/runs/replay/catalog")
+        self.assertEqual(route.cli_command, ("python3", "scripts/cost_bench.py", "replay",
+                                             "--help"))
+        self.assertTrue((REPO / route.cli_command[1]).is_file())
+        self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
+                         "python3 scripts/cost_bench.py replay")
+        parsed = replay.ReplayRequest.parse(request())
+        text = replay.preview_payload([], parsed)["command"]
+        self.assertNotIn("citizen", text)
+        bench = load_cost_bench()
+        seen = []
+        with mock.patch.object(bench, "cmd_replay", lambda args: seen.append(args) or 0):
+            for line in text.splitlines():
+                argv = shlex.split(line)
+                self.assertEqual(argv[:3], ["python3", "scripts/cost_bench.py", "replay"])
+                self.assertEqual(bench.main(argv[2:]), 0)
+        self.assertEqual([args.tag for args in seen], [["a" * 40], ["b" * 40]])
+        self.assertEqual([args.exploratory for args in seen], [False, True])
 
 
 if __name__ == "__main__":

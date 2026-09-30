@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -16,6 +17,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from . import run_store, runs, spend_guard, targets
@@ -33,10 +35,22 @@ HISTORY_TRANSACTION = ".studio-replay-history-transaction"
 HISTORY_STAGE_PREFIX = ".studio-replay-history-stage-"
 MAX_SPEND_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 4 * 1024 * 1024
+# The digest AH-S301 records for a target with no configuration of its own. cost_bench builds the
+# harness arm from the commit's defaults, so this is the only configuration a replay can measure.
+DEFAULT_CONFIG_DIGEST = targets._config_digest({})
+NATIVE_COMMAND = ("python3", "scripts/cost_bench.py", "replay")
 
 
 class ReplayError(ValueError):
     """A replay request or native result is unsafe or incomplete."""
+
+
+class ReplayRefusal(ReplayError):
+    """A request the replay refuses for a reason the Studio names by a stable code."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 class ReplayExecutionError(ReplayError):
@@ -164,6 +178,13 @@ class ReplayRequest:
             raise ReplayError("pre-registration must name a file")
         if any(target.kind == "release" for target in targets) and not registration:
             raise ReplayError("a release replay needs a pre-registration before it can write history")
+        for target in targets:
+            if target.config_digest not in (None, DEFAULT_CONFIG_DIGEST):
+                raise ReplayRefusal(
+                    "replay_target_config_unsupported",
+                    "replay target %s:%s carries its own configuration, but the benchmark builds "
+                    "the harness arm from the commit's defaults; checkpoint the change as source "
+                    "or clear the draft configuration" % (target.kind, target.ref))
         return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration)
 
     def as_dict(self) -> Dict[str, Any]:
@@ -219,7 +240,7 @@ def preview_payload(records: Iterable[Mapping[str, Any]], request: ReplayRequest
         "suite_id": "live-replay", "request": request.as_dict(), "plan": plan,
     })
     return dict(plan, valid=True, request=request.as_dict(), confirmation_digest=confirmation,
-                command="citizen runs replay")
+                command=native_commands(request))
 
 
 def launch_payload(request: ReplayRequest, confirmation_token: str,
@@ -283,6 +304,13 @@ class ReplayAdmission:
                 built = self.target_service.build(kind, ref, temporary / "target")
             except targets.TargetError as exc:
                 raise ReplayError(str(exc)) from exc
+            if built.get("snapshot"):
+                # A dirty worktree resolves to a commit that exists only in this disposable
+                # clone, and each snapshot is a new commit, so the benchmark could never run it.
+                raise ReplayRefusal(
+                    "replay_worktree_dirty",
+                    "worktree target %s has uncommitted changes; commit them or checkpoint "
+                    "them as a draft before a replay" % ref)
             resolved = {
                 "kind": kind, "ref": ref, "revision": built.get("revision"),
                 "version": built.get("version"),
@@ -305,7 +333,10 @@ class ReplayAdmission:
                 raise ReplayError("replay target identity changed after spend preview")
 
     def preview(self, value: Any) -> Dict[str, Any]:
-        request = self.resolve(value)
+        return self.preview_resolved(self.resolve(value))
+
+    def preview_resolved(self, request: ReplayRequest) -> Dict[str, Any]:
+        """The supervisor half of preview; the target builds in `resolve` stay outside it."""
         launch = launch_payload(request, "preview", self.repository)
         try:
             value = self.supervisor.spend_preview(
@@ -315,11 +346,18 @@ class ReplayAdmission:
         except runs.RunError as exc:
             raise ReplayError(str(exc)) from exc
         return dict(value, valid=True, errors=[], request=request.as_dict(),
-                    command="citizen runs replay")
+                    command=native_commands(request))
 
-    def start(self, value: Any, confirmation_token: Any) -> Dict[str, Any]:
+    def confirm(self, value: Any) -> ReplayRequest:
+        """Re-resolve a previewed request; this builds both targets, so it runs unserialized."""
         request = ReplayRequest.parse(value)
         self._confirm_resolved(request)
+        return request
+
+    def start(self, value: Any, confirmation_token: Any) -> Dict[str, Any]:
+        return self.start_confirmed(self.confirm(value), confirmation_token)
+
+    def start_confirmed(self, request: ReplayRequest, confirmation_token: Any) -> Dict[str, Any]:
         launch = launch_payload(request, confirmation_token, self.repository)
         try:
             started = self.supervisor.start(
@@ -348,17 +386,22 @@ def _safe_file(root: Path, supplied: str) -> Path:
     return path
 
 
+def _native_arguments(request: ReplayRequest, target: ReplayTarget, cap: str) -> List[str]:
+    arguments = ["--tag", target.execution_ref, "--model", request.model,
+                 "--reps", str(request.repetitions), "--run-cap", request.max_budget_usd,
+                 "--spend-cap", cap]
+    for task in request.tasks:
+        arguments.extend(("--task", task))
+    return arguments
+
+
 def command_for_target(request: ReplayRequest, target: ReplayTarget, repository: Path,
                        output: Path, remaining_cap: Optional[str] = None,
                        history_dir: Optional[Path] = None) -> List[str]:
     repository = Path(repository).resolve()
     cap = remaining_cap or request.spend_cap_usd
-    command = [sys.executable, str(repository / "scripts" / "cost_bench.py"), "replay",
-               "--tag", target.execution_ref, "--model", request.model,
-               "--reps", str(request.repetitions), "--run-cap", request.max_budget_usd,
-               "--spend-cap", cap, "--out", str(output)]
-    for task in request.tasks:
-        command.extend(("--task", task))
+    command = ([sys.executable, str(repository / "scripts" / "cost_bench.py"), "replay"]
+               + _native_arguments(request, target, cap) + ["--out", str(output)])
     if target.kind == "release":
         registration = _safe_file(repository, request.pre_registration or "")
         command.extend(("--pre-registration", str(registration),
@@ -366,6 +409,22 @@ def command_for_target(request: ReplayRequest, target: ReplayTarget, repository:
     else:
         command.append("--exploratory")
     return command
+
+
+def native_commands(request: ReplayRequest) -> str:
+    """The native commands a replay runs, one per target, as a person would type them.
+
+    The Studio gives target two only what target one left of the whole-set cap; run by hand,
+    each command carries the whole cap."""
+    lines = []
+    for target in request.targets:
+        command = list(NATIVE_COMMAND) + _native_arguments(request, target, request.spend_cap_usd)
+        if target.kind == "release":
+            command.extend(("--pre-registration", request.pre_registration or ""))
+        else:
+            command.append("--exploratory")
+        lines.append(" ".join(shlex.quote(part) for part in command))
+    return "\n".join(lines)
 
 
 def _history_lock_path(history_dir: Path) -> Path:
@@ -481,12 +540,24 @@ def _publish_history_pair(home: Path, stage: Path,
     shutil.rmtree(transaction)
 
 
-def release_history_transaction(repository: Path, action: Callable[[Path], Any]) -> Any:
-    """Serialize release-only history writes and publish the JSONL/Markdown pair together."""
+def _sweep_stale_stages(home: Path) -> None:
+    """Remove stages a killed run left behind; under the lock none of them is live."""
+    for stale in home.glob(HISTORY_STAGE_PREFIX + "*"):
+        if stale.is_dir() and not stale.is_symlink():
+            shutil.rmtree(str(stale), ignore_errors=True)
+
+
+def release_history_transaction(repository: Path, action: Callable[[Path], Any],
+                                verify: Optional[Callable[[Any], bool]] = None) -> Any:
+    """Serialize release-only history writes and publish the JSONL/Markdown pair together.
+
+    The pair is published only when the action exits 0 and `verify` accepts its result, so a
+    run whose native rows or spend fail verification leaves project history untouched."""
     repository = Path(repository).resolve()
     home = repository / "benchmarks"
     with history_lock(home):
         _recover_history_pair(home)
+        _sweep_stale_stages(home)
         original = _history_pair(home)
         stage = Path(tempfile.mkdtemp(prefix=HISTORY_STAGE_PREFIX, dir=home))
         try:
@@ -494,7 +565,8 @@ def release_history_transaction(repository: Path, action: Callable[[Path], Any])
                 if content is not None:
                     (stage / name).write_bytes(content)
             result = action(stage)
-            if getattr(result, "returncode", 1) == 0:
+            if (getattr(result, "returncode", 1) == 0
+                    and (verify is None or verify(result))):
                 _publish_history_pair(home, stage, original)
             return result
         finally:
@@ -573,14 +645,39 @@ def _read_spend(path: Path, target: ReplayTarget, run_cap: str, spend_cap: str,
     preflight = _sidecar_money(value.get("preflight_spend_usd"), "preflight spend")
     scored = _sidecar_money(value.get("scored_spend_usd"), "scored spend")
     charged = _sidecar_money(value.get("charged_spend_usd"), "charged spend")
+    # Both sides are rounded to six places independently, one from a Decimal sum and one from a
+    # float difference, so a half-way seventh place may legitimately differ by one unit.
+    tolerance = Decimal("0.000001")
     row_charge = Decimal(str(round(float(charged_spend(rows, run_cap)), 6)))
-    if scored != row_charge:
+    if abs(scored - row_charge) > tolerance:
         raise ReplayError("replay spend sidecar does not match its native rows")
-    if abs(charged - preflight - scored) > Decimal("0.000001"):
+    if abs(charged - preflight - scored) > tolerance:
         raise ReplayError("replay spend sidecar components do not equal charged spend")
     if charged > Decimal(spend_cap) and not value["stopped_at_cap"]:
         raise ReplayError("replay spend sidecar exceeds its cap without stopping")
     return dict(value)
+
+
+class _NothingSpent(ReplayError):
+    """The native replay stopped before it created its output, so before any paid call."""
+
+
+def _verify_target_output(request: ReplayRequest, target: ReplayTarget, native_out: Path,
+                          returncode: int, remaining: str
+                          ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Read and verify one target's native rows and spend sidecar, or raise ReplayError."""
+    if not native_out.exists() and returncode != 0:
+        raise _NothingSpent("replay target was refused before any spend (exit %s)" % returncode)
+    result_path, spend_path = native_out / RESULTS_NAME, native_out / SPEND_NAME
+    rows = _read_rows(result_path) if result_path.is_file() else []
+    _verify_target_rows(target, rows)
+    _reconcile_target_rows(request, rows, complete=returncode == 0)
+    spend = _read_spend(spend_path, target, request.max_budget_usd, remaining, rows)
+    if spend["stopped_at_cap"] != (returncode == 1):
+        raise ReplayError("replay spend sidecar does not match the native exit status")
+    if returncode in (0, 1) and not rows and not spend["stopped_at_cap"]:
+        raise ReplayError("replay target finished without producing a native result")
+    return rows, spend
 
 
 def case_id(target_index: int, task: str, repetition: int, arm: str) -> str:
@@ -680,6 +777,22 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
         target_out.mkdir(mode=0o700)
         command = command_for_target(request, target, repository, target_out,
                                      format(remaining, "f"))
+        native_out = target_out / target.execution_ref
+        result_path = native_out / RESULTS_NAME
+        spend_path = native_out / SPEND_NAME
+        settled: Dict[str, Any] = {}
+
+        def settle(done: Any) -> bool:
+            """Verify the native output once; the release path does so before publishing."""
+            if not settled:
+                code = getattr(done, "returncode", 1)
+                try:
+                    settled["value"] = _verify_target_output(
+                        request, target, native_out, code, format(remaining, "f"))
+                except ReplayError as exc:
+                    settled["error"] = exc
+            return "value" in settled
+
         launch_error: Optional[BaseException] = None
         try:
             if target.kind == "release":
@@ -688,36 +801,32 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
                         request, target, repository, target_out, format(remaining, "f"), history_dir)
                     return launch(release_command, cwd=str(repository), check=False)
 
-                done = release_history_transaction(repository, launch_release)
+                done = release_history_transaction(repository, launch_release, settle)
             else:
                 done = launch(command, cwd=str(repository), check=False)
             returncode = getattr(done, "returncode", 1)
         except Exception as exc:
             launch_error = exc
             returncode = 2
-        result_path = target_out / target.execution_ref / RESULTS_NAME
-        spend_path = target_out / target.execution_ref / SPEND_NAME
-        rows: List[Dict[str, Any]] = []
-        try:
-            rows = _read_rows(result_path) if result_path.is_file() else []
-            _verify_target_rows(target, rows)
-            _reconcile_target_rows(request, rows, complete=returncode == 0)
-            spend = _read_spend(spend_path, target, request.max_budget_usd,
-                                format(remaining, "f"), rows)
-            if spend["stopped_at_cap"] != (returncode == 1):
-                raise ReplayError("replay spend sidecar does not match the native exit status")
-            if returncode in (0, 1) and not rows and not spend["stopped_at_cap"]:
-                raise ReplayError("replay target finished without producing a native result")
-        except ReplayError as exc:
-            charge = round(float(remaining), 6)
-            spend_records[index] = {
-                "preflight_spend_usd": charge, "scored_spend_usd": 0.0,
-                "charged_spend_usd": charge, "stopped_at_cap": True,
-            }
-            spent += remaining
-            stopped = True
-            failure = (str(exc), exc)
+            settled.clear()
+        settle(SimpleNamespace(returncode=returncode))
+        if "error" in settled:
+            exc = settled["error"]
+            if isinstance(exc, _NothingSpent):
+                # cost_bench creates the target folder only after every pre-spend refusal
+                # (credential, pre-registration, tag, arm build), so nothing was charged.
+                charge = Decimal("0")
+            else:
+                charge = remaining
+                spend_records[index] = {
+                    "preflight_spend_usd": round(float(remaining), 6), "scored_spend_usd": 0.0,
+                    "charged_spend_usd": round(float(remaining), 6), "stopped_at_cap": True,
+                }
+                stopped = True
+            spent += charge
+            failure = (str(exc), launch_error or exc)
             break
+        rows, spend = settled["value"]
         spent += Decimal(str(spend["charged_spend_usd"]))
         reported_spent += total_spend(rows)
         collected.append((target, rows))
@@ -844,7 +953,7 @@ def task_catalog(repository: Path) -> Dict[str, Any]:
              for item in raw]
     return {"schema_version": 1, "tasks": tasks, "target_kinds": sorted(TARGET_KINDS),
             "default_model": "claude-haiku-4-5",
-            "commands": {"run": "citizen runs replay"}}
+            "commands": {"run": " ".join(NATIVE_COMMAND)}}
 
 
 def validate_task_selection(repository: Path, request: ReplayRequest) -> None:
@@ -901,7 +1010,8 @@ def progress_payload(request: ReplayRequest, rows_by_target: Mapping[int, Sequen
                     progress.append({
                         "target": target.as_dict(), "task": task, "arm": arm,
                         "repetition": repetition,
-                        "status": "completed" if row is not None else "pending",
+                        "status": ("pending" if row is None
+                                   else "errored" if row.get("error") else "completed"),
                         "passed": row.get("passed") if row is not None else None,
                         "cost_usd": row.get("cost_usd") if row is not None else None,
                     })
@@ -916,10 +1026,20 @@ def index_native_rows(store: run_store.RunStore, source_root: Path,
     for supplied in summary.get("result_files") or []:
         path = Path(supplied).resolve()
         try:
-            relative = path.relative_to(root).as_posix()
+            # Keyed under the run folder's name, so a second replay of the same revision is a
+            # second set of rows rather than an overwrite of the first.
+            relative = "runs/" + root.name + "/" + path.relative_to(root).as_posix()
         except ValueError as exc:
             raise ReplayError("replay result is outside its authoritative run root") from exc
         for number, row in enumerate(_read_rows(path), 1):
             store.upsert(run_store._benchmark_result(relative, number, row))
             count += 1
     return count
+
+
+def index_run_directory(store: run_store.RunStore, run_root: Path) -> int:
+    """Re-index one Studio run's preserved replay rows, if it was a replay; for rebuilds."""
+    summary_path = Path(run_root) / "replay" / SUMMARY_NAME
+    if not summary_path.is_file():
+        return 0
+    return index_native_rows(store, run_root, read_summary(summary_path))
