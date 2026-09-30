@@ -403,6 +403,41 @@ selection, with the bare arm beside them in every trial.
   `--spend-cap` is required for a live pair, since the default is sized for two arms;
   `--stance-cost` is refused, and `--tag`, if given, must be the manifest's.
 
+### Micro tier
+
+`replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
+all. It runs the three tasks in `benchmarks/micro/tasks.json`, each built to give one mechanism the
+chance to fire, on the small model that manifest pins, in the bare and harness arms.
+
+```sh
+python3 scripts/cost_bench.py replay --tier micro --verify-tasks
+python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit> --exploratory --dry-run
+python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit> --raw <scratch dir> \
+    --pre-registration <plan>
+```
+
+- **Its protocol is five reps, 0.10 USD per run, 0.05 USD per preflight and a 4.55 USD stop.**
+  Thirty scored runs and two preflights report 3.10 USD if every one reaches its cap; the per-run
+  cap is soft, so the stop is the binding limit. `--reps`, `--run-cap` and `--spend-cap` may change
+  them; `--model` may not, and `--pair` is refused. The dry run prints the set's ceiling.
+- **Each run reports pass or fail, whether its mechanism fired, and its cost.** The oracle scores
+  pass or fail as for any synthetic task. `mechanism_fired` on each row is `true`, `false` or
+  `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, and the
+  output style the offline detectors named in the manifest, which must all report no hit. A missing
+  stream or a detector row without a count is unknown, never "no", so a real run needs `--raw`.
+- **Its rows never meet production rows.** They carry `tier: micro`, seed their own series and go
+  to `benchmarks/micro/micro-history.jsonl` and `micro-history.md`; `upsert_history` refuses to
+  write one tier's row into a file holding the other's, whichever `--history-dir` is named. The
+  micro history carries no ratio and no verdict.
+- **It is refused by the contamination control, as every same-repository task is.** Its oracles
+  are in this repository, so the harness arm's installed checkout exposes them, and the replay
+  refuses the set before any model call. It cannot run until its tasks have independent provenance
+  or the control is changed for this tier.
+- **What it can claim:** that a mechanism can fire, and did, on the pinned small model in these
+  tasks. **What it cannot:** that it fires on the production model, how often it would, or
+  anything about what the harness costs or saves. A small model's behaviour is not the production
+  model's; the production set stays the release calibration.
+
 ## Limits
 
 - Claude Code only. Codex instructions are rendered at sync time and are not counted.
