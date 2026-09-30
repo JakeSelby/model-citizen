@@ -14,6 +14,7 @@ from pathlib import Path
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
 
+import draft_support
 import test_studio_browser as browser_support
 from harness_core.studio import drafts
 
@@ -40,6 +41,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        draft_support.register_draft_cleanup(self, self.draft, self.env, stop=self._stop_studio)
         self.created = json.loads(created.stdout)
         saved = drafts.checkpoint(
             browser_support.REPO, self.draft, self.created["revision"], "browser-module",
@@ -51,18 +53,6 @@ class ModuleEditorBrowserTests(unittest.TestCase):
             check_command=[sys.executable, "-c", "raise SystemExit(0)"],
         )
         self.revision = saved["revision"]
-        self.addCleanup(self._discard)
-
-    def _discard(self):
-        for _ in range(100):
-            result = subprocess.run(
-                [sys.executable, str(browser_support.CLI), "draft", "discard", self.draft, "--json"],
-                env=self.env, capture_output=True, text=True, timeout=15,
-            )
-            if result.returncode == 0 or '"code": "busy"' not in result.stdout:
-                break
-            time.sleep(0.05)
-        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def _wait(self, expression, message, attempts=1000):
         for _ in range(attempts):
@@ -999,6 +989,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
             [sys.executable, str(browser_support.CLI), "draft", "create", other, "--json"],
             env=self.env, capture_output=True, text=True, timeout=20, check=True,
         )
+        draft_support.register_draft_cleanup(self, other, self.env, stop=self._stop_studio)
         initial = json.loads(created.stdout)
         drafts.checkpoint(
             browser_support.REPO, other, initial["revision"], "ownership-modules",
@@ -1008,79 +999,73 @@ class ModuleEditorBrowserTests(unittest.TestCase):
             },
             check_command=[sys.executable, "-c", "raise SystemExit(0)"],
         )
-        try:
-            name, value = self.cookie.split("=", 1)
-            self.devtools.call("Network.enable")
-            self.devtools.call("Page.enable")
-            self.devtools.call("Network.setCookie", {
-                "name": name, "value": value, "url": self.started["url"],
-                "httpOnly": True, "sameSite": "Strict",
-            })
-            self.devtools.call("Page.addScriptToEvaluateOnNewDocument", {"source": """
-                globalThis.__moduleCalls = [];
-                globalThis.__inventoryGate = new Promise(resolve => { __releaseInventory = resolve; });
-                globalThis.__keyedGate = new Promise(resolve => { __releaseKeyed = resolve; });
-                globalThis.__setDraft = value => {
-                  const label = [...document.querySelectorAll('label')]
-                    .find(item => item.textContent.trim().startsWith('Draft name'));
-                  const input = document.getElementById(label.htmlFor);
-                  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
-                    .set.call(input, value);
-                  input.dispatchEvent(new Event('input', {bubbles: true}));
-                };
-                const originalFetch = globalThis.fetch.bind(globalThis);
-                let heldInventory = false;
-                let heldKeyed = false;
-                globalThis.fetch = async (input, init = {}) => {
-                  const url = typeof input === 'string' ? input : input.url;
-                  const body = init.body ? JSON.parse(init.body) : {};
-                  const response = await originalFetch(input, init);
-                  if (url.includes('/api/configure/module/read') && !body.module && !heldInventory) {
-                    heldInventory = true; __inventoryHeld = true; await __inventoryGate;
-                  } else if (url.includes('/api/configure/module/read')
-                      && body.module?.includes('owner-one') && !heldKeyed) {
-                    heldKeyed = true; __keyedHeld = true; await __keyedGate;
-                  }
-                  return response;
-                };
-            """})
-            self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
-            self.devtools.call("Page.bringToFront")
-            self._wait_for_shell()
-            self._wait("document.querySelector('input') !== null", "Configure did not render")
-            self.devtools.evaluate("__setDraft(%s)" % json.dumps(self.draft))
-            self.devtools.evaluate(
-                "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-            )
-            self._wait("globalThis.__inventoryHeld === true", "initial inventory was not held")
-            self.devtools.evaluate("__setDraft(%s)" % json.dumps(other))
-            self.devtools.evaluate(
-                "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-            )
-            self._wait("document.body.textContent.includes('Choose a draft-owned rule')",
-                       "newer inventory did not load")
-            self.devtools.evaluate("__releaseInventory()")
-            time.sleep(0.2)
-            self._select("owner-one")
-            self._wait("globalThis.__keyedHeld === true", "initial keyed read was not held")
-            self._select("owner-two")
-            self._wait(
-                "document.querySelector('.cm-content')?.getAttribute('aria-label')?.includes('owner-two')",
-                "newer keyed read did not load",
-            )
-            self.devtools.evaluate("__releaseKeyed()")
-            time.sleep(0.2)
-            self.assertIn("Second", self.devtools.evaluate(
-                "document.querySelector('.cm-content').textContent"
-            ))
-            self.assertIn("owner-two", self.devtools.evaluate(
-                "document.querySelector('.cm-content').getAttribute('aria-label')"
-            ))
-        finally:
-            subprocess.run(
-                [sys.executable, str(browser_support.CLI), "draft", "discard", other, "--json"],
-                env=self.env, capture_output=True, text=True, timeout=15,
-            )
+        name, value = self.cookie.split("=", 1)
+        self.devtools.call("Network.enable")
+        self.devtools.call("Page.enable")
+        self.devtools.call("Network.setCookie", {
+            "name": name, "value": value, "url": self.started["url"],
+            "httpOnly": True, "sameSite": "Strict",
+        })
+        self.devtools.call("Page.addScriptToEvaluateOnNewDocument", {"source": """
+            globalThis.__moduleCalls = [];
+            globalThis.__inventoryGate = new Promise(resolve => { __releaseInventory = resolve; });
+            globalThis.__keyedGate = new Promise(resolve => { __releaseKeyed = resolve; });
+            globalThis.__setDraft = value => {
+              const label = [...document.querySelectorAll('label')]
+                .find(item => item.textContent.trim().startsWith('Draft name'));
+              const input = document.getElementById(label.htmlFor);
+              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')
+                .set.call(input, value);
+              input.dispatchEvent(new Event('input', {bubbles: true}));
+            };
+            const originalFetch = globalThis.fetch.bind(globalThis);
+            let heldInventory = false;
+            let heldKeyed = false;
+            globalThis.fetch = async (input, init = {}) => {
+              const url = typeof input === 'string' ? input : input.url;
+              const body = init.body ? JSON.parse(init.body) : {};
+              const response = await originalFetch(input, init);
+              if (url.includes('/api/configure/module/read') && !body.module && !heldInventory) {
+                heldInventory = true; __inventoryHeld = true; await __inventoryGate;
+              } else if (url.includes('/api/configure/module/read')
+                  && body.module?.includes('owner-one') && !heldKeyed) {
+                heldKeyed = true; __keyedHeld = true; await __keyedGate;
+              }
+              return response;
+            };
+        """})
+        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
+        self.devtools.call("Page.bringToFront")
+        self._wait_for_shell()
+        self._wait("document.querySelector('input') !== null", "Configure did not render")
+        self.devtools.evaluate("__setDraft(%s)" % json.dumps(self.draft))
+        self.devtools.evaluate(
+            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
+        )
+        self._wait("globalThis.__inventoryHeld === true", "initial inventory was not held")
+        self.devtools.evaluate("__setDraft(%s)" % json.dumps(other))
+        self.devtools.evaluate(
+            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
+        )
+        self._wait("document.body.textContent.includes('Choose a draft-owned rule')",
+                   "newer inventory did not load")
+        self.devtools.evaluate("__releaseInventory()")
+        time.sleep(0.2)
+        self._select("owner-one")
+        self._wait("globalThis.__keyedHeld === true", "initial keyed read was not held")
+        self._select("owner-two")
+        self._wait(
+            "document.querySelector('.cm-content')?.getAttribute('aria-label')?.includes('owner-two')",
+            "newer keyed read did not load",
+        )
+        self.devtools.evaluate("__releaseKeyed()")
+        time.sleep(0.2)
+        self.assertIn("Second", self.devtools.evaluate(
+            "document.querySelector('.cm-content').textContent"
+        ))
+        self.assertIn("owner-two", self.devtools.evaluate(
+            "document.querySelector('.cm-content').getAttribute('aria-label')"
+        ))
 
     def test_late_preview_cannot_update_a_switched_draft(self):
         other = "module-browser-other-" + secrets.token_hex(4)
@@ -1089,65 +1074,59 @@ class ModuleEditorBrowserTests(unittest.TestCase):
             env=self.env, capture_output=True, text=True, timeout=20,
         )
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        draft_support.register_draft_cleanup(self, other, self.env, stop=self._stop_studio)
         other_created = json.loads(created.stdout)
         drafts.checkpoint(
             browser_support.REPO, other, other_created["revision"], "other-module",
             files={"developer-primitives/rules/browser-rule.md": b"# Browser rule\n\nOther draft.\n"},
             check_command=[sys.executable, "-c", "raise SystemExit(0)"],
         )
-        try:
-            self._open("""
-                const originalFetch = globalThis.fetch.bind(globalThis);
-                let held = false;
-                globalThis.__draftGate = new Promise(resolve => { globalThis.__releaseDraft = resolve; });
-                globalThis.fetch = async (input, init = {}) => {
-                  const url = typeof input === 'string' ? input : input.url;
-                  if (url.includes('/api/configure/module/preview') && !held) {
-                    held = true;
-                    globalThis.__moduleCalls.push({kind: 'preview'});
-                    await globalThis.__draftGate;
-                    return new Response(JSON.stringify({
-                      valid: true, error: '', error_code: '', base_revision: 'old',
-                      source_digest: 'old', content_digest: 'old', unchanged: false,
-                      module: null, diagnostics: [], budgets: [],
-                      projections: [{runtime: 'codex', path: 'old',
-                        text: 'Late draft marker.', truncated: false}],
-                      nothing_applied: true,
-                    }), {status: 200, headers: {'Content-Type': 'application/json'}});
-                  }
-                  return originalFetch(input, init);
-                };
-            """)
-            self._choose("browser-rule")
-            self.devtools.evaluate("document.querySelector('.cm-content').focus()")
-            for kind in ("keyDown", "keyUp"):
-                self.devtools.call("Input.dispatchKeyEvent", {
-                    "type": kind, "key": "a", "code": "KeyA", "modifiers": 4,
-                    "windowsVirtualKeyCode": 65,
-                })
-            self.devtools.call("Input.insertText", {"text": "# Browser rule\n\nLate draft marker.\n"})
-            self._wait("__moduleCalls.some(call => call.kind === 'preview')", "preview was not held")
-            self.devtools.evaluate("__setDraft(%s)" % json.dumps(other))
-            self.devtools.evaluate(
-                "[...document.querySelectorAll('button')]"
-                ".find(b => b.textContent === 'Load draft').click()"
-            )
-            self.devtools.evaluate("__releaseDraft()")
-            self._wait("document.body.textContent.includes(%s)" % json.dumps(
-                "citizen draft settings read " + other
-            ),
-                       "second draft module list did not load")
-            self._choose("browser-rule")
-            self.assertIn("Other draft", self.devtools.evaluate(
-                "document.querySelector('.cm-content').textContent"
-            ))
-            self.assertNotIn("Late draft marker", self.devtools.evaluate("document.body.textContent"))
-        finally:
-            discarded = subprocess.run(
-                [sys.executable, str(browser_support.CLI), "draft", "discard", other, "--json"],
-                env=self.env, capture_output=True, text=True, timeout=20,
-            )
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+        self._open("""
+            const originalFetch = globalThis.fetch.bind(globalThis);
+            let held = false;
+            globalThis.__draftGate = new Promise(resolve => { globalThis.__releaseDraft = resolve; });
+            globalThis.fetch = async (input, init = {}) => {
+              const url = typeof input === 'string' ? input : input.url;
+              if (url.includes('/api/configure/module/preview') && !held) {
+                held = true;
+                globalThis.__moduleCalls.push({kind: 'preview'});
+                await globalThis.__draftGate;
+                return new Response(JSON.stringify({
+                  valid: true, error: '', error_code: '', base_revision: 'old',
+                  source_digest: 'old', content_digest: 'old', unchanged: false,
+                  module: null, diagnostics: [], budgets: [],
+                  projections: [{runtime: 'codex', path: 'old',
+                    text: 'Late draft marker.', truncated: false}],
+                  nothing_applied: true,
+                }), {status: 200, headers: {'Content-Type': 'application/json'}});
+              }
+              return originalFetch(input, init);
+            };
+        """)
+        self._choose("browser-rule")
+        self.devtools.evaluate("document.querySelector('.cm-content').focus()")
+        for kind in ("keyDown", "keyUp"):
+            self.devtools.call("Input.dispatchKeyEvent", {
+                "type": kind, "key": "a", "code": "KeyA", "modifiers": 4,
+                "windowsVirtualKeyCode": 65,
+            })
+        self.devtools.call("Input.insertText", {"text": "# Browser rule\n\nLate draft marker.\n"})
+        self._wait("__moduleCalls.some(call => call.kind === 'preview')", "preview was not held")
+        self.devtools.evaluate("__setDraft(%s)" % json.dumps(other))
+        self.devtools.evaluate(
+            "[...document.querySelectorAll('button')]"
+            ".find(b => b.textContent === 'Load draft').click()"
+        )
+        self.devtools.evaluate("__releaseDraft()")
+        self._wait("document.body.textContent.includes(%s)" % json.dumps(
+            "citizen draft settings read " + other
+        ),
+                   "second draft module list did not load")
+        self._choose("browser-rule")
+        self.assertIn("Other draft", self.devtools.evaluate(
+            "document.querySelector('.cm-content').textContent"
+        ))
+        self.assertNotIn("Late draft marker", self.devtools.evaluate("document.body.textContent"))
 
 
 if __name__ == "__main__":

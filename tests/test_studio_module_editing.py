@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 
 from harness_core.studio import drafts, module_editing, module_evaluator, selection, server
 
+import draft_support  # noqa: E402
+
 
 class FakeHarness:
     ALWAYS_LOADED_CAP = 225
@@ -930,146 +932,144 @@ class ModuleEditingTests(unittest.TestCase):
                 cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
             )
             self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-            initial = json.loads(created.stdout)
-            relative = "developer-primitives/rules/matrix.md"
-            with mock.patch.dict(os.environ, environment, clear=True):
-                added = drafts.checkpoint(
-                    ROOT, name, initial["revision"], "matrix-module",
-                    files={relative: b"# Matrix\n\nOriginal.\n"},
-                    check_command=[sys.executable, "-c", "raise SystemExit(0)"],
-                )
-                loaded = module_editing.read(ROOT, name, "root-1:rules:matrix")
-                candidate = "# Matrix\n\nSaved cleanly.\n"
-                content_path = Path(temporary) / "module.md"
-                content_path.write_text(candidate, encoding="utf-8")
-                for action, extra in (
-                    ("read", []),
-                    ("preview", ["--content", str(content_path)]),
-                ):
-                    command = [sys.executable, str(ROOT / "bin" / "harness"), "draft", "module",
-                               action, name, "root-1:rules:matrix", *extra, "--json"]
-                    executed = subprocess.run(command, cwd=ROOT, env=environment,
-                                              capture_output=True, text=True, timeout=60)
+            try:
+                initial = json.loads(created.stdout)
+                relative = "developer-primitives/rules/matrix.md"
+                with mock.patch.dict(os.environ, environment, clear=True):
+                    added = drafts.checkpoint(
+                        ROOT, name, initial["revision"], "matrix-module",
+                        files={relative: b"# Matrix\n\nOriginal.\n"},
+                        check_command=[sys.executable, "-c", "raise SystemExit(0)"],
+                    )
+                    loaded = module_editing.read(ROOT, name, "root-1:rules:matrix")
+                    candidate = "# Matrix\n\nSaved cleanly.\n"
+                    content_path = Path(temporary) / "module.md"
+                    content_path.write_text(candidate, encoding="utf-8")
+                    for action, extra in (
+                        ("read", []),
+                        ("preview", ["--content", str(content_path)]),
+                    ):
+                        command = [sys.executable, str(ROOT / "bin" / "harness"), "draft", "module",
+                                   action, name, "root-1:rules:matrix", *extra, "--json"]
+                        executed = subprocess.run(command, cwd=ROOT, env=environment,
+                                                  capture_output=True, text=True, timeout=60)
+                        self.assertEqual(executed.returncode, 0, executed.stderr or executed.stdout)
+                        self.assertNotIn("invalid choice", executed.stderr)
+                        payload = json.loads(executed.stdout)
+                        if action == "read":
+                            self.assertEqual(payload["content"], "# Matrix\n\nOriginal.\n")
+                            self.assertEqual(payload["source_digest"], loaded["source_digest"])
+                        else:
+                            self.assertEqual(payload["content_digest"], hashlib.sha256(
+                                candidate.encode(),
+                            ).hexdigest())
+                            self.assertIn("diagnostics", payload)
+                            self.assertEqual({row["runtime"] for row in payload["budgets"]},
+                                             {"claude-code", "codex"})
+                            self.assertEqual({row["runtime"] for row in payload["projections"]},
+                                             {"claude-code", "codex"})
+                    save_command = [
+                        sys.executable, str(ROOT / "bin" / "harness"), "draft", "module", "save",
+                        name, "root-1:rules:matrix", "--base-revision", added["revision"],
+                        "--source-digest", loaded["source_digest"], "--idempotency-key", "matrix-save",
+                        "--content", str(content_path), "--json",
+                    ]
+                    executed = subprocess.run(
+                        save_command, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60,
+                    )
                     self.assertEqual(executed.returncode, 0, executed.stderr or executed.stdout)
-                    self.assertNotIn("invalid choice", executed.stderr)
-                    payload = json.loads(executed.stdout)
-                    if action == "read":
-                        self.assertEqual(payload["content"], "# Matrix\n\nOriginal.\n")
-                        self.assertEqual(payload["source_digest"], loaded["source_digest"])
-                    else:
-                        self.assertEqual(payload["content_digest"], hashlib.sha256(
-                            candidate.encode(),
-                        ).hexdigest())
-                        self.assertIn("diagnostics", payload)
-                        self.assertEqual({row["runtime"] for row in payload["budgets"]},
-                                         {"claude-code", "codex"})
-                        self.assertEqual({row["runtime"] for row in payload["projections"]},
-                                         {"claude-code", "codex"})
-                save_command = [
-                    sys.executable, str(ROOT / "bin" / "harness"), "draft", "module", "save",
-                    name, "root-1:rules:matrix", "--base-revision", added["revision"],
-                    "--source-digest", loaded["source_digest"], "--idempotency-key", "matrix-save",
-                    "--content", str(content_path), "--json",
-                ]
-                executed = subprocess.run(
-                    save_command, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=60,
-                )
-                self.assertEqual(executed.returncode, 0, executed.stderr or executed.stdout)
-                saved = json.loads(executed.stdout)
-                replayed = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", added["revision"],
-                    loaded["source_digest"], "matrix-save", candidate,
-                )
-                changed = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", added["revision"],
-                    loaded["source_digest"], "matrix-save", candidate + "Changed request.\n",
-                )
+                    saved = json.loads(executed.stdout)
+                    replayed = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", added["revision"],
+                        loaded["source_digest"], "matrix-save", candidate,
+                    )
+                    changed = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", added["revision"],
+                        loaded["source_digest"], "matrix-save", candidate + "Changed request.\n",
+                    )
 
-                self.assertTrue(saved["saved"], saved["error"])
-                self.assertEqual(saved["saved_lint"], [])
-                self.assertTrue(replayed["saved"], replayed["error"])
-                self.assertTrue(replayed["result"]["replayed"])
-                self.assertEqual(replayed["result"]["revision"], saved["result"]["revision"])
-                self.assertEqual(changed["error_code"], "idempotency-conflict")
+                    self.assertTrue(saved["saved"], saved["error"])
+                    self.assertEqual(saved["saved_lint"], [])
+                    self.assertTrue(replayed["saved"], replayed["error"])
+                    self.assertTrue(replayed["result"]["replayed"])
+                    self.assertEqual(replayed["result"]["revision"], saved["result"]["revision"])
+                    self.assertEqual(changed["error_code"], "idempotency-conflict")
 
-                unchanged_key = "matrix-unchanged"
-                unchanged = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", saved["result"]["revision"],
-                    hashlib.sha256(candidate.encode()).hexdigest(), unchanged_key, candidate,
-                )
-                self.assertTrue(unchanged["unchanged"])
-                self.assertFalse(unchanged["saved"])
-                self.assertIsNone(unchanged["result"])
-                self.assertEqual(drafts._revision(drafts.find(ROOT, name)[0]),
-                                 saved["result"]["revision"])
-                self.assertIsNone(drafts.replay_request_response(
-                    ROOT, name, unchanged_key,
-                    module_editing._request_identity(
-                        "root-1:rules:matrix", saved["result"]["revision"],
-                        hashlib.sha256(candidate.encode()).hexdigest(), candidate.encode(),
-                    ),
-                ))
+                    unchanged_key = "matrix-unchanged"
+                    unchanged = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", saved["result"]["revision"],
+                        hashlib.sha256(candidate.encode()).hexdigest(), unchanged_key, candidate,
+                    )
+                    self.assertTrue(unchanged["unchanged"])
+                    self.assertFalse(unchanged["saved"])
+                    self.assertIsNone(unchanged["result"])
+                    self.assertEqual(drafts._revision(drafts.find(ROOT, name)[0]),
+                                     saved["result"]["revision"])
+                    self.assertIsNone(drafts.replay_request_response(
+                        ROOT, name, unchanged_key,
+                        module_editing._request_identity(
+                            "root-1:rules:matrix", saved["result"]["revision"],
+                            hashlib.sha256(candidate.encode()).hexdigest(), candidate.encode(),
+                        ),
+                    ))
 
-                worktree, _state = drafts.find(ROOT, name)
-                commits = subprocess.run(
-                    ["git", "-C", str(worktree), "rev-list", "--count",
-                     added["revision"] + ".." + saved["result"]["revision"]],
-                    capture_output=True, text=True, check=True,
-                )
-                self.assertEqual(commits.stdout.strip(), "1")
-                linted = subprocess.run(
-                    [sys.executable, "bin/harness", "lint"], cwd=worktree,
-                    env=environment, capture_output=True, text=True, timeout=60,
-                )
-                self.assertEqual(linted.returncode, 0, linted.stderr or linted.stdout)
-                self.assertIn("lint: 0 finding(s)", linted.stdout)
+                    worktree, _state = drafts.find(ROOT, name)
+                    commits = subprocess.run(
+                        ["git", "-C", str(worktree), "rev-list", "--count",
+                         added["revision"] + ".." + saved["result"]["revision"]],
+                        capture_output=True, text=True, check=True,
+                    )
+                    self.assertEqual(commits.stdout.strip(), "1")
+                    linted = subprocess.run(
+                        [sys.executable, "bin/harness", "lint"], cwd=worktree,
+                        env=environment, capture_output=True, text=True, timeout=60,
+                    )
+                    self.assertEqual(linted.returncode, 0, linted.stderr or linted.stdout)
+                    self.assertIn("lint: 0 finding(s)", linted.stdout)
 
-                digest_after_save = hashlib.sha256(candidate.encode()).hexdigest()
-                advanced = drafts.checkpoint(
-                    ROOT, name, saved["result"]["revision"], "advance-revision",
-                    files={"matrix-unrelated.txt": b"advance\n"},
-                    check_command=[sys.executable, "-c", "raise SystemExit(0)"],
-                )
-                old_replay = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", added["revision"],
-                    loaded["source_digest"], "matrix-save", candidate,
-                )
-                self.assertTrue(old_replay["result"]["replayed"])
-                self.assertEqual(old_replay["result"]["revision"], saved["result"]["revision"])
-                self.assertNotEqual(old_replay["result"]["revision"], advanced["revision"])
-                revision_buffer = "# Matrix\n\nRevision conflict buffer.\n"
-                stale_revision = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", saved["result"]["revision"],
-                    digest_after_save, "revision-conflict", revision_buffer,
-                )
-                self.assertEqual(stale_revision["error_code"], "stale-revision")
-                self.assertEqual((worktree / relative).read_text(encoding="utf-8"), candidate)
-                self.assertEqual(drafts._revision(worktree), advanced["revision"])
+                    digest_after_save = hashlib.sha256(candidate.encode()).hexdigest()
+                    advanced = drafts.checkpoint(
+                        ROOT, name, saved["result"]["revision"], "advance-revision",
+                        files={"matrix-unrelated.txt": b"advance\n"},
+                        check_command=[sys.executable, "-c", "raise SystemExit(0)"],
+                    )
+                    old_replay = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", added["revision"],
+                        loaded["source_digest"], "matrix-save", candidate,
+                    )
+                    self.assertTrue(old_replay["result"]["replayed"])
+                    self.assertEqual(old_replay["result"]["revision"], saved["result"]["revision"])
+                    self.assertNotEqual(old_replay["result"]["revision"], advanced["revision"])
+                    revision_buffer = "# Matrix\n\nRevision conflict buffer.\n"
+                    stale_revision = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", saved["result"]["revision"],
+                        digest_after_save, "revision-conflict", revision_buffer,
+                    )
+                    self.assertEqual(stale_revision["error_code"], "stale-revision")
+                    self.assertEqual((worktree / relative).read_text(encoding="utf-8"), candidate)
+                    self.assertEqual(drafts._revision(worktree), advanced["revision"])
 
-                (worktree / relative).write_text("# Matrix\n\nExternal source.\n", encoding="utf-8")
-                subprocess.run(["git", "-C", str(worktree), "add", "--", relative], check=True)
-                subprocess.run(
-                    ["git", "-C", str(worktree), "commit", "-qm", "external source"], check=True,
-                )
-                state = drafts._read_state(worktree)
-                state["revision"] = drafts._revision(worktree)
-                drafts._atomic_json(drafts._paths(worktree)["state"], state)
-                source_buffer = "# Matrix\n\nSource conflict buffer.\n"
-                stale_source = module_editing.save(
-                    ROOT, name, "root-1:rules:matrix", state["revision"], digest_after_save,
-                    "source-conflict", source_buffer,
-                )
-                self.assertEqual(stale_source["error_code"], "stale-source")
-                self.assertEqual(
-                    (worktree / relative).read_text(encoding="utf-8"),
-                    "# Matrix\n\nExternal source.\n",
-                )
-                self.assertEqual(drafts._revision(worktree), state["revision"])
-            discarded = subprocess.run(
-                [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name, "--json"],
-                cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
-            )
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+                    (worktree / relative).write_text("# Matrix\n\nExternal source.\n", encoding="utf-8")
+                    subprocess.run(["git", "-C", str(worktree), "add", "--", relative], check=True)
+                    subprocess.run(
+                        ["git", "-C", str(worktree), "commit", "-qm", "external source"], check=True,
+                    )
+                    state = drafts._read_state(worktree)
+                    state["revision"] = drafts._revision(worktree)
+                    drafts._atomic_json(drafts._paths(worktree)["state"], state)
+                    source_buffer = "# Matrix\n\nSource conflict buffer.\n"
+                    stale_source = module_editing.save(
+                        ROOT, name, "root-1:rules:matrix", state["revision"], digest_after_save,
+                        "source-conflict", source_buffer,
+                    )
+                    self.assertEqual(stale_source["error_code"], "stale-source")
+                    self.assertEqual(
+                        (worktree / relative).read_text(encoding="utf-8"),
+                        "# Matrix\n\nExternal source.\n",
+                    )
+                    self.assertEqual(drafts._revision(worktree), state["revision"])
+            finally:
+                draft_support.discard_draft(self, name, environment)
 
     def test_linked_worktree_cli_uses_its_checkout_for_configured_root_resolution(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1106,58 +1106,56 @@ class ModuleEditingTests(unittest.TestCase):
                 cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
             )
             self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-            initial = json.loads(created.stdout)
-            seeded = drafts.checkpoint(
-                linked, name, initial["revision"], "linked-module",
-                files={"custom-primitives/rules/linked-only.md": b"# Linked checkout module\n"},
-                check_command=[sys.executable, "-c", "raise SystemExit(0)"],
-            )
-            draft_worktree, draft_state = drafts.find(linked, name)
-            drafts._atomic_bytes(
-                drafts._paths(draft_worktree)["config"],
-                (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
-            )
-            draft_state["config_present"] = True
-            drafts._atomic_json(drafts._paths(draft_worktree)["state"], draft_state)
-            self.assertIn("primitive_roots", json.loads(
-                drafts._paths(draft_worktree)["config"].read_text(encoding="utf-8"),
-            ))
-            self.assertEqual(drafts.find(linked, name)[0], draft_worktree)
-            self.assertTrue((draft_worktree / "custom-primitives" / "rules"
-                             / "linked-only.md").is_file())
-            with drafts.locked_context(linked, name) as (locked_worktree, _state, raw_config):
-                mapped = module_editing._mapped_config(linked, locked_worktree, raw_config)
-            self.assertEqual(mapped["primitive_roots"],
-                             [str(draft_worktree / "custom-primitives")])
-            self.assertEqual(drafts.read_config(linked, name)["config"]["primitive_roots"],
-                             [str(linked / "custom-primitives")])
-            self.assertIn("linked-only", [item["name"]
-                                           for item in module_editing.list_modules(linked, name)])
-            inventory = subprocess.run(
-                [sys.executable, str(linked / "bin" / "harness"), "draft", "module", "read",
-                 name, "--json"],
-                cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
-            )
-            self.assertEqual(inventory.returncode, 0, inventory.stderr or inventory.stdout)
-            inventory_payload = json.loads(inventory.stdout)
-            module_key = next(item["key"] for item in inventory_payload["modules"]
-                              if item["name"] == "linked-only")
-            read = subprocess.run(
-                [sys.executable, str(linked / "bin" / "harness"), "draft", "module", "read",
-                 name, module_key, "--json"],
-                cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
-            )
-            self.assertEqual(read.returncode, 0, read.stderr or read.stdout)
-            payload = json.loads(read.stdout)
-            self.assertEqual(payload["status"], "ready", payload)
-            self.assertEqual(payload["content"], "# Linked checkout module\n")
-            self.assertEqual(payload["draft"]["revision"], seeded["revision"])
-            discarded = subprocess.run(
-                [sys.executable, str(linked / "bin" / "harness"),
-                 "draft", "discard", name, "--json"],
-                cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
-            )
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+            try:
+                initial = json.loads(created.stdout)
+                seeded = drafts.checkpoint(
+                    linked, name, initial["revision"], "linked-module",
+                    files={"custom-primitives/rules/linked-only.md": b"# Linked checkout module\n"},
+                    check_command=[sys.executable, "-c", "raise SystemExit(0)"],
+                )
+                draft_worktree, draft_state = drafts.find(linked, name)
+                drafts._atomic_bytes(
+                    drafts._paths(draft_worktree)["config"],
+                    (json.dumps(config, indent=2, sort_keys=True) + "\n").encode(),
+                )
+                draft_state["config_present"] = True
+                drafts._atomic_json(drafts._paths(draft_worktree)["state"], draft_state)
+                self.assertIn("primitive_roots", json.loads(
+                    drafts._paths(draft_worktree)["config"].read_text(encoding="utf-8"),
+                ))
+                self.assertEqual(drafts.find(linked, name)[0], draft_worktree)
+                self.assertTrue((draft_worktree / "custom-primitives" / "rules"
+                                 / "linked-only.md").is_file())
+                with drafts.locked_context(linked, name) as (locked_worktree, _state, raw_config):
+                    mapped = module_editing._mapped_config(linked, locked_worktree, raw_config)
+                self.assertEqual(mapped["primitive_roots"],
+                                 [str(draft_worktree / "custom-primitives")])
+                self.assertEqual(drafts.read_config(linked, name)["config"]["primitive_roots"],
+                                 [str(linked / "custom-primitives")])
+                self.assertIn("linked-only", [item["name"]
+                                               for item in module_editing.list_modules(linked, name)])
+                inventory = subprocess.run(
+                    [sys.executable, str(linked / "bin" / "harness"), "draft", "module", "read",
+                     name, "--json"],
+                    cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(inventory.returncode, 0, inventory.stderr or inventory.stdout)
+                inventory_payload = json.loads(inventory.stdout)
+                module_key = next(item["key"] for item in inventory_payload["modules"]
+                                  if item["name"] == "linked-only")
+                read = subprocess.run(
+                    [sys.executable, str(linked / "bin" / "harness"), "draft", "module", "read",
+                     name, module_key, "--json"],
+                    cwd=linked, env=environment, capture_output=True, text=True, timeout=30,
+                )
+                self.assertEqual(read.returncode, 0, read.stderr or read.stdout)
+                payload = json.loads(read.stdout)
+                self.assertEqual(payload["status"], "ready", payload)
+                self.assertEqual(payload["content"], "# Linked checkout module\n")
+                self.assertEqual(payload["draft"]["revision"], seeded["revision"])
+            finally:
+                draft_support.discard_draft(self, name, environment, repo=linked,
+                                             cli=linked / "bin" / "harness")
             removed = subprocess.run(
                 ["git", "-C", str(ROOT), "worktree", "remove", "--force", str(linked)],
                 capture_output=True, text=True, timeout=30,
@@ -1225,11 +1223,7 @@ class ModuleEditingTests(unittest.TestCase):
                     self.assertIn("Original", (worktree / "developer-primitives" / "rules"
                                                 / "config-lint.md").read_text(encoding="utf-8"))
             finally:
-                discarded = subprocess.run(
-                    [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name,
-                     "--json"], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
-                )
-                self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+                draft_support.discard_draft(self, name, environment)
 
     def test_real_skill_and_layer_selected_stance_save_with_external_runtime_input(self):
         name = "module-kinds-" + uuid.uuid4().hex[:10]
@@ -1259,78 +1253,76 @@ class ModuleEditingTests(unittest.TestCase):
                 cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
             )
             self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-            initial = json.loads(created.stdout)
-            with mock.patch.dict(os.environ, environment, clear=True):
-                seeded = drafts.checkpoint(
-                    ROOT, name, initial["revision"], "seed-kinds",
-                    files={
-                        "developer-primitives/rules/matrix-rule.md":
-                            b"# Matrix rule\n\nOld rule.\n",
-                        "developer-primitives/skills/matrix-skill/SKILL.md":
-                            b"---\nname: matrix-skill\ndescription: Matrix skill\n---\n\nOld skill.\n",
-                        "developer-primitives/stances/voice/matrix.md": b"Old matrix voice.\n",
-                        "developer-primitives/stances/voice/inactive.md": b"Old inactive voice.\n",
-                        "developer-primitives/modes/matrix-mode.json": json.dumps({
-                            "schema_version": 1, "description": "Select the matrix test voice.",
-                            "stances": {"voice": "matrix"},
-                            "rules": {"matrix-rule": "off"},
-                            "skills": {"matrix-skill": "off"},
-                        }).encode() + b"\n",
-                    },
-                    check_command=[sys.executable, "-c", "raise SystemExit(0)"],
-                )
-                configured = drafts.checkpoint_config(
-                    ROOT, name, seeded["revision"], "select-matrix-mode", draft_config,
-                    check_command=[sys.executable, "-c", "raise SystemExit(0)"],
-                )
-                baseline_harness = set(selection._HARNESS_MODULES)
-                baseline_posture = set(selection.catalog._POSTURE_MODULES)
-                revision = configured["revision"]
-                for key, candidate in (
-                    ("root-1:rules:matrix-rule", "# Matrix rule\n\nNew rule.\n"),
-                    ("root-1:skills:matrix-skill",
-                     "---\nname: matrix-skill\ndescription: Matrix skill\n---\n\nNew skill.\n"),
-                    ("root-1:stances:voice/inactive", "New inactive voice.\n"),
-                    ("root-1:stances:voice/matrix", "New matrix voice.\n"),
-                ):
-                    loaded = module_editing.read(ROOT, name, key)
-                    self.assertEqual(loaded["status"], "ready", loaded["message"])
-                    previewed = module_editing.preview(ROOT, name, key, candidate)
-                    self.assertTrue(previewed["valid"], previewed["error"])
-                    if key.endswith("voice/matrix"):
-                        projected = {row["runtime"]: row["text"]
-                                     for row in previewed["projections"]}
-                        self.assertIn("New matrix voice", projected["claude-code"])
-                        self.assertIn("New matrix voice", projected["codex"])
-                        self.assertNotIn("External runtime sentinel", projected["codex"])
-                        self.assertNotIn(str(external), json.dumps(projected))
-                        self.assertNotIn("studio-module-preview-", json.dumps(projected))
-                    else:
-                        self.assertTrue(all(not row["text"]
-                                            for row in previewed["projections"]), previewed)
-                        self.assertTrue(all(row["line_delta"] == 0
-                                            and row["token_delta"] == 0
-                                            for row in previewed["budgets"]), previewed)
-                    saved = module_editing.save(
-                        ROOT, name, key, revision, loaded["source_digest"],
-                        "save-" + hashlib.sha256(key.encode()).hexdigest()[:12], candidate,
+            try:
+                initial = json.loads(created.stdout)
+                with mock.patch.dict(os.environ, environment, clear=True):
+                    seeded = drafts.checkpoint(
+                        ROOT, name, initial["revision"], "seed-kinds",
+                        files={
+                            "developer-primitives/rules/matrix-rule.md":
+                                b"# Matrix rule\n\nOld rule.\n",
+                            "developer-primitives/skills/matrix-skill/SKILL.md":
+                                b"---\nname: matrix-skill\ndescription: Matrix skill\n---\n\nOld skill.\n",
+                            "developer-primitives/stances/voice/matrix.md": b"Old matrix voice.\n",
+                            "developer-primitives/stances/voice/inactive.md": b"Old inactive voice.\n",
+                            "developer-primitives/modes/matrix-mode.json": json.dumps({
+                                "schema_version": 1, "description": "Select the matrix test voice.",
+                                "stances": {"voice": "matrix"},
+                                "rules": {"matrix-rule": "off"},
+                                "skills": {"matrix-skill": "off"},
+                            }).encode() + b"\n",
+                        },
+                        check_command=[sys.executable, "-c", "raise SystemExit(0)"],
                     )
-                    self.assertTrue(saved["saved"], saved["error"])
-                    revision = saved["result"]["revision"]
+                    configured = drafts.checkpoint_config(
+                        ROOT, name, seeded["revision"], "select-matrix-mode", draft_config,
+                        check_command=[sys.executable, "-c", "raise SystemExit(0)"],
+                    )
+                    baseline_harness = set(selection._HARNESS_MODULES)
+                    baseline_posture = set(selection.catalog._POSTURE_MODULES)
+                    revision = configured["revision"]
+                    for key, candidate in (
+                        ("root-1:rules:matrix-rule", "# Matrix rule\n\nNew rule.\n"),
+                        ("root-1:skills:matrix-skill",
+                         "---\nname: matrix-skill\ndescription: Matrix skill\n---\n\nNew skill.\n"),
+                        ("root-1:stances:voice/inactive", "New inactive voice.\n"),
+                        ("root-1:stances:voice/matrix", "New matrix voice.\n"),
+                    ):
+                        loaded = module_editing.read(ROOT, name, key)
+                        self.assertEqual(loaded["status"], "ready", loaded["message"])
+                        previewed = module_editing.preview(ROOT, name, key, candidate)
+                        self.assertTrue(previewed["valid"], previewed["error"])
+                        if key.endswith("voice/matrix"):
+                            projected = {row["runtime"]: row["text"]
+                                         for row in previewed["projections"]}
+                            self.assertIn("New matrix voice", projected["claude-code"])
+                            self.assertIn("New matrix voice", projected["codex"])
+                            self.assertNotIn("External runtime sentinel", projected["codex"])
+                            self.assertNotIn(str(external), json.dumps(projected))
+                            self.assertNotIn("studio-module-preview-", json.dumps(projected))
+                        else:
+                            self.assertTrue(all(not row["text"]
+                                                for row in previewed["projections"]), previewed)
+                            self.assertTrue(all(row["line_delta"] == 0
+                                                and row["token_delta"] == 0
+                                                for row in previewed["budgets"]), previewed)
+                        saved = module_editing.save(
+                            ROOT, name, key, revision, loaded["source_digest"],
+                            "save-" + hashlib.sha256(key.encode()).hexdigest()[:12], candidate,
+                        )
+                        self.assertTrue(saved["saved"], saved["error"])
+                        revision = saved["result"]["revision"]
 
-                stance = module_editing.read(ROOT, name, "root-1:stances:voice/matrix")
-                failed = module_editing.preview(
-                    ROOT, name, "root-1:stances:voice/matrix",
-                    stance["content"] + "\n" + "AKIA" + "I" * 16 + "\n",
-                )
-                self.assertFalse(failed["valid"])
-                self.assertEqual(set(selection._HARNESS_MODULES), baseline_harness)
-                self.assertEqual(set(selection.catalog._POSTURE_MODULES), baseline_posture)
-            discarded = subprocess.run(
-                [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name, "--json"],
-                cwd=ROOT, env=environment, capture_output=True, text=True, timeout=30,
-            )
-            self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+                    stance = module_editing.read(ROOT, name, "root-1:stances:voice/matrix")
+                    failed = module_editing.preview(
+                        ROOT, name, "root-1:stances:voice/matrix",
+                        stance["content"] + "\n" + "AKIA" + "I" * 16 + "\n",
+                    )
+                    self.assertFalse(failed["valid"])
+                    self.assertEqual(set(selection._HARNESS_MODULES), baseline_harness)
+                    self.assertEqual(set(selection.catalog._POSTURE_MODULES), baseline_posture)
+            finally:
+                draft_support.discard_draft(self, name, environment)
 
     # -- R6 review proofs ------------------------------------------------------------------
 
@@ -1524,12 +1516,7 @@ class ModuleEditingTests(unittest.TestCase):
                                      clear=True):
                     yield name, initial, environment, base, config
             finally:
-                discarded = subprocess.run(
-                    [sys.executable, str(ROOT / "bin" / "harness"), "draft", "discard", name,
-                     "--json"], cwd=ROOT, env=environment, capture_output=True, text=True,
-                    timeout=30,
-                )
-                self.assertEqual(discarded.returncode, 0, discarded.stderr or discarded.stdout)
+                draft_support.discard_draft(self, name, environment)
 
     def test_real_preview_and_save_evaluate_out_of_process_with_the_save_lint_environment(self):
         leaked = {"HARNESS_STANCE_VOICE": "verbose", "HARNESS_MODE": "leaky"}
