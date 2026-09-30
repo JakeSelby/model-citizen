@@ -96,6 +96,7 @@ def _paths(worktree: Path) -> Dict[str, Path]:
         "config": root / "config.json",
         "base_config": root / "base-config.json",
         "snapshots": root / "snapshots",
+        "generation": root / "generation",
     }
 
 
@@ -138,19 +139,54 @@ def _read_state(worktree: Path) -> Dict[str, Any]:
     return state
 
 
+def _generation(paths: Dict[str, Path]) -> int:
+    """The draft's write generation: odd while a lock holder may be changing it, even otherwise."""
+    try:
+        return int(paths["generation"].read_text(encoding="ascii").strip() or "0")
+    except FileNotFoundError:
+        return 0
+    except (OSError, ValueError):
+        return -1
+
+
+def _bump_generation(paths: Dict[str, Path]) -> None:
+    current = max(_generation(paths), 0)
+    _atomic_bytes(paths["generation"], str(current + 1).encode("ascii"))
+
+
 @contextlib.contextmanager
-def _locked(worktree: Path):
-    lock = _paths(worktree)["lock"]
+def _held(worktree: Path, blocking_timeout: Optional[float] = None):
+    """The exclusive writer lock. Every holder is a write attempt: the generation goes odd on entry
+    and even on exit, rolled-back saves included, so a lock-free reader can tell it overlapped one."""
+    paths = _paths(worktree)
+    lock = paths["lock"]
     lock.parent.mkdir(parents=True, exist_ok=True)
+    deadline = None if blocking_timeout is None else time.monotonic() + blocking_timeout
     with open(lock, "a", encoding="utf-8") as stream:
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if deadline is None or time.monotonic() >= deadline:
+                    raise DraftError("busy", "another writer is changing this draft") from exc
+                time.sleep(0.05)
         try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise DraftError("busy", "another writer is changing this draft") from exc
-        try:
+            if _generation(paths) % 2 == 0:
+                _bump_generation(paths)
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            try:
+                if _generation(paths) % 2 != 0:
+                    _bump_generation(paths)
+            finally:
+                fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def _locked(worktree: Path):
+    with _held(worktree):
+        yield
 
 
 @contextlib.contextmanager
@@ -368,6 +404,61 @@ def locked_context(repo: Path, name: str):
         if not isinstance(value, dict):
             raise DraftError("invalid-config", "draft configuration must be a JSON object")
         yield worktree.resolve(), state, value
+
+
+def _config_value(path: Path) -> Dict[str, Any]:
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()),
+        ) if path.is_file() else {}
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise DraftError("invalid-config", "draft configuration is unavailable") from exc
+    if not isinstance(value, dict):
+        raise DraftError("invalid-config", "draft configuration must be a JSON object")
+    return value
+
+
+def read_snapshot(repo: Path, name: str, operation: Callable[[Path, Dict[str, Any], Dict[str, Any]], Any],
+                  fast_attempts: int = 5, delay: float = 0.05, lock_timeout: float = 620.0) -> Any:
+    """Run a read-only `operation(worktree, state, config)` without making a writer fail `busy`.
+
+    A seqlock over the write generation: the operation runs only while the generation is even and
+    no lock holder is changing the draft, and its result, or its exception, counts only when the
+    generation is unchanged afterwards. A generation left odd by a crashed writer is recovered
+    once under the lock, as `locked_context` does. After a few fast attempts the reader waits for
+    the lock itself, up to `lock_timeout` (a save's check runs for up to 600 s), and reads under it.
+    """
+    worktree, _ = find(repo, name)
+    worktree = worktree.resolve()
+    paths = _paths(worktree)
+    for _attempt in range(fast_attempts):
+        before = _generation(paths)
+        if before < 0 or before % 2 or paths["journal"].exists():
+            try:
+                # Free lock plus odd generation or a journal: the last writer died. Recover once.
+                with _locked(worktree):
+                    _recover(worktree, _read_state(worktree))
+                continue
+            except DraftError as exc:
+                if exc.code != "busy":
+                    raise
+                time.sleep(delay)
+                continue
+        try:
+            state = _read_state(worktree)
+            result = operation(worktree, state, _config_value(paths["config"]))
+        except Exception:
+            if _generation(paths) == before:
+                raise
+            time.sleep(delay)
+            continue
+        if _generation(paths) == before:
+            return result
+        time.sleep(delay)
+    with _held(worktree, blocking_timeout=lock_timeout):
+        state = _recover(worktree, _read_state(worktree))
+        return operation(worktree, state, _config_value(paths["config"]))
 
 
 def checkpoint_config(repo: Path, name: str, base_revision: str, idempotency_key: str,

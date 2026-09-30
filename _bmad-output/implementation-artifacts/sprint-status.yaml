@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-29"
+generated: "2026-09-30"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -354,7 +354,7 @@ development_status:
   ah-s291-change-mode-stance-variants-and-switches-in-a: done
   ah-s292-edit-identity-preferences-and-integrations-in-a: ready-for-dev
   ah-s293-hand-edit-a-rule-skill-or-stance-in-a-draft-with: backlog
-  ah-s294-add-your-own-module-from-a-template-or-fork-a: backlog
+  ah-s294-add-your-own-module-from-a-template-or-fork-a: ready-for-dev
   ah-s295-review-and-apply-a-draft-through-the-governed: backlog
   ah-s296-roll-back-an-applied-draft: backlog
 

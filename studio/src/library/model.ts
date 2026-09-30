@@ -14,6 +14,14 @@ export type LibraryModule = {
   rendered: { text: string };
   projections: ModuleProjection[];
   context_cost: { tokens: number; estimate: string; method: string };
+  fork?: ModuleFork | null;
+};
+
+export type ModuleFork = {
+  source: string;
+  version: string;
+  revision: string;
+  upstream: { changed: boolean; missing: boolean; original_available: boolean; diff: string };
 };
 
 export type LibraryPayload = {

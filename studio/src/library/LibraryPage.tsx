@@ -13,17 +13,39 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { EvidenceState, StatusBadge } from "../components/StudioKit";
+import { CodeView, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { useLiveUpdates } from "../live/LiveUpdates";
 import { updateTouchesPaths } from "../live/model";
 import { loadLibrary } from "./api";
-import { filterLibrary, LibraryRequestGate, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload } from "./model";
+import { filterLibrary, LibraryRequestGate, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload, type ModuleFork } from "./model";
 import "./library.css";
 
 const EMPTY_FILTERS: LibraryFilters = { query: "", kind: "", root: "", state: "", cost: "" };
 
 export function sourceLineId(moduleKey: string, line: number): string {
   return `library-source-${encodeURIComponent(moduleKey)}-${line}`;
+}
+
+export function ForkProvenance({ fork }: { fork: ModuleFork }) {
+  const from = fork.version ? ` at ${fork.version}` : "";
+  const revision = fork.revision ? ` (${fork.revision.slice(0, 12)})` : "";
+  return (
+    <div className="library-fork">
+      <Text fw={650} size="sm">Forked from core <Code>{fork.source}</Code>{from}{revision}</Text>
+      {fork.upstream.missing ? (
+        <Text c="orange" size="sm">The core original is no longer installed{fork.upstream.diff
+          ? "; the diff shows what it was."
+          : ". The original as forked is not in this checkout's history, so no diff is shown."}</Text>
+      ) : fork.upstream.changed && !fork.upstream.original_available ? (
+        <Text c="orange" size="sm">The core original changed since this fork. The original as forked is not in this checkout's history, so no diff is shown.</Text>
+      ) : fork.upstream.changed ? (
+        <Text c="orange" size="sm">The core original changed since this fork. Upstream diff, from the original as forked to core now:</Text>
+      ) : (
+        <Text c="dimmed" size="sm">The core original is unchanged since this fork.</Text>
+      )}
+      {fork.upstream.diff ? <CodeView label={`Upstream diff for ${fork.source}`}>{fork.upstream.diff}</CodeView> : null}
+    </div>
+  );
 }
 
 function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository }: {
@@ -38,12 +60,15 @@ function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository
         <span className="library-module-name">{module.name}</span>
         {module.root.id !== sharedRoot && <span className="library-module-root">{module.root.label}</span>}
         <span className="library-module-state">
+          {module.fork ? <Badge variant="light">Fork of {module.fork.source}</Badge> : null}
+          {module.fork?.upstream.changed ? <Badge color="orange">Upstream changed</Badge> : null}
           {module.collision ? <Badge color="orange">Collision</Badge> : null}
           <StatusBadge>{module.state.value}</StatusBadge>
         </span>
       </summary>
       <Stack className="library-module-body" gap="md">
       <Text c="dimmed" size="sm">Ownership: {module.root.label}</Text>
+      {module.fork ? <ForkProvenance fork={module.fork} /> : null}
       <Group gap="xs">
         <Badge variant="light">{module.context_cost.tokens.toLocaleString()} tokens</Badge>
         <Text c="dimmed" size="xs">{module.context_cost.estimate} · {module.context_cost.method}</Text>
