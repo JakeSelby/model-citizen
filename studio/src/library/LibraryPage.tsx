@@ -33,7 +33,9 @@ export function ForkProvenance({ fork }: { fork: ModuleFork }) {
     <div className="library-fork">
       <Text fw={650} size="sm">Forked from core <Code>{fork.source}</Code>{from}{revision}</Text>
       {fork.upstream.missing ? (
-        <Text c="orange" size="sm">The core original is no longer installed; the diff shows what it was.</Text>
+        <Text c="orange" size="sm">The core original is no longer installed{fork.upstream.diff
+          ? "; the diff shows what it was."
+          : ". The original as forked is not in this checkout's history, so no diff is shown."}</Text>
       ) : fork.upstream.changed && !fork.upstream.original_available ? (
         <Text c="orange" size="sm">The core original changed since this fork. The original as forked is not in this checkout's history, so no diff is shown.</Text>
       ) : fork.upstream.changed ? (

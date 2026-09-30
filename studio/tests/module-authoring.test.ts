@@ -116,6 +116,12 @@ test("AC3 and AC4: the library shows a fork's source, version and upstream diff"
     fork: { ...fork, upstream: { changed: true, missing: false, original_available: false, diff: "" } },
   })));
   assert.match(unavailable, /not in this checkout/);
+  const gone = renderToStaticMarkup(h(MantineProvider, {}, h(ForkProvenance, {
+    fork: { ...fork, upstream: { changed: true, missing: true, original_available: false, diff: "" } },
+  })));
+  assert.match(gone, /no longer installed/);
+  assert.doesNotMatch(gone, /the diff shows what it was/);
+  assert.match(gone, /no diff is shown/);
   const owned = draftOwnedModules([module("core:rules:secrets", true), module("root-1:rules:mine", false),
     module("root-1:rules:secrets-fork", false, fork)]);
   assert.deepEqual(owned.map((item) => item.key), ["root-1:rules:secrets-fork", "root-1:rules:mine"]);

@@ -44,6 +44,10 @@ class RequestValidationTests(unittest.TestCase):
             ({"action": "fork", "source": "core:roles:reviewer"}, "fork-unavailable"),
             ({"action": "fork", "source": "core:rules:../../../../etc/passwd"}, "fork-unavailable"),
             ({"action": "fork", "source": "core:skills:Beta"}, "fork-unavailable"),
+            (dict(_rule("a---b")), "invalid-name"),
+            ({"action": "fork", "source": "core:skills:beta", "name": "x---y"}, "invalid-name"),
+            ({"action": "add", "kind": "stances", "name": "tone/a---b", "description": "d"},
+             "invalid-name"),
             (_rule("fine", "a --- b"), "invalid-description"),
             (_rule("fine", "tab\there"), "invalid-description"),
         ]
@@ -155,6 +159,26 @@ class UpstreamDiffTests(unittest.TestCase):
             "rules/alpha", revision, {"alpha.md": b"# Alpha\n"}), "rules", "mine")
         self.assertTrue(fork["upstream"]["missing"])
         self.assertIn("-# Alpha", fork["upstream"]["diff"])
+
+    def test_originals_are_cached_by_revision_and_sha256_names_are_accepted(self):
+        original = {"primitives/rules/alpha.md": b"# Alpha\n"}
+        checkout, revision = self._checkout(original)
+        module_library._ORIGINALS.clear()
+        real_run = subprocess.run
+        spawned = []
+
+        def counting(*args, **kwargs):
+            spawned.append(args[0])
+            return real_run(*args, **kwargs)
+
+        with mock.patch.object(module_library.subprocess, "run", side_effect=counting):
+            for _ in range(3):
+                self.assertEqual(module_library._at_revision(
+                    checkout, revision, "primitives/rules/alpha.md"), b"# Alpha\n")
+        self.assertEqual(len(spawned), 1)
+        self.assertTrue(module_library.REVISION.fullmatch("a" * 64))
+        self.assertTrue(module_library.REVISION.fullmatch("a" * 40))
+        self.assertFalse(module_library.REVISION.fullmatch("a" * 41))
 
     def test_a_traversing_source_is_never_read(self):
         checkout, revision = self._checkout({"primitives/rules/alpha.md": b"# Alpha\n",
@@ -384,6 +408,86 @@ class DraftAuthoringTests(unittest.TestCase):
             # The read that overlapped the write is retried against the new revision.
             self.assertGreaterEqual(len(calls), 2)
             self.assertIn("modules", results["library"])
+
+    def test_lock_free_reads_see_every_write_attempt_recover_and_wait_for_the_lock(self):
+        with self.real_draft("authoring-seqlock") as (name, initial, _environment, _base):
+            worktree = drafts.find(ROOT, name)[0]
+            paths = drafts._paths(worktree)
+
+            # A save that fails its check and rolls back still invalidates an overlapping read.
+            calls = []
+
+            def overlapped(worktree_path, state, config):
+                calls.append(state["revision"])
+                if len(calls) == 1:
+                    with self.assertRaises(drafts.DraftError):
+                        drafts.checkpoint(ROOT, name, initial["revision"], "rolled-back",
+                                          files={"rolled.md": b"# Never committed\n"},
+                                          check_command=[sys.executable, "-c", "raise SystemExit(1)"])
+                return (worktree_path / "rolled.md").exists()
+
+            self.assertFalse(drafts.read_snapshot(ROOT, name, overlapped))
+            self.assertEqual(len(calls), 2)
+
+            # An exception raised inside an overlapping write is retried, a genuine one is not.
+            raised = []
+
+            def transient(worktree_path, state, config):
+                raised.append(1)
+                if len(raised) == 1:
+                    with drafts._locked(worktree_path):
+                        pass
+                    raise FileNotFoundError("moved aside mid-publish")
+                return "read"
+
+            self.assertEqual(drafts.read_snapshot(ROOT, name, transient), "read")
+            with self.assertRaises(ValueError):
+                drafts.read_snapshot(ROOT, name, lambda *_args: (_ for _ in ()).throw(ValueError("real")))
+
+            # A generation a crashed writer left odd is recovered once, not reported busy.
+            paths["generation"].write_text(str(drafts._generation(paths) + 1), encoding="ascii")
+            self.assertEqual(drafts.read_snapshot(ROOT, name, lambda *_args: "recovered"), "recovered")
+            self.assertEqual(drafts._generation(paths) % 2, 0)
+
+            # A write longer than the fast retries is waited for, not refused busy.
+            held, release = threading.Event(), threading.Event()
+
+            def writer():
+                with drafts._locked(worktree):
+                    held.set()
+                    release.wait(30)
+
+            thread = threading.Thread(target=writer)
+            thread.start()
+            self.assertTrue(held.wait(30))
+            threading.Timer(3.0, release.set).start()
+            try:
+                self.assertEqual(drafts.read_snapshot(ROOT, name, lambda *_args: "waited"), "waited")
+            finally:
+                release.set()
+                thread.join(30)
+
+    def test_a_fork_after_a_draft_edit_of_the_core_module_still_diffs_upstream(self):
+        with self.real_draft("authoring-edited-core") as (name, initial, _environment, _base):
+            worktree = drafts.find(ROOT, name)[0]
+            core_rule = "primitives/rules/" + FORKED + ".md"
+            edited = (worktree / core_rule).read_text(encoding="utf-8") + "\nA draft edit before the fork.\n"
+            first = drafts.checkpoint(ROOT, name, initial["revision"], "edit-core",
+                                      files={core_rule: edited.encode("utf-8")}, check_command=PASS)
+            forked = module_authoring.save(ROOT, name, first["revision"], "fork-edited", {
+                "action": "fork", "source": "core:rules:" + FORKED, "create_root": True})
+            self.assertTrue(forked["saved"], forked)
+            recorded = json.loads(next(item["text"] for item in forked["files"]
+                                       if item["path"] == "forks.json"))["rules"][FORKED + "-fork"]
+            self.assertEqual(recorded["revision"], first["revision"])
+            drafts.checkpoint(ROOT, name, forked["result"]["revision"], "upstream-after",
+                              files={core_rule: (edited + "Upstream after the fork.\n").encode("utf-8")},
+                              check_command=PASS)
+            upstream = {item["key"]: item for item in module_authoring.library(ROOT, name)["modules"]}[
+                "root-1:rules:" + FORKED + "-fork"]["fork"]["upstream"]
+            self.assertTrue(upstream["original_available"])
+            self.assertIn("+Upstream after the fork.", upstream["diff"])
+            self.assertNotIn("+A draft edit before the fork.", upstream["diff"])
 
     def test_manifest_checks_refuse_before_any_checkpoint(self):
         with self.real_draft("authoring-manifest") as (name, initial, _environment, _base):

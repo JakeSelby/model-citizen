@@ -73,9 +73,7 @@ class AuthoringError(ValueError):
 
 
 def _identifier(value: Any) -> bool:
-    # The resolver's identifier rule (posture._identifier), for names the draft has not loaded yet.
-    return (isinstance(value, str) and bool(value) and value[0].isalpha() and value.islower()
-            and value.isascii() and all(c.isalnum() or c == "-" for c in value))
+    return module_library.identifier(value)
 
 
 def _title(name: str) -> str:
@@ -178,6 +176,17 @@ def _template_files(kind: str, name: str, description: str) -> Dict[str, bytes]:
         ).encode("utf-8")}
     return {"modes/" + name + ".json": _canonical({"schema_version": 1,
                                                    "description": description})}
+
+
+def _forked_revision(worktree: Path, state: Dict[str, Any], kind: str, source: str,
+                     originals: Mapping[str, bytes]) -> str:
+    base = state["base_revision"]
+    for relative, content in originals.items():
+        path = ("primitives/rules/" + source + ".md" if kind == "rules"
+                else "primitives/skills/" + source + "/" + relative)
+        if module_library._at_revision(worktree, base, path) != content:
+            return state["revision"]
+    return base
 
 
 def _renamed_skill(content: bytes, name: str) -> bytes:
@@ -330,9 +339,10 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
         fork = {"source": kind + "/" + source,
                 "version": version_path.read_text(encoding="utf-8").strip()
                 if version_path.is_file() else "",
-                # The base revision is in the installed checkout's history, so the original
-                # can be read back from git; the draft's own commits may be discarded.
-                "revision": state["base_revision"],
+                # The revision the digests were taken at: the base, which the installed checkout's
+                # history keeps, unless the draft already changed this core module, in which case
+                # only the draft's own revision holds the text that was forked.
+                "revision": _forked_revision(worktree, state, kind, source, originals),
                 "files": {relative: module_library.digest(content)
                           for relative, content in originals.items()}}
         forks_relative = own["relative"] + "/" + module_library.FORKS_FILE
@@ -501,7 +511,10 @@ def library(repo: Path, name: str) -> Dict[str, Any]:
         mapped = module_editing._mapped_config(repo, worktree, raw_config)
         return worktree, module_library.inventory(worktree, mapped)
 
-    worktree, payload = drafts.read_snapshot(repo, name, snapshot)
+    try:
+        worktree, payload = drafts.read_snapshot(repo, name, snapshot)
+    except OSError as exc:
+        raise drafts.DraftError("library-unavailable", "the draft library could not be read") from exc
     prefix = str(worktree) + os.sep
 
     def relative(value: str) -> str:

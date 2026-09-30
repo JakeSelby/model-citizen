@@ -8,9 +8,11 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from harness_core import catalog
 
@@ -23,7 +25,12 @@ FORKS_FILE = "forks.json"
 FORK_KINDS = ("rules", "skills")
 MAX_FORK_FILES = 64
 MAX_FORK_FILE_BYTES = 512 * 1024
-REVISION = re.compile(r"^[0-9a-f]{40}$")
+# A SHA-1 or a SHA-256 object name.
+REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+MAX_CACHED_ORIGINALS = 1024
+# Commits are immutable, so a file at a revision is cached: a retried read never re-spawns git.
+_ORIGINALS: "OrderedDict[Tuple[str, str, str], Optional[bytes]]" = OrderedDict()
+_ORIGINALS_LOCK = threading.Lock()
 
 
 def _config_and_selection(root: Path, supplied: Optional[Mapping[str, Any]] = None):
@@ -120,8 +127,11 @@ def _manifest(root_path: Path, kind: str, name: str) -> Optional[Dict[str, Any]]
 
 def identifier(value: Any) -> bool:
     """The resolver's unit-name rule (posture._identifier): the only names joined into a path."""
+    # `---` is refused too: `catalog.frontmatter` splits on it, so a name holding it cuts a
+    # skill's frontmatter short.
     return (isinstance(value, str) and bool(value) and value[0].isalpha() and value.islower()
-            and value.isascii() and all(c.isalnum() or c == "-" for c in value))
+            and value.isascii() and all(c.isalnum() or c == "-" for c in value)
+            and "---" not in value)
 
 
 def safe_relative(value: Any) -> bool:
@@ -226,12 +236,22 @@ def _at_revision(checkout: Path, revision: str, path: str) -> Optional[bytes]:
     """One file's bytes at a recorded revision of the checkout, or None when git cannot say."""
     if not REVISION.fullmatch(revision):
         return None
+    key = (str(checkout), revision, path)
+    with _ORIGINALS_LOCK:
+        if key in _ORIGINALS:
+            _ORIGINALS.move_to_end(key)
+            return _ORIGINALS[key]
     try:
         shown = subprocess.run(["git", "-C", str(checkout), "show", revision + ":" + path],
                                capture_output=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    return shown.stdout if shown.returncode == 0 else None
+        return None  # Transient: not cached.
+    content = shown.stdout if shown.returncode == 0 else None
+    with _ORIGINALS_LOCK:
+        _ORIGINALS[key] = content
+        while len(_ORIGINALS) > MAX_CACHED_ORIGINALS:
+            _ORIGINALS.popitem(last=False)
+    return content
 
 
 def _fork(checkout: Path, forks: Dict[str, Any], kind: str, name: str) -> Optional[Dict[str, Any]]:
