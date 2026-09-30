@@ -58,6 +58,7 @@ Behaviour:
 
 Test: echo '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' | python3 grade-bash.py
 """
+import fnmatch
 import importlib.util
 import json
 import os
@@ -154,14 +155,22 @@ RUNNERS = {("bundle", "exec"), ("poetry", "run"), ("uv", "run"), ("pipx", "run")
 SUDO = {"sudo": ("-u", "-g", "-U", "--user", "--group", "-p", "--prompt"),
         "doas": ("-u", "-C"),
         "su": ("-c", "-s", "--shell", "--command")}
-SHELLS = {"bash", "sh", "zsh", "ksh", "dash"}
+SHELLS = {"bash", "sh", "zsh", "ksh", "mksh", "dash", "csh", "tcsh", "fish"}
 # A word naming one of these makes any here-document body on the line a script (`_runs_input`).
 SHELL_RUNNERS = SHELLS | {"eval", "ssh"}
-SHELL_WORD_RE = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:bash|sh|zsh|ksh|dash|eval|ssh|source|\.)"
+SHELL_WORD_RE = re.compile(r"(?:^|[\s;&|(`])=?(?:\S*/)?"
+                           r"(?:bash|sh|zsh|m?ksh|dash|t?csh|fish|eval|ssh|source|\.)"
                            r"(?=[\s;&|)`]|$)")
+# A command word bash may expand into a name: a brace expansion, a variable or a glob.
+BRACE_RE = re.compile(r"\{[^{}]*(?:,|\.\.)[^{}]*\}")
 # How many substitutions `_body_substitutions` reads in one unquoted body before it calls the
 # body unreadable: each can read to the end of the body.
 BODY_SUB_CHECKS = 64
+# What in a body substitution bash 3.2 and zsh may close at a different `)` than the matcher
+# does: a comment, a `case` pattern or a nested here-document.
+UNSURE_SUB_RE = re.compile(r"(?<![^\s;&|()])(?:#|case(?![^\s;&|)]))|<<")
+# The backslashes bash removes from the text of a backtick substitution before running it.
+BACKTICK_ESCAPE_RE = re.compile(r"\\([\\`$])")
 GIT_VALUE_GLOBALS = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path",
                      "--config-env")
 XARGS_VALUE_FLAGS = ("-I", "-i", "-n", "-P", "-L", "-s", "-d", "-a", "-E", "-e", "--replace",
@@ -1466,9 +1475,9 @@ def _grade_reading(text, bodies, cwd, depth):
 def _runs_input(tokens):
     """Whether the simple command `tokens` may run its standard input or an argument as shell
     text: a shell, `eval`, `ssh`, or a `.` or `source` at its head, past assignments and
-    wrappers, or a head that a substitution or a variable supplies."""
+    wrappers, or a head that may expand to one of them (`_may_name_shell`)."""
     tokens, _written = _redirects(list(tokens))
-    if any(t.rpartition("/")[2] in SHELL_RUNNERS for t in tokens):
+    if any(t.rpartition("/")[2].lstrip("=") in SHELL_RUNNERS for t in tokens):
         return True
     for _ in range(MAX_DEPTH):
         while tokens and ASSIGN_RE.match(tokens[0]):
@@ -1476,16 +1485,64 @@ def _runs_input(tokens):
         if not tokens:
             return False
         head = tokens[0]
-        if PLACEHOLDER in head or head.startswith("$") or head in (".", "source"):
+        if _may_name_shell(head):
             return True
         prog = head.rpartition("/")[2]
-        if prog in WRAPPERS:
+        if prog == "env":
+            rest = _env_split(tokens[1:])
+            if rest is None:
+                return True
+            tokens = strip_options(rest, WRAPPERS[prog])
+        elif prog in WRAPPERS:
             tokens = strip_options(tokens[1:], WRAPPERS[prog])
         elif prog in ("xargs", "parallel"):
             tokens = strip_options(tokens[1:], XARGS_VALUE_FLAGS)
         else:
             return False
     return True
+
+
+def _may_name_shell(word):
+    """Whether bash, or zsh, may run the command word `word` as a shell, `eval`, `ssh`, `.` or
+    `source`: by its name, a zsh `=name`, or a variable, substitution, brace expansion or glob
+    that may expand to one. What cannot be expanded here counts as a shell."""
+    if PLACEHOLDER in word or "$" in word or "`" in word or BRACE_RE.search(word):
+        return True
+    name = word.rpartition("/")[2].lstrip("=")
+    if name in SHELL_RUNNERS or name in (".", "source") or re.search(r"\[.*\]", name):
+        return True
+    return ("*" in name or "?" in name) and any(
+        fnmatch.fnmatchcase(each, name) for each in SHELL_RUNNERS | {"source"})
+
+
+def _env_split(args):
+    """`env`'s arguments with the string of its `-S` split into the words env reads, or None
+    when the string holds a quote, a backslash or a `$`, which env interprets itself."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--" or not a.startswith("-") or a == "-":
+            return args
+        value = None
+        if a in ("-S", "--split-string"):
+            value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 2
+        elif a.startswith("--split-string="):
+            value, i = a.partition("=")[2], i + 1
+        elif not a.startswith("--"):
+            letters = a[1:]
+            cut = min((letters.find(c) for c in "uCPS" if c in letters), default=-1)
+            if cut >= 0 and letters[cut] == "S":
+                value = letters[cut + 1:]
+                if not value:
+                    value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+                i += 1
+        if value is None:
+            i += 2 if a in WRAPPERS["env"] or a == "-P" else 1
+            continue
+        if any(c in value for c in "\\'\"$"):
+            return None
+        return value.split() + args[i:]
+    return args
 
 
 def _feeds_shell(text, parts, inners, depth):
@@ -1512,7 +1569,12 @@ def _body_substitutions(body):
     they cannot be read for sure. Quotes are literal in a body, so `'$(x)'` runs `x`; a
     backslash escapes `$`, a backtick and itself, and removes a newline, so `$\\` then `(x)`
     runs `x` too. A `$((…))` is arithmetic whose own substitutions the walk still finds; a
-    `$((` that does not close as one is a substitution, as bash 3.2 reads `$((x) )`."""
+    `$((` that does not close as one is a substitution, as bash 3.2 reads `$((x) )`.
+
+    Where a comment, a `case` pattern or a nested here-document may move the `)` that closes a
+    substitution, as bash 3.2 and zsh disagree on it, the rest of the body from that `$(` on is
+    one more text, read as a script. A backtick substitution loses the backslashes bash removes
+    before running it, so an escaped backtick inside it opens a nested one."""
     out, i, n = [], 0, len(body)
     while i < n:
         if body[i] == "\\":
@@ -1529,7 +1591,7 @@ def _body_substitutions(body):
         return []
     if len(text) > HEREDOC_CHECKED_LENGTH:
         return None
-    inners, checks, i, n = [], 0, 0, len(text)
+    inners, rest, checks, i, n = [], None, 0, 0, len(text)
     while i < n:
         c = text[i]
         if c == "\\":
@@ -1542,11 +1604,15 @@ def _body_substitutions(body):
             if text.startswith("$((", i):
                 k = ro._match_paren(text, i + 2)
                 if k is not None and text.startswith(")", k + 1):
+                    if rest is None and UNSURE_SUB_RE.search(text, i + 3, k):
+                        rest = text[i + 2:]
                     i += 3
                     continue
             j = ro._match_paren(text, i + 1)
             if j is None:
                 return None
+            if rest is None and UNSURE_SUB_RE.search(text, i + 2, j):
+                rest = text[i + 2:]
             inners.append(text[i + 2:j])
             i = j + 1
             continue
@@ -1556,13 +1622,39 @@ def _body_substitutions(body):
                 j += 2 if text[j] == "\\" else 1
             if j >= n:
                 return None
-            inners.append(text[i + 1:j])
+            inners.append(BACKTICK_ESCAPE_RE.sub(r"\1", text[i + 1:j]))
             i = j + 1
             continue
         i += 1
     if len(inners) > BODY_SUB_CHECKS or sum(len(inner) for inner in inners) > SCAN_CAP:
         return None
-    return inners
+    return inners + ([rest] if rest is not None else [])
+
+
+def _nested_texts(text, levels):
+    """[(text, level)] for `text` and every substitution nested in it down `levels` levels, each
+    of which runs when `text` does, or None past `BODY_SUB_CHECKS` of them. A text with a
+    backslash before a backtick, `$` or backslash is read unescaped as well, as bash reads the
+    text of a backtick substitution."""
+    out, todo = [], [(text, 0)]
+    while todo:
+        each, level = todo.pop()
+        variants = [each]
+        if "\\" in each:
+            unescaped = BACKTICK_ESCAPE_RE.sub(r"\1", each)
+            if unescaped != each:
+                variants.append(unescaped)
+        for variant in variants:
+            out.append((variant, level))
+            if len(out) > BODY_SUB_CHECKS:
+                return None
+            if level >= levels or len(variant) > SCAN_CAP or (
+                    "$(" not in variant and "`" not in variant and "<(" not in variant
+                    and ">(" not in variant):
+                continue
+            _stripped, nested = _extract_subs(variant)
+            todo.extend((inner, level + 1) for inner in nested)
+    return out
 
 
 def _grade_bodies(bodies, runs, cwd, depth):
@@ -1577,10 +1669,18 @@ def _grade_bodies(bodies, runs, cwd, depth):
             hits.append(grade_text(body, cwd, depth + 1))
         if not getattr(body, "quoted", True):
             inners = _body_substitutions(body)
+            texts = []
+            for inner in inners or ():
+                nested = _nested_texts(inner, MAX_DEPTH - depth - 1)
+                if nested is None:
+                    inners = None
+                    break
+                texts.extend(nested)
             if inners is None:
                 hits.append(max(_scan(body), (1, "", "", "opaque"), key=lambda h: h[0]))
             else:
-                hits.extend(grade_text(inner, cwd, depth + 1) for inner in inners)
+                # A nested text is graded as deep as it sits, so the deepest are scanned.
+                hits.extend(grade_text(text, cwd, depth + 1 + level) for text, level in texts)
         for hit in hits:
             if hit[0] > best[0]:
                 best = hit
