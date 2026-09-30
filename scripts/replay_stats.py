@@ -31,11 +31,12 @@ METHOD = "task-clustered paired percentile bootstrap"
 SUPPORTED, NOT_SUPPORTED, INCONCLUSIVE = "supported", "not supported", "inconclusive"
 
 
-def attempts(rows):
+def attempts(rows, arms=ARMS):
     """One validated `{task, arm, trial, passed, cost, long}` per saved row.
 
     ValueError names the first malformed or contradictory row. An errored row is a fail by
-    intention to treat. The trial is the row's `rep`.
+    intention to treat. The trial is the row's `rep`. `arms` is the `(reference, treatment)`
+    pair the rows may name, bare and harness unless a caller compares another pair.
     """
     out, seen, long_by_task = [], set(), {}
     for index, row in enumerate(rows, 1):
@@ -44,7 +45,7 @@ def attempts(rows):
             missing.append("rep")
         if missing:
             raise ValueError("row %d has no %s" % (index, ", ".join(missing)))
-        if row["arm"] not in ARMS:
+        if row["arm"] not in arms:
             raise ValueError("row %d names an unknown arm %r" % (index, row["arm"]))
         trial = row.get("rep", row.get("trial"))
         if type(trial) is not int or trial < 1:
@@ -102,31 +103,31 @@ def cost_of_pass(cost, passes):
     return cost / passes
 
 
-def _cells(atts):
+def _cells(atts, arms=ARMS):
     """Per task, per arm: `[cost or None, passes, attempts]`, and the sorted task ids. ValueError
     when a task has attempts in one arm only, since a paired interval cannot use it."""
     cells, trial_ids = {}, {}
     for a in atts:
-        cell = cells.setdefault(a["task"], {arm: [0.0, 0, 0] for arm in ARMS})[a["arm"]]
-        trial_ids.setdefault(a["task"], {arm: set() for arm in ARMS})[a["arm"]].add(a["trial"])
+        cell = cells.setdefault(a["task"], {arm: [0.0, 0, 0] for arm in arms})[a["arm"]]
+        trial_ids.setdefault(a["task"], {arm: set() for arm in arms})[a["arm"]].add(a["trial"])
         cell[0] = None if cell[0] is None or a["cost"] is None else cell[0] + a["cost"]
         cell[1] += 1 if a["passed"] else 0
         cell[2] += 1
-    unpaired = sorted(t for t, c in cells.items() if not all(c[arm][2] for arm in ARMS))
+    unpaired = sorted(t for t, c in cells.items() if not all(c[arm][2] for arm in arms))
     if unpaired:
         raise ValueError("task %s has attempts in one arm only; a paired interval needs both" % unpaired[0])
-    mismatched = sorted(t for t in cells if trial_ids[t]["bare"] != trial_ids[t]["harness"])
+    mismatched = sorted(t for t in cells if trial_ids[t][arms[0]] != trial_ids[t][arms[1]])
     if mismatched:
         raise ValueError("task %s has different trial ids in its two arms" % mismatched[0])
     tasks = sorted(cells)
-    if tasks and any(trial_ids[t]["bare"] != trial_ids[tasks[0]]["bare"] for t in tasks):
+    if tasks and any(trial_ids[t][arms[0]] != trial_ids[tasks[0]][arms[0]] for t in tasks):
         raise ValueError("tasks have different trial ids; a fixed sample needs one trial set")
     return cells, tasks
 
 
-def _totals(cells, tasks):
+def _totals(cells, tasks, arms=ARMS):
     out = {}
-    for arm in ARMS:
+    for arm in arms:
         costs = [cells[t][arm][0] for t in tasks]
         total = None if None in costs else sum(costs)
         if total is not None and not math.isfinite(total):
@@ -136,17 +137,18 @@ def _totals(cells, tasks):
     return out
 
 
-def _ratio(totals):
-    """(value, reason). The value is None, with the reason, when it is undefined."""
-    unreadable = [arm for arm in ARMS if totals[arm][0] is None]
+def _ratio(totals, arms=ARMS):
+    """(value, reason): treatment over reference, `arms[1]` over `arms[0]`. The value is None,
+    with the reason, when it is undefined."""
+    unreadable = [arm for arm in arms if totals[arm][0] is None]
     if unreadable:
         return None, "the %s arm has a run with no readable cost" % unreadable[0]
-    nothing = [arm for arm in ARMS if not totals[arm][1]]
+    nothing = [arm for arm in arms if not totals[arm][1]]
     if nothing:
         return None, "the %s arm passed nothing" % " and the ".join(nothing)
-    harness, bare = (cost_of_pass(totals[arm][0], totals[arm][1]) for arm in ("harness", "bare"))
+    harness, bare = (cost_of_pass(totals[arm][0], totals[arm][1]) for arm in (arms[1], arms[0]))
     if not bare:
-        return None, "the bare arm's cost is zero"
+        return None, "the %s arm's cost is zero" % arms[0]
     ratio = harness / bare
     if not math.isfinite(ratio):
         raise ValueError("the cost-of-pass ratio is non-finite")
@@ -166,7 +168,7 @@ def _bound(sample):
     return sample[1] if sample[0] == 1 else None
 
 
-def bootstrap(cells, tasks, seed=SEED, resamples=RESAMPLES):
+def bootstrap(cells, tasks, seed=SEED, resamples=RESAMPLES, arms=ARMS):
     """(ratio interval, difference interval, undefined ratio resamples) over `tasks`.
 
     Each resample draws len(tasks) tasks with replacement and pools both arms over the same
@@ -178,16 +180,16 @@ def bootstrap(cells, tasks, seed=SEED, resamples=RESAMPLES):
         raise ValueError("resamples must be an integer of at least 2")
     rng = random.Random(seed)
     alpha = (1 - CONFIDENCE) / 2
-    priced = all(cells[t][arm][0] is not None for t in tasks for arm in ARMS)
+    priced = all(cells[t][arm][0] is not None for t in tasks for arm in arms)
     ratios, diffs, undefined = [], [], 0
     for _ in range(resamples):
         picks = [tasks[rng.randrange(len(tasks))] for _ in tasks]
-        totals = _totals(cells, picks)
-        (hc, hp, hn), (bc, bp, bn) = totals["harness"], totals["bare"]
+        totals = _totals(cells, picks, arms)
+        (hc, hp, hn), (bc, bp, bn) = totals[arms[1]], totals[arms[0]]
         diffs.append(hp / hn - bp / bn)
         if not priced:
             continue
-        value, _ = _ratio(totals)
+        value, _ = _ratio(totals, arms)
         if value is None:
             undefined += 1
             ratios.append((0, None) if hp else (2, None))
@@ -231,15 +233,20 @@ def decide(ratio, ratio_ci, diff_ci, long_ci=None, has_long=False):
     return SUPPORTED, "both conditions of the decision rule hold", claim
 
 
-def analyse(rows, seed=SEED, resamples=RESAMPLES):
-    """The whole SM-2 result for a finished two-arm row set; ValueError when it cannot be derived."""
-    atts = attempts(rows)
-    cells, tasks = _cells(atts)
+def analyse(rows, seed=SEED, resamples=RESAMPLES, arms=ARMS):
+    """The whole SM-2 result for a finished two-arm row set; ValueError when it cannot be derived.
+
+    `arms` is `(reference, treatment)`: the ratio is treatment over reference and the difference
+    treatment minus reference. The verdict is SM-2's rule, which is defined for harness against
+    bare only, so a caller comparing another pair reads the intervals and not the verdict."""
+    pair = arms
+    atts = attempts(rows, pair)
+    cells, tasks = _cells(atts, pair)
     if not tasks:
         raise ValueError("no rows")
-    totals = _totals(cells, tasks)
+    totals = _totals(cells, tasks, pair)
     arms = {}
-    for arm in ARMS:
+    for arm in pair:
         cost, passes, n = totals[arm]
         low, high = wilson(passes, n)
         arms[arm] = {"attempts": n, "passes": passes,
@@ -249,17 +256,17 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES):
                      "mean_cost_per_attempt": None if cost is None else round(cost / n, 6),
                      "pass_rate": round(passes / n, 4),
                      "pass_rate_interval_descriptive": [round(low, 4), round(high, 4)]}
-    ratio, undefined_reason = _ratio(totals)
-    ratio_ci, diff_ci, undefined = bootstrap(cells, tasks, seed, resamples)
+    ratio, undefined_reason = _ratio(totals, pair)
+    ratio_ci, diff_ci, undefined = bootstrap(cells, tasks, seed, resamples, pair)
     long_tasks = sorted({a["task"] for a in atts if a["long"]})
     long = None
     if long_tasks:
-        long_ratio, long_reason = _ratio(_totals(cells, long_tasks))
+        long_ratio, long_reason = _ratio(_totals(cells, long_tasks, pair), pair)
         long = {"tasks": long_tasks, "ratio": None if long_ratio is None else round(long_ratio, 4),
                 "ratio_undefined": long_reason,
-                "ratio_interval": bootstrap(cells, long_tasks, seed, resamples)[0]}
+                "ratio_interval": bootstrap(cells, long_tasks, seed, resamples, pair)[0]}
     verdict, reason, claim = decide(ratio, ratio_ci, diff_ci, long and long["ratio_interval"], bool(long_tasks))
-    min_trials = min(cells[task][arm][2] for task in tasks for arm in ARMS)
+    min_trials = min(cells[task][arm][2] for task in tasks for arm in pair)
     eligible = min_trials >= 5
     limitation = None
     if not eligible:
@@ -269,25 +276,26 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES):
             "delta": DELTA, "tasks": len(tasks), "arms": arms,
             "ratio": None if ratio is None else round(ratio, 4), "ratio_undefined": undefined_reason,
             "ratio_interval": ratio_ci, "undefined_resamples": undefined,
-            "difference": round(totals["harness"][1] / totals["harness"][2] -
-                                totals["bare"][1] / totals["bare"][2], 4),
+            "difference": round(totals[pair[1]][1] / totals[pair[1]][2] -
+                                totals[pair[0]][1] / totals[pair[0]][2], 4),
             "difference_interval": diff_ci, "long": long, "sm2_eligible": eligible,
             "limitation": limitation,
             "verdict": verdict, "reason": reason, "claim": claim}
 
 
-def pareto(result):
+def pareto(result, names=ARMS):
     """Per arm `(arm, mean cost per attempt, pass rate, status)`, status `frontier` or `dominated
     by <arm>`: dominated when another arm costs no more per attempt and passes at least as often,
-    better on one. An arm with an unreadable cost is `unpriced`."""
+    better on one. An arm with an unreadable cost is `unpriced`. `names` are the arms of
+    `result["arms"]` to place, in order; a three-arm view passes three."""
     arms = result["arms"]
     out = []
-    for arm in ARMS:
+    for arm in names:
         mine = arms[arm]
         status = "frontier"
         if mine["mean_cost_per_attempt"] is None:
             status = "unpriced"
-        for other in ARMS:
+        for other in names:
             theirs = arms[other]
             if other == arm or status == "unpriced" or theirs["mean_cost_per_attempt"] is None:
                 continue

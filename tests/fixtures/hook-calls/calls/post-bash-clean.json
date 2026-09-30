@@ -1,0 +1,19 @@
+{
+ "about": "Ordinary test output.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "python3 -m unittest"
+  },
+  "tool_response": {
+   "stdout": "Ran 12 tests in 0.4s\n\nOK\n",
+   "stderr": "",
+   "interrupted": false
+  }
+ }
+}

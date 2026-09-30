@@ -420,7 +420,10 @@ class RederivationTests(unittest.TestCase):
             with redirect_stdout(out):
                 code = BENCH.main(["summarise", "--results", tmp, "--json", "--seed", "3", "--resamples", "400"])
             self.assertEqual(code, 0)
-            self.assertEqual(json.loads(out.getvalue()), STATS.analyse(rows, seed=3, resamples=400))
+            printed = json.loads(out.getvalue())
+            self.assertIn("delegation", printed)  # a separate key; SM-2's result is untouched
+            printed.pop("delegation")
+            self.assertEqual(printed, STATS.analyse(rows, seed=3, resamples=400))
             out = io.StringIO()
             with redirect_stdout(out):
                 BENCH.main(["summarise", "--results", str(Path(tmp) / BENCH.RESULTS)])

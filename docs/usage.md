@@ -502,8 +502,8 @@ a context token.
 ```
 
 `module` names the hook that owns the decision, as `hooks/<id>`: `grade-bash`, `stop-gate` and
-`brief-guard` their own, and the band routing row and the `integration-descriptor` notice
-`hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
+`brief-guard` their own, and the band routing row, the `delegation-nudge` row and the
+`integration-descriptor` notice `hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
 launch guard name `null`, because no hook id switches them off, and so does any other point no
 hook owns, such as `decision-provider`.
 `POINT_MODULES` in `decisions.py` is the map.
@@ -519,13 +519,14 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
 | `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
+| `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |
 | `evasion-deny` | `deny`, on a re-spawn of already-refused work | not labelled yet |
 | `role-confinement` | `deny`, on a native spawn naming a constrained role, by `subagent_type` or a `harness-role:` line; `input` leads with the role and which of the two named it | not labelled yet |
 | `framework-spawn` | `deny`, when a framework descriptor maps a spawn to a constrained role | not labelled yet |
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
 | `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
-| `workflow-launch` | `allow` or `deny`, on every `Workflow` tool launch | not labelled yet |
+| `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a
@@ -879,6 +880,35 @@ Codex session: that runtime reports a cached-read figure and no cache-write figu
 as a perfectly held prefix, which is the opposite of what the row knows. On a runtime that does
 report writes, cached reads against zero writes are not unknown but the best case there is: a day
 that served its whole prefix. The footer counts the unknown sessions separately.
+
+### Which calls rebuilt the prefix
+
+`bin/citizen usage --by rebuild --days 30` reads local Claude Code main-session transcripts and
+attributes each prompt-cache rebuild to its first matching observed cause: model switches,
+compaction, idle expiry, client-version changes, transcript events, slash commands or an
+unexplained remainder. A call is a rebuild when its cache read is at least 20,000 tokens short of
+the preceding call's input, cache read and cache write total. The report shows both all sessions
+and long sessions with at least 200 calls, with breaks, rewritten tokens, known spend share and
+cost per break.
+
+This report reads transcripts directly; it does not add a hook or write per-call data to the usage
+ledger, so `--rescan`, `--rules` and `--stance` are refused with it. Main-session files reached
+through more than one path are read once. Subagent, role-worker and Codex sessions are excluded,
+and so are client-generated `<synthetic>` turns, which made no request: the next real call is
+compared with the last real one. Unpriced models, malformed lines, unreadable files, duplicate
+requests, synthetic turns, valid untimed records and calls outside the window are counted
+explicitly instead of being treated as zero. A cause with any break on an unpriced model has no
+dollar figure: its excess, share and cost per break are `null` in `--json` and read `unpriced` in
+the table, with the count of its unpriced breaks beside them. A call whose usage reports no
+one-hour/five-minute split is priced whole at the base write rate, as ledger rows are, and is
+never attributed to the five-minute TTL; an idle gap of 5 to 60 minutes then reads as an event
+cause or `idle 5-60 min, no event`.
+
+Attribution depends on undocumented Claude Code transcript markers. The fixtures that pin them are
+synthetic transcripts stamped with client version 2.0.20 (2.0.21 on the far side of the version
+change); no other client version is covered. If a client changes or removes a marker, the break
+remains in the report as `unexplained`; the report does not infer a cause that the transcript did
+not record.
 
 ## Rule telemetry
 

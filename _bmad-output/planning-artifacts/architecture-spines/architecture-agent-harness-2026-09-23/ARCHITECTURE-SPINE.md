@@ -307,6 +307,9 @@ flowchart TB
   - Micro-tier rows never enter the production series.
   - Every row records the provenance of its arm. Ablations are declared in an ablation manifest, which
     lists arms and is distinct from a module's manifest (AD-22).
+    (Note 2026-09-29, #754: ablation manifests live in `benchmarks/ablations/`, schema 1. A one-policy
+    pair names one tag, one session-scoped factor and its reference and treatment values; the bare arm
+    runs beside it. No rule changes.)
   - Every figure carries an estimand label. (Amended 2026-09-24. The labels land in v0.14.0 with
     attribution; the soft-estimate report and series land in v0.15.0.)
     - **Measured:** a count read directly from recorded rows, or an estimate from runs. Each names the

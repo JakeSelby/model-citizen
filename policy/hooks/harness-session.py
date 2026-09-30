@@ -261,20 +261,26 @@ def record_session(data):
     if source == "startup":
         module.write_session_record(session, {"agents": on_disk, "at": int(time.time())})
     else:
-        record = module.read_session_record(session)
-        if record is not None:
-            known = module.session_agents(session)
+        def narrow(record):
+            # Read and rewritten under the session's lock, so a concurrent hook-time write,
+            # such as the delegation nudge's read count, is never overwritten by a stale copy.
+            if not record:
+                return None
+            names = record.get("agents")
             narrowed = dict(record, at=int(time.time()))
             # An absent `agents` is unknown, and a resume learns nothing that could end that.
-            if known is None:
+            if not isinstance(names, list):
                 narrowed.pop("agents", None)
             else:
+                known = [name for name in names if isinstance(name, str)]
                 narrowed["agents"] = sorted(set(known) & set(on_disk))
             # What a reload announced is narrowed the same way: a definition that has left the
             # disk is one a new process would not have loaded either.
             if isinstance(narrowed.get("announced"), list):
                 narrowed["announced"] = sorted(set(narrowed["announced"]) & set(on_disk))
-            module.write_session_record(session, narrowed)
+            return narrowed
+
+        module.update_session_record(session, narrow)
     module.prune_session_records(keep=session if isinstance(session, str) else None)
 
 

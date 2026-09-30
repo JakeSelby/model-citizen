@@ -60,7 +60,7 @@ has no arm. Read the rows in order; none of them is a live measurement.
 ## Live replay
 
 `scripts/cost_bench.py replay` runs the pinned tasks in `benchmarks/tasks.json` headlessly in two
-fresh containers, one with Claude Code and nothing else and one with the harness at a pinned ref,
+fresh containers, one with Claude Code plus the shared observer and one with those plus the harness at a pinned ref,
 and scores each run with a check the agent never sees. It calls a model and spends real usage, so
 it is run by hand on a release candidate and never in CI. It needs Docker, and
 `CLAUDE_CODE_OAUTH_TOKEN` set as for the Linux qualification target.
@@ -72,6 +72,10 @@ python3 scripts/cost_bench.py replay --model <id> --tag v0.13.1 --pre-registrati
 python3 scripts/cost_bench.py replay --model <id> --tag v0.12.0 --tag v0.13.0 \
     --pre-registration <plan>                                           # two versions, one run
 python3 scripts/cost_bench.py summarise --results <dir> --plot <dir>/pareto.svg                # SM-2's verdict from the saved rows; calls no model
+python3 scripts/cost_bench.py replay --model <id> --pair benchmarks/ablations/<name>.json \
+    --exploratory --dry-run                                            # a one-policy pair's three arms and schedule
+python3 scripts/cost_bench.py detect --raw <dir>                     # which rules fired in each saved stream; calls no model
+python3 scripts/cost_bench.py detect --backfill <root>               # the same beside every results.jsonl under root
 python3 scripts/cost_bench.py arms check --tag v0.13.1 --dry-run     # the two-build check, shown
 python3 scripts/cost_bench.py arms check --tag v0.13.1               # build each arm twice, compare
 python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the egress rule
@@ -84,7 +88,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
 - **Each arm is a fresh image from pinned inputs, and nothing from your machine reaches it.**
   Both are built by `scripts/replay-arm.Dockerfile` from the Linux qualification image's pinned
   base digest and `CLAUDE_CODE_VERSION`, read out of `scripts/linux-target.Dockerfile` so the two
-  cannot drift. `bare` is that base plus Claude Code, less the Codex client the base template
+  cannot drift. `bare` is that base plus Claude Code and the observation-only recorder, less the Codex client the base template
   ships, so no other agent client is on the path. `harness@<ref>` adds this repository at the
   ref's full commit, cloned into the build context and synced for the image's own user with no
   configuration, so the arm loads the ref's defaults. Your home directory, profile, personal layer,
@@ -102,8 +106,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   publishes no history row or claim.
 - **Each build writes a declaration and a manifest beside the image.** The declaration is the
   inputs: base digest, Claude Code version, harness ref and commit or none, and the hashes of the
-  Dockerfile and the lister. The manifest is every file, link and directory under the image user's
-  home, Claude Code's managed settings and the harness checkout, each file by mode, size and
+  Dockerfile, the lister and the exact observer hook settings. The manifest is every file, link and directory under the image user's
+  home, Claude Code's managed settings, the observer install and the harness checkout, each file by mode, size and
   sha256 and each link by its target, with a summary of settings, hooks, rules, skills, agents and
   plugins, and every global npm package by name and version, where agent clients live. It is listed by `scripts/arm_manifest.py` in a fresh container with no network and no
   mount. Left out, and named in the manifest: npm's cache and logs, tool caches, and the
@@ -115,8 +119,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   image each arm will be.
 - **An arm outside the protocol never launches.** Before the first launch, `replay_arms.admit`
   recomputes the declaration and manifest digests and requires their known schemas. It refuses an
-  arm whose components are missing, duplicated or malformed; whose manifest holds a Claude Code
-  version, agent client or harness commit other than its declaration names; whose settings, hooks,
+  arm whose components are missing, duplicated or malformed; whose installed observer does not
+  match its declared sha256; whose manifest holds a Claude Code version, agent client or harness commit other than its declaration names; whose settings, hooks,
   rules, skills, agents, plugins or instruction files are not the declared harness's; whose
   recorded inputs name your home directory, this checkout or an ambient `CLAUDE_CONFIG_DIR`; whose
   declaration pins no reasoning effort; or whose run is neither pre-registered nor exploratory.
@@ -146,8 +150,12 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `arm_base_image`, `arm_declaration_sha256`, `arm_manifest_sha256`, and `harness_ref` and
   `harness_commit`, both `null` for the bare arm. The history row carries each arm's image id,
   manifest digest, ref and commit.
-- **A run is `docker run --rm` with one mount.** The task's snapshot is mounted at `/work`, which
-  has no instruction file above it; nothing else from your machine is mounted. Every snapshot is
+- **A run is `docker run --rm` with two scoped mounts**, except a pair's harness arms, which are
+  kept until their ledger is copied out (see [Pairs](#pairs)). The task's snapshot is mounted at `/work`, which
+  has no instruction file above it. A fresh run-owned `observations/` directory is mounted at
+  `/observations`; it is the only other host path. Each native session gets a different empty
+  directory outside protected host paths, with one ledger and error file. The host then retains
+  those streams under the tag's output directory, which is never mounted into an arm. Every snapshot is
   made writable for any user, since the image's user id may differ from yours, and the images
   trust `/work` for git. Before anything is measured, each arm's container must write a mounted
   snapshot and have git read it, or the replay is refused with the reason. Every run, check and
@@ -156,7 +164,15 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `no-new-privileges` and no capabilities, and one command line serves both arms: the same
   `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
-  headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch`.
+  headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch` and
+  register the same observation-only command in both arms.
+- **Native observations belong to the replay.** The fixed observer component is declared by its
+  source sha256, installed at the same path and compared by manifest parity in both arms. Each
+  preflight and scored launch receives container-only ledger, error and profile values; no host
+  home, profile or ordinary state path enters the container. Result rows name the ledger relative
+  to the tag output and record `observation_rows` and `observation_errors`. A missing ledger row or
+  any collector error makes the attempt an error without erasing its measured cost; the same
+  condition makes a preflight red. The recorder stays silent and rows remain identifier-only.
 - **The one way out is the model API.** Both arms sit on an internal Docker network with no route
   out. The only other container on it is `scripts/egress_proxy.py`, a standard-library CONNECT
   proxy run from the bare image. It listens only on its own address on that network, and is
@@ -206,6 +222,31 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   paths visible in tool inputs, not a complete filesystem-read audit: an unknown symlink, relative
   traversal or copied file may evade it. Prelaunch exclusion is the primary control. The installed
   runtime remains intact.
+- **Which rules fired is read from the saved streams, with no model call.** `detect --raw <dir>`
+  runs every detector in `policy/hooks/rule-detectors.py` over each `<task>-<arm>-<rep>.json`
+  in the directory and writes `detections.jsonl` there: one row per run per detector, with the
+  detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
+  call, counted from 1, and a tool result takes the turn of the call that asked for it. A
+  subagent's own messages are not the run's, though its return is. Every detector runs in both
+  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  with no model call, a stream that cannot be found, one found twice, and a detector that raised
+  are rows with `count` null and the reason in `error`: unknown, never zero. An existing
+  `detections.jsonl` is replaced only with `--overwrite`. With `--raw`, the replay does the same
+  after each tag's set, before the next tag's runs overwrite the streams, reading each run only
+  from the stream that run saved and still unchanged: stream names carry no tag, so a run that
+  saved none, a timeout among them, gets error rows rather than an earlier tag's stream. It
+  writes `detections.jsonl` beside that set's `results.jsonl`; its history row then carries
+  `mechanisms`, which detectors fired in the harness arm per task and in how many of its runs,
+  printed in `history.md` under the task lines. The mechanism record keeps each task's total run
+  count, each firing detector's measured-run denominator, and detector errors with their reasons,
+  so an unreadable stream cannot silently disappear from attribution. `detect --backfill <root>`
+  does it for sets already on disk: it finds every `results.jsonl` under the root, looks for each
+  row's stream in the same directory, a sibling `transcripts` or `raw` directory and their
+  subdirectories other than a nested set's, and writes `detections.jsonl` beside it, leaving an
+  existing one alone without `--overwrite`. A stream in a directory another set also searches,
+  as sibling tag sets sharing one `../raw` do, could be either set's, so both get error rows.
+  It reads `results.jsonl` and never writes it. The backfill of the evidence sets already on
+  disk is an owner-run step and has not been run yet.
 - **Each arm is proved before anything is scored.** One capped `-p` run per arm runs
   `bin/harness lint` in that arm's own container; an arm whose lint is not clean, or whose run has
   a read refused, refuses the whole replay with exit 2 before any scored run launches, and its
@@ -266,6 +307,25 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   proof or saving claim. No task is marked yet.
 - **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.
+- **Whether delegation fired is reported under SM-2, as adherence, not as the result.** Each row
+  records `spawn_offered` (the `init` event listed `Agent` or `Task`), `spawns` (spawn calls whose
+  result is not an error, made on the main thread or inside a spawned subagent, never inside a
+  `Workflow` agent), `gather_calls` (`Read`, `Grep` and `Glob` calls in every thread),
+  `absorbed_calls` (those inside a counted spawn's thread) and `workflow_launches`, which are
+  reported beside spawns and never counted as one.
+  Output that cannot show a call, such as a lone result, leaves all four counts `null`, never 0.
+  `summarise` then prints one verdict per task, and under `--json` adds it as a `delegation` key:
+  `fired`, `declined-below-break-even`, `missed-above-break-even`, `not-offered` or `unknown`.
+  Rows carrying `error`, such as a timeout or an effort mismatch, are left out and counted. A
+  task's size is the median of the clean bare runs' gather calls, unknown unless each reported one.
+  Fired means a spawn in at least 75% of the clean harness runs, the share #513 registers, and
+  fewer than four clean harness runs read `unknown`. The break-even is FR-34's 7.6 absorbed calls,
+  hypothetical; `--break-even` overrides it and the report labels it an override. Missing data
+  reads `unknown`, never a decline. The block's `registered` is true only when every row came from
+  a run that named a pre-registration; otherwise each verdict prints as exploratory. The registered
+  reading that closes #429 is #1104. The mean cost of spawning and non-spawning runs is shown beside the verdict and is
+  descriptive, not causal. The same block is in each history row under `delegation`. The rules
+  are in `scripts/delegation_verdict.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
   days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.
@@ -292,6 +352,56 @@ turn cap, the stop gate, web access, `usage-prices` and hook capture. Each is fi
 above, and no result has been taken since. The arms have since moved from host profiles to
 containers, which starts a new series. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
 figure to rely on today.
+
+### Pairs
+
+`replay --pair <manifest>` judges one policy change on what the whole task costs. It runs one
+harness image twice, as a reference arm and a treatment arm that differ in one session-scoped
+selection, with the bare arm beside them in every trial.
+
+- **An ablation manifest declares the pair.** `benchmarks/ablations/<name>.json`, schema 1, holds
+  `name`, `tag` (one release tag or full commit), `factor`, and the `reference` and `treatment`
+  values. The factor is a `HARNESS_STANCE_<DIMENSION>` variable or `HARNESS_MODE`, and each harness
+  arm is given its value by value; `null` leaves the tag's default. The two values must differ. A
+  change that exists only at build time cannot be a pair factor.
+- **Three arms, the lead rotating.** Every trial runs bare, reference and treatment, and the arm
+  that goes first rotates through all three across trials, so none always runs on another's warm
+  cache. Each row names its `arm`, the `ablation` it answers (name, digest, schema and its
+  `factors`, a list) and the `selection` its arm ran with, so a design of more factors writes the
+  same row keys. `summarise` recognises a pair by its `ablation`, so a pair stopped at its spend
+  cap before every arm ran is still reported as a pair, each unfinished trial named.
+- **Parity is checked before launch and after the run.** Before anything is spent, the two
+  harness arms' launch specs (image id, declaration and manifest digests, commit, model, run cap,
+  command line, environment by value, network, proxy, credential name, protocol stamp, and the
+  task file and price table digests) must differ in the factor and nothing else, and this
+  checkout's resolver must give the two selections different profile fingerprints; either
+  refusal names every difference. `replay --pair` launches both harness arms from one image
+  record with `--stance-cost` refused, so the spec check holds by construction there; it guards
+  arm records assembled any other way, such as ones read back from the arms directory. After the run, `summarise` compares each trial's loaded surface
+  between reference and treatment, and exits 1 naming each trial that differs.
+- **Decision calls are copied out, never mounted in.** A harness arm's container is kept after it
+  exits; its usage ledger is copied out with `docker cp`, then the container is removed by name,
+  on a timeout too. With observation on, the session's native streams are archived after that
+  removal, so both the ledger copy and the observation archive run on every outcome. Only `kind: "decision"` rows are kept, in `decisions/` beside the results.
+  Every row records `decision_ledger`: `read`, `absent` for the bare arm, or `unknown: <reason>`
+  when the copy failed, which is never read as no calls. The egress rule is unchanged, so a call
+  to a remote decision provider cannot complete from an arm; its row, if any, is unpriced, and the
+  report labels it `blocked by egress` when the row records a network failure.
+- **Costing.** Per arm, `summarise` reports attempts, passes with a Wilson interval, pooled
+  Cost-of-Pass for workers alone and with the arm's decision calls, total and per-attempt wall
+  time, and `respawns_up` (a brief spawned again on a stronger model class, ranked by the classes
+  in `adapters/claude-code/bindings.json`) with `spawns_unranked`. A decision row joins its attempt
+  by session id; one from another session still counts in its arm and is named unmatched. Each is
+  priced from `policy/prices.json`; an unpriced call or an unread ledger leaves the with-decisions
+  figure undefined and is named, never zero. Decision latency ran inside the arm's wall time, so it
+  is reported as a share of it and never added.
+- **Intervals, no verdict.** Treatment over reference, and each harness arm over bare, carry the
+  paired, task-clustered intervals SM-2 uses, on worker cost and on cost with decisions, beside a
+  three-arm Pareto view. No SM-2 verdict is printed: its decision rule is defined for harness
+  against bare.
+- **A pair writes `results.jsonl` and no history row**, whose series is harness against bare.
+  `--spend-cap` is required for a live pair, since the default is sized for two arms;
+  `--stance-cost` is refused, and `--tag`, if given, must be the manifest's.
 
 ## Limits
 

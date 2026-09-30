@@ -663,8 +663,8 @@ slices, the harness version and the session effort. **Status:** implemented (0.1
 
 **Consequences (testable):**
 - Codex subagent threads are linked to their parents, and archived sessions are read.
-- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`
-  and `prefix`, and reports the deduplication ratio.
+- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`,
+  `prefix` and `rebuild`, and reports the deduplication ratio.
 - `--by role` marks any role with fewer than 30 samples.
 
 #### FR-24: Honest pricing
@@ -767,11 +767,16 @@ a different band by naming `worker-a`, `worker-b` or `worker-c`. Routing must re
 change to the runtime's agent registry. **Status:** partial:
 - implemented (0.11);
 - routing resume is unreleased (#584);
-- the Workflow tool's `agent()` calls bypass routing (#576, v0.14.0).
+- the Workflow tool's `agent()` calls bypass routing: the launch refuses a literal `frontier` model
+  and logs an effort above the cost variant's ceiling, or a class above a custom variant's
+  strongest, as `over-ceiling` (#915, v0.15.0); an `agent()` naming no `model` still runs on the
+  session model, which is the routing gap itself.
 
 **Consequences (testable):**
 - An unnamed spawn is rewritten to the posture's default band, and the usage ledger records the band.
 - After the runtime's agent listing changes mid-session, the next unnamed spawn is still routed (#584).
+- A Workflow script whose `agent()` call names a frontier model is refused at launch; one naming an
+  effort above the cost variant's highest is let through and logged as `over-ceiling` (#915).
 
 #### FR-31: Soft budgets in every brief
 Every brief must state its expected output tokens and tool calls. The budget informs the agent and never
@@ -808,6 +813,14 @@ then zero in 40 (#429). A PostToolUse nudge is planned (v0.15.0, #513).
 
 **Consequences (testable):**
 - On a benchmark task above the break-even, the harness arm spawns at least once under `cost=balanced`.
+
+*Amended 2026-09-29 (#429):* an absorbed call is a `Read`, `Grep` or `Glob` call made inside a
+subagent's thread, counted from the run's own stream. The 4.8 to 7.6 range comes from unpublished
+break-even notes. The replay's delegation verdict pre-registers 7.6, the top of the range, as a
+hypothetical figure until a registered run measures one. The consequence above is superseded: the
+stance fires when the harness arm spawns in at least the share #513 registers, three of four runs,
+on every task above the break-even, rather than once. A `Workflow` launch is reported beside spawns
+and not counted until #915 routes it. The status is settled at #429's close-out.
 
 ### 4.7 Guardrails
 
@@ -1137,12 +1150,17 @@ Releases are cut by milestone, and a regression fix releases at once as a patch.
 
 #### FR-54: Landing copy as data
 All landing, README and About copy must come from `product.json`. Published copy must follow the §1.2
-positioning. **Status:** implemented (0.11); `landing-copy` check (0.12). **Scope:** repository process.
+positioning. **Status:** implemented (0.11); `landing-copy` check (0.12); evidence-card claim gate
+(0.15). **Scope:** repository process.
 
 **Consequences (testable):**
 - The `landing-copy` check fails a pull request that changes a path under `bin/`, `lib/`, `adapters/`,
   `primitives/` or `policy/` without either updating `product.json` or stating why no update is needed.
 - No published copy says "cheaper" until a result supports SM-2's pre-registered hypothesis (FR-56).
+- A mechanically recognized measured claim in `product.json` binds its exact field and text to an
+  evidence card whose local bundle verifies again. A cheaper claim requires SM-2 support, and any
+  numeric cheaper magnitude fits the paired interval. Semantic review remains responsible for claims
+  outside the documented recognizer.
 - Published copy uses no em dashes. (Partial: the README still has some, and no test checks copy for
   them.)
 - Public documents credit the projects they compare against rather than framing them as competition.
@@ -1577,6 +1595,8 @@ test and apply loop headless, and a new install must reach an applied draft thro
   - Every public claim is labelled implemented, validated, proposed, historical or unknown, following the
     mapping in §0.
   - No copy asserts an unmeasured saving or a first-in-field claim that the field scan has not checked.
+  - Each mechanically recognized measured product claim names an exact evidence card and passes fresh
+    bundle verification; cached success is not evidence.
 - **NFR-14 Release cost:**
   - A release costs one qualification round.
   - The baseline to beat is about 60 minutes and about 1M orchestrator tokens per round.
@@ -1767,6 +1787,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - evaluation tiers (#510, #511, #512);
   - harness against bare at five or more trials, with confidence intervals (#559, #560);
   - the two-by-two unit design (#754) and per-rule attribution (#514);
+    (Correction 2026-09-29, #754: read this as the one-policy pair (#754) and the two-by-two unit design
+    (#797), as the 2026-09-24 sprint change proposal splits them.)
   - a scorecard, and soft estimates labelled as such;
   - delegation fixed or disproved (#429, #513);
   - the burndown bot (FR-71 to FR-74, #941), whose randomised stream feeds v0.17.0's field experiment;
@@ -1802,6 +1824,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 
 **The evaluation gate in the 1.0 contract.** A candidate ships only with a verified proof bundle:
 - `harness evidence verify` re-derives the published proof set;
+- every published measured figure and interval has a verified evidence card naming its estimand and
+  exact product field and text;
 - every module in the selection document has a scorecard row, measured or marked unmeasured.
 
 ## 10. Success metrics
@@ -1872,6 +1896,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 - **SM-4 Mechanism fired:**
   - Measures spawns per run on tasks above the break-even.
   - No saving is credited to a mechanism unless the ledger rows show it fired.
+  - *Amended 2026-09-29 (#429):* replay rows in `results.jsonl` count as the rows that show it;
+    spawns per run on them are read through the per-task delegation verdict.
   - Validates FR-34.
 - **SM-5 Lifecycle integrity:**
   - Every supported target passes install, upgrade, repeat sync, rollback and uninstall with zero loss of

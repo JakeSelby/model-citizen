@@ -9,6 +9,8 @@ serve.
 
 It measures and does not enforce. Nothing in this module denies, warns or blocks a prefix
 change; `harness usage --by prefix` is retrospective and read-only.
+For request-level rebuild causes, `harness usage --by rebuild` reads main-session transcripts
+through `harness_core.rebuilds`; this ledger report deliberately does not infer them.
 
 Four things this figure refuses to guess at:
 

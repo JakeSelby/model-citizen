@@ -1,0 +1,15 @@
+{
+ "about": "A file-tool write into the store of approvals the user typed.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+   "file_path": "{home}/.local/state/agent-harness/approvals/s-matrix.json",
+   "content": "{}"
+  }
+ }
+}
