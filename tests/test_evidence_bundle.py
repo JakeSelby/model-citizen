@@ -95,14 +95,19 @@ Task manifest sha256: %s
         # The arm pins the design's effort, and its image bakes no effort override (schema 2).
         declaration = EVIDENCE.replay_arms.declaration(arm, inputs, harness=harness, effort="high")
         lister = EVIDENCE.replay_arms.arm_manifest
-        manifest = {"schema": lister.SCHEMA, "roots": ({"harness": "/opt/model-citizen"} if harness else {}),
+        # Both arms install the declared observer, one file under its own root.
+        observer = {"path": "observer:observe.py", "kind": "file", "mode": "0644", "size": 1,
+                    "sha256": EVIDENCE.replay_arms.file_sha(EVIDENCE.replay_arms.OBSERVER_SOURCE)}
+        manifest = {"schema": lister.SCHEMA,
+                    "roots": dict({"observer": "/opt/model-citizen-observer"},
+                                  **({"harness": "/opt/model-citizen"} if harness else {})),
                     "excluded": {}, "normalised": [], "claude_code_version": "2.0.0",
                     "cli_packages": ["@anthropic-ai/claude-code" + "@2.0.0"],
                     "environment": {lister.EFFORT_ENV: None},
                     "harness_commit": self.run_commit if harness else None,
                     "summary": {key: [] for key in
                                 ("settings", "hooks", "rules", "skills", "agents", "plugins",
-                                 "instructions")}, "entries": []}
+                                 "instructions")}, "entries": [observer]}
         return {"arm": arm, "label": arm, "image": "proof-%s:1" % arm,
                 "image_id": "sha256:" + ("2" if arm == "bare" else "3") * 64,
                 "declaration": declaration,
