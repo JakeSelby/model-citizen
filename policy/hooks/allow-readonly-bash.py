@@ -576,13 +576,19 @@ def segment_ok(tokens):
 
     A prefix such as `time`, `nice` or `env` is looked through in a loop, never by recursion,
     and a command behind more than `MAX_PREFIXES` of them is not read-only."""
+    return segment_verdict(tokens) is True
+
+
+def segment_verdict(tokens):
+    """`segment_ok`, or None when the command is behind more than `MAX_PREFIXES` prefixes: a
+    caller that looks through a prefix itself must not read the shorter chain as read-only."""
     tokens = strip_redirects(tokens)  # all of them, the prefixed command's included
     for step in range(MAX_PREFIXES + 1):
         verdict = _segment_step(tokens, step == 0)
         if not isinstance(verdict, list):
             return bool(verdict)
         tokens = verdict
-    return False
+    return None
 
 
 def _segment_step(tokens, first=True):

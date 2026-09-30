@@ -1399,18 +1399,26 @@ def grade_tokens(tokens, cwd, depth):
     """(grade, verb, target, family) for one simple command.
 
     A wrapper or runner is looked through in a loop, never by recursion; a command behind more
-    of them than `ro.MAX_PREFIXES` is graded 3, as text too long to grade is."""
+    of them than `ro.MAX_PREFIXES`, counted from any word, is graded 3, as text too long to
+    grade is, and names the file a redirect on it writes."""
+    wrote = []
     for _ in range(ro.MAX_PREFIXES + 1):
-        found = _grade_step(tokens, cwd, depth)
+        found = _grade_step(tokens, cwd, depth, wrote)
         if found[0] is not _AGAIN:
             return found
         tokens = found[1]
-    return PREFIX_CHAIN
+    return _prefix_chain(wrote)
 
 
-def _grade_step(tokens, cwd, depth):
-    """`grade_tokens` for one command word, or (`_AGAIN`, the tokens a wrapper runs)."""
+def _prefix_chain(wrote):
+    return PREFIX_CHAIN[:2] + (wrote[0] if wrote else "",) + PREFIX_CHAIN[3:]
+
+
+def _grade_step(tokens, cwd, depth, recorded):
+    """`grade_tokens` for one command word, or (`_AGAIN`, the tokens a wrapper runs). The files
+    its redirects write are appended to `recorded`, the steps before it included."""
     tokens, written = _redirects(tokens)
+    recorded.extend(t for t in written if t and t != "/dev/null")
     wrote = ""
     for target in written:
         if re.match(r"^/dev/(sd|disk|nvme|rdisk)", target):
@@ -1419,7 +1427,10 @@ def _grade_step(tokens, cwd, depth):
             wrote = target
     while tokens and ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
-    if not tokens or ro.segment_ok(list(tokens)):
+    read_only = ro.segment_verdict(list(tokens)) if tokens else True
+    if read_only is None:  # the shorter chain a later step sees must not pass as read-only
+        return _prefix_chain(recorded)
+    if read_only:
         # A redirect-only segment, as after a subshell in `(ls) > out.txt`, still writes its file.
         return (1, "redirect to", wrote, None) if wrote else (0, None, None, None)
     head = tokens[0]
@@ -2650,7 +2661,8 @@ _HOME_UNKNOWN = object()
 # directory, through CDPATH or a physical-path option; `_cd_certain` names what still resolves.
 _CD_UNKNOWN = object()
 # A context key: True once a `cd` itself may not move where it says, because the line defines a
-# function, which may be named `cd`, or set a trap, an alias or `enable`; `_resets_cd` names them.
+# function, which may be named `cd`, sources a script or sets a trap, an alias or `enable`, or a
+# shell started here may read a startup file first; `_walk` says which.
 _CD_UNTRUSTED = object()
 # The value of a variable assigned something the resolver cannot read, such as `$(pwd)/x` or
 # `-x`: the variable is known to be set, to a value that is not, so it resolves to nothing.
@@ -2799,8 +2811,21 @@ CDABLE_OPTION_RE = re.compile(r"cd_?able_?vars", re.I)
 # A function defined at a command position, `f() {`, `f ()` or `function f`, outside quotes as
 # `_unquoted_structure` leaves them. zsh's anonymous `() { … }` runs at once, as walked.
 FUNCTION_DEF_RE = re.compile(
-    r"(?:^|[;&|(){}\n]|(?<![^\s;&|(){}])(?:then|do|else|elif|time|!))\s*"
+    r"(?:^|[;&|(){}\n]|(?<![^\s;&|(){}])(?:then|do|else|elif|time|!))[ \t]*"
     r"(?:function\s+[^\s;&|()<>]|[^\s;&|(){}<>'\"$`=]+\s*\(\s*\))")
+# The same definitions, each with its name and the body's opening bracket.
+FUNCTION_HEAD_RE = re.compile(
+    r"(?:^|[;&|(){}\n]|(?<![^\s;&|(){}])(?:then|do|else|elif|time|!))[ \t]*"
+    r"(?:function\s+(?P<keyword>[^\s;&|()<>{}]+)(?:\s*\(\s*\))?"
+    r"|(?P<name>[^\s;&|(){}<>'\"$`=]+)\s*\(\s*\))\s*(?P<open>[{(]?)")
+# Words that, run from a trap or a function body, may move this shell, make `cd` other than the
+# builtin, or run text the walk does not read.
+MOVING_WORDS = frozenset(("cd", "pushd", "popd", "source", ".", "eval", "exec", "trap",
+                          "enable", "disable", "alias", "autoload", "functions", "builtin",
+                          "command"))
+# Variables that make a shell started later read a startup file first, which may `cd` or
+# redefine it: bash's BASH_ENV, zsh's ZDOTDIR and an exported bash function.
+STARTUP_WORD_RE = re.compile(r"(?<![A-Za-z0-9_])(?:BASH_ENV|ZDOTDIR|BASH_FUNC_)")
 # A word naming CDPATH anywhere: `CDPATH=w`, `${CDPATH:=w}`, `declare -n r=CDPATH`.
 CDPATH_WORD_RE = re.compile(r"(?<![A-Za-z0-9_])CDPATH(?![A-Za-z0-9_])")
 # Builtins that assign the variable an argument names, which may be CDPATH behind a `$v`.
@@ -2905,21 +2930,39 @@ def _moves_cd_resolution(tokens):
 
 def _sources(tokens):
     """Whether a simple command reads a script into this shell, as `. ./s.sh` and `source s.sh`
-    do: the script may change the directory, so what follows runs where it left off. A `cd`
-    after it is still followed, as `source .venv/bin/activate && cd d` is."""
+    do: the script may change the directory or redefine `cd`, so what follows runs where it
+    left off, whatever a later `cd` says. The script is not read."""
     return _command_word(tokens)[0] in (".", "source")
+
+
+def _inert(text, literal=False):
+    """Whether shell text run later, as a trap's action or a function's body, leaves this
+    shell's directory and its `cd` alone: it names none of `MOVING_WORDS`, defines no function
+    and runs no command word the walk cannot read. A `literal` text, a trap's, holds no `$`,
+    backquote or substitution either, since those expand as the trap is set."""
+    if literal and (PLACEHOLDER in text or any(c in text for c in "$`")):
+        return False
+    if _defines_function(text):
+        return False
+    parts = segments(text)
+    return parts is not None and not any(
+        _runs_unseen(tokens) or any(t in MOVING_WORDS for t in tokens) for tokens in parts)
 
 
 def _resets_cd(tokens):
     """Whether a simple command may make every later `cd` go elsewhere, or a later command run
     in another directory: a trap other than on EXIT, which runs its text before a command
     (`DEBUG`), after a failure (`ERR`) or a return (`RETURN`), where `cd` moves this shell; an
-    alias, which may name `cd`; or `enable` with a name, since `enable -n cd` leaves `cd` the
-    program, which moves nothing. A trap that prints, as `trap -p`, or resets, as `trap - INT`
-    or `trap INT`, or ignores, as `trap '' INT`, runs no text."""
+    alias, which may name `cd`; or `enable` or zsh's `disable` with a name, since `enable -n cd`
+    leaves `cd` the program, which moves nothing; or zsh's `autoload` of a name or `functions
+    -c`, which define a function. A trap that prints, as `trap -p`, or resets, as `trap - INT`
+    or `trap INT`, or ignores, as `trap '' INT`, runs no text, and one whose action is `_inert`
+    moves nothing, as `trap 'echo failed' ERR` does not."""
     word, args, _sure = _command_word(tokens)
-    if word == "enable":
-        return any(not a.startswith("-") for a in args)
+    if word in ("enable", "disable", "autoload"):
+        return any(not a.startswith(("-", "+")) for a in args)
+    if word == "functions":
+        return any(a.startswith("-") and "c" in a for a in args)
     if word == "alias":
         return any("=" in a for a in args)
     if word != "trap":
@@ -2930,13 +2973,59 @@ def _resets_cd(tokens):
         return False  # `-l` and `-p` print
     if len(args) < 2 or args[0] in ("-", ""):
         return False
-    return any(sig.upper() not in ("EXIT", "0") for sig in args[1:])
+    return (any(sig.upper() not in ("EXIT", "0") for sig in args[1:])
+            and not _inert(args[0], literal=True))
+
+
+def _evals_inert(tokens):
+    """Whether a simple command is an `eval` of literal text that is `_inert`."""
+    word, args, _sure = _command_word(tokens)
+    return (word.rpartition("/")[2] == "eval" and not _dynamic_head(word)
+            and _inert(" ".join(args), literal=True))
 
 
 def _defines_function(text):
     """Whether `text` defines a shell function: one named `cd`, `pushd` or `builtin` changes
     what every later `cd` does, and any may be called where the walk does not look."""
     return bool(FUNCTION_DEF_RE.search(_unquoted_structure(text)))
+
+
+def _defines_moving_function(text):
+    """Whether `text` defines a function that may move this shell or change what `cd` does: one
+    named in `MOVING_WORDS`, or whose body is not a bracketed group this reader takes apart and
+    finds `_inert`, as it finds `log() { echo "$@"; }`. A body holding any bracket other than a
+    `${…}` expansion is not taken apart, so `f() { echo }; cd ..; }` is not read as `echo `."""
+    structure = _unquoted_structure(text)
+    heads = list(FUNCTION_HEAD_RE.finditer(structure))
+    if len(heads) != len(FUNCTION_DEF_RE.findall(structure)):
+        return True  # a definition this reader does not take apart
+    # Quoted brackets are blanked, so only the ones the shell reads are counted.
+    masked = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.",
+                    lambda m: "_" * len(m.group()), structure)
+    for head in heads:
+        name = re.sub(r"[\\'\"]", "", head.group("keyword") or head.group("name"))
+        opening = head.group("open")
+        if name in MOVING_WORDS or not opening:
+            return True
+        start = end = head.end("open")
+        while end < len(masked):
+            if masked.startswith("${", end):  # `${x}`, unnested
+                close = masked.find("}", end)
+                if close < 0 or "{" in masked[end + 2:close]:
+                    return True
+                end = close + 1
+            elif masked[end] in "{}()":
+                break
+            else:
+                end += 1
+        if masked[end:end + 1] != ("}" if opening == "{" else ")"):
+            return True
+        # `}` closes the group only where a command may start: `{ echo; }`, not `{ echo }`.
+        if opening == "{" and masked[:end].rstrip(" \t")[-1:] not in (";", "&", "\n"):
+            return True
+        if not _inert(text[start:end]):
+            return True
+    return False
 
 
 def _cd_unknown(variables):
@@ -3498,10 +3587,11 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
           cd_untrusted=False):
     """`governed_text` for one normalized reading.
 
-    A line that defines a function follows none of its `cd`s: the function may be `cd`
-    itself, and its body, walked here as if it ran at once, runs where it is called. From a
-    command `_resets_cd` names, no `cd` is followed and the directory is unknown; after one
-    `_sources` names, it is unknown until the next `cd`."""
+    A line that defines a function `_defines_moving_function` names follows none of its `cd`s:
+    the function may be `cd` itself, and its body, walked here as if it ran at once, runs where
+    it is called. From a command `_resets_cd` or `_sources` names, or one that runs text the
+    walk does not read, as `eval "$x"` and `$t` do, no `cd` is followed and the directory is
+    unknown; from one naming a startup file, as `BASH_ENV=f` does, so is every shell it starts."""
     stripped, inners = _extract_subs(text)
     parts = segments(stripped) if stripped is not None else None
     if parts is None:
@@ -3517,7 +3607,8 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
     queue = list(inners)
     found = []
     assignment_contexts = _assignment_contexts(stripped, parts, home_unknown, cd_unknown)
-    untrusted = cd_untrusted or _defines_function(stripped)
+    untrusted = cd_untrusted or _defines_moving_function(stripped)
+    shells = untrusted  # a shell started from here may read a startup file that moves it
 
     def substitutions(count, where, variables):
         # A substitution runs in a subshell of this one, with its HOME.
@@ -3527,7 +3618,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             inner = queue.pop(0)
             found.extend(governed_text(inner, where, depth + 1, isolated=True, causes=causes,
                                        home_unknown=moved, cd_unknown=_cd_unknown(variables),
-                                       cd_untrusted=untrusted)
+                                       cd_untrusted=untrusted or shells)
                          or [(SHELL, _scan(inner)[0], where, [])])
 
     # `pending` is (where the last `cd` goes when it runs, its chain) for a `cd` that may not
@@ -3579,14 +3670,20 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             pending = ((dest, own) if may_skip and dest is not None and own is not None
                        and "!" not in tokens else None)
             continue
-        if untrusted:
+        shells = shells or any(STARTUP_WORD_RE.search(t) for t in tokens)
+        if untrusted or shells:
             variables = dict(variables or {})
             variables[_CD_UNTRUSTED] = True
         found.extend(_governed(tokens, at, depth, variables, causes))
+        # `eval cd d`, `{cd,d}`, `$c d` or `. s.sh` may move this shell, and may also set a
+        # trap or redefine `cd`, as `eval "trap 'cd ..' DEBUG"` does, unless it is an `eval` of
+        # literal `_inert` text. A DEBUG trap runs before the very next command.
         if _runs_unseen(tokens) or _sources(tokens):
-            here = pending = None  # `eval cd d`, `{cd,d}`, `$c d` or `. s.sh` may move it
+            here = pending = None
+            if not _evals_inert(tokens):
+                untrusted = shells = True
         if _resets_cd(tokens):
-            untrusted = True  # a DEBUG trap runs before the very next command
+            untrusted = shells = True
             here = pending = None
     # Any the segments did not account for: fail closed, HOME included.
     substitutions(len(queue), None, {_HOME_UNKNOWN: True, _CD_UNKNOWN: True})

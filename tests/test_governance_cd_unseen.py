@@ -17,7 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from test_governance_binding import grader
+from test_governance_binding import SESSION, approvals, grader
 from test_governance_cd_forms import Fixture
 from test_grade_bash import cpu_seconds, pre_tool_use_timeout
 
@@ -35,13 +35,61 @@ class UnseenDirectoryChanges(Fixture):
             with self.subTest(command=command):
                 self.assert_unknown(command)
 
-    def test_a_literal_cd_after_a_sourced_script_is_still_followed(self):
-        # A relative one is not: the script may have left the shell anywhere.
-        self.assert_unknown("source .venv/bin/activate && cd ../beta && git push")
-        for command in ("source .venv/bin/activate && cd %s && git push" % self.beta,
-                        ". ./s.sh; cd ~/beta; git push"):
+    def test_no_cd_after_a_sourced_script_is_followed(self):
+        # The script may leave the shell anywhere, or redefine `cd` so an absolute one stays put.
+        (self.repo / "c.sh").write_text("cd() { :; }\n")
+        for command in ("source .venv/bin/activate && cd ../beta && git push",
+                        "source .venv/bin/activate && cd %s && git push" % self.beta,
+                        ". ./s.sh; cd ~/beta; git push",
+                        "source c.sh; cd %s; git push" % self.beta,
+                        "source /dev/stdin <<< 'cd ..'; cd %s; git push" % self.beta,
+                        ". <(echo 'cd() { :; }'); cd %s; git push" % self.beta):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_a_trap_or_definition_the_walk_cannot_read_leaves_every_cd_unknown(self):
+        for command in ("eval \"trap 'cd ..' DEBUG\"; cd %s; git push",
+                        "t=trap; $t 'cd ..' DEBUG; cd %s; git push",
+                        "eval 'cd(){ :; }'; cd %s; git push",
+                        "eval \"$(echo cd ..)\"; cd %s; git push",
+                        "functions[cd]=':'; cd %s; git push",
+                        "autoload -Uz cd; cd %s; git push",
+                        "disable cd; cd %s; git push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command % self.beta)
+
+    def test_a_shell_that_reads_a_startup_file_starts_in_an_unknown_directory(self):
+        for command in ("BASH_ENV=t.sh bash -c 'cd %s; git push'",
+                        "export BASH_ENV=t.sh; bash -c 'cd %s; git push'",
+                        "env BASH_ENV=t.sh bash -c 'cd %s; git push'",
+                        "ZDOTDIR=. zsh -c 'cd %s; git push'",
+                        "source s.sh; bash -c 'cd %s; git push'"):
+            with self.subTest(command=command):
+                self.assert_unknown(command % self.beta)
+        self.assert_beta("bash -c 'cd %s; git push'" % self.beta)
+
+    def test_an_inert_trap_function_or_eval_keeps_the_cd(self):
+        for command in ("trap 'echo failed' ERR; cd ../beta && git push",
+                        "log() { echo \"$@\"; }; cd ../beta && git push",
+                        "log(){ echo ${1:-x}; }\ncd ../beta && git push",
+                        "f() ( echo hi ); cd ../beta && git push",
+                        "eval 'echo hi'; cd %s; git push" % self.beta):
             with self.subTest(command=command):
                 self.assert_beta(command)
+
+    def test_a_trap_or_function_that_may_move_is_not_read_as_inert(self):
+        for command in ("trap 'echo x; cd ..' ERR; cd ../beta; git push",
+                        "trap \"c''d ..\" DEBUG; cd ../beta; git push",
+                        "trap 'echo $x' DEBUG; cd ../beta; git push",
+                        "f(){ echo }; cd ..; }; cd ../beta; f; git push",
+                        "f() { echo '}'; cd ..; }; cd ../beta; f; git push",
+                        "f() { \"$@\"; }; cd ../beta; f cd ..; git push",
+                        "f() { command cd ..; }; cd ../beta; f; git push",
+                        "f(){ { cd ..; }; }; cd ../beta; f; git push",
+                        "f() echo; cd ../beta; git push",
+                        "pushd() { :; }; cd ../beta; git push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
 
     def test_a_trap_that_may_run_leaves_every_later_directory_unknown(self):
         for command in ("trap 'cd ..' DEBUG; git push",
@@ -114,6 +162,22 @@ class LongPrefixChains(Fixture):
                 self.assertGreaterEqual(grader.grade_text(command, str(self.repo))[0], 3)
                 answer, _reason = self.bash(command)
                 self.assertEqual(answer, "ask")
+
+    def test_a_chain_past_the_cap_keeps_its_write_and_asks(self):
+        policy = ".agent-harness/" + "governance.json"
+        for word in ("nice", "time", "command"):
+            for count in (ro.MAX_PREFIXES + 1, 2 * ro.MAX_PREFIXES + 1):
+                command = (word + " ") * count + "echo {} > " + policy
+                with self.subTest(word=word, count=count):
+                    grade = grader.grade_text(command, str(self.repo))
+                    self.assertGreaterEqual(grade[0], 3)
+                    self.assertEqual(grade[2], policy)
+                    self.assertEqual(self.bash(command)[0], "ask")
+
+    def test_a_chain_past_the_cap_writing_the_approval_store_is_denied(self):
+        command = "nice " * (ro.MAX_PREFIXES + 1) + "echo '{}' > %s" % approvals.store_path(SESSION)
+        self.assertGreaterEqual(grader.grade_text(command, str(self.repo))[0], 3)
+        self.assertEqual(self.bash(command, mode="bypassPermissions")[0], "deny")
 
     def test_a_long_prefix_chain_grades_inside_the_hook_budget(self):
         budget = pre_tool_use_timeout() / 10
