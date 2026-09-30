@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 146,
+    "bug": 147,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -8328,6 +8328,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B144.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B146",
+      "github_number": 1109,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1109",
+      "title": "A here-document body that a shell runs is graded as inert text by grade-bash",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B146.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
