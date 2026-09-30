@@ -14,22 +14,27 @@ import {
 
 type Props = { draft: string; revision: string; onRevision: (revision: string) => void };
 
-export function AuthoringPlan({ preview }: { preview: AuthoringPreview }) {
+/** Only the verdict and findings: this is what the live region announces after a check or save. */
+export function AuthoringVerdict({ preview }: { preview: AuthoringPreview }) {
+  if (preview.findings.length > 0) {
+    return (
+      <Alert color="red" title="The manifest checks refused this module; nothing was saved">
+        <ul className="message-list">{preview.findings.map((line) => <li key={line}>{line}</li>)}</ul>
+      </Alert>
+    );
+  }
+  if (!preview.valid) return preview.error ? <Alert color="red" title="Nothing was saved">{preview.error}</Alert> : null;
   return (
-    <Stack gap="sm" aria-live="polite">
-      {preview.findings.length > 0 && (
-        <Alert color="red" title="The manifest checks refused this module; nothing was saved">
-          <ul className="message-list">{preview.findings.map((line) => <li key={line}>{line}</li>)}</ul>
-        </Alert>
-      )}
-      {!preview.valid && preview.findings.length === 0 && preview.error && (
-        <Alert color="red" title="Nothing was saved">{preview.error}</Alert>
-      )}
-      {preview.valid && (
-        <Text size="sm">Manifest checks pass. Saving writes {preview.files.length} file(s)
-          {preview.root?.created ? <> and registers the new personal root <Code>{preview.root.label}</Code></> : null}.
-          Nothing is applied.</Text>
-      )}
+    <Text size="sm">Manifest checks pass. Saving writes {preview.files.length} file(s)
+      {preview.root?.created ? <> and registers the new personal root <Code>{preview.root.label}</Code></> : null}.
+      Nothing is applied.</Text>
+  );
+}
+
+/** The planned configuration and files, outside the live region so a check never reads them out. */
+export function AuthoringFiles({ preview }: { preview: AuthoringPreview }) {
+  return (
+    <Stack gap="sm">
       {preview.fork && (
         <Text size="sm">Fork of core <Code>{preview.fork.source}</Code> at {preview.fork.version || "this checkout"}.</Text>
       )}
@@ -47,6 +52,28 @@ export function AuthoringPlan({ preview }: { preview: AuthoringPreview }) {
         </div>
       ))}
     </Stack>
+  );
+}
+
+/** The always-mounted status region: its text changes, the region itself never mounts late. */
+export function AuthoringStatus({ message, preview }: { message: string; preview: AuthoringPreview | null }) {
+  return (
+    <div aria-live="polite" className="authoring-status" role="status">
+      {message ? <Text size="sm">{message}</Text> : null}
+      {preview ? <AuthoringVerdict preview={preview} /> : null}
+    </div>
+  );
+}
+
+export function RootOffer({ read, checked, onChange }: {
+  read: AuthoringRead | null; checked: boolean; onChange: (checked: boolean) => void;
+}) {
+  if (!needsRoot(read)) return null;
+  return (
+    <Alert color="blue" title="This draft has no personal root">
+      <Checkbox checked={checked} onChange={(event) => onChange(event.currentTarget.checked)}
+        label={<>Create <Code>{read?.offer.label}</Code> in this draft and register <Code>{read?.offer.registers}</Code> in <Code>primitive_roots</Code></>} />
+    </Alert>
   );
 }
 
@@ -133,12 +160,7 @@ export function ModuleAuthoring({ draft, revision, onRevision }: Props) {
           <Text c="dimmed" size="sm">New modules and forks go to your personal root in this draft; a core module is never edited in place.</Text>
         </div>
         {read && read.status !== "ready" && <Alert color="red" title="Unavailable">{read.message}</Alert>}
-        {needsRoot(read) && (
-          <Alert color="blue" title="This draft has no personal root">
-            <Checkbox checked={form.createRoot} onChange={(event) => update({ createRoot: event.currentTarget.checked })}
-              label={<>Create <Code>{read?.offer.label}</Code> in this draft and register <Code>{read?.offer.registers}</Code> in <Code>primitive_roots</Code></>} />
-          </Alert>
-        )}
+        <RootOffer read={read} checked={form.createRoot} onChange={(createRoot) => update({ createRoot })} />
         {read?.root && <Text size="sm">Personal root: <Code>{read.root.label}</Code></Text>}
         <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
           <Select label="Start from" allowDeselect={false} value={form.action}
@@ -166,8 +188,8 @@ export function ModuleAuthoring({ draft, revision, onRevision }: Props) {
           <Button variant="default" disabled={!canPreview(form, read) || busy !== ""} loading={busy === "checking"} onClick={check}>Check</Button>
           <Button disabled={!preview?.valid || previewed !== requestText || busy !== ""} loading={busy === "saving"} onClick={save}>Save to draft</Button>
         </Group>
-        {message && <Text aria-live="polite" size="sm">{message}</Text>}
-        {preview && <AuthoringPlan preview={preview} />}
+        <AuthoringStatus message={message} preview={preview} />
+        {preview && <AuthoringFiles preview={preview} />}
         <CommandChip command={authoringCommand(draft, revision, true)} />
         <div>
           <Title order={3}>Your modules in this draft</Title>

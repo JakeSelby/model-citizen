@@ -9,7 +9,7 @@ import {
   authoringCommand, canPreview, draftOwnedModules, EMPTY_FORM, nameProblem, needsRoot, toRequest,
   type AuthoringPreview, type AuthoringRead,
 } from "../src/configure/authoringModel.ts";
-import { AuthoringPlan, ModuleAuthoring } from "../src/configure/ModuleAuthoring.tsx";
+import { AuthoringFiles, AuthoringStatus, ModuleAuthoring, RootOffer } from "../src/configure/ModuleAuthoring.tsx";
 import { ForkProvenance, LibraryGroups } from "../src/library/LibraryPage.tsx";
 import type { LibraryModule } from "../src/library/model.ts";
 
@@ -40,11 +40,22 @@ test("AC1: a draft without a personal root must accept the offer before a check 
   assert.deepEqual(toRequest({ ...form, createRoot: true }), {
     action: "add", kind: "rules", name: "greeting", description: "Greets first.", create_root: true,
   });
+  const offered = renderToStaticMarkup(h(MantineProvider, {}, h(RootOffer, {
+    read: READY, checked: false, onChange: () => {},
+  })));
+  assert.match(offered, /This draft has no personal root/);
+  assert.match(offered, /type="checkbox"/);
+  assert.doesNotMatch(offered, /checked=""/);
+  assert.match(offered, /personal-primitives/);
+  assert.match(offered, /primitive_roots/);
+  const withRoot = renderToStaticMarkup(h(MantineProvider, {}, h(RootOffer, {
+    read: { ...READY, root: { id: "root-1", label: "personal-primitives" } }, checked: false, onChange: () => {},
+  })));
+  assert.doesNotMatch(withRoot, /personal root|checkbox/);
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(ModuleAuthoring, {
     draft: "tuning", revision: "rev", onRevision: () => {},
   })));
   assert.match(html, /Add or fork a module/);
-  assert.match(html, /never edited in place/);
 });
 
 test("names follow the resolver's identifier rule; a fork may leave its name to the server", () => {
@@ -58,31 +69,38 @@ test("names follow the resolver's identifier rule; a fork may leave its name to 
   });
 });
 
-test("AC2: manifest findings refuse the save and are listed; a clean plan shows every file", () => {
+test("AC2: findings are announced in an always-mounted live region that never holds file text", () => {
   const base: AuthoringPreview = {
     valid: false, error: "Fix the manifest findings before saving.", error_code: "manifest-refused",
     base_revision: "rev", action: "add", module: { key: "root-1:rules:greeting", kind: "rules", name: "greeting" },
     root: { id: "root-1", label: "personal-primitives", created: true },
-    files: [{ path: "rules/greeting.md", text: "# Greeting\n" }], manifest: null, fork: null,
+    files: [{ path: "rules/greeting.md", text: "# Greeting body text\n" }], manifest: null, fork: null,
     config_changes: [{ path: "primitive_roots", value: "+ <checkout>/personal-primitives" }],
     findings: ["module manifest: rules/greeting conflicts with rules/secrets; switch one of them off"],
     nothing_applied: true,
   };
-  const refused = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringPlan, { preview: base })));
+  const idle = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringStatus, { message: "", preview: null })));
+  assert.match(idle, /<div aria-live="polite" class="authoring-status" role="status"><\/div>/);
+  const refused = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringStatus, { message: "Nothing was saved.", preview: base })));
+  assert.match(refused, /aria-live="polite"/);
   assert.match(refused, /manifest checks refused this module/);
   assert.match(refused, /conflicts with rules\/secrets/);
-  const clean = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringPlan, {
-    preview: { ...base, valid: true, error: "", error_code: "", findings: [] },
-  })));
-  assert.match(clean, /Manifest checks pass/);
-  assert.match(clean, /registers the new personal root/);
-  assert.match(clean, /personal-primitives\/rules\/greeting\.md/);
-  assert.match(clean, /primitive_roots/);
+  assert.doesNotMatch(refused, /Greeting body text/);
+  const clean = { ...base, valid: true, error: "", error_code: "", findings: [] };
+  const verdict = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringStatus, { message: "", preview: clean })));
+  assert.match(verdict, /Manifest checks pass/);
+  assert.match(verdict, /registers the new personal root/);
+  assert.doesNotMatch(verdict, /Greeting body text/);
+  const files = renderToStaticMarkup(h(MantineProvider, {}, h(AuthoringFiles, { preview: clean })));
+  assert.doesNotMatch(files, /aria-live/);
+  assert.match(files, /personal-primitives\/rules\/greeting\.md/);
+  assert.match(files, /Greeting body text/);
+  assert.match(files, /primitive_roots/);
 });
 
 test("AC3 and AC4: the library shows a fork's source, version and upstream diff", () => {
   const fork = { source: "rules/secrets", version: "0.18.0", revision: "abcdef1234567890",
-    upstream: { changed: true, missing: false, diff: "--- forked\n+++ core\n+An upstream line.\n" } };
+    upstream: { changed: true, missing: false, original_available: true, diff: "--- forked\n+++ core\n+An upstream line.\n" } };
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(LibraryGroups, {
     modules: [module("root-1:rules:secrets-fork", false, fork)],
   })));
@@ -91,9 +109,13 @@ test("AC3 and AC4: the library shows a fork's source, version and upstream diff"
   assert.match(html, /at 0\.18\.0 \(abcdef123456\)/);
   assert.match(html, /\+An upstream line\./);
   const unchanged = renderToStaticMarkup(h(MantineProvider, {}, h(ForkProvenance, {
-    fork: { ...fork, upstream: { changed: false, missing: false, diff: "" } },
+    fork: { ...fork, upstream: { changed: false, missing: false, original_available: true, diff: "" } },
   })));
   assert.match(unchanged, /unchanged since this fork/);
+  const unavailable = renderToStaticMarkup(h(MantineProvider, {}, h(ForkProvenance, {
+    fork: { ...fork, upstream: { changed: true, missing: false, original_available: false, diff: "" } },
+  })));
+  assert.match(unavailable, /not in this checkout/);
   const owned = draftOwnedModules([module("core:rules:secrets", true), module("root-1:rules:mine", false),
     module("root-1:rules:secrets-fork", false, fork)]);
   assert.deepEqual(owned.map((item) => item.key), ["root-1:rules:secrets-fork", "root-1:rules:mine"]);

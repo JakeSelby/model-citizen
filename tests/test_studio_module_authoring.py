@@ -41,6 +41,10 @@ class RequestValidationTests(unittest.TestCase):
              "invalid-name"),
             ({"action": "fork", "source": "root-1:rules:mine"}, "fork-unavailable"),
             ({"action": "fork", "source": "core:roles:reviewer"}, "fork-unavailable"),
+            ({"action": "fork", "source": "core:rules:../../../../etc/passwd"}, "fork-unavailable"),
+            ({"action": "fork", "source": "core:skills:Beta"}, "fork-unavailable"),
+            (_rule("fine", "a --- b"), "invalid-description"),
+            (_rule("fine", "tab\there"), "invalid-description"),
         ]
         for request, code in cases:
             with self.subTest(request=request):
@@ -52,6 +56,13 @@ class RequestValidationTests(unittest.TestCase):
         normalized = module_authoring._normalized({"action": "fork", "source": "core:rules:secrets"})
         self.assertEqual(normalized["name"], "secrets-fork")
         self.assertEqual(normalized["kind"], "rules")
+
+    def test_a_forked_skill_is_renamed_in_its_frontmatter_only(self):
+        renamed = module_authoring._renamed_skill(
+            b"---\nname: beta\ndescription: d\n---\n\nname: beta stays in the body\n", "beta-fork")
+        self.assertEqual(renamed, b"---\nname: beta-fork\ndescription: d\n---\n\n"
+                                  b"name: beta stays in the body\n")
+        self.assertEqual(module_authoring._renamed_skill(b"\xff\x00", "x"), b"\xff\x00")
 
     def test_templates_carry_manifest_fields_the_resolver_accepts(self):
         posture = module_authoring.load_posture(ROOT)
@@ -69,53 +80,108 @@ class RequestValidationTests(unittest.TestCase):
 
 
 class UpstreamDiffTests(unittest.TestCase):
-    """AC4: the library diffs the original as forked against the core module as it is now."""
+    """AC4: the original is read from git at the recorded revision and diffed against core now."""
 
-    def _library(self, recorded):
+    def _git(self, checkout, *args):
+        return subprocess.run(["git", "-C", str(checkout), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def _checkout(self, files):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        checkout = Path(temporary.name) / "checkout"
+        checkout.mkdir()
+        self._git(checkout, "init", "-q")
+        self._git(checkout, "config", "user.email", "t")
+        self._git(checkout, "config", "user.name", "Test")
+        return checkout, self._commit(checkout, files)
+
+    def _commit(self, checkout, files):
+        for relative, content in files.items():
+            path = checkout / relative
+            if content is None:
+                path.unlink()
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        self._git(checkout, "add", "-A")
+        self._git(checkout, "commit", "-q", "-m", "update")
+        return self._git(checkout, "rev-parse", "HEAD")
+
+    @staticmethod
+    def _forks(source, revision, files):
+        kind = source.split("/", 1)[0]
+        return {"schema_version": 1, kind: {"mine": {
+            "source": source, "version": "0.1.0", "revision": revision,
+            "files": {key: module_library.digest(value) for key, value in files.items()}}}}
+
+    def test_an_unchanged_original_reports_no_upstream_diff(self):
+        original = {"primitives/rules/alpha.md": b"# Alpha\n\nKeep it.\n"}
+        checkout, revision = self._checkout(original)
+        fork = module_library._fork(checkout, self._forks(
+            "rules/alpha", revision, {"alpha.md": original["primitives/rules/alpha.md"]}), "rules", "mine")
+        self.assertEqual(fork["upstream"], {"changed": False, "missing": False,
+                                            "original_available": True, "diff": ""})
+        self.assertEqual((fork["source"], fork["version"], fork["revision"]),
+                         ("rules/alpha", "0.1.0", revision))
+
+    def test_an_update_shows_a_multi_file_diff_with_binary_files_compared_by_digest(self):
+        skill = "primitives/skills/beta/"
+        original = {skill + "SKILL.md": b"---\nname: beta\n---\n\nOld step.\n",
+                    skill + "scripts/run.py": b"print('old')\n",
+                    skill + "icon.png": b"\x89PNG\x00\xff old"}
+        checkout, revision = self._checkout(original)
+        self._commit(checkout, {skill + "SKILL.md": b"---\nname: beta\n---\n\nNew step.\n",
+                                skill + "scripts/run.py": b"print('new')\n",
+                                skill + "icon.png": b"\x89PNG\x00\xff new"})
+        recorded = {key[len(skill):]: value for key, value in original.items()}
+        fork = module_library._fork(checkout, self._forks("skills/beta", revision, recorded),
+                                    "skills", "mine")
+        diff = fork["upstream"]["diff"]
+        self.assertTrue(fork["upstream"]["changed"])
+        self.assertIn("-Old step.", diff)
+        self.assertIn("+New step.", diff)
+        self.assertIn("+print('new')", diff)
+        self.assertIn("Binary file skills/beta/icon.png differs", diff)
+        self.assertEqual(module_library.module_bytes(checkout / "primitives", "skills", "beta")["icon.png"],
+                         b"\x89PNG\x00\xff new")
+
+    def test_a_removed_original_is_reported_missing(self):
+        original = {"primitives/rules/alpha.md": b"# Alpha\n"}
+        checkout, revision = self._checkout(original)
+        self._commit(checkout, {"primitives/rules/alpha.md": None, "README": b"x\n"})
+        fork = module_library._fork(checkout, self._forks(
+            "rules/alpha", revision, {"alpha.md": b"# Alpha\n"}), "rules", "mine")
+        self.assertTrue(fork["upstream"]["missing"])
+        self.assertIn("-# Alpha", fork["upstream"]["diff"])
+
+    def test_a_traversing_source_is_never_read(self):
+        checkout, revision = self._checkout({"primitives/rules/alpha.md": b"# Alpha\n",
+                                             "secret.md": b"do not show\n"})
+        for source, files in (("rules/../../secret", {"secret.md": b"do not show\n"}),
+                              ("skills/beta", {"../../secret.md": b"do not show\n"}),
+                              ("roles/alpha", {"alpha.md": b"# Alpha\n"})):
+            with self.subTest(source=source):
+                self.assertIsNone(module_library._fork(
+                    checkout, self._forks(source, revision, files), source.split("/")[0], "mine"))
+        self.assertIsNone(module_library.module_files(checkout / "primitives", "rules", "../../secret"))
+
+    def test_the_library_attaches_a_fork_from_the_personal_root(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         own = Path(temporary.name) / "own"
         (own / "rules").mkdir(parents=True)
         (own / "rules" / (FORKED + "-fork.md")).write_text("# Mine\n", encoding="utf-8")
-        (own / module_library.FORKS_FILE).write_text(json.dumps({
-            "schema_version": 1,
-            "rules": {FORKED + "-fork": {"source": "rules/" + FORKED, "version": "0.1.0",
-                                         "revision": "a" * 40, "files": recorded}},
-        }), encoding="utf-8")
+        current = (ROOT / "primitives" / "rules" / (FORKED + ".md")).read_bytes()
+        forks = self._forks("rules/" + FORKED, "0" * 40, {FORKED + ".md": current})
+        forks["rules"] = {FORKED + "-fork": forks["rules"].pop("mine")}
+        (own / module_library.FORKS_FILE).write_text(json.dumps(forks), encoding="utf-8")
         payload = module_library.inventory(ROOT, {"primitive_roots": [str(own)]})
-        return {item["key"]: item for item in payload["modules"]}
-
-    def test_an_unchanged_original_reports_no_upstream_diff(self):
-        current = (ROOT / "primitives" / "rules" / (FORKED + ".md")).read_text(encoding="utf-8")
-        modules = self._library({FORKED + ".md": current})
+        modules = {item["key"]: item for item in payload["modules"]}
         fork = modules["root-1:rules:" + FORKED + "-fork"]["fork"]
         self.assertEqual(fork["source"], "rules/" + FORKED)
-        self.assertEqual(fork["version"], "0.1.0")
-        self.assertEqual(fork["upstream"], {"changed": False, "missing": False, "diff": ""})
+        self.assertFalse(fork["upstream"]["changed"])
         self.assertIsNone(modules["core:rules:" + FORKED]["fork"])
-
-    def test_an_updated_original_shows_the_upstream_diff_on_the_fork(self):
-        current = (ROOT / "primitives" / "rules" / (FORKED + ".md")).read_text(encoding="utf-8")
-        older = current.replace("\n", "\nA line the update removed.\n", 1)
-        fork = self._library({FORKED + ".md": older})["root-1:rules:" + FORKED + "-fork"]["fork"]
-        self.assertTrue(fork["upstream"]["changed"])
-        self.assertIn("-A line the update removed.", fork["upstream"]["diff"])
-        self.assertIn("core/rules/" + FORKED + "/" + FORKED + ".md", fork["upstream"]["diff"])
-
-    def test_a_removed_original_is_reported_missing(self):
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        own = Path(temporary.name) / "own"
-        (own / "rules").mkdir(parents=True)
-        (own / "rules" / "gone-fork.md").write_text("# Mine\n", encoding="utf-8")
-        (own / module_library.FORKS_FILE).write_text(json.dumps({
-            "schema_version": 1, "rules": {"gone-fork": {
-                "source": "rules/no-such-core-rule", "files": {"no-such-core-rule.md": "x\n"}}},
-        }), encoding="utf-8")
-        payload = module_library.inventory(ROOT, {"primitive_roots": [str(own)]})
-        fork = next(item for item in payload["modules"] if item["name"] == "gone-fork")["fork"]
-        self.assertTrue(fork["upstream"]["missing"])
-        self.assertTrue(fork["upstream"]["changed"])
 
 
 class DraftAuthoringTests(unittest.TestCase):
@@ -204,6 +270,12 @@ class DraftAuthoringTests(unittest.TestCase):
             self.assertTrue(forked["saved"], forked)
             self.assertEqual(forked["config_changes"], [{"path": "rules." + FORKED, "value": "off"}])
             self.assertEqual(self._config(name)["rules"][FORKED], "off")
+            # forks.json records digests, never the original's text, so it stays small.
+            forks_text = next(item["text"] for item in forked["files"] if item["path"] == "forks.json")
+            recorded = json.loads(forks_text)["rules"][FORKED + "-fork"]
+            self.assertEqual(recorded["revision"], initial["base_revision"])
+            self.assertRegex(recorded["files"][FORKED + ".md"], r"^[0-9a-f]{64}$")
+            self.assertLess(len(forks_text), 1024)
             version = (worktree / "VERSION").read_text(encoding="utf-8").strip()
             library = {item["key"]: item for item in module_authoring.library(ROOT, name)["modules"]}
             fork_key = "root-1:rules:" + FORKED + "-fork"
@@ -240,6 +312,43 @@ class DraftAuthoringTests(unittest.TestCase):
             self.assertEqual(json.loads(executed.stdout), module_authoring.preview(
                 ROOT, name, json.loads(request_path.read_text(encoding="utf-8"))))
 
+    def test_a_forked_skill_is_renamed_copied_whole_and_diffed_across_files(self):
+        skill = "workflow-status"
+        with self.real_draft("authoring-skill") as (name, initial, _environment, _base):
+            forked = module_authoring.save(ROOT, name, initial["revision"], "fork-skill", {
+                "action": "fork", "source": "core:skills:" + skill, "create_root": True})
+            self.assertTrue(forked["saved"], forked)
+            worktree = drafts.find(ROOT, name)[0]
+            core = worktree / "primitives" / "skills" / skill
+            fork = worktree / module_authoring.OWN_ROOT / "skills" / (skill + "-fork")
+            core_files = sorted(path.relative_to(core).as_posix() for path in core.rglob("*")
+                                if path.is_file())
+            self.assertGreater(len(core_files), 1)
+            self.assertEqual(sorted(path.relative_to(fork).as_posix() for path in fork.rglob("*")
+                                    if path.is_file()), core_files)
+            header = (fork / "SKILL.md").read_text(encoding="utf-8").split("\n---", 1)[0]
+            self.assertIn("name: " + skill + "-fork\n", header + "\n")
+            self.assertNotIn("name: " + skill + "\n", header + "\n")
+            for relative in core_files:
+                if relative != "SKILL.md":
+                    self.assertEqual((fork / relative).read_bytes(), (core / relative).read_bytes())
+            self.assertEqual(self._config(name)["skills"][skill], "off")
+
+            other = next(relative for relative in core_files if relative != "SKILL.md")
+            updates = {}
+            for relative in ("SKILL.md", other):
+                text = (core / relative).read_text(encoding="utf-8")
+                updates["primitives/skills/" + skill + "/" + relative] = (
+                    text + "\n# upstream change in " + relative + "\n").encode("utf-8")
+            drafts.checkpoint(ROOT, name, forked["result"]["revision"], "skill-update",
+                              files=updates, check_command=PASS)
+            library = {item["key"]: item for item in module_authoring.library(ROOT, name)["modules"]}
+            upstream = library["root-1:skills:" + skill + "-fork"]["fork"]["upstream"]
+            self.assertTrue(upstream["changed"])
+            self.assertTrue(upstream["original_available"])
+            self.assertIn("+# upstream change in SKILL.md", upstream["diff"])
+            self.assertIn("+# upstream change in " + other, upstream["diff"])
+
     def test_manifest_checks_refuse_before_any_checkpoint(self):
         with self.real_draft("authoring-manifest") as (name, initial, _environment, _base):
             first = module_authoring.save(ROOT, name, initial["revision"], "first",
@@ -275,7 +384,7 @@ class DraftAuthoringTests(unittest.TestCase):
 
 
 class RouteTests(unittest.TestCase):
-    def test_authoring_routes_are_authenticated_posts_with_cli_equivalents(self):
+    def test_authoring_routes_name_their_cli_equivalents(self):
         routes = {route.path: route for route in server.ROUTES.entries}
         for path, action in (("/api/configure/authoring/read", "read"),
                              ("/api/configure/authoring/preview", "preview"),

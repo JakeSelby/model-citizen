@@ -11,8 +11,8 @@ command, after `citizen lint`, on the written draft.
 
 Switches are keyed by unit name across roots, so a fork takes a new name: switching the core
 module off under the same name would switch the fork off with it. The root's `forks.json` records
-the source, the harness version and revision, and the original's text, which is what
-`module_library` diffs against the core module after an update.
+the source, the harness version, the draft's base revision and a sha256 per file; `module_library`
+reads the original back from git at that revision to diff it against the core module after an update.
 """
 from __future__ import annotations
 
@@ -180,6 +180,26 @@ def _template_files(kind: str, name: str, description: str) -> Dict[str, bytes]:
                                                    "description": description})}
 
 
+def _renamed_skill(content: bytes, name: str) -> bytes:
+    """A forked SKILL.md whose frontmatter `name:` is the fork's, so two skills never share one."""
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content
+    if not text.startswith("---\n"):
+        return content
+    closing = text.find("\n---", 4)
+    head = text[:closing] if closing > 0 else text
+    return (_FRONTMATTER_NAME.sub("name: " + name, head, count=1) + text[len(head):]).encode("utf-8")
+
+
+def _shown(content: bytes) -> str:
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return "(binary file, %d bytes, sha256 %s)" % (len(content), module_library.digest(content))
+
+
 def _json_file(worktree: Path, relative: str) -> Dict[str, Any]:
     path = worktree / relative
     if not path.exists():
@@ -203,9 +223,13 @@ def _normalized(request: Any) -> Dict[str, Any]:
     if action not in ("add", "fork"):
         raise AuthoringError("invalid-request", "action is add or fork")
     description = request.get("description", "")
-    if not isinstance(description, str) or "\n" in description or len(description) > MAX_DESCRIPTION:
+    if (not isinstance(description, str) or len(description) > MAX_DESCRIPTION
+            or any(not character.isprintable() for character in description)):
         raise AuthoringError("invalid-description",
                              "description is one line of at most %d characters" % MAX_DESCRIPTION)
+    if "---" in description:
+        # `catalog.frontmatter` splits a skill on the first `---`, so the listing would be cut short.
+        raise AuthoringError("invalid-description", "description cannot contain ---")
     name = request.get("name", "")
     create_root = request.get("create_root", False)
     if not isinstance(name, str) or not isinstance(create_root, bool):
@@ -220,7 +244,8 @@ def _normalized(request: Any) -> Dict[str, Any]:
     else:
         source = request.get("source")
         parts = source.split(":") if isinstance(source, str) else []
-        if len(parts) != 3 or parts[0] != "core" or parts[1] not in FORK_KINDS:
+        if (len(parts) != 3 or parts[0] != "core" or parts[1] not in FORK_KINDS
+                or not module_library.identifier(parts[2])):
             raise AuthoringError("fork-unavailable",
                                  "only a core " + " or ".join(FORK_KINDS) + " module can be forked")
         result.update(kind=parts[1], source=source, source_name=parts[2])
@@ -281,18 +306,16 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
             manifest = _manifest_template(kind, request["description"])
     else:
         source = request["source_name"]
-        texts = module_library.module_texts(worktree / "primitives", kind, source)
-        if texts is None:
+        originals = module_library.module_bytes(worktree / "primitives", kind, source)
+        if originals is None:
             raise AuthoringError("fork-unavailable", "core " + kind + "/" + source
                                  + " is not a forkable module in this draft")
         files = {}
-        for relative, text in texts.items():
-            if kind == "skills" and relative == "SKILL.md" and text.startswith("---\n"):
-                closing = text.find("\n---", 4)
-                head = text[:closing] if closing > 0 else text
-                text = _FRONTMATTER_NAME.sub("name: " + name, head, count=1) + text[len(head):]
+        for relative, content in originals.items():
+            if kind == "skills" and relative == "SKILL.md":
+                content = _renamed_skill(content, name)
             prefix = "rules/" if kind == "rules" else "skills/" + name + "/"
-            files[prefix + (name + ".md" if kind == "rules" else relative)] = text.encode("utf-8")
+            files[prefix + (name + ".md" if kind == "rules" else relative)] = content
         shipped = module_library._manifest(worktree / "primitives", kind, source)
         manifest = copy.deepcopy(shipped) if shipped else _manifest_template(
             kind, "Fork of core " + kind + "/" + source + ".")
@@ -307,7 +330,11 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
         fork = {"source": kind + "/" + source,
                 "version": version_path.read_text(encoding="utf-8").strip()
                 if version_path.is_file() else "",
-                "revision": state["revision"], "files": texts}
+                # The base revision is in the installed checkout's history, so the original
+                # can be read back from git; the draft's own commits may be discarded.
+                "revision": state["base_revision"],
+                "files": {relative: module_library.digest(content)
+                          for relative, content in originals.items()}}
         forks_relative = own["relative"] + "/" + module_library.FORKS_FILE
         forks = _json_file(worktree, forks_relative)
         forks.setdefault(kind, {})
@@ -341,7 +368,7 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
         "base_revision": state["revision"], "action": request["action"],
         "module": {"key": key, "kind": kind, "name": name},
         "root": {"id": own["id"], "label": own["label"], "created": created},
-        "files": [{"path": relative, "text": content.decode("utf-8")}
+        "files": [{"path": relative, "text": _shown(content)}
                   for relative, content in sorted(files.items())],
         "manifest": manifest, "fork": None if fork is None else {
             "source": fork["source"], "version": fork["version"], "revision": fork["revision"]},
@@ -392,7 +419,8 @@ def read(repo: Path, name: str) -> Dict[str, Any]:
             own = _own_root(worktree, mapped)
             forkable = [{"key": "core:" + kind + ":" + unit, "kind": kind, "name": unit}
                         for kind in FORK_KINDS
-                        for unit in sorted(_existing(worktree, {"primitive_roots": []})[kind])]
+                        for unit in sorted(_existing(worktree, {"primitive_roots": []})[kind])
+                        if module_library.module_files(worktree / "primitives", kind, unit) is not None]
             return {"status": "ready", "message": "Module templates are ready.",
                     "draft": {"name": state["name"], "revision": state["revision"]},
                     "root": None if own is None else {"id": own["id"], "label": own["label"]},

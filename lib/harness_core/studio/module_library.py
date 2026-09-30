@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import difflib
+import hashlib
 import json
 import os
+import re
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
@@ -20,6 +23,7 @@ FORKS_FILE = "forks.json"
 FORK_KINDS = ("rules", "skills")
 MAX_FORK_FILES = 64
 MAX_FORK_FILE_BYTES = 512 * 1024
+REVISION = re.compile(r"^[0-9a-f]{40}$")
 
 
 def _config_and_selection(root: Path, supplied: Optional[Mapping[str, Any]] = None):
@@ -114,18 +118,43 @@ def _manifest(root_path: Path, kind: str, name: str) -> Optional[Dict[str, Any]]
     return value if isinstance(value, dict) else None
 
 
+def identifier(value: Any) -> bool:
+    """The resolver's unit-name rule (posture._identifier): the only names joined into a path."""
+    return (isinstance(value, str) and bool(value) and value[0].isalpha() and value.islower()
+            and value.isascii() and all(c.isalnum() or c == "-" for c in value))
+
+
+def safe_relative(value: Any) -> bool:
+    """A path inside one module: relative, no empty, dot or dot-dot segment, no backslash."""
+    if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
+        return False
+    return all(part not in ("", ".", "..") for part in value.split("/"))
+
+
+def _inside(base: Path, path: Path) -> bool:
+    try:
+        path.resolve().relative_to(base.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def module_files(primitives: Path, kind: str, name: str) -> Optional[Dict[str, Path]]:
     """The regular files one forkable module is made of, keyed by path inside the module.
 
-    None when the module is absent or is not a plain tree of bounded regular files.
+    None when the name is not an identifier, the module is absent, or it is not a plain tree of
+    bounded regular files that resolves inside `primitives`.
     """
+    if kind not in FORK_KINDS or not identifier(name):
+        return None
     if kind == "rules":
         path = primitives / "rules" / (name + ".md")
-        return {name + ".md": path} if path.is_file() and not path.is_symlink() else None
-    if kind != "skills":
-        return None
+        if not path.is_file() or path.is_symlink() or not _inside(primitives, path):
+            return None
+        return {name + ".md": path}
     directory = primitives / "skills" / name
-    if directory.is_symlink() or not (directory / "SKILL.md").is_file():
+    if (directory.is_symlink() or not (directory / "SKILL.md").is_file()
+            or not _inside(primitives, directory)):
         return None
     found: Dict[str, Path] = {}
     for path in sorted(directory.rglob("*")):
@@ -141,14 +170,19 @@ def module_files(primitives: Path, kind: str, name: str) -> Optional[Dict[str, P
     return found
 
 
-def module_texts(primitives: Path, kind: str, name: str) -> Optional[Dict[str, str]]:
+def module_bytes(primitives: Path, kind: str, name: str) -> Optional[Dict[str, bytes]]:
+    """Every file of a forkable module as bytes: text and binary assets alike."""
     files = module_files(primitives, kind, name)
     if files is None:
         return None
     try:
-        return {relative: path.read_text(encoding="utf-8") for relative, path in files.items()}
-    except (OSError, UnicodeDecodeError):
+        return {relative: path.read_bytes() for relative, path in files.items()}
+    except OSError:
         return None
+
+
+def digest(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
 
 
 def _forks(root_path: Path) -> Dict[str, Any]:
@@ -159,38 +193,82 @@ def _forks(root_path: Path) -> Dict[str, Any]:
     return data if isinstance(data, dict) and data.get("schema_version") == 1 else {}
 
 
-def upstream_diff(recorded: Mapping[str, str], current: Optional[Mapping[str, str]],
+def _text(content: Optional[bytes]) -> Optional[List[str]]:
+    if content is None:
+        return []
+    try:
+        return content.decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        return None
+
+
+def upstream_diff(original: Mapping[str, Optional[bytes]], current: Optional[Mapping[str, bytes]],
                   source: str) -> str:
-    """A unified diff from the original as forked to the core module as it is now."""
+    """A unified diff from the original as forked to the core module now; binary files by digest."""
     current = current or {}
-    chunks = []
-    for relative in sorted(set(recorded) | set(current)):
-        before, after = recorded.get(relative), current.get(relative)
+    chunks: List[str] = []
+    for relative in sorted(set(original) | set(current)):
+        before, after = original.get(relative), current.get(relative)
         if before == after:
             continue
+        old, new = _text(before), _text(after)
+        if old is None or new is None:
+            chunks.append("Binary file " + source + "/" + relative + " differs\n")
+            continue
         chunks.extend(difflib.unified_diff(
-            [] if before is None else before.splitlines(keepends=True),
-            [] if after is None else after.splitlines(keepends=True),
-            fromfile="forked/" + source + "/" + relative,
+            old, new, fromfile="forked/" + source + "/" + relative,
             tofile="core/" + source + "/" + relative,
         ))
     return "".join(chunks)
 
 
-def _fork(core: Path, forks: Dict[str, Any], kind: str, name: str) -> Optional[Dict[str, Any]]:
-    """The provenance of a forked module and whether its core original has changed since."""
-    entry = (forks.get(kind) or {}).get(name) if isinstance(forks.get(kind), dict) else None
+def _at_revision(checkout: Path, revision: str, path: str) -> Optional[bytes]:
+    """One file's bytes at a recorded revision of the checkout, or None when git cannot say."""
+    if not REVISION.fullmatch(revision):
+        return None
+    try:
+        shown = subprocess.run(["git", "-C", str(checkout), "show", revision + ":" + path],
+                               capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def _fork(checkout: Path, forks: Dict[str, Any], kind: str, name: str) -> Optional[Dict[str, Any]]:
+    """A forked module's provenance and whether its core original has changed since.
+
+    `forks.json` records a digest per file, not the text: the original is read from git at the
+    recorded revision and used only when its digest matches, so the diff is always of the text
+    that was forked. A source that is not a forkable identifier is ignored, never joined.
+    """
+    entries = forks.get(kind)
+    entry = entries.get(name) if isinstance(entries, dict) else None
     if not isinstance(entry, dict) or not isinstance(entry.get("source"), str):
         return None
     source_kind, _, source_name = entry["source"].partition("/")
-    recorded = entry.get("files") if isinstance(entry.get("files"), dict) else {}
-    recorded = {key: value for key, value in recorded.items()
-                if isinstance(key, str) and isinstance(value, str)}
-    current = module_texts(core, source_kind, source_name) if source_kind in FORK_KINDS else None
-    diff = upstream_diff(recorded, current, entry["source"])
+    recorded = entry.get("files")
+    if (source_kind not in FORK_KINDS or not identifier(source_name) or not isinstance(recorded, dict)
+            or not all(safe_relative(key) and isinstance(value, str)
+                       for key, value in recorded.items())):
+        return None
+    revision = str(entry.get("revision", ""))
+    current = module_bytes(checkout / "primitives", source_kind, source_name)
+    changed = current is None or {key: digest(value) for key, value in current.items()} != recorded
+    original: Dict[str, Optional[bytes]] = {}
+    for relative, expected in recorded.items():
+        path = ("primitives/rules/" + source_name + ".md" if source_kind == "rules"
+                else "primitives/skills/" + source_name + "/" + relative)
+        content = _at_revision(checkout, revision, path)
+        if content is None or digest(content) != expected:
+            original = {}
+            break
+        original[relative] = content
+    available = bool(original) or not recorded
+    diff = upstream_diff(original, current, entry["source"]) if changed and available else ""
     return {"source": entry["source"], "version": str(entry.get("version", "")),
-            "revision": str(entry.get("revision", "")),
-            "upstream": {"changed": bool(diff), "missing": current is None, "diff": diff}}
+            "revision": revision,
+            "upstream": {"changed": changed, "missing": current is None,
+                         "original_available": available, "diff": diff}}
 
 
 def _source_entries(root: Path, root_entry: Dict[str, Any], kind: str,
@@ -235,7 +313,6 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
     resolved_config, selection = _config_and_selection(root, config)
     roots = _roots(root, resolved_config)
     modules: List[Dict[str, Any]] = []
-    core = (root / "primitives").resolve()
     for root_entry in roots:
         forks = {} if root_entry["core"] else _forks(root_entry["path"])
         for kind, definition in KINDS.items():
@@ -250,7 +327,7 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
                     "state": _state(kind, name, selection),
                     "collision": False,
                     "manifest": _manifest(root_entry["path"], kind, manifest_name),
-                    "fork": _fork(core, forks, kind, name) if forks else None,
+                    "fork": _fork(root, forks, kind, name) if forks else None,
                     "source": {"path": str(path),
                                "text": "" if metadata_only else _rendered(root, "source", path, name)},
                     "rendered": {"text": "" if metadata_only else _rendered(root, kind, path, name)},

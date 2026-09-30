@@ -21,7 +21,7 @@ export type ModuleFork = {
   source: string;
   version: string;
   revision: string;
-  upstream: { changed: boolean; missing: boolean; diff: string };
+  upstream: { changed: boolean; missing: boolean; original_available: boolean; diff: string };
 };
 
 export type LibraryPayload = {
