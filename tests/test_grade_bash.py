@@ -10,6 +10,7 @@ Run: python3 -m unittest discover tests
 """
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import sys
@@ -41,6 +42,24 @@ def pre_tool_use_timeout():
     """The tightest PreToolUse timeout `harness sync` registers for any runtime, in seconds."""
     return min(lifecycle.registration(REPO, runtime)["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
                for runtime in ("claude-code", "codex"))
+
+
+def cpu_seconds(call, batches=5, batch_seconds=0.02):
+    """The CPU seconds one `call()` costs this process: the best of `batches` batches, each
+    repeating the call until it has run about `batch_seconds`, so a call of a few microseconds
+    is not lost in the clock's resolution. CPU time rather than wall time, so time spent waiting
+    for a core on a loaded machine is not charged to the code under test."""
+    start = time.process_time()
+    call()
+    once = time.process_time() - start
+    repeats = max(1, math.ceil(batch_seconds / max(once, 1e-6)))
+    best = once
+    for _ in range(batches):
+        start = time.process_time()
+        for _ in range(repeats):
+            call()
+        best = min(best, (time.process_time() - start) / repeats)
+    return best
 
 
 def grade(command):
@@ -419,23 +438,15 @@ class GradeTests(unittest.TestCase):
 
     def test_grading_a_hundred_kilobyte_command_stays_well_inside_the_hook_timeout(self):
         # A PreToolUse hook past its registered timeout fails open, and every PreToolUse policy
-        # shares that one timeout, so the grader gets a tenth of it. The best of several runs
-        # measures the grader rather than the machine's load, and the quarter-size run bounds the
-        # growth: linear grading quadruples, a quadratic scan grows sixteenfold and fails here
-        # long before it would outgrow the budget.
+        # shares that one timeout, so the grader gets a tenth of it. The quarter-size run bounds
+        # the growth: linear grading quadruples, a quadratic scan grows sixteenfold and fails here
+        # long before it would outgrow the budget. `cpu_seconds` measures the grader rather than
+        # the machine's load.
         budget = pre_tool_use_timeout() / 10
-
-        def best(command, runs=5):
-            times = []
-            for _ in range(runs):
-                start = time.perf_counter()
-                grader.grade_text(command, CWD)
-                times.append(time.perf_counter() - start)
-            return min(times)
-
         for suffix in ("", ' "unbalanced'):
-            full = best("echo " + "push " * 20000 + suffix)
-            quarter = best("echo " + "push " * 5000 + suffix)
+            long, short = ("echo " + "push " * n + suffix for n in (20000, 5000))
+            full = cpu_seconds(lambda: grader.grade_text(long, CWD))
+            quarter = cpu_seconds(lambda: grader.grade_text(short, CWD))
             with self.subTest(unbalanced=bool(suffix)):
                 self.assertLess(full, budget)
                 self.assertLess(full / quarter, 8)

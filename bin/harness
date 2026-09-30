@@ -64,6 +64,7 @@ from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
 from harness_core import intents, observation
+from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
 from harness_core import rule_coverage
@@ -5131,6 +5132,34 @@ def usage_accumulator() -> List[Any]:
     return [0, 0, 0, 0, 0, 0.0, {name: 0 for name in RATE_FIELDS}, 0]
 
 
+def adherence_report(days: int, json_output: bool = False) -> int:
+    """`usage --by adherence`: each recommendation's adherence rate and its if-followed saving.
+
+    Read-only over the adherence ledger and the sessions' own transcripts; the estimator, its
+    labels and the refusal to pool them are `harness_core.soft_estimates`'. A session's calls are
+    read once however many of its emissions are priced.
+    """
+    adherence = load_hook_module("adherence", required=True)
+    feed = load_hook_module("usage-feed", required=True)
+    rows = adherence.read_rows(adherence.path())
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(days, 0) * 86400))
+    projects = claude_projects_root()
+    sessions: Dict[Any, Any] = {}
+
+    def calls_for(session_id: Any) -> Any:
+        if session_id not in sessions:
+            sessions[session_id] = rebuilds.session_calls(projects, session_id)
+        return sessions[session_id]
+
+    result = soft_estimates.report(rows, adherence, intervals, calls_for,
+                                   load_prices(load_config()), pricing, feed._context, cutoff)
+    if json_output:
+        data = soft_estimates.summary(result)
+        return usage_json("adherence", "adherence", days, data["groups"], labels=data["labels"],
+                          footer=data["footer"])
+    return soft_estimates.render(result, say)
+
+
 def cmd_usage(args: argparse.Namespace) -> int:
     """Summarize the records the usage-log hook writes. Local file only.
 
@@ -5219,6 +5248,12 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by rebuild reports transcript-observed cache rebuilds; --rules, --stance "
               "and --rescan do not apply", file=sys.stderr)
         return 2
+    if by == "adherence" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # Advice and what following it would have saved are neither a session's detector hits
+        # nor its stance's tokens, and the transcripts are read on every run.
+        print("usage --by adherence reports advice adherence and its soft estimate; --rules, "
+              "--stance and --rescan do not apply", file=sys.stderr)
+        return 2
     if stance and by != "stance":
         print("usage --stance applies only to --by stance", file=sys.stderr)
         return 2
@@ -5241,6 +5276,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
         for line in rebuilds.render(result):
             say(line)
         return 0
+    if by == "adherence":
+        return adherence_report(args.days, json_output)
     if getattr(args, "rescan", False):
         hook = REPO / "claude" / "hooks" / "usage-log.py"
         out = subprocess.run([sys.executable, str(hook), "--rescan", str(args.days)], capture_output=True, text=True)
@@ -5325,8 +5362,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
         # The ratio is reported over exactly what TOTAL counts: a run where the runs column
         # counts one, and tokens where the token columns add them, which under `--by day` is
         # the in-window slices and not the whole row.
+        # A ledger line can hold NaN or Infinity, which `json.loads` accepts; neither is a
+        # measured figure, so either counts as unknown rather than poisoning the weighted ratio.
         ratio = row.get("raw_vs_deduped")
-        measured = isinstance(ratio, float)
+        measured = isinstance(ratio, float) and math.isfinite(ratio)
         if sliced and days_map:
             # The run is counted on the day the session ended, once; its tokens are counted on
             # the days they were spent. So the run column still counts sessions rather than
@@ -5980,7 +6019,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "rebuild", "profile"],
+                                    "provider", "prefix", "rebuild", "adherence", "profile"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")
