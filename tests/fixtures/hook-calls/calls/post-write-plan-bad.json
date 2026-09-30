@@ -1,0 +1,22 @@
+{
+ "about": "A plan file written without the Review Card's sections.",
+ "files": {
+  "{home}/.claude/plans/rename-parser.md": "# Plan: rename the parser\n\n## Context\n\nSome background.\n\n## Steps\n\n1. Rename it.\n"
+ },
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Write",
+  "tool_input": {
+   "file_path": "{home}/.claude/plans/rename-parser.md",
+   "content": "# Plan: rename the parser\n\n## Context\n\nSome background.\n\n## Steps\n\n1. Rename it.\n"
+  },
+  "tool_response": {
+   "filePath": "{home}/.claude/plans/rename-parser.md",
+   "type": "create"
+  }
+ }
+}
