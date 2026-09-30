@@ -10,6 +10,12 @@ where zsh goes to `b`; `HOME=$PWD/x cd` and `v=HOM; eval ${v}E=$PWD/x; cd ~` go 
 `HOME=$PWD/x cd ~` goes to the caller's home; `set -P; cd l/..` and
 `set -o physical; cd l; cd ..` go to `real`, where `cd l/..` alone stays put.
 
+Bash stays put for `x=1 time cd b`, `\\time cd b`, `time time cd b`, `builtin time cd b`,
+`builtin -p cd b`, `>f time cd b`, `! time cd b` and `true || cd b`, and goes to `b` for
+`command -- cd b`, `builtin -- cd b`, `: ${CDPATH:=w}; cd b` (to `w/b`) and
+`cd b || cd x`; zsh stays put for `time -p cd b`, `command -- cd b` and `builtin -- cd b`, and
+goes to `b` for `>f time cd b` and `! time cd b`.
+
 Run: python3 -m unittest discover -s tests
 """
 import os
@@ -46,7 +52,8 @@ class PrefixedAndExpandedCd(Fixture):
     def test_builtin_and_time_run_the_cd_they_prefix(self):
         for command in ("builtin cd ../beta && git push",
                         "time cd ../beta && git push",
-                        "time -p builtin cd ../beta; git push"):
+                        "time builtin cd ../beta; git push",
+                        "time ! cd ../beta; git push"):
             with self.subTest(command=command):
                 self.assert_beta(command)
 
@@ -56,9 +63,35 @@ class PrefixedAndExpandedCd(Fixture):
                         "eval cd ../beta && git push",
                         "eval 'cd ../beta'; git push",
                         "{cd,../beta} && git push",
-                        "c=cd; $c ../beta; git push"):
+                        "c=cd; $c ../beta; git push",
+                        "time -p builtin cd ../beta; git push",
+                        "command -- cd ../beta; git push",
+                        "command -p -- cd ../beta; git push",
+                        "builtin -- cd ../beta; git push",
+                        "\\time cd ../beta; git push",
+                        "'time' cd ../beta; git push",
+                        "! time cd ../beta; git push",
+                        ">/dev/null time cd ../beta; git push"):
             with self.subTest(command=command):
                 self.assert_unknown(command)
+
+    def test_a_time_that_is_not_the_reserved_word_runs_no_cd(self):
+        for command in ("x=1 time cd ../beta; git push",
+                        "time time cd ../beta; git push",
+                        "builtin time cd ../beta; git push",
+                        "builtin -p cd ../beta; git push"):
+            with self.subTest(command=command):
+                self.assertEqual(self.places(command), [str(self.repo)], command)
+
+    def test_a_policy_write_after_a_cd_not_followed_is_still_found(self):
+        (self.repo / ".agent-harness").mkdir(exist_ok=True)
+        for command in ("cd .agent-harness; x=1 time cd ..; echo {} > governance.json",
+                        "cd .agent-harness; \\time cd ..; echo {} > governance.json",
+                        "command -- cd .agent-harness; echo {} > governance.json",
+                        "cd .agent-harness; true || cd ..; echo {} > governance.json"):
+            with self.subTest(command=command):
+                found = grader.governed_text(command, str(self.repo))
+                self.assertTrue(grader._policy_hits(command, found), command)
 
     def test_command_v_is_not_a_directory_change(self):
         self.assertEqual(self.places("command -v cd; git -C ../beta push"), [str(self.beta)])
@@ -79,7 +112,14 @@ class CdPath(Fixture):
                         "CDPATH=.. cd beta && git push",
                         "export CDPATH=..; cd beta; git push",
                         "CDPATH=..; echo \"$(cd beta && git push)\"",
-                        "CDPATH=.. bash -c 'cd beta && git push'"):
+                        "CDPATH=.. bash -c 'cd beta && git push'",
+                        ": ${CDPATH:=..}; cd beta; git push",
+                        ": ${CDPATH=..}; cd beta; git push",
+                        ": ${CDPATH:?}; cd beta; git push",
+                        "declare CDPATH=..; cd beta; git push",
+                        "read CDPATH <<< ..; cd beta; git push",
+                        "printf -v CDPATH ..; cd beta; git push",
+                        "v=CDPATH; read $v <<< ..; cd beta; git push"):
             with self.subTest(command=command):
                 self.assert_unknown(command)
 
@@ -98,6 +138,33 @@ class CdPath(Fixture):
         # CDPATH itself skips `../beta`; the walk trusts no `..` once CDPATH or a physical
         # option may be set, since it keeps one flag for both.
         self.assert_unknown("CDPATH=/nowhere; cd ../beta; git push")
+
+
+class CdThatMayNotRun(Fixture):
+    def test_a_cd_after_a_list_operator_or_in_a_compound_leaves_the_directory_unknown(self):
+        for command in ("true || cd ../beta; git push",
+                        "true && cd ../beta; git push",
+                        "cd ../beta || cd ../alpha; git push",
+                        "! cd ../beta; git push",
+                        "if true; then cd ../beta; fi; git push",
+                        "while false; do cd ../beta; done; git push",
+                        "for d in x; do cd ../beta; done; git push",
+                        "case x in x) cd ../beta;; esac; git push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_a_command_past_a_list_operator_after_a_cd_is_unknown(self):
+        for command in ("cd ../beta || git push",
+                        "cd ../beta && true || git push"):
+            with self.subTest(command=command):
+                self.assert_unknown(command)
+
+    def test_a_cd_that_leads_its_list_is_followed(self):
+        for command in ("cd ../beta && git push",
+                        "cd ../beta || exit; git push",
+                        "true || true; cd ../beta && git push"):
+            with self.subTest(command=command):
+                self.assert_beta(command)
 
 
 class HomeForTheCd(Fixture):
@@ -126,6 +193,7 @@ class PhysicalCd(Fixture):
                         "set -eP; cd l/..; git push",
                         "set -o physical; cd l; cd ..; git push",
                         "setopt chase_links; cd l/..; git push",
+                        "set -w; cd l/..; git push",
                         "set -P; echo \"$(cd l/.. && git push)\""):
             with self.subTest(command=command):
                 self.assert_unknown(command)

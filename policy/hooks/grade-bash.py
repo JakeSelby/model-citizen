@@ -1961,8 +1961,13 @@ def _mentions_home(tokens):
 
 
 # Options that make `cd` resolve `..` physically: bash's `set -P` or `set -o physical`, and
-# zsh's `chase_links` and `chase_dots`, which zsh spells with any case and underscores.
-PHYSICAL_OPTION_RE = re.compile(r"^[-+][A-Za-z]*P|physical|chase_?(?:links|dots)", re.I)
+# zsh's `set -w`, `chase_links` and `chase_dots`, which zsh spells with any case and underscores.
+PHYSICAL_OPTION_RE = re.compile(r"^[-+][A-Za-z]*[Pw]|physical|chase_?(?:links|dots)", re.I)
+# A word naming CDPATH anywhere: `CDPATH=w`, `${CDPATH:=w}`, `declare -n r=CDPATH`.
+CDPATH_WORD_RE = re.compile(r"(?<![A-Za-z0-9_])CDPATH(?![A-Za-z0-9_])")
+# Builtins that assign the variable an argument names, which may be CDPATH behind a `$v`.
+ASSIGNING_BUILTINS = {"declare", "typeset", "export", "local", "readonly", "read", "printf",
+                      "getopts", "mapfile", "readarray", "let", "unset", "vared"}
 # A command word bash may expand into another, `cd` or `eval` included: `$c` or `c?`, when it
 # has no `/`, since a word with a `/` names a file, never a builtin; a brace expansion such as
 # `{cd,../d}` always, since it splits into words before the `/`.
@@ -1971,21 +1976,41 @@ DYNAMIC_HEAD_RE = re.compile(r"[$`*?\[]")
 
 def _command_word(tokens):
     """(the command word a simple command runs, as written, its arguments, whether bash and zsh agree it is that
-    command), past assignments and the prefixes that run a builtin in this shell: `builtin` and
-    `time` in both shells, and `command`, `noglob` and `nocorrect`, which zsh and bash read
-    differently, so what follows them is not certain. `command -v cd` prints and runs nothing,
-    so it is the command `command`."""
-    body, sure = _redirects(list(tokens))[0], True
+    command), past assignments and the prefixes that run a builtin in this shell.
+
+    `time` is the reserved word only as the first word, so `x=1 time cd d`, `builtin time cd d`
+    and `time time cd d` run the program `time`, which cannot move this shell; `time -p` and a
+    `time` after a redirect are the reserved word to bash and a command to zsh. `builtin` runs
+    the builtin in both shells; `builtin --`, `command`, `noglob` and `nocorrect` are read
+    differently by the two, so what follows them is not certain. `command -v cd` prints and runs
+    nothing, so it is the command `command`, and `builtin -p cd` fails in both. The lexer drops
+    quoting, so `_bare_times` must also hold for a leading `time` to be the reserved word."""
+    tokens = list(tokens)
+    body, sure = _redirects(tokens)[0], True
+    if body[:1] == ["time"] and tokens[:1] != ["time"]:
+        body, sure = body[1:], False  # `>f time cd d`: bash times the cd, zsh runs `time`
+    elif body[:1] == ["time"]:
+        body = body[1:]
+        if body[:1] == ["-p"]:
+            body, sure = body[1:], False
+        if body[:1] == ["!"]:
+            body = body[1:]
     while body and ASSIGN_RE.match(body[0]):
         body = body[1:]
     while body:
-        if body[0] in ("builtin", "time"):
-            body = body[1:]
-            while body and body[0] == "-p":
+        if body[0] == "builtin":
+            if body[1:2] == ["--"]:
+                body, sure = body[2:], False
+            elif body[1:2] and body[1].startswith("-"):
+                return body[0], body[1:], sure
+            else:
                 body = body[1:]
         elif body[0] in ("command", "noglob", "nocorrect"):
             rest = body[1:]
             while rest and rest[0].startswith("-") and body[0] == "command":
+                if rest[0] == "--":
+                    rest = rest[1:]
+                    break
                 if rest[0] != "-p":
                     return body[0], body[1:], True
                 rest = rest[1:]
@@ -1995,6 +2020,15 @@ def _command_word(tokens):
     if not body:
         return "", [], sure
     return body[0], body[1:], sure
+
+
+def _bare_times(text, parts):
+    """Whether each `time` word in `parts`, the simple commands of `text`, is written bare and
+    none follows a `!`: the lexer returns `\\time`, `'time'` and `t''ime` as `time`, which bash
+    runs as the program, and `! time cd d` stays put in bash where zsh moves."""
+    unquoted = re.sub(r"'[^']*'|\"(?:\\.|[^\"\\])*\"|\\.", "_", text)
+    bare = re.findall(r"(?<![^\s;&|(){}])(!\s+)?time(?![^\s;&|()<>])", unquoted)
+    return (not any(bare) and len(bare) == sum(tokens.count("time") for tokens in parts))
 
 
 def _dynamic_head(word):
@@ -2013,11 +2047,15 @@ def _runs_unseen(tokens):
 
 def _moves_cd_resolution(tokens):
     """Whether a simple command may change how a later `cd` resolves its operand: it names
-    CDPATH, as `CDPATH=w`, `export CDPATH` or `CDPATH=w cd b` do, or it sets a physical-path
+    CDPATH, as `CDPATH=w`, `export CDPATH`, `: ${CDPATH:=w}` or `CDPATH=w cd b` do, an assigning
+    builtin names a variable through an expansion, as `read $v` may, or it sets a physical-path
     option with `set` or `setopt`."""
-    if any(token == "CDPATH" or token.startswith(("CDPATH=", "CDPATH+=")) for token in tokens):
+    if any(CDPATH_WORD_RE.search(token) for token in tokens):
         return True
     word, args, _sure = _command_word(tokens)
+    if word in ASSIGNING_BUILTINS and any(
+            PLACEHOLDER in a or any(c in a for c in "$`") for a in args):
+        return True
     return word in ("set", "setopt") and any(PHYSICAL_OPTION_RE.search(a) for a in args)
 
 
@@ -2232,6 +2270,69 @@ def _confined(text):
             for index, in_parens, in_compound in places]
 
 
+def _list_places(text):
+    """Per simple command of `segments(text)`, (whether it may not run when its AND-OR list
+    does, the list it is in, whether it runs only past a `||` of that list), or None when the
+    walk cannot place the line's structure.
+
+    A command after `&&` or `||`, negated with `!`, or inside a conditional, loop or `case` may
+    not run, or may run where a `cd` before it failed: `true || cd d` stays put, and `cd d || x`
+    runs `x` where `cd d` did not go. The first command of a list always runs, and so does one
+    in a brace group or subshell that does, whose `;` does not end the list around it."""
+    try:
+        tokens = ro.tokenize(" ; ".join(_unquoted_structure(text).split("\n")))
+    except ValueError:
+        return None
+    places, ops, lists, cur, skipping, negated = [], [], 0, [], False, False
+    groups = []  # (opening word, whether what it holds may not run), innermost last
+
+    def enclosed():
+        return bool(ops) or negated or bool(groups and groups[-1][1])
+
+    for token in tokens:
+        if token in ro.ALWAYS_DELIM:
+            if cur:
+                places.append(opened)
+            cur, skipping = [], False
+            if token in ("&&", "||"):
+                ops.append(token)
+            elif token == "(":
+                groups.append((token, enclosed()))
+                ops, negated = [], False
+            elif token == ")":
+                if groups and groups[-1][0] == "(":
+                    groups.pop()
+                elif not groups or groups[-1][0] != "case":  # a `case` pattern ends at `)`
+                    return None
+            elif token in (";", "&", ";;"):
+                ops, lists = [], lists + (not groups)
+            continue
+        if skipping:
+            continue
+        if not cur:
+            if token in COMPOUND_OPEN:
+                groups.append((token, token != "{" or enclosed()))
+                ops, negated = [], False
+            elif token in COMPOUND_CLOSE:
+                if not groups or groups[-1][0] == "(":
+                    return None
+                groups.pop()
+            if token == "!":
+                negated = True
+                continue
+            if token in ro.WORD_DROP or token in ro.WORD_COND:
+                continue
+            if token in ro.WORD_HEADER:
+                skipping = True
+                continue
+            opened = (enclosed(), lists, "||" in ops)
+            negated = False
+        cur.append(token)
+    if cur:
+        places.append(opened)
+    return None if groups else places
+
+
 def _user_policy(name=POLICY_NAME):
     home = os.environ.get("HARNESS_HOME") or os.environ.get("HOME") or str(Path.home())
     return os.path.join(home, ".config", "agent-harness", name)
@@ -2442,6 +2543,10 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
     confined = None if isolated else _confined(stripped)
     if confined is None or len(confined) != len(parts):
         confined = [None] * len(parts)
+    places = _list_places(stripped)
+    if places is None or len(places) != len(parts):
+        places = [(True, None, True)] * len(parts)  # every `cd` may not run
+    plain_times = _bare_times(stripped, parts)
     queue = list(inners)
     found = []
     assignment_contexts = _assignment_contexts(stripped, parts, home_unknown, cd_unknown)
@@ -2456,23 +2561,30 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
                                        home_unknown=moved, cd_unknown=_cd_unknown(variables))
                          or [(SHELL, _scan(inner)[0], where, [])])
 
-    here = cwd
-    for tokens, alone, variables in zip(parts, confined, assignment_contexts):
-        substitutions(sum(t.count(PLACEHOLDER) for t in tokens), here, variables)
+    here, moved_in = cwd, None
+    for tokens, alone, variables, (may_skip, in_list, past_or) in zip(
+            parts, confined, assignment_contexts, places):
+        # Past a `||` in the list of a `cd`, the command runs where that `cd` failed, or where
+        # a command after it failed: `cd d || x` runs `x` where `cd d` did not go.
+        at = None if past_or and in_list == moved_in else here
+        substitutions(sum(t.count(PLACEHOLDER) for t in tokens), at, variables)
         _targets = _redirects(list(tokens))[1]
         word, args, sure = _command_word(tokens)
+        sure = sure and (plain_times or "time" not in tokens)
         head = word.rpartition("/")[2]
         if head in ("cd", "pushd", "popd"):
             # A directory change that also writes, through a redirect, is governed where it runs.
-            moved_grade = grade_tokens(list(tokens), here or "", depth)[0]
+            moved_grade = grade_tokens(list(tokens), at or "", depth)[0]
             if moved_grade > 0:
-                found.append((SHELL, moved_grade, here, _written(head, [], _targets, here)))
+                found.append((SHELL, moved_grade, at, _written(head, [], _targets, at)))
             if alone is None:
                 alone = line_wide
+            moved_in = in_list
             # A confined `cd` leaves the directory unknown, not unchanged: zsh runs a
-            # pipeline's last element in the current shell, so `x | cd d` moves it there.
-            if (alone or not sure or head == "popd" or any(a.startswith("-") for a in args)
-                    or len(args) > 1):
+            # pipeline's last element in the current shell, so `x | cd d` moves it there. So
+            # does one that may not run, as `true || cd d` does not.
+            if (alone or not sure or may_skip or head == "popd"
+                    or any(a.startswith("-") for a in args) or len(args) > 1):
                 here = None
             elif head == "pushd" and not args:
                 here = None  # swaps with the directory stack, which this walk does not hold
@@ -2489,7 +2601,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             else:
                 here = _static_dir(args[0] if args else "~", here)
             continue
-        found.extend(_governed(tokens, here, depth, variables, causes))
+        found.extend(_governed(tokens, at, depth, variables, causes))
         if _runs_unseen(tokens):
             here = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
     # Any the segments did not account for: fail closed, HOME included.
