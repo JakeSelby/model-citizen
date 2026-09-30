@@ -478,6 +478,8 @@ development_status:
   ah-b137-studio-run-catalog-discovery-blocks-run-history: backlog
   ah-b138-concurrent-first-studio-lock-opens-fail-with: backlog
   ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
+  ah-b140-studio-live-update-cpu-budget-test-fails-under: backlog
+  ah-b141-studio-draft-discard-intermittently-exits-1-with: backlog
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
