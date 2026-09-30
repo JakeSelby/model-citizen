@@ -240,7 +240,7 @@ development_status:
   ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
   ah-s240-replay-a-task-set-sized-by-power-analysis-long: backlog
   ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: backlog
-  ah-s242-the-soft-estimate-report-adherence-rate-and-the: backlog
+  ah-s242-the-soft-estimate-report-adherence-rate-and-the: ready-for-dev
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
   ah-s252-replay-charges-the-user-s-personal-layer-to-the: done

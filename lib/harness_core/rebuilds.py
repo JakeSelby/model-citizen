@@ -39,6 +39,7 @@ EVENT_CAUSES = (
     ("remote session change", ("att:remote_session_change",)),
 )
 COMMAND = re.compile(r"<command-name>(/[\w:-]+)")
+SESSION_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def timestamp(value):
@@ -80,6 +81,19 @@ def event_kinds(entry):
             found.append("compact-summary")
         return found + entrypoint
     return entrypoint
+
+
+def is_prompt(entry):
+    """A main-session user prompt, counted as the usage feed counts a turn: a user entry that is
+    not a tool result, a meta entry or a compaction summary."""
+    if entry.get("type") != "user" or entry.get("isSidechain"):
+        return False
+    if entry.get("isMeta") or entry.get("isCompactSummary"):
+        return False
+    message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+    content = message.get("content")
+    return not (isinstance(content, list) and any(
+        isinstance(block, dict) and block.get("type") == "tool_result" for block in content))
 
 
 def cause(events, gap, previous_model, model, five_minute_share, previous_version="", version=""):
@@ -162,8 +176,12 @@ def transcript_paths(projects):
 
 
 def read_calls(path, cutoff):
-    """`(calls, counts)` from one transcript, filtering every line by its own timestamp."""
-    calls, events, seen = [], [], set()
+    """`(calls, counts)` from one transcript, filtering every line by its own timestamp.
+
+    Each call's `prompt` is the ordinal of the user prompt it follows (`is_prompt`), counted from
+    the start of the transcript even when earlier lines fall outside the window.
+    """
+    calls, events, seen, prompts = [], [], set(), 0
     counts = collections.Counter()
     try:
         stream = Path(path).open(encoding="utf-8", errors="replace")
@@ -180,6 +198,8 @@ def read_calls(path, cutoff):
             if not isinstance(entry, dict):
                 counts["malformed_lines"] += 1
                 continue
+            if is_prompt(entry):
+                prompts += 1
             stamp = timestamp(entry.get("timestamp"))
             if stamp is not None and stamp < cutoff:
                 counts["outside_window"] += 1
@@ -202,6 +222,7 @@ def read_calls(path, cutoff):
                     counts["duplicate_call_lines"] += 1
                     continue
                 seen.add(call["id"])
+                call["prompt"] = prompts
                 calls.append(call)
                 events = []
             else:
@@ -212,6 +233,55 @@ def read_calls(path, cutoff):
                     counts["untimed_lines"] += 1
                 events.extend(event_kinds(entry))
     return calls, counts
+
+
+def annotate(calls):
+    """Mark each call's cache rebuild on the call itself and return the list.
+
+    A call is a rebuild when it read at least `MIN_SHORTFALL` fewer tokens than the previous
+    call sent; it then carries `rewritten` (the shortfall it wrote back, at most its own write)
+    and `cause`. Every other call, the first included, carries `rewritten` 0 and `cause` None.
+    """
+    previous = None
+    for call in calls:
+        call["rewritten"], call["cause"] = 0, None
+        if previous is not None:
+            sent = previous["input"] + previous["cache_read"] + previous["cache_write"]
+            shortfall = max(0, sent - call["cache_read"])
+            if shortfall >= MIN_SHORTFALL:
+                writes = call["cache_write"]
+                if call["cache_write_5m"] is None:
+                    five_share = None
+                else:
+                    five_share = call["cache_write_5m"] / writes if writes else 0.0
+                gap = call["timestamp"] - previous["timestamp"]
+                call["rewritten"] = min(shortfall, writes)
+                call["cause"] = cause(call["events"], gap, previous["model"], call["model"],
+                                      five_share, previous["version"], call["version"])
+        previous = call
+    return calls
+
+
+def session_transcript(projects, session_id):
+    """The main transcript `<session_id>.jsonl` in any project folder, or None.
+
+    Only a plain name is looked up, so an id can never widen the glob or leave the folder.
+    """
+    if not isinstance(session_id, str) or not SESSION_ID.match(session_id):
+        return None
+    found = sorted(Path(projects).glob("*/" + session_id + ".jsonl"))
+    return found[0] if found else None
+
+
+def session_calls(projects, session_id):
+    """One session's annotated calls from its whole transcript, or None when it cannot be read."""
+    path = session_transcript(projects, session_id)
+    if path is None:
+        return None
+    calls, counts = read_calls(path, 0)
+    if counts.get("unreadable_files"):
+        return None
+    return annotate(calls)
 
 
 def _scope():
@@ -265,20 +335,10 @@ def analyse(projects, cutoff, days, table, pricing):
                     scope["unpriced_calls"] += 1
                 else:
                     scope["priced_spend_usd"] += cost
-        for previous, call in zip(calls, calls[1:]):
-            sent = previous["input"] + previous["cache_read"] + previous["cache_write"]
-            shortfall = max(0, sent - call["cache_read"])
-            if shortfall < MIN_SHORTFALL:
+        for call in annotate(calls):
+            label, rewritten = call["cause"], call["rewritten"]
+            if label is None:
                 continue
-            rewritten = min(shortfall, call["cache_write"])
-            writes = call["cache_write"]
-            if call["cache_write_5m"] is None:
-                five_share = None
-            else:
-                five_share = call["cache_write_5m"] / writes if writes else 0.0
-            gap = call["timestamp"] - previous["timestamp"]
-            label = cause(call["events"], gap, previous["model"], call["model"], five_share,
-                          previous["version"], call["version"])
             cost = _break_cost(call, rewritten, table, pricing)
             for name in names:
                 scope, bucket = scopes[name], scopes[name]["causes"][label]
