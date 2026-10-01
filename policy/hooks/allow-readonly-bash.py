@@ -41,7 +41,7 @@ PLAIN = {
     "printenv", "basename", "dirname", "realpath", "readlink", "uniq", "cut",
     "tr", "jq", "column", "nl", "od", "strings", "md5", "md5sum",
     "shasum", "sha256sum", "diff", "cmp", "comm", "tac", "rev", "seq", "expr",
-    "cd", "arch", "nproc", "lsof", "ps", "top", "uptime",
+    "cd", "nproc", "lsof", "ps", "top", "uptime",
     "read", "fold", "paste", "join", "look", "hexdump", "base64", "cksum",
 }
 
@@ -136,6 +136,7 @@ READ_REDIRECTS = {"<", "<<", "<<<", "<&"}
 HEREDOC_OPERATOR = re.compile(r"(?<!<)<<(?!<)")
 # The longest command this hook reads; a longer one falls through unread.
 MAX_LENGTH = 10000
+MAX_PREFIXES = 64  # `time nice env …` words looked through before a command
 WRITE_REDIRECTS = re.compile(r"^\d*(?:&?>>?[!|]?|>&|<>)$")
 PUNCTUATION_RUN = re.compile(r"^\d*[<>&|]+!?$")
 
@@ -569,10 +570,37 @@ def strip_redirects(tokens):
     return cleaned
 
 
+# Wrappers that run the command after their own words; `arch` runs one only when given any.
+# The most read in a row is `MAX_PREFIXES`: a longer run is not approved.
+WRAPPERS = ("timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob")
+
+
 def segment_ok(tokens):
     """True when a single simple command (already free of substitutions and of the
-    structural keywords) is read-only."""
-    tokens = strip_redirects(tokens)
+    structural keywords) is read-only.
+
+    A prefix such as `time`, `nice` or `env` is looked through in a loop, never by recursion,
+    and a command behind more than `MAX_PREFIXES` of them is not read-only."""
+    return segment_verdict(tokens) is True
+
+
+def segment_verdict(tokens, budget=MAX_PREFIXES):
+    """`segment_ok`, or None when the command is behind more than `budget` prefixes: a caller
+    that looks through a prefix itself passes what remains of `MAX_PREFIXES`, so the shorter
+    chain a later step sees is never read as read-only."""
+    tokens = strip_redirects(tokens)  # all of them, the prefixed command's included
+    for step in range(max(budget, 0) + 1):
+        verdict = _segment_step(tokens, step == 0)
+        if not isinstance(verdict, list):
+            return bool(verdict)
+        tokens = verdict
+    return None
+
+
+def _segment_step(tokens, first=True):
+    """`segment_ok` for one command word, its redirects removed: True or False, or the tokens
+    a prefix runs. Only the `first` step looks for a substitution: a later one sees a suffix of
+    the words it read."""
     if not tokens:
         return False
     # Strip leading assignments (LANG=C, S=/path, NAME=value cmd ...). A segment
@@ -584,9 +612,8 @@ def segment_ok(tokens):
         tokens = tokens[1:]
     if not tokens:
         return True
-    for t in tokens:
-        if "$(" in t or "`" in t or "<(" in t or ">(" in t:
-            return False  # an unextracted substitution: fail closed
+    if first and any("$(" in t or "`" in t or "<(" in t or ">(" in t for t in tokens):
+        return False  # an unextracted substitution: fail closed
     head = tokens[0]
     if "/" in head:
         base, _, prog = head.rpartition("/")
@@ -597,8 +624,10 @@ def segment_ok(tokens):
     args = tokens[1:]
     if prog in NEVER:
         return False
-    if prog in ("timeout", "time", "nice", "nohup", "stdbuf", "command", "noglob"):
-        return segment_ok(args[1:] if prog == "timeout" and args else args)
+    if prog in WRAPPERS:
+        return list(args[1:] if prog == "timeout" and args else args)
+    if prog == "arch":
+        return not args  # `arch -arm64 cmd` runs cmd
     if prog == "env":
         while args and ASSIGN_RE.match(args[0]):
             if not assignment_ok(args[0]):
@@ -606,7 +635,7 @@ def segment_ok(tokens):
             args = args[1:]
         if not args:
             return True
-        return not args[0].startswith("-") and segment_ok(args)
+        return False if args[0].startswith("-") else list(args)
     if prog == "export":
         return bool(args) and all(
             NAME_RE.match(a.split("=", 1)[0]) is not None and assignment_ok(a) for a in args)
@@ -883,7 +912,11 @@ def main():
     if payload.get("tool_name") != "Bash":
         return
     cmd = (payload.get("tool_input") or {}).get("command") or ""
-    if command_ok(cmd):
+    try:
+        read_only = command_ok(cmd)
+    except Exception:
+        read_only = False  # text this reader cannot parse is never passed as read-only
+    if read_only:
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
