@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 153,
+    "bug": 155,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -8484,6 +8484,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B151.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B154",
+      "github_number": 1155,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1155",
+      "title": "Installing the harness leaves undeclared files that make every replay arm pair fail parity",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B154.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
