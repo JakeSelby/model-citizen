@@ -8425,6 +8425,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B150",
+      "github_number": 1136,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1136",
+      "title": "grade-bash misses directory changes from sourced scripts, traps and a redefined cd, and crashes on long prefix chains",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B150.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B151",
       "github_number": 1139,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1139",
