@@ -5,7 +5,7 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { EvidenceState, StatusBadge } from "../../components/StudioKit";
 import { useLiveUpdates } from "../../live/LiveUpdates";
 import { loadCaseHistory, loadEvidence, loadRunDetail, rerun } from "./api";
-import { displayUnknown, reportHref, type CaseHistory, type RunDetail } from "./model";
+import { displayUnknown, evaluationLines, reportHref, type CaseHistory, type RunDetail } from "./model";
 
 export function RunDetailPage() {
   const { runId = "" } = useParams();
@@ -151,6 +151,10 @@ export function RunDetailPage() {
       {caseHistory && <Paper p="xl" withBorder><Title order={2}>Case history: {caseHistory.case_id}</Title>
         <Stack gap="xs">{caseHistory.items.map((item) => <Text key={item.run_id} component={NavLink} to={`/experiments/runs/${item.run_id}`}>{item.case?.outcome} · {displayUnknown(item.created_at)} {item.case?.flaky ? "· Flaky" : ""}</Text>)}</Stack>
         {caseHistory.next_cursor && <Button mt="sm" variant="default" onClick={() => void showCaseHistory(caseHistory.case_id, caseHistory.next_cursor)}>Load more</Button>}
+      </Paper>}
+      {detail.evaluation && <Paper p="xl" withBorder><Title order={2}>Evaluation contract</Title>
+        <Table className="data-table" mt="sm"><Table.Tbody>{evaluationLines(detail.evaluation).map(([label, value], index) =>
+          <Table.Tr key={`${label}-${index}`}><Table.Th scope="row">{label}</Table.Th><Table.Td><Text style={{ overflowWrap: "anywhere" }}>{value}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>}
       <Paper p="xl" withBorder><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => {
         const href = reportHref(item);

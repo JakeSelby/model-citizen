@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store, open_shared
-from . import free_suites, run_store, spend_guard, targets
+from . import evaluation, free_suites, run_store, spend_guard, targets
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -1511,6 +1511,16 @@ class RunSupervisor:
                     item["label"] = "Result JSON"
                 detail["artifacts"].append(item)
         return detail
+
+    def run_evaluation(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """The landed evaluation contract an indexed source declared, carried as indexed; no
+        figure, verdict or proof status is derived here. None for a source with no contract."""
+        try:
+            with self.lock():
+                indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        return evaluation.detail_contract(indexed)
 
     def plugin_eval_report(self, run_id: str) -> bytes:
         """The original `claude plugin eval` HTML report an imported run declares."""

@@ -41,12 +41,31 @@ export type RunArtifact = {
   href?: string;
 };
 
+export type ProofStatus = {
+  status: "verified" | "failed";
+  bundle_id: string | null;
+  errors: string[];
+  unknown: string[];
+};
+
+/** The landed Measured contract an indexed source declared; the engine's values, never re-derived. */
+export type EvaluationContract = {
+  shape: "two-arm" | "pair" | "variable-arm" | "four-cell" | "proof-bundle";
+  arms?: string[];
+  pack?: { pack: string; pack_version: string; pack_commit: string; pack_digest: string } | null;
+  ablation?: { name: string; sha256: string; schema: number } | null;
+  design?: { name: string; schema: number; manifest_sha256: string } | null;
+  registration?: { evidence: string | null; pre_registration: string | null; pre_registration_commit: string | null } | null;
+  proof?: ProofStatus;
+};
+
 export type RunDetail = RunSummary & {
   cases: RunCase[];
   reruns: { items: string[]; next_cursor: string | null };
   exact_command: string | null;
   rerun: { available: boolean; reason: string | null };
   artifacts: RunArtifact[];
+  evaluation?: EvaluationContract | null;
 };
 
 export type CaseHistory = {
@@ -70,4 +89,38 @@ const REPORT_HREF = /^\/api\/runs\/plugin-eval-report\/[0-9a-f]{8}-[0-9a-f]{4}-[
 export function reportHref(artifact: RunArtifact): string | null {
   if (artifact.kind !== "html-report" || artifact.available === false) return null;
   return typeof artifact.href === "string" && REPORT_HREF.test(artifact.href) ? artifact.href : null;
+}
+
+const SHAPE_LABELS: Record<EvaluationContract["shape"], string> = {
+  "two-arm": "Two-arm replay", pair: "One-policy pair", "variable-arm": "Variable-arm ablation",
+  "four-cell": "Four-cell design", "proof-bundle": "Proof bundle",
+};
+
+/**
+ * Label and value lines for an evaluation contract, in display order. A missing evidence label
+ * reads "Unlabelled", never "Exploratory" or "Pre-registered"; a proof is "Verified" only when the
+ * verifier said so.
+ */
+export function evaluationLines(contract: EvaluationContract | null | undefined): Array<[string, string]> {
+  if (!contract) return [];
+  const lines: Array<[string, string]> = [["Contract", SHAPE_LABELS[contract.shape] ?? `Unsupported (${String(contract.shape)})`]];
+  if (contract.arms && contract.arms.length) lines.push(["Arms", contract.arms.join(", ")]);
+  if (contract.pack) lines.push(["Pack", `${contract.pack.pack} ${contract.pack.pack_version} @ ${contract.pack.pack_commit}`],
+    ["Pack digest", contract.pack.pack_digest]);
+  if (contract.ablation) lines.push(["Ablation", `${contract.ablation.name} (schema ${contract.ablation.schema})`],
+    ["Ablation digest", contract.ablation.sha256]);
+  if (contract.design) lines.push(["Design", `${contract.design.name} (schema ${contract.design.schema})`],
+    ["Design digest", contract.design.manifest_sha256]);
+  if (contract.registration) {
+    const label = contract.registration.evidence;
+    lines.push(["Evidence label", label === "pre-registered" ? "Pre-registered" : label === "exploratory" ? "Exploratory" : "Unlabelled"]);
+    if (contract.registration.pre_registration) lines.push(["Pre-registration", contract.registration.pre_registration]);
+  }
+  if (contract.proof) {
+    lines.push(["Proof", contract.proof.status === "verified" ? "Verified" : "Verification failed"]);
+    if (contract.proof.bundle_id) lines.push(["Bundle", contract.proof.bundle_id]);
+    contract.proof.errors.forEach((error) => lines.push(["Failed check", error]));
+    contract.proof.unknown.forEach((item) => lines.push(["Unknown, not verified", item]));
+  }
+  return lines;
 }

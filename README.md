@@ -111,6 +111,15 @@ Reasonable developers disagree about testing, autonomy and how much to delegate.
 - [Autonomy stances](primitives/stances/autonomy): Execute, confirm-writes or ask. The choice sets which shell-command grade stops and asks; it is enforced, not advised.
 - [Judgment stays local by default](docs/runtime-controls.md): An external judgment provider is off at every decision point until you turn it on, sends only the fields you list, and one file switches every call off.
 
+### A Studio for editing and measuring the harness
+
+A local browser view over the same commands the CLI runs. Edits stay in a draft until you apply them, and every run keeps the native result files as its record.
+
+- [Hand-edit in a draft](lib/harness_core/studio/module_editing.py): Edit a rule, skill or stance in a draft with live lint, context budget and runtime projection, then save an explicit checkpoint.
+- [Templates and forks](lib/harness_core/studio/module_authoring.py): Add your own module from a template, or fork a core one into your root; the draft switches the original off and shows its upstream diff.
+- [Live replay against two targets](lib/harness_core/studio/replay.py): Run the replay benchmark against two explicit targets, each built into its own profile, under one spend cap, with a per-task table per arm.
+- [Plugin eval import](lib/harness_core/studio/plugin_evals.py): Imports `claude plugin eval` results into the run history, with a link to the HTML report.
+
 ### On the way
 
 Planned, not promised.
