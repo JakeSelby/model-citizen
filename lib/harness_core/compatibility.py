@@ -1,6 +1,7 @@
 """Compatibility claims must carry versioned native evidence."""
 import hashlib
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -142,6 +143,19 @@ def qualification_reuse(root, data, target=None, seen=None, depth=0):
     """Validate a patch release's explicit reuse of an immutable prior release's evidence."""
     reuse = reuse_metadata(data)
     if reuse is None:
+        if (target or release_target(root, data) or "HEAD") == "HEAD":
+            staged = subprocess.run(["git", "-C", str(root), "show", ":compatibility/catalog.json"],
+                                    capture_output=True)
+            # Open candidates may be edited before staging; released HEAD claims must match the index.
+            required = data.get("release_state") == "released"
+            if staged.returncode and required:
+                raise ValueError("staged compatibility catalog is unavailable")
+            if staged.returncode == 0:
+                staged_catalog = json.loads(staged.stdout)
+                if not isinstance(staged_catalog, dict):
+                    raise ValueError("staged compatibility catalog must be an object")
+                if (required or staged_catalog.get("qualification_reuse") is not None) and not same_json(data, staged_catalog):
+                    raise ValueError("compatibility catalog differs from the staged catalog; stage the validated catalog")
         return None
     if depth >= MAX_REUSE_DEPTH:
         raise ValueError("qualification reuse chain exceeds " + str(MAX_REUSE_DEPTH) + " releases")
@@ -220,6 +234,12 @@ def qualification_reuse(root, data, target=None, seen=None, depth=0):
         raise ValueError("qualification reuse release delta contains ineligible path: " + refused[0])
     if "VERSION" not in changed:
         raise ValueError("qualification reuse release delta must change VERSION")
+    if target_commit == "HEAD":
+        staged_catalog = json.loads(git_output(root, "show", ":compatibility/catalog.json"))
+        if not same_json(data, staged_catalog):
+            raise ValueError("qualification reuse catalog differs from the staged catalog; stage the validated catalog")
+        if git_output(root, "show", ":VERSION").strip() != current:
+            raise ValueError("qualification reuse staged VERSION does not match the catalog")
     return reuse
 
 
@@ -482,16 +502,17 @@ def stale_cases(data, record, changed):
 
 def changed_files(root, commit, target, paths, carved):
     """The files under `paths`, and under the carved-back `carved`, that differ between the two
-    commits, or None when git cannot say, which the caller treats as all of them."""
+    commits, including staged paths for a working HEAD, or None when git cannot say."""
     names = set()
     for spec in (paths, carved):
         if not spec:
             continue
-        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "--no-renames",
-                               commit, target, "--", *spec], capture_output=True, text=True)
+        revisions = ["--cached", commit] if target == "HEAD" else [commit, target]
+        done = subprocess.run(["git", "-C", str(root), "diff", "--name-only", "-z", "--no-renames",
+                               *revisions, "--", *spec], capture_output=True)
         if done.returncode:
             return None
-        names.update(line for line in (done.stdout or "").splitlines() if line.strip())
+        names.update(os.fsdecode(name) for name in (done.stdout or b"").split(b"\0") if name)
     return sorted(names)
 
 

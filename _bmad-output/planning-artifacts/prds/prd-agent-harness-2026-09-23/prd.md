@@ -2,7 +2,7 @@
 title: Model Citizen product requirements
 status: final
 created: 2026-09-23
-updated: 2026-09-27
+updated: 2026-09-29
 supersedes: ../prd-agent-harness-2026-09-19/prd.md
 sources:
   - ../../source-ledger.md
@@ -10,6 +10,8 @@ sources:
   - ../../research/
   - addendum.md
 ---
+
+> Current delivery assignments: [Delivery roadmap amendment — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
 
 # PRD: Model Citizen
 
@@ -661,8 +663,8 @@ slices, the harness version and the session effort. **Status:** implemented (0.1
 
 **Consequences (testable):**
 - Codex subagent threads are linked to their parents, and archived sessions are read.
-- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`
-  and `prefix`, and reports the deduplication ratio.
+- `citizen usage` supports `--by day`, `repo`, `model`, `role`, `rule`, `stance`, `decision`, `provider`,
+  `prefix` and `rebuild`, and reports the deduplication ratio.
 - `--by role` marks any role with fewer than 30 samples.
 
 #### FR-24: Honest pricing
@@ -710,6 +712,29 @@ sampling and completion claims are unreleased (#574, #593).
 - Each row's `input` is capped at 2 KiB. The log stays local, is not part of export, and stops when
   `telemetry.decisions` is off.
 
+#### FR-85: Soft-estimate report
+`citizen usage --by adherence` must report, per recommendation kind, the adherence rate as a measured
+figure with a 95% Wilson interval, and what following the advice would have saved as a soft estimate
+from a named estimator, never pooled with a measured figure (AD-12). The estimator for the fresh-session
+nudge is **carried-context reprice**:
+- **Inputs:** the adherence ledger's emissions answered `not_followed`, the session's main transcript,
+  the cache-rebuild breaks and causes attributed from it (#748), and the dated price table (FR-24).
+- **Assumption:** the same later turns, in a session reset at the nudge with no handoff. The fresh
+  session starts from the session's own first-call context, so the figure is a saving of at most the
+  amount shown.
+- **Method:** the context carried past the session's first call is removed from every call after the
+  nudge, up to the first compaction; the first such call is repriced as a cold start and a rebuild
+  writes less by the carried context. The saving is signed and never clipped at zero.
+
+**Status:** planned (v0.15.0, #798).
+
+**Consequences (testable):**
+- Every figure carries its estimand label; summing figures with different labels is refused, and no
+  total spans the measured and soft sections.
+- A kind with no judged emission prints no rate rather than 0%; a kind with no estimator is unmeasured.
+- An emission whose horizon holds an unpriced model is counted as unpriced, and one whose transcript
+  cannot be read as transcript missing; neither is priced at $0.
+
 ### 4.6 Cost posture and delegation
 
 **Description:** The `cost` stance resolves to a cost posture: a capability class, an effort level and a
@@ -742,11 +767,16 @@ a different band by naming `worker-a`, `worker-b` or `worker-c`. Routing must re
 change to the runtime's agent registry. **Status:** partial:
 - implemented (0.11);
 - routing resume is unreleased (#584);
-- the Workflow tool's `agent()` calls bypass routing (#576, v0.14.0).
+- the Workflow tool's `agent()` calls bypass routing: the launch refuses a literal `frontier` model
+  and logs an effort above the cost variant's ceiling, or a class above a custom variant's
+  strongest, as `over-ceiling` (#915, v0.15.0); an `agent()` naming no `model` still runs on the
+  session model, which is the routing gap itself.
 
 **Consequences (testable):**
 - An unnamed spawn is rewritten to the posture's default band, and the usage ledger records the band.
 - After the runtime's agent listing changes mid-session, the next unnamed spawn is still routed (#584).
+- A Workflow script whose `agent()` call names a frontier model is refused at launch; one naming an
+  effort above the cost variant's highest is let through and logged as `over-ceiling` (#915).
 
 #### FR-31: Soft budgets in every brief
 Every brief must state its expected output tokens and tool calls. The budget informs the agent and never
@@ -783,6 +813,14 @@ then zero in 40 (#429). A PostToolUse nudge is planned (v0.15.0, #513).
 
 **Consequences (testable):**
 - On a benchmark task above the break-even, the harness arm spawns at least once under `cost=balanced`.
+
+*Amended 2026-09-29 (#429):* an absorbed call is a `Read`, `Grep` or `Glob` call made inside a
+subagent's thread, counted from the run's own stream. The 4.8 to 7.6 range comes from unpublished
+break-even notes. The replay's delegation verdict pre-registers 7.6, the top of the range, as a
+hypothetical figure until a registered run measures one. The consequence above is superseded: the
+stance fires when the harness arm spawns in at least the share #513 registers, three of four runs,
+on every task above the break-even, rather than once. A `Workflow` launch is reported beside spawns
+and not counted until #915 routes it. The status is settled at #429's close-out.
 
 ### 4.7 Guardrails
 
@@ -1112,12 +1150,17 @@ Releases are cut by milestone, and a regression fix releases at once as a patch.
 
 #### FR-54: Landing copy as data
 All landing, README and About copy must come from `product.json`. Published copy must follow the §1.2
-positioning. **Status:** implemented (0.11); `landing-copy` check (0.12). **Scope:** repository process.
+positioning. **Status:** implemented (0.11); `landing-copy` check (0.12); evidence-card claim gate
+(0.15). **Scope:** repository process.
 
 **Consequences (testable):**
 - The `landing-copy` check fails a pull request that changes a path under `bin/`, `lib/`, `adapters/`,
   `primitives/` or `policy/` without either updating `product.json` or stating why no update is needed.
 - No published copy says "cheaper" until a result supports SM-2's pre-registered hypothesis (FR-56).
+- A mechanically recognized measured claim in `product.json` binds its exact field and text to an
+  evidence card whose local bundle verifies again. A cheaper claim requires SM-2 support, and any
+  numeric cheaper magnitude fits the paired interval. Semantic review remains responsible for claims
+  outside the documented recognizer.
 - Published copy uses no em dashes. (Partial: the README still has some, and no test checks copy for
   them.)
 - Public documents credit the projects they compare against rather than framing them as competition.
@@ -1181,6 +1224,8 @@ per-rule attribution and the two-arm path (v0.15.0: #514, #559, #560); four arms
 **Consequences (testable):**
 - A per-rule report lists each loaded instruction source with its token cost, including sources outside
   the harness.
+  *Amended 2026-10-01 (#514):* a source outside the harness is a local soft estimate or unmeasured, and
+  never enters a published arm.
 - Arms are declared in `benchmarks/ablations.json`. Each metric is reported against control, with n and
   spread.
 
@@ -1582,6 +1627,8 @@ the system of record. **Status:** planned (v0.18.0, #955).
   - Every public claim is labelled implemented, validated, proposed, historical or unknown, following the
     mapping in §0.
   - No copy asserts an unmeasured saving or a first-in-field claim that the field scan has not checked.
+  - Each mechanically recognized measured product claim names an exact evidence card and passes fresh
+    bundle verification; cached success is not evidence.
 - **NFR-14 Release cost:**
   - A release costs one qualification round.
   - The baseline to beat is about 60 minutes and about 1M orchestrator tokens per round.
@@ -1778,6 +1825,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
   - evaluation tiers (#510, #511, #512);
   - harness against bare at five or more trials, with confidence intervals (#559, #560);
   - the two-by-two unit design (#754) and per-rule attribution (#514);
+    (Correction 2026-09-29, #754: read this as the one-policy pair (#754) and the two-by-two unit design
+    (#797), as the 2026-09-24 sprint change proposal splits them.)
   - a scorecard, and soft estimates labelled as such;
   - delegation fixed or disproved (#429, #513);
   - the burndown bot (FR-71 to FR-74, #941), whose randomised stream feeds v0.17.0's field experiment;
@@ -1814,6 +1863,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 
 **The evaluation gate in the 1.0 contract.** A candidate ships only with a verified proof bundle:
 - `harness evidence verify` re-derives the published proof set;
+- every published measured figure and interval has a verified evidence card naming its estimand and
+  exact product field and text;
 - every module in the selection document has a scorecard row, measured or marked unmeasured.
 
 ## 10. Success metrics
@@ -1884,6 +1935,8 @@ observation, then evaluation, then proof. Each entry names what the milestone ne
 - **SM-4 Mechanism fired:**
   - Measures spawns per run on tasks above the break-even.
   - No saving is credited to a mechanism unless the ledger rows show it fired.
+  - *Amended 2026-09-29 (#429):* replay rows in `results.jsonl` count as the rows that show it;
+    spawns per run on them are read through the per-task delegation verdict.
   - Validates FR-34.
 - **SM-5 Lifecycle integrity:**
   - Every supported target passes install, upgrade, repeat sync, rollback and uninstall with zero loss of
@@ -2013,3 +2066,23 @@ answer.
 - §4.6 FR-32: the nudge's starting thresholds are recalibrated from ledger data before 0.15.
 - §4.9 FR-45: the `harness bmad` alias is removed in 0.14.
 - §5 NFR-16: 250 ms p95 per hook is a starting bound, to be confirmed by the first measurement.
+
+## Delivery roadmap amendment — 2026-09-28
+
+Current assignments are Measured v0.15.0, Studio v0.16.0, Composable v0.17.0 and Real work v0.18.0. This supersedes the earlier roadmap/version annotations, while preserving requirement IDs and capability meaning. FR-71–74 bot work moves to 0.18; the measured MVP and proof gate remain after 0.15. Independent FR-75–84 Studio work follows landed 0.15; four-arm/layer-swap and composition/judge interfaces follow in 0.17, factorial/proposal and field/Codex interfaces in 0.18. Studio design work pending in #961/#962, including any already planned AI assessment, is preserved rather than overwritten here.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
+
+## Amendment — 2026-10-01: the unit-by-economy two-by-two (#797)
+
+Appended for #797 (AH-S241). The requirement IDs and the earlier text stand; these lines add to them.
+
+- **FR-28.** The shipped postures gain `off`, which puts no cost posture in force. It extends
+  `balanced`, so a spawn still resolves, and its per-turn feed is off. It is the economy concern's
+  off level in a unit eval.
+- **§1, Economy.** The economy concern's members for a unit eval are declared in
+  `benchmarks/unit-economy.json`: the `cost` and `delegation` stances and the `tier-agent-spawns` and
+  `usage-feed` hooks, each with its off and on value. `brief-guard` belongs to the concern too, but it
+  is a core hook, so it is on in every cell.
+- **FR-58.** An ablation manifest lists arms. A design manifest declares factors instead, and the runner
+  derives its arms from them: bare plus four cells for the two-by-two.

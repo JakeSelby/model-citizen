@@ -1,0 +1,3 @@
+{"arm": "bare", "rep": 1, "tag": "v1", "task": "gate-run"}
+{"arm": "reference", "rep": 1, "tag": "v1", "task": "gate-run"}
+{"arm": "treatment", "rep": 1, "tag": "v1", "task": "gate-run"}

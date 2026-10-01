@@ -1,0 +1,315 @@
+{
+  "bare": {
+    "attempts": 10,
+    "cost_of_pass": 2.5,
+    "cost_usd": 10.0,
+    "errors": 0,
+    "pass_rate": 0.4,
+    "pass_rate_interval_descriptive": [
+      0.1682,
+      0.6873
+    ],
+    "passes": 4,
+    "rule_adherence": {
+      "compliant": 2,
+      "interval_descriptive": [
+        0.0567,
+        0.5098
+      ],
+      "rate": 0.2,
+      "scored": 10,
+      "unknown": 0
+    }
+  },
+  "base_selection_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "cells": {
+    "base": {
+      "attempts": 10,
+      "cost_of_pass": 2.0,
+      "cost_of_pass_ratio_to_bare": {
+        "interval": [
+          0.666667,
+          1.0
+        ],
+        "undefined_reason": null,
+        "value": 0.8
+      },
+      "cost_usd": 10.0,
+      "errors": 0,
+      "pass_rate": 0.5,
+      "pass_rate_interval_descriptive": [
+        0.2366,
+        0.7634
+      ],
+      "passes": 5,
+      "rule_adherence": {
+        "compliant": 2,
+        "interval_descriptive": [
+          0.0567,
+          0.5098
+        ],
+        "rate": 0.2,
+        "scored": 10,
+        "unknown": 0
+      }
+    },
+    "both": {
+      "attempts": 10,
+      "cost_of_pass": 0.9,
+      "cost_of_pass_ratio_to_bare": {
+        "interval": [
+          0.315,
+          0.42
+        ],
+        "undefined_reason": null,
+        "value": 0.36
+      },
+      "cost_usd": 6.3,
+      "errors": 0,
+      "pass_rate": 0.7,
+      "pass_rate_interval_descriptive": [
+        0.3968,
+        0.8922
+      ],
+      "passes": 7,
+      "rule_adherence": {
+        "compliant": 6,
+        "interval_descriptive": [
+          0.3127,
+          0.8318
+        ],
+        "rate": 0.6,
+        "scored": 10,
+        "unknown": 0
+      }
+    },
+    "economy": {
+      "attempts": 10,
+      "cost_of_pass": 1.2,
+      "cost_of_pass_ratio_to_bare": {
+        "interval": [
+          0.4,
+          0.6
+        ],
+        "undefined_reason": null,
+        "value": 0.48
+      },
+      "cost_usd": 6.0,
+      "errors": 0,
+      "pass_rate": 0.5,
+      "pass_rate_interval_descriptive": [
+        0.2366,
+        0.7634
+      ],
+      "passes": 5,
+      "rule_adherence": {
+        "compliant": 2,
+        "interval_descriptive": [
+          0.0567,
+          0.5098
+        ],
+        "rate": 0.2,
+        "scored": 10,
+        "unknown": 0
+      }
+    },
+    "unit": {
+      "attempts": 10,
+      "cost_of_pass": 1.5,
+      "cost_of_pass_ratio_to_bare": {
+        "interval": [
+          0.6,
+          0.6
+        ],
+        "undefined_reason": null,
+        "value": 0.6
+      },
+      "cost_usd": 9.0,
+      "errors": 0,
+      "pass_rate": 0.6,
+      "pass_rate_interval_descriptive": [
+        0.3127,
+        0.8318
+      ],
+      "passes": 6,
+      "rule_adherence": {
+        "compliant": 8,
+        "interval_descriptive": [
+          0.4902,
+          0.9433
+        ],
+        "rate": 0.8,
+        "scored": 10,
+        "unknown": 0
+      }
+    }
+  },
+  "claim": null,
+  "confidence": 0.95,
+  "delta": 0.125,
+  "descriptive": "every figure but the primary contrast's is descriptive: it carries its interval and supports no claim, as no correction for the further comparisons is applied",
+  "design": "unit-economy-2x2",
+  "economy": {
+    "members": [
+      "hooks/tier-agent-spawns",
+      "hooks/usage-feed",
+      "stances/cost",
+      "stances/delegation"
+    ]
+  },
+  "effects": {
+    "cost_of_pass": {
+      "economy_alone": {
+        "interval": [
+          0.6,
+          0.6
+        ],
+        "undefined_reason": null,
+        "value": 0.6
+      },
+      "interaction": {
+        "interval": [
+          0.875,
+          1.166667
+        ],
+        "undefined_reason": null,
+        "value": 1.0
+      },
+      "unit_alone": {
+        "interval": [
+          0.6,
+          0.9
+        ],
+        "undefined_reason": null,
+        "value": 0.75
+      },
+      "unit_with_economy": {
+        "interval": [
+          0.7,
+          0.7875
+        ],
+        "undefined_reason": null,
+        "value": 0.75
+      }
+    },
+    "pass_rate": {
+      "economy_alone": {
+        "interval": [
+          0.0,
+          0.0
+        ],
+        "undefined_reason": null,
+        "value": 0.0
+      },
+      "interaction": {
+        "interval": [
+          0.0,
+          0.2
+        ],
+        "undefined_reason": null,
+        "value": 0.1
+      },
+      "unit_alone": {
+        "interval": [
+          0.0,
+          0.2
+        ],
+        "undefined_reason": null,
+        "value": 0.1
+      },
+      "unit_with_economy": {
+        "interval": [
+          0.2,
+          0.2
+        ],
+        "undefined_reason": null,
+        "value": 0.2
+      }
+    },
+    "rule_adherence": {
+      "economy_alone": {
+        "interval": [
+          0.0,
+          0.0
+        ],
+        "undefined_reason": null,
+        "value": 0.0
+      },
+      "interaction": {
+        "interval": [
+          -0.2,
+          -0.2
+        ],
+        "undefined_reason": null,
+        "value": -0.2
+      },
+      "unit_alone": {
+        "interval": [
+          0.6,
+          0.6
+        ],
+        "undefined_reason": null,
+        "value": 0.6
+      },
+      "unit_with_economy": {
+        "interval": [
+          0.4,
+          0.4
+        ],
+        "undefined_reason": null,
+        "value": 0.4
+      }
+    }
+  },
+  "estimand": "intention to treat",
+  "indeterminate_resamples": {
+    "cost_of_pass": {
+      "economy_alone": 0,
+      "interaction": 0,
+      "unit_alone": 0,
+      "unit_with_economy": 0
+    },
+    "pass_rate": {
+      "economy_alone": 0,
+      "interaction": 0,
+      "unit_alone": 0,
+      "unit_with_economy": 0
+    },
+    "rule_adherence": {
+      "economy_alone": 0,
+      "interaction": 0,
+      "unit_alone": 0,
+      "unit_with_economy": 0
+    }
+  },
+  "limitation": null,
+  "manifest_sha256": "abababababababababababababababababababababababababababababababab",
+  "method": "task-clustered paired percentile bootstrap",
+  "parity": {
+    "ok": true,
+    "reasons": []
+  },
+  "primary": {
+    "contrast": "unit_alone",
+    "metric": "cost_of_pass",
+    "source": "default"
+  },
+  "reason": "supported on the whole set; no long-task subset is marked, so no saving is claimed",
+  "resamples": 10000,
+  "schedule_seeds": [
+    7
+  ],
+  "schema": 1,
+  "seed": 795,
+  "sm2_eligible": true,
+  "tasks": 2,
+  "unit": {
+    "id": "secrets",
+    "instruments": [
+      "secrets/git-add-secret-file",
+      "secrets/secret-in-write"
+    ],
+    "kind": "rules"
+  },
+  "verdict": "supported"
+}

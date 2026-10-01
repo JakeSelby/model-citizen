@@ -1,0 +1,25 @@
+{
+ "about": "Recorded hook-inventory benchmark event, normalized to the hook payload schema.",
+ "provenance": {
+  "run": "cost-replay-baseline-v2-2026-09-22",
+  "artifact": "hook-inventory-harness-1.json",
+  "sha256": "1724400c70db80220a60ee69efc07d4551a913207fc658970402a2fe3b8c2386",
+  "record_index": 2,
+  "normalization": "Session and workspace metadata replaced; tool input and output preserved. Stop is derived from the successful result record.",
+  "source_excerpt": "sources/hook-inventory-excerpt.json",
+  "source_excerpt_sha256": "c47027990550e04b2db3efc25f4184cd645a599defc3bf4230dfbd595c2f7115",
+  "excerpt_index": 0,
+  "kind": "recorded-tool-data"
+ },
+ "payload": {
+  "session_id": "s-recorded",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "ls policy/hooks/*.py"
+  }
+ }
+}

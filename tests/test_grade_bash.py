@@ -10,12 +10,15 @@ Run: python3 -m unittest discover tests
 """
 import importlib.util
 import json
+import math
 import os
+import statistics
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from isolation import without_config_dir
@@ -40,6 +43,38 @@ def pre_tool_use_timeout():
     """The tightest PreToolUse timeout `harness sync` registers for any runtime, in seconds."""
     return min(lifecycle.registration(REPO, runtime)["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
                for runtime in ("claude-code", "codex"))
+
+
+def cpu_growth(large, small, pairs=11, batch_seconds=0.01, floor=1e-9):
+    """How the CPU cost of a call grows with its input: `(seconds, ratio)`, where `seconds` is
+    the best per-call CPU time of `large()` and `ratio` is the median over `pairs` of `large()`'s
+    per-call cost over `small()`'s, each timed in a batch of about `batch_seconds`.
+
+    CPU time rather than wall time, so waiting for a core is not charged. The two batches of a
+    pair run back to back, in alternating order, and the ratio is taken per pair: a machine
+    whose cores differ in speed can move this process between a fast and a slow core under
+    load, which changes both calls' cost alike within a pair but not across a best-of-each.
+    The median discards the pairs a migration split. `floor` bounds `small()`'s cost from below
+    for a call too cheap to time."""
+    calls = (large, small)
+    repeats = []
+    for call in calls:
+        call()
+        start = time.process_time()
+        call()
+        once = time.process_time() - start
+        repeats.append(max(1, math.ceil(batch_seconds / max(once, 1e-6))))
+    best, ratios = math.inf, []
+    for pair in range(pairs):
+        cost = [0.0, 0.0]
+        for index in ((0, 1) if pair % 2 == 0 else (1, 0)):
+            start = time.process_time()
+            for _ in range(repeats[index]):
+                calls[index]()
+            cost[index] = (time.process_time() - start) / repeats[index]
+        best = min(best, cost[0])
+        ratios.append(cost[0] / max(cost[1], floor))
+    return best, statistics.median(ratios)
 
 
 def grade(command):
@@ -418,26 +453,67 @@ class GradeTests(unittest.TestCase):
 
     def test_grading_a_hundred_kilobyte_command_stays_well_inside_the_hook_timeout(self):
         # A PreToolUse hook past its registered timeout fails open, and every PreToolUse policy
-        # shares that one timeout, so the grader gets a tenth of it. The best of several runs
-        # measures the grader rather than the machine's load, and the quarter-size run bounds the
-        # growth: linear grading quadruples, a quadratic scan grows sixteenfold and fails here
-        # long before it would outgrow the budget.
+        # shares that one timeout, so the grader gets a tenth of it. The quarter-size run bounds
+        # the growth: linear grading quadruples, a quadratic scan grows sixteenfold and fails here
+        # long before it would outgrow the budget. `cpu_growth` measures the grader rather than
+        # the machine's load.
         budget = pre_tool_use_timeout() / 10
-
-        def best(command, runs=5):
-            times = []
-            for _ in range(runs):
-                start = time.perf_counter()
-                grader.grade_text(command, CWD)
-                times.append(time.perf_counter() - start)
-            return min(times)
-
         for suffix in ("", ' "unbalanced'):
-            full = best("echo " + "push " * 20000 + suffix)
-            quarter = best("echo " + "push " * 5000 + suffix)
+            long, short = ("echo " + "push " * n + suffix for n in (20000, 5000))
+            full, growth = cpu_growth(lambda: grader.grade_text(long, CWD),
+                                      lambda: grader.grade_text(short, CWD))
             with self.subTest(unbalanced=bool(suffix)):
                 self.assertLess(full, budget)
-                self.assertLess(full / quarter, 8)
+                self.assertLess(growth, 8)
+
+    def _record(self, name, commands):
+        """The length of every text `grader.library.<name>` received while grading and governing
+        `commands`; the real function still runs."""
+        lengths = []
+        original = getattr(grader.library, name)
+
+        def spy(text, *args, **kwargs):
+            lengths.append(len(text))
+            return original(text, *args, **kwargs)
+
+        with mock.patch.object(grader.library, name, side_effect=spy):
+            for command in commands:
+                grader.grade_text(command, CWD)
+                grader.governed_text(command, CWD)
+        return lengths
+
+    # Over the cap by its outer text alone: substitutions, a continuation and a push in a repo.
+    OVER_CAP = ("cd " + CWD + " && git push " + "$(a \\\n b)" * 2000 + " \\\n x",
+                "echo " + "$(a)" * 8000)
+
+    def test_the_continuation_lexer_never_reads_text_past_the_scan_cap(self):
+        # The lexer still runs on the short inner texts of a line under the cap, so the spy
+        # is live; it never receives a text longer than the cap.
+        under = "echo " + "$(a \\\n b)" * 100 + " \\\n x"
+        self.assertTrue(self._record("_join_continuations", [under]))
+        lengths = self._record("_join_continuations", self.OVER_CAP)
+        self.assertLessEqual(max(lengths, default=0), grader.SCAN_CAP)
+
+    def test_substitutions_are_never_extracted_from_text_past_the_scan_cap(self):
+        lengths = self._record("_extract_subs", self.OVER_CAP)
+        self.assertLessEqual(max(lengths, default=0), grader.SCAN_CAP)
+
+    def test_a_line_past_the_scan_cap_grades_too_long_at_an_unknown_directory(self):
+        for command in self.OVER_CAP:
+            with self.subTest(command=command[:30]):
+                self.assertEqual(grader.grade_text(command, CWD),
+                                 (3, "command too long to grade", "", "opaque"))
+                found = grader.governed_text(command, CWD)
+                self.assertEqual([(grade, where) for _, grade, where, _ in found], [(3, None)])
+        self.assertEqual(grader.governed_text(self.OVER_CAP[0], CWD)[0][0], grader.PUSH)
+
+    def test_a_long_here_document_body_is_not_counted_toward_the_scan_cap(self):
+        short = "cat > notes.md <<'EOF'\nline\nEOF\ngit push"
+        long = "cat > notes.md <<'EOF'\n" + "line $(a) \\\n" * 2000 + "EOF\ngit push"
+        self.assertGreater(len(long), grader.SCAN_CAP)
+        self.assertEqual(grader.grade_text(long, CWD), grader.grade_text(short, CWD))
+        self.assertEqual(grader.governed_text(long, CWD), grader.governed_text(short, CWD))
+        self.assertEqual({where for _, _, where, _ in grader.governed_text(long, CWD)}, {CWD})
 
     def test_an_unparseable_command_past_the_scan_cap_grades_three(self):
         command = "echo " + "x" * 20000 + ' "unbalanced'
@@ -583,9 +659,10 @@ class HookTests(unittest.TestCase):
                 self.assertEqual(out.stdout.strip(), "")
                 self.assertEqual(out.returncode, 0)
 
-    def test_an_unknown_stance_falls_back_to_execute(self):
-        self.assertEqual(run("gh pr create --fill", "made-up", "default"), (None, None))
-        self.assertEqual(run("rm -rf /", "made-up", "default")[0], "ask")
+    def test_an_unknown_stance_uses_the_strictest_threshold(self):
+        for command in ("touch notes.md", "gh pr create --fill", "rm -rf /"):
+            with self.subTest(command=command):
+                self.assertEqual(run(command, "made-up", "default")[0], "ask")
 
 
     def test_a_marker_that_is_not_leading_confirms_nothing(self):

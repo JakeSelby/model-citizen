@@ -32,7 +32,9 @@ an appended entry in the deviation log, never an edit above it.
 - **Question:** <one sentence: what this run decides>
 - **Author role:** <maintainer, contributor>
 - **Date registered:** <YYYY-MM-DD>
-- **Task manifest:** `benchmarks/tasks.json` at commit `<sha>`
+- **Task manifest:** `benchmarks/tasks.json` at commit `<sha>`; or, for an evaluator pack, `<name>`
+  version `<version>` at commit `<sha>`, digest `<sha256>`, set `<set>`, as `replay --dry-run`
+  prints them
 - **Arms:** <harness at tag or commit, bare>
 - **Model, CLI and effort:** `<exact model ID>`, `<CLI version>`, `<effort>`
 
@@ -53,6 +55,11 @@ an appended entry in the deviation log, never an edit above it.
 
 ## Guardrails
 
+- **Contamination control:** `installed-checkout-oracle-and-transcript-v1`; every task must pass the
+  prelaunch installed-checkout check, and any scored transcript with an observed tool-input path
+  that normalizes under `/opt/model-citizen` fails that attempt. List every task excluded by this
+  control and its manifest reason; do not treat the transcript check as proof against unknown
+  symlinks, relative traversal or copies.
 - **Pass rate:** non-inferiority margin δ = 0.125 on the paired, task-clustered pass-rate difference
   (harness minus bare).
 - **Fallback rate:** <the share of trials on an unpinned model above which the run is reported as
@@ -63,6 +70,10 @@ an appended entry in the deviation log, never an edit above it.
 ## Sample size
 
 - **Tasks:** <k>, of which <n> are long multi-turn tasks.
+- **Long tasks:** a task is long when its absorbed-call size is above 7.6, FR-34's upper
+  break-even. Its absorbed-call size is the median, over its clean bare-arm runs, of the row's
+  `gather_calls`: `Read`, `Grep` and `Glob` calls in every thread, the calls a subagent could
+  absorb. Name the run whose rows confirmed each long task, or "pilot pending" for a pilot.
 - **Trials per task and arm:** <m>, five or more.
 - **α and power:** α 0.05 two-sided, joint power 0.8 on both tests of the decision rule, assuming a
   true ratio of 0.85 and equal pass rates.
@@ -72,8 +83,9 @@ an appended entry in the deviation log, never an edit above it.
 - **Minimum detectable effect:** <at most 15%>
 - **Variance source:** <the pilot rows or earlier run the power analysis used, with its
   intra-cluster correlation>
-- **Power calculation:** <the command or formula that produced k, n and m for the decision rule and
-  for the claim, and its output>
+- **Power calculation:** <the command that produced k, n and m for the decision rule and for the
+  claim, and its output: `python3 scripts/replay_power.py --pilot <results dir> --have <k> <n> <m>`,
+  or the formula used instead>
 
 ## Stopping rule
 

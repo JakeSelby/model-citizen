@@ -34,6 +34,12 @@ def refusal(record):
     return None
 
 
+def rehash(record):
+    record["declaration_sha256"] = ARMS.digest(record["declaration"])
+    record["manifest_sha256"] = ARMS.digest(record["manifest"])
+    return record
+
+
 class DeclarationTests(unittest.TestCase):
     def test_an_arm_holding_exactly_its_declaration_is_admitted(self):
         self.assertIsNone(refusal(admitted("bare")))
@@ -64,7 +70,7 @@ class InheritedConfigurationTests(unittest.TestCase):
         record = copy.deepcopy(admitted(arm))
         record["manifest"]["entries"].append(entry)
         record["manifest"]["summary"].setdefault(kind, []).append(entry["path"])
-        return record
+        return rehash(record)
 
     def test_a_hook_or_setting_in_the_bare_arm_is_refused(self):
         hook = {"path": "home:.claude/hooks/stop.py", "kind": "file", "sha256": "0"}
@@ -106,7 +112,7 @@ class HostPathTests(unittest.TestCase):
     def test_an_image_home_that_matches_the_host_home_is_not_a_host_input(self):
         record = copy.deepcopy(admitted())
         record["manifest"]["roots"]["home"] = str(Path.home())
-        self.assertIsNone(refusal(record))
+        self.assertIsNone(refusal(rehash(record)))
 
     def test_a_mount_or_variable_reaching_the_host_is_refused_at_launch(self):
         for workdir in (Path.home() / "snap", ARMS.ROOT / "benchmarks"):
@@ -204,7 +210,10 @@ class ReplayCliTests(unittest.TestCase):
     def test_an_exploratory_dry_run_proceeds_and_says_so(self):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
-            code, out, err = self.main(tmp, "--exploratory")
+            # The dry run's contamination check has its own tests; this one is about the protocol.
+            clean = lambda tasks, repo, commit, tmp=None: [(t["id"], []) for t in tasks]  # noqa: E731
+            with mock.patch.object(BENCH, "contamination_by_task", clean):
+                code, out, err = self.main(tmp, "--exploratory")
             self.assertEqual(code, 0)
             self.assertIn("exploratory run", err)
             self.assertIn("demo rep 1", out)

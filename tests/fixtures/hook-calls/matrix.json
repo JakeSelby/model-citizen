@@ -1,0 +1,264 @@
+{
+ "schema_version": 1,
+ "runtime": "claude-code",
+ "variants": [
+  "base",
+  "autonomy=ask",
+  "autonomy=confirm-writes",
+  "build-vs-buy=off",
+  "commits=as-you-go",
+  "commits=conventional",
+  "commits=off",
+  "cost=frugal",
+  "cost=max",
+  "cost=off",
+  "delegation=off",
+  "delegation=session-model",
+  "licensing=off",
+  "licensing=open-source",
+  "plan-ceremony=light",
+  "testing=off",
+  "testing=pragmatic",
+  "voice=answer-card",
+  "voice=concise",
+  "voice=off"
+ ],
+ "rows": [
+  "allow-plan-webfetch",
+  "allow-readonly-bash",
+  "approvals",
+  "brief-guard",
+  "filter-output",
+  "grade-bash",
+  "harness-session",
+  "intent-overlap",
+  "neutralize-tool-output",
+  "stage-user-files",
+  "stop-gate",
+  "tier-agent-spawns",
+  "usage-feed",
+  "usage-log",
+  "validate-plan-card",
+  "workspace-session",
+  "dispatcher"
+ ],
+ "calls": [
+  "post-agent-result",
+  "post-bash-clean",
+  "post-bash-injection",
+  "post-webfetch-injection",
+  "post-write-plan-bad",
+  "post-write-plan-card",
+  "pre-agent-bounded-brief",
+  "pre-agent-read-only-role",
+  "pre-agent-role-marker",
+  "pre-agent-unbounded-brief",
+  "pre-bash-commit",
+  "pre-bash-force-push",
+  "pre-bash-force-push-auto",
+  "pre-bash-plan-grep",
+  "pre-bash-plan-script",
+  "pre-bash-push",
+  "pre-bash-read-only",
+  "pre-bash-remove-build",
+  "pre-bash-test-run",
+  "pre-edit-source",
+  "pre-read-plan",
+  "pre-send-user-file",
+  "pre-webfetch-default",
+  "pre-webfetch-plan",
+  "pre-write-approvals-store",
+  "pre-write-source",
+  "recorded-post-hook-inventory",
+  "recorded-pre-hook-inventory",
+  "recorded-stop-hook-inventory",
+  "stop-outside-repository",
+  "stop-trusted-red-gate",
+  "stop-untrusted-gate"
+ ],
+ "cells": {
+  "allow-plan-webfetch": {
+   "pre-webfetch-plan": {
+    "base": "allow"
+   }
+  },
+  "allow-readonly-bash": {
+   "pre-bash-plan-grep": {
+    "base": "allow"
+   },
+   "pre-bash-read-only": {
+    "base": "allow"
+   },
+   "recorded-pre-hook-inventory": {
+    "base": "allow"
+   }
+  },
+  "brief-guard": {
+   "pre-agent-unbounded-brief": {
+    "base": "rewrite+message",
+    "delegation=off": "as-dispatcher"
+   }
+  },
+  "filter-output": {
+   "pre-bash-test-run": {
+    "base": "rewrite"
+   }
+  },
+  "grade-bash": {
+   "pre-bash-commit": {
+    "base": "as-dispatcher",
+    "autonomy=ask": "ask"
+   },
+   "pre-bash-force-push": {
+    "base": "ask"
+   },
+   "pre-bash-force-push-auto": {
+    "base": "deny"
+   },
+   "pre-bash-plan-script": {
+    "base": "as-dispatcher",
+    "autonomy=ask": "ask"
+   },
+   "pre-bash-push": {
+    "base": "as-dispatcher",
+    "autonomy=ask": "ask",
+    "autonomy=confirm-writes": "ask"
+   },
+   "pre-bash-remove-build": {
+    "base": "as-dispatcher",
+    "autonomy=ask": "ask"
+   },
+   "pre-bash-test-run": {
+    "base": "as-dispatcher",
+    "autonomy=ask": "ask"
+   },
+   "pre-write-approvals-store": {
+    "base": "deny"
+   }
+  },
+  "neutralize-tool-output": {
+   "post-bash-injection": {
+    "base": "context"
+   },
+   "post-webfetch-injection": {
+    "base": "context"
+   }
+  },
+  "stage-user-files": {
+   "pre-send-user-file": {
+    "base": "rewrite+message"
+   }
+  },
+  "stop-gate": {
+   "stop-trusted-red-gate": {
+    "base": "block"
+   }
+  },
+  "validate-plan-card": {
+   "post-write-plan-bad": {
+    "base": "context",
+    "plan-ceremony=light": "as-dispatcher"
+   }
+  },
+  "dispatcher": {
+   "post-agent-result": {
+    "base": "none"
+   },
+   "post-bash-clean": {
+    "base": "none"
+   },
+   "post-bash-injection": {
+    "base": "none"
+   },
+   "post-webfetch-injection": {
+    "base": "none"
+   },
+   "post-write-plan-bad": {
+    "base": "none"
+   },
+   "post-write-plan-card": {
+    "base": "none"
+   },
+   "pre-agent-bounded-brief": {
+    "base": "none",
+    "delegation=off": "deny"
+   },
+   "pre-agent-read-only-role": {
+    "base": "deny"
+   },
+   "pre-agent-role-marker": {
+    "base": "deny"
+   },
+   "pre-agent-unbounded-brief": {
+    "base": "none",
+    "delegation=off": "deny"
+   },
+   "pre-bash-commit": {
+    "base": "none"
+   },
+   "pre-bash-force-push": {
+    "base": "none"
+   },
+   "pre-bash-force-push-auto": {
+    "base": "none"
+   },
+   "pre-bash-plan-grep": {
+    "base": "none"
+   },
+   "pre-bash-plan-script": {
+    "base": "none"
+   },
+   "pre-bash-push": {
+    "base": "none"
+   },
+   "pre-bash-read-only": {
+    "base": "none"
+   },
+   "pre-bash-remove-build": {
+    "base": "none"
+   },
+   "pre-bash-test-run": {
+    "base": "none"
+   },
+   "pre-edit-source": {
+    "base": "none"
+   },
+   "pre-read-plan": {
+    "base": "none"
+   },
+   "pre-send-user-file": {
+    "base": "none"
+   },
+   "pre-webfetch-default": {
+    "base": "none"
+   },
+   "pre-webfetch-plan": {
+    "base": "none"
+   },
+   "pre-write-approvals-store": {
+    "base": "none"
+   },
+   "pre-write-source": {
+    "base": "none"
+   },
+   "recorded-post-hook-inventory": {
+    "base": "none"
+   },
+   "recorded-pre-hook-inventory": {
+    "base": "none"
+   },
+   "recorded-stop-hook-inventory": {
+    "base": "none"
+   },
+   "stop-outside-repository": {
+    "base": "none"
+   },
+   "stop-trusted-red-gate": {
+    "base": "none"
+   },
+   "stop-untrusted-gate": {
+    "base": "none"
+   }
+  }
+ }
+}

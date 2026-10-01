@@ -22,7 +22,7 @@ def run_tag(tmp, **patches):
     args = types.SimpleNamespace(
         tasks=str(tasks_file), model="claude-test", task=None, tmp=None, stance_cost=None,
         raw=None, change_note=None, skip_preflight=False, bucket=None, predicted_ratio=None,
-        reps=1, run_cap=2.0, spend_cap=20.0, history_dir=None)
+        reps=1, run_cap=2.0, spend_cap=20.0, history_dir=None, allow_surface_drift=False)
     common = {"tasks": [TASK], "plan": [], "out": tmp / "target-1", "prices": {},
               "bare": {"image": "bare"}, "network": "net", "proxy": "http://proxy",
               "client_env": {}, "cli_version": "1", "protocol": {}}
@@ -63,8 +63,11 @@ class PreSpendRefusalTests(unittest.TestCase):
 
     def test_a_workdir_probe_refusal_records_zero_spend(self):
         probe = mock.Mock(side_effect=SystemExit("replay-arms: workdir not writable"))
-        with mock.patch.object(BENCH.arms, "admit", mock.Mock()):
-            self.assert_refused_at_zero(probe_workdirs=probe)
+        # Admission, the pair check and the contamination check all pass, so the probe refuses.
+        with mock.patch.object(BENCH.arms, "admit", mock.Mock()), \
+                mock.patch.object(BENCH.arms, "admit_pair", mock.Mock()):
+            self.assert_refused_at_zero(probe_workdirs=probe,
+                                        contamination_errors=mock.Mock(return_value=[]))
         probe.assert_called_once()
 
 

@@ -90,7 +90,7 @@ dimension.
 | `delegation` | `tiered`, `session-model`, `off` | `tiered` |
 | `testing` | `required`, `pragmatic`, `off` | `required` |
 | `autonomy` | `execute`, `confirm-writes`, `ask` | `execute` |
-| `cost` | `frugal`, `balanced`, `max` | `balanced` |
+| `cost` | `off`, `frugal`, `balanced`, `max` | `balanced` |
 | `voice` | `scannable`, `concise`, `answer-card`, `off` | `scannable` |
 
 `citizen config set stances.testing off` checks the variant exists before writing, and names
@@ -153,6 +153,9 @@ unnamed spawn is routed to. All of it is data in a JSON sidecar beside the varia
   ask for it, `/clear` at task end, and the measured budgets unscaled.
 - `max` leaves effort at the model's default, fans out as widely as the task needs, allows fast
   mode and compaction, and marks nothing as over budget.
+- `off` puts no cost posture in force: no effort, fan-out or handoff guidance and no per-turn
+  usage feed. Spawns still resolve on `balanced`'s table. It is the economy concern's off level in
+  the unit-by-economy two-by-two ([benchmarks.md](benchmarks.md#unit-evals-the-two-by-two)).
 
 Select one with `citizen config set stances.cost frugal`, or for a single session with
 `HARNESS_STANCE_COST=frugal claude`. To write your own, put a `.md` and a sidecar in your
@@ -327,7 +330,12 @@ inherits no voice, so its brief has to carry the output shape itself.
 boundaries where they stop holding are in the `delegation-tiering` skill, not here. The
 `tier-agent-spawns` hook enforces the chosen variant on spawns that name no agent definition:
 routed to the cost variant's default band worker under `tiered`, untouched under
-`session-model`, a prompt under `off`.
+`session-model`, a prompt under `off`. Under `tiered`, three distinct successful file reads in a
+session add one PostToolUse nudge to move the remaining bounded gathering into `worker-a`; the
+variant sidecar owns both that threshold and the message. Simple proven-read-only Bash file
+operands count with native Read calls. Dynamic shell paths and commands whose operands are not
+unambiguous do not. Variants without a nudge sidecar, including `session-model` and `off`, stay
+silent.
 
 **Band workers.** `worker-a`, `worker-b` and `worker-c` are the three roles the A/B/C bands
 render into, and they exist for one reason: the `Agent` tool takes no effort, so only an agent

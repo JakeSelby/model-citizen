@@ -1,0 +1,14 @@
+{
+ "about": "A script run while planning, which the grammar cannot read through.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "plan",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+   "command": "python3 scripts/report.py"
+  }
+ }
+}

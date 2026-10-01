@@ -14,6 +14,9 @@ The file is standard library only and imports nothing from the harness, because 
 copies it alone (`harness_core.observation.bare_install`). Run as a script it takes
 `--runtime <name>` and `--profile <fingerprint>`; a bare install passes `--profile bare`, which is
 the name the bare arm's rows carry, since it loads no profile to digest.
+
+The benchmark runner sets explicit ledger, error and profile environment variables inside its
+container. Ordinary sessions set none and continue to use the local state directory.
 """
 import datetime
 import importlib.util
@@ -27,6 +30,9 @@ SCHEMA_VERSION = 1
 FINGERPRINT_KEY = "profile_fingerprint"
 LEDGER = "observation.jsonl"
 ERRORS = "observation.errors.jsonl"
+LEDGER_ENV = "HARNESS_OBSERVATION_LEDGER"
+ERRORS_ENV = "HARNESS_OBSERVATION_ERRORS"
+PROFILE_ENV = "HARNESS_OBSERVATION_PROFILE"
 
 
 def state_dir(env=None):
@@ -36,11 +42,13 @@ def state_dir(env=None):
 
 
 def ledger_path(env=None):
-    return state_dir(env) / LEDGER
+    env = os.environ if env is None else env
+    return Path(env[LEDGER_ENV]) if env.get(LEDGER_ENV) else state_dir(env) / LEDGER
 
 
 def errors_path(env=None):
-    return state_dir(env) / ERRORS
+    env = os.environ if env is None else env
+    return Path(env[ERRORS_ENV]) if env.get(ERRORS_ENV) else state_dir(env) / ERRORS
 
 
 def now():
@@ -123,7 +131,7 @@ def main(runtime=None, argv=None, stdin=None):
         named, profile = parse_args(sys.argv[1:] if argv is None else argv)
         runtime = runtime or named or "unknown"
         raw = (sys.stdin if stdin is None else stdin).read()
-        record(json.loads(raw), runtime, profile)
+        record(json.loads(raw), runtime, profile or os.environ.get(PROFILE_ENV))
     except BaseException as error:  # noqa: BLE001 - observation fails open and silent, always.
         note_error(runtime or "unknown", error)
     return 0

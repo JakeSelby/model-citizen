@@ -50,7 +50,7 @@ def replay_args(work, **over):
               "history_dir": str(Path(work) / "history"), "change_note": "",
               "out": str(Path(work) / "out"), "arms_dir": str(Path(work) / "arms"), "raw": None,
               "tmp": None, "skip_preflight": True, "dry_run": False, "exploratory": False,
-              "pre_registration": None}
+              "pre_registration": None, "effort": "high", "allow_surface_drift": False}
     values.update(over)
     repo = Path(work) / "repo"
     if not values["exploratory"] and values["pre_registration"] is None and (repo / ".git").is_dir():
@@ -132,8 +132,12 @@ class TagScheduleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
             args = replay_args(tmp, tag=["v1", "v2"], dry_run=True)
-            code, out, fake = self.run_replay(tmp, args)
-            self.assertEqual((code, fake.built, fake.egress_up), (0, [], []))
+            with contextlib.redirect_stderr(io.StringIO()):
+                code, out, fake = self.run_replay(tmp, args)
+            # A same-repository task is refused by the contamination control, which the dry run
+            # now runs at each tag's commit, so the run it previews would stop: exit 2.
+            self.assertEqual((code, fake.built, fake.egress_up), (2, [], []))
+            self.assertEqual(out.count("contamination demo: demo: answer absence cannot be established"), 2)
             self.assertIn("arm bare: model-citizen-arm-bare:", out)
             self.assertIn("tag v1: arm harness@v1 at ", out)
             self.assertIn("model-citizen-arm-harness:", out)

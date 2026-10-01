@@ -46,7 +46,8 @@ from pathlib import Path
 
 # The points that write. Named here so the report can list a point that has not fired yet, and
 # so a typo in a call site is a test failure rather than a silent new group.
-POINTS = ("grade-bash", "stop-gate", "tier-agent-spawns", "brief-guard", "evasion-deny")
+POINTS = ("grade-bash", "stop-gate", "tier-agent-spawns", "delegation-nudge",
+          "brief-guard", "evasion-deny")
 
 # The module that owns each point's decision (AD-23): the hook id whose logic made it, named as a
 # selection reference, `hooks/<id>`. The integration notice runs in the spawn path
@@ -58,6 +59,7 @@ POINT_MODULES = {
     "grade-bash": "hooks/grade-bash",
     "stop-gate": "hooks/stop-gate",
     "tier-agent-spawns": "hooks/tier-agent-spawns",
+    "delegation-nudge": "hooks/tier-agent-spawns",
     "brief-guard": "hooks/brief-guard",
     "evasion-deny": None,
     "role-confinement": None,

@@ -15,7 +15,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_harness import REPO
+from isolation import isolate_home
+from test_harness import REPO, harness
 
 
 def load(name):
@@ -94,12 +95,15 @@ class DeclarationTests(unittest.TestCase):
     def test_the_arm_dockerfile_takes_its_base_from_the_runner_and_names_no_other(self):
         text = ARMS.ARM_DOCKERFILE.read_text(encoding="utf-8")
         froms = [line.split()[1] for line in text.splitlines() if line.startswith("FROM ")]
-        self.assertEqual(froms, ["${BASE_IMAGE}", "bare"])
+        # The harness stage and the declared-selection harness stage both build on the bare one.
+        self.assertEqual(froms, ["${BASE_IMAGE}", "bare", "bare"])
 
     def test_each_arm_declares_exactly_its_components(self):
         bare = ARMS.declaration("bare", INPUTS)
         harness = ARMS.declaration("harness", INPUTS, {"ref": "v1", "commit": COMMIT})
-        self.assertEqual([c["name"] for c in bare["components"]], ["base-image", "@anthropic-ai/claude-code"])
+        self.assertEqual([c["name"] for c in bare["components"]],
+                         ["base-image", "@anthropic-ai/claude-code", "model-citizen-observer"])
+        self.assertEqual(bare["components"][-1]["version"], "sha256:" + ARMS.file_sha(ARMS.OBSERVER_SOURCE))
         self.assertIsNone(bare["harness"])
         self.assertEqual(harness["components"][-1], {"name": "model-citizen", "version": "v1", "commit": COMMIT})
         self.assertEqual(harness["harness"], {"ref": "v1", "commit": COMMIT})
@@ -158,7 +162,7 @@ class BuildTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(record["paths"]["declaration"]).read_text(encoding="utf-8")), decl)
             self.assertEqual([p.name for p in Path(tmp).iterdir()], ["out"])  # the context is gone
 
-    def test_the_bare_arm_is_built_from_an_empty_context(self):
+    def test_the_bare_arm_context_holds_no_harness_checkout(self):
         docker, cloned = Docker(), []
         with tempfile.TemporaryDirectory() as tmp:
             ARMS.build_arm(ARMS.declaration("bare", INPUTS), tmp, fake_snapshot(cloned), docker, tmp=tmp)
@@ -291,31 +295,119 @@ class RunTests(unittest.TestCase):
 
 
 class AdmissionSeamTests(unittest.TestCase):
-    # A bare arm that holds exactly what it declares, in an exploratory run.
-    RECORD = {"label": "bare", "image": "i", "image_id": "sha256:1", "declaration_sha256": "d",
-              "manifest_sha256": "m",
-              "declaration": {"claude_code_version": "1.0", "harness": None,
-                              "components": [{"name": "base-image", "version": "base" + "@sha256:0"},
-                                             {"name": "@anthropic-ai/claude-code", "version": "1.0"}]},
-              "manifest": {"claude_code_version": "1.0", "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"],
-                           "harness_commit": None, "roots": {"home": "/home/agent"}, "summary": {},
-                           "entries": []},
-              "protocol": {"evidence": "exploratory"}}
+    def setUp(self):
+        declaration = {"schema": ARMS.SCHEMA, "arm": "bare", "base_image": "base@sha256:0",
+                       "claude_code_version": "1.0", "harness": None,
+                       "components": [{"name": "base-image", "version": "base@sha256:0"},
+                                      {"name": "@anthropic-ai/claude-code", "version": "1.0"},
+                                      {"name": "model-citizen-observer",
+                                       "version": "sha256:" + ARMS.file_sha(ARMS.OBSERVER_SOURCE)}],
+                       "effort": "high",
+                       "observer_settings_sha256": ARMS.digest(ARMS.observer_settings())}
+        observer_sha = ARMS.file_sha(ARMS.OBSERVER_SOURCE)
+        manifest = {"schema": LISTER.SCHEMA, "claude_code_version": "1.0",
+                    "cli_packages": ["@anthropic-ai/claude-code" + "@1.0"], "harness_commit": None,
+                    "roots": {"home": "/home/agent", "observer": "/opt/model-citizen-observer"},
+                    "summary": LISTER.summary([{"path": "observer:observe.py", "kind": "file",
+                                                 "sha256": observer_sha}]),
+                    "entries": [{"path": "observer:observe.py", "kind": "file",
+                                  "sha256": observer_sha}],
+                    "environment": {ARMS.EFFORT_ENV: None}}
+        self.record = {"label": "bare", "image": "i", "image_id": "sha256:1",
+                       "declaration_sha256": ARMS.digest(declaration),
+                       "manifest_sha256": ARMS.digest(manifest), "declaration": declaration,
+                       "manifest": manifest, "protocol": {"evidence": "exploratory"}}
 
     def test_a_complete_record_is_admitted(self):
-        self.assertIsNone(ARMS.admit(self.RECORD))
+        self.assertIsNone(ARMS.admit(self.record))
 
     def test_a_record_missing_its_manifest_digest_is_refused(self):
         with self.assertRaises(SystemExit) as caught:
-            ARMS.admit(dict(self.RECORD, manifest_sha256=None))
+            ARMS.admit(dict(self.record, manifest_sha256=None))
         self.assertIn("manifest_sha256", str(caught.exception))
+
+    def test_record_schemas_and_digests_are_recomputed(self):
+        record = dict(self.record, declaration=dict(self.record["declaration"], schema=0),
+                      manifest=dict(self.record["manifest"], schema=0))
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        for text in ("declaration schema", "manifest schema", "declaration_sha256 does not match",
+                     "manifest_sha256 does not match"):
+            self.assertIn(text, refusal)
+
+    def test_missing_duplicate_and_malformed_harness_components_are_refused(self):
+        harness = {"ref": "v1", "commit": "c" * 40}
+        for components, expected in (
+                ([{"name": "base-image", "version": "base@sha256:0"},
+                  {"name": "@anthropic-ai/claude-code", "version": "1.0"}],
+                 "exactly one model-citizen"),
+                ([{"name": "model-citizen", "version": "v1", "commit": "c" * 40},
+                  {"name": "model-citizen", "version": "v1", "commit": "c" * 40}],
+                 "duplicate components"),
+                ([{"name": "model-citizen"}], "component 0 is malformed")):
+            record = dict(self.record, declaration=dict(self.record["declaration"], arm="harness",
+                                                         harness=harness, components=components))
+            record["declaration_sha256"] = ARMS.digest(record["declaration"])
+            with self.assertRaises(SystemExit) as caught:
+                ARMS.admit(record)
+            self.assertIn(expected, str(caught.exception))
+
+    def test_admission_reports_independent_defects_together(self):
+        record = dict(self.record, declaration_sha256="0" * 64,
+                      protocol={}, manifest=dict(self.record["manifest"]))
+        record["manifest"]["environment"] = {ARMS.EFFORT_ENV: "max"}
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        self.assertIn("declaration_sha256 does not match", refusal)
+        self.assertIn("no committed pre-registration", refusal)
+        self.assertIn("image bakes", refusal)
+
+    def test_a_non_object_manifest_entry_is_refused_without_crashing_other_checks(self):
+        record = dict(self.record, manifest=dict(self.record["manifest"]))
+        record["manifest"]["entries"] = [42]
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        self.assertIn("manifest entries contain a malformed path", str(caught.exception))
+
+    def test_malformed_paths_and_unsupported_entry_kinds_are_refused_without_a_crash(self):
+        for entry, expected in (({"path": 7, "kind": "file"}, "malformed path"),
+                                ({"path": "home:socket", "kind": "socket"},
+                                 "unsupported kind 'socket'")):
+            record = dict(self.record, manifest=dict(self.record["manifest"]))
+            record["manifest"]["entries"] = [entry]
+            record["manifest_sha256"] = ARMS.digest(record["manifest"])
+            with self.subTest(entry=entry), self.assertRaises(SystemExit) as caught:
+                ARMS.admit(record)
+            self.assertIn(expected, str(caught.exception))
+
+    def test_parent_segments_cannot_make_a_link_look_inside_the_harness(self):
+        self.assertFalse(ARMS._inside("/opt/model-citizen/../outside", ARMS.HARNESS_ROOT))
+        self.assertTrue(ARMS._inside("/opt/model-citizen/primitives", ARMS.HARNESS_ROOT))
+
+    def test_admission_names_every_undeclared_configuration_entry(self):
+        record = dict(self.record, manifest=dict(self.record["manifest"]))
+        entries = [{"path": "home:.claude/settings.z.json", "kind": "file"},
+                   {"path": "home:.claude/settings.a.json", "kind": "file"}]
+        record["manifest"]["entries"] = entries
+        record["manifest"]["summary"] = LISTER.summary(entries)
+        record["manifest_sha256"] = ARMS.digest(record["manifest"])
+        with self.assertRaises(SystemExit) as caught:
+            ARMS.admit(record)
+        refusal = str(caught.exception)
+        for entry in entries:
+            self.assertIn(entry["path"], refusal)
+        self.assertLess(refusal.index(entries[1]["path"]), refusal.index(entries[0]["path"]))
 
     def test_a_further_check_can_refuse_through_the_same_seam(self):
         """The protocol's own refusals plug in here, each a function of the arm's record."""
         differs = lambda record: "manifest differs from its declaration"
         with mock.patch.object(ARMS, "ADMISSION_CHECKS", ARMS.ADMISSION_CHECKS + [differs]):
             with self.assertRaises(SystemExit) as caught:
-                ARMS.admit(self.RECORD)
+                ARMS.admit(self.record)
         self.assertIn("differs from its declaration", str(caught.exception))
 
 
@@ -385,6 +477,45 @@ class ManifestListerTests(unittest.TestCase):
                 self.assertEqual(LISTER.cli_packages(), ["@anthropic-ai/claude-code@123", "@openai/codex@10",
                                                          "left@2"])
                 self.assertEqual(LISTER.cli_version(), "123")
+
+    def test_treatment_paths_match_files_rendered_by_a_real_sync(self):
+        old_environ = dict(os.environ)
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                home = Path(tmp) / "home"
+                home.mkdir()
+                isolate_home(home)
+                personal = home / ".codex" / "AGENTS.personal.md"
+                personal.parent.mkdir(parents=True)
+                personal.write_text("user-owned\n", encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(harness.cmd_sync(harness.argparse.Namespace(
+                        dry_run=False, adopt=False, adopt_codex=False, print_only=False)), 0)
+                listed = self.listed(home, harness=REPO)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_environ)
+        treatment = ARMS._treatment_paths(listed)
+        for path in ("home:.codex/AGENTS.md", "home:.codex/agents/builder.toml",
+                     "home:.agents/skills/harness-build/SKILL.md",
+                     "home:.config/agent-harness/config.json"):
+            self.assertIn(path, treatment)
+        self.assertNotIn("home:.codex/AGENTS.personal.md", treatment)
+
+    def test_generated_agent_and_workflow_paths_require_their_checkout_sources(self):
+        entries = [
+            {"path": "harness:primitives/roles/builder.md", "kind": "file"},
+            {"path": "harness:primitives/workflows/build.md", "kind": "file"},
+            {"path": "home:.codex/agents/builder.toml", "kind": "file"},
+            {"path": "home:.agents/skills/harness-build/SKILL.md", "kind": "file"},
+            {"path": "home:.codex/agents/personal.toml", "kind": "file"},
+            {"path": "home:.agents/skills/harness-personal/SKILL.md", "kind": "file"},
+        ]
+        treatment = ARMS._treatment_paths({"entries": entries})
+        self.assertIn("home:.codex/agents/builder.toml", treatment)
+        self.assertIn("home:.agents/skills/harness-build/SKILL.md", treatment)
+        self.assertNotIn("home:.codex/agents/personal.toml", treatment)
+        self.assertNotIn("home:.agents/skills/harness-personal/SKILL.md", treatment)
 
     def test_the_arm_image_removes_the_base_templates_codex_client(self):
         """The base is the Codex sandbox template; an arm carries Claude Code and no other client."""

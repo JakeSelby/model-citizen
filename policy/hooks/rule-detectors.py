@@ -21,6 +21,8 @@ that `run()` returns `{detector_id: [Hit, ...]}` with the empty detectors omitte
 hit never carries a snippet — the transcript is the evidence, and `usage.jsonl` holds no
 command text (plan decision 3).
 """
+import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -31,6 +33,8 @@ from ruleprobe import Registry, analyse, counts, run as _run  # noqa: E402,F401
 from ruleprobe.detectors import common as generic  # noqa: E402
 from ruleprobe.events import hit, input_of, text_of  # noqa: E402
 from ruleprobe.registry import Detector as _Detector  # noqa: E402
+from ruleprobe.rules import discover as _discover, load_file as _load_file  # noqa: E402
+from ruleprobe.rules import read_rule_file  # noqa: E402,F401
 from ruleprobe.shell import (MAX_COMMAND, MARKER_RE, SUB_PLACEHOLDER, git_calls,  # noqa: E402
                              has_redirect, normalise, operands, pipelines, strip_heredocs)
 
@@ -39,7 +43,7 @@ from ruleprobe.shell import (MAX_COMMAND, MARKER_RE, SUB_PLACEHOLDER, git_calls,
 SECRET_PATTERNS = generic.SECRET_PATTERNS
 
 # The three openers and the closing phrase are read from `claude/output-styles/scannable.md`
-# (sections 1 and 9) at build time and frozen here; this module never reads a file at runtime.
+# (sections 1 and 9) at build time and frozen here.
 BANNED_OPENERS = ("I started by", "After investigating", "Great question")
 BANNED_CLOSER = "Let me know if"
 
@@ -96,6 +100,34 @@ BUDGET_RE = re.compile(
 _COMMENT_RE = re.compile(r"^(?:\s*(?:#[^\n]*)?\n)+")
 _CONFIRMED_RE = re.compile(r"^\s*(?:env\s+)?HARNESS_CONFIRMED=1\s*;?\s*")
 GRADE_SIGNATURE = "(grade-bash hook,"
+# The whole deny as Claude Code records it, and nothing else: the reason opens the result,
+# behind at most the client's own `PreToolUse:Bash hook error:` prefix; the signature closes
+# the reason; and what may follow is only what `grade-bash.py` appends to it, a governance
+# sentence and then one of its two refusal tails. A result that quotes the signature, such as a
+# grep over a test that asserts it, or a denial-shaped line with other output after it, is not a
+# denial. The tails are copied, not imported; a test holds them to the hook's own.
+GRADE_CLIENT_PREFIX = "PreToolUse:Bash hook error:"
+_GRADE_REFUSED = (" Nothing can prompt in this permission mode, so the command was refused rather"
+                  " than asked about.")
+GRADE_DENY_TAIL = (_GRADE_REFUSED + " Say in chat what it would change and why that is hard to"
+                   " undo; if the user says yes, run the same command again with"
+                   " HARNESS_CONFIRMED=1 in front of it.")
+GRADE_APPROVAL_TAIL = (_GRADE_REFUSED + " Stop, say in chat what it would change and why that is"
+                       " hard to undo, and ask the user, if they agree, to reply with exactly"
+                       " `approve %s` as the whole message, since any other text in it records"
+                       " nothing. After that reply, run exactly the same command again with no"
+                       " marker: the approval covers this command once, in this session, for"
+                       " thirty minutes.")
+GRADE_DENY_RE = re.compile(
+    r"\s*(?:" + re.escape(GRADE_CLIENT_PREFIX) + r"\s*)?grade [0-3], [a-z -]+: .*?"
+    + re.escape(GRADE_SIGNATURE) + r" autonomy=[\w-]+(?:, unresolved: [^)\n]*)?\)"
+    r"(?: Governance: [^\n]*?\.)?"
+    r"(?:" + re.escape(GRADE_DENY_TAIL)
+    + r"|" + r"\S+".join(re.escape(part) for part in GRADE_APPROVAL_TAIL.split("%s")) + r")?"
+    r"\s*\Z", re.S)
+# The private halves of an SSH key pair by their default names, whole: a runbook named after
+# one, or its public half, is not the key.
+SSH_KEY_NAMES = frozenset(("id_rsa", "id_ed25519"))
 # A path that says it holds a credential, by basename; see `_is_secret_path`.
 ENV_EXAMPLES = frozenset(("example", "sample", "template", "dist"))
 KEY_SUFFIXES = (".pem", ".p12", ".pfx")
@@ -181,7 +213,7 @@ def _is_secret_path(path):
         return base.split(".", 2)[2].lower() not in ENV_EXAMPLES
     if base.lower().endswith(KEY_SUFFIXES):
         return True
-    if "id_rsa" in base or "id_ed25519" in base:
+    if base in SSH_KEY_NAMES:
         return True
     return base.split(".", 1)[0] == "credentials"
 
@@ -427,14 +459,15 @@ def confirmed_irreversible(events, ctx):
 
 
 def denied_by_grade(events, ctx):
-    """A Bash result carrying the grade hook's signature: the gate fired and the command
-    never ran. The hook signs its own deny reason, so the string is the evidence — the
-    detector never imports it, and reads no other hook's output as a denial."""
+    """A Bash result that is the grade hook's deny reason: the gate fired and the command
+    never ran. The hook signs its own reason, so the string is the evidence — the detector
+    never imports it, and reads no other hook's output, nor a quotation of this one's, as a
+    denial; see `GRADE_DENY_RE`."""
     hits = []
     for event in events:
         if event.get("kind") != "tool_result" or event.get("tool_name") != "Bash":
             continue
-        if GRADE_SIGNATURE in text_of(event.get("text")):
+        if GRADE_DENY_RE.match(text_of(event.get("text"))):
             hits.append((event.get("turn", 0), event.get("tool_use_id") or None))
     return hits
 
@@ -446,11 +479,19 @@ _VOICE_ON = ("voice", None)  # the shape is the stance's; `off` imposes none
 _VOICE_CONCISE = ("voice", ("concise",))  # shapes only the `concise` voice forbids
 _COMMITS_ATTRIBUTED = ("commits", ("conventional-attributed",))
 
-# A cost variant whose `compaction` switch is `compact-allowed` lifts `cache-hygiene.md`'s "not
-# compaction", so a compaction there is the stance working, not a miss. Frozen here because
-# this module reads no file at runtime; a test holds it equal to the shipped sidecars.
-COMPACTION_ALLOWED = frozenset(("max",))
-_GATES = {"cache-hygiene/compact": lambda stances: stances.get("cost") not in COMPACTION_ALLOWED}
+def compaction_required(stances):
+    """Resolve the selected cost variant's switch, including custom sidecar inheritance."""
+    path = Path(__file__).resolve().with_name("posture.py")
+    spec = importlib.util.spec_from_file_location("detector_posture", path)
+    posture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(posture)
+    config_path = posture.config_path()
+    config = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    table = posture.table_for(stances, config, strict=True)
+    return table["switches"].get("compaction") != "compact-allowed"
+
+
+_GATES = {"cache-hygiene/compact": compaction_required}
 
 # The six the engine ships, re-registered under this file's `Detector` so every entry in the
 # registry answers to the same field names. The functions are the wheel's, not a second copy.
@@ -491,10 +532,51 @@ OPT_OUT = {
 }
 
 
-def run(events, stances=None, strict=False, errors=None):
+def declarative(cwd):
+    """`(detectors, findings)` from the `.ruleprobe/detectors.yaml` of the repository `cwd` is
+    in, found by walking up as `ruleprobe` does; `([], [])` for an empty `cwd` or none found.
+
+    The file is read by the engine's own loader, so one detector file works in the harness and
+    in standalone `ruleprobe`. A bad entry is a finding with its file and line, and the rest of
+    the file still loads. Only the repository file is read, not `ruleprobe`'s per-user one: a
+    session is measured by the detectors its repository ships.
+    """
+    detectors, findings = [], []
+    if not cwd:
+        return detectors, findings
+    for path in _discover(cwd=str(cwd), user=False):
+        found, problems = _load_file(path)
+        detectors.extend(found)
+        findings.extend(problems)
+    return detectors, findings
+
+
+def run(events, stances=None, strict=False, errors=None, extra=()):
     """Every detector over one session's events; detectors with no hits are omitted.
 
     The registry is built per call from `_REGISTRY`, which is a list so a test can add a
     detector to it and take it away again; the cost is once per session, not once per event.
+    `extra` are declarative detectors (`declarative`); one whose id is already registered
+    replaces it, which is how a repository overrides a shipped detector, as in `ruleprobe`.
     """
-    return _run(events, stances, registry=Registry(_REGISTRY), strict=strict, errors=errors)
+    registry = Registry(_REGISTRY)
+    for detector in extra:
+        registry.add(detector)
+    compact = registry.get("cache-hygiene/compact")
+    if compact is not None and compact.gate is compaction_required:
+        # The engine catches detector failures, but not gate failures. Resolve this file-backed
+        # gate once here so an unreadable custom selection costs only its own measurement.
+        try:
+            enabled = compact.enabled(stances)
+        except Exception as exc:
+            if strict:
+                raise
+            if errors is not None:
+                errors.append({"detector": compact.id, "error": type(exc).__name__})
+            enabled = False
+        if enabled:
+            registry.add(Detector(compact.id, compact.rule, compact.event, compact.fn,
+                                  examples=compact.examples))
+        else:
+            registry.remove(compact.id)
+    return _run(events, stances, registry=registry, strict=strict, errors=errors)

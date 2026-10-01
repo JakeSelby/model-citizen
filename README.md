@@ -94,7 +94,7 @@ and lint fails the commit otherwise. `bin/citizen usage --rules` then reports ho
 grouped by repository and by the preference variant you had selected at the time.
 
 - [Detector or reason](primitives/rules): Every rule names a deterministic detector over the transcript, or says in one line why nothing in a transcript can decide it. Lint fails the commit otherwise.
-- [Hit rate per rule](docs/usage.md): bin/citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.
+- [Hit rate per rule](docs/usage.md): bin/citizen usage --rules lists each loaded rule as measured, dark or unmeasured and how often it fired, by repo or stance; --by profile splits spend by profile.
 - [Cache prefix held](docs/usage.md): bin/citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.
 - [What is detected](claude/hooks/rule-detectors.py): Nineteen deterministic detectors read the transcript: whole-file reads, unverified pushes, secrets in a write, banned openers, non-conventional commits.
 - [Caught in the act](docs/field-scan.md): The instrument has already caught two of this repository's own shipped features doing nothing. Both are filed as issues, not hidden.

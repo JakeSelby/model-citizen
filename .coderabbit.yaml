@@ -30,8 +30,6 @@ reviews:
     - "!_bmad/**"
     - "!_bmad-output/**"
     - "!.agent-harness/plans/**"
-    - "!claude/agents/**"
-    - "!claude/commands/**"
     - "!claude/CLAUDE.md"
     - "!claude/CLAUDE.personal.template.md"
     - "!compatibility/evidence/**"

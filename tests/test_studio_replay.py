@@ -17,6 +17,21 @@ from harness_core.studio import replay, replay_runner, run_store, runs, server, 
 from studio_target_support import FixtureTargetService
 
 
+_TASK_CATALOG = replay.task_catalog
+
+
+@contextlib.contextmanager
+def fixture_tasks(*identities):
+    """Read the task catalog from a fixture, since the repository's own tasks.json retires every
+    in-repository task in favour of evaluator packs."""
+    with tempfile.TemporaryDirectory() as root:
+        (Path(root) / "benchmarks").mkdir()
+        (Path(root) / "benchmarks" / "tasks.json").write_text(json.dumps(
+            {"schema_version": 1, "tasks": [{"id": item} for item in identities]}), encoding="utf-8")
+        with mock.patch.object(replay, "task_catalog", lambda _repository: _TASK_CATALOG(root)):
+            yield Path(root)
+
+
 def target(kind, ref, revision, digest=None):
     return {"kind": kind, "ref": ref, "revision": revision,
             "version": ref.removeprefix("v") if kind == "release" else None,
@@ -537,7 +552,7 @@ class StudioReplayTests(unittest.TestCase):
         unresolved = request(targets=[{"kind": "release", "ref": "v0.17.0"},
                                       {"kind": "draft", "ref": "cost-pass"}],
                              tasks=["link-alias"], repetitions=1)
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, fixture_tasks("link-alias"):
             supervisor = Supervisor()
             admission = replay.ReplayAdmission(
                 REPO, Path(temporary), supervisor, FixtureTargetService())
@@ -561,8 +576,9 @@ class StudioReplayTests(unittest.TestCase):
             ("POST", "/api/runs/replay/start"),
             ("POST", "/api/runs/replay/result"),
         }.issubset(routes))
-        catalog = replay.task_catalog(REPO)
-        self.assertGreater(len(catalog["tasks"]), 0)
+        with fixture_tasks("link-alias") as root:
+            catalog = replay.task_catalog(root)
+        self.assertEqual(catalog["tasks"], [{"id": "link-alias", "label": "Link Alias"}])
         self.assertIn("release", catalog["target_kinds"])
 
     def test_unknown_benchmark_task_is_refused_before_spend_preview(self):
@@ -907,7 +923,7 @@ class ReplayReviewFixTests(unittest.TestCase):
                 assert mutations.active
                 return {"run_id": "replay-run", "status": "queued"}
 
-        with tempfile.TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary, fixture_tasks("link-alias"):
             class Handler:
                 response = None
                 error = None

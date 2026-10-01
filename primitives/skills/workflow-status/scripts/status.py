@@ -33,29 +33,52 @@ def find_runs() -> list[Path]:
     return sorted(runs, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def read_journal(run: Path) -> tuple[list[str], dict[str, int]]:
-    """Returns (started keys in order, {key: result length})."""
+def read_journal(run: Path) -> tuple[list[str], dict[str, int], dict[str, str]]:
+    """Started keys, result lengths and agent states, using journal IDs rather than file age."""
     journal = run / "journal.jsonl"
     if not journal.exists():
-        return [], {}
+        return [], {}, {}
 
     started: list[str] = []
     results: dict[str, int] = {}
+    identities: dict[str, str] = {}
+    states: dict[str, str] = {}
     for line in journal.read_text(errors="replace").splitlines():
         try:
             entry = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(entry, dict):
+            continue
         key = entry.get("key")
-        if not key:
+        if not isinstance(key, str) or not key:
+            continue
+        supplied_id = entry.get("agentId")
+        if entry.get("type") == "started":
+            if not isinstance(supplied_id, str) or not supplied_id:
+                continue
+            if key in identities and identities[key] != supplied_id:
+                continue
+            identities[key] = supplied_id
+        agent_id = identities.get(key)
+        if entry.get("type") != "started" and (
+                not agent_id or ("agentId" in entry and supplied_id != agent_id)):
             continue
         if entry.get("type") == "started":
             if key not in started:
                 started.append(key)
+            results.pop(key, None)
+            if agent_id:
+                states[agent_id] = "pending"
         elif entry.get("type") == "result":
             payload = entry.get("result")
-            results[key] = len(payload) if isinstance(payload, str) else 0
-    return started, results
+            if agent_id and isinstance(payload, str):
+                results[key] = len(payload)
+                states[agent_id] = "returned"
+        elif entry.get("type") == "failed" and agent_id:
+            results.pop(key, None)
+            states[agent_id] = "failed"
+    return started, results, states
 
 
 def agent_identity(path: Path) -> str:
@@ -110,9 +133,9 @@ def human_age(seconds: float) -> str:
     return f"{seconds / 3600:.1f}h"
 
 
-def report(run: Path) -> None:
+def report(run: Path, terminal_status=None) -> None:
     run_id = run.name
-    started, results = read_journal(run)
+    started, results, states = read_journal(run)
     agents = sorted(run.glob("agent-*.jsonl"), key=lambda p: p.stat().st_mtime)
 
     now = time.time()
@@ -123,7 +146,7 @@ def report(run: Path) -> None:
     done = len(results)
     total = max(len(started), len(agents))
     chars = sum(results.values())
-    state = "COMPLETE" if done and done == total and idle > 60 else "RUNNING"
+    state = terminal_status.upper() if terminal_status else "UNKNOWN (no terminal signal)"
 
     print(f"\n\033[1m{run_id}\033[0m  —  {state}")
     print(f"  started {human_age(now - began)} ago · last activity {human_age(idle)} ago")
@@ -137,10 +160,9 @@ def report(run: Path) -> None:
     for path in agents:
         size = path.stat().st_size
         age = now - path.stat().st_mtime
-        # An agent whose transcript has been quiet for a while has almost certainly returned.
-        finished = age > 45
-        mark = "\033[32m✓\033[0m" if finished else "\033[33m•\033[0m"
-        status = "done" if finished else f"active {human_age(age)} ago"
+        status = states.get(path.stem.removeprefix("agent-"), "unknown")
+        mark = "\033[32m✓\033[0m" if status == "returned" else "\033[33m•\033[0m"
+        status += f"; activity {human_age(age)} ago"
         print(f"  {mark} {agent_identity(path)[:74]:<74} {size / 1024:>7.0f}KB  {status}")
     print()
 
@@ -150,7 +172,11 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="show every run")
     parser.add_argument("--run", help="a specific run id (wf_...)")
     parser.add_argument("--limit", type=int, default=1, help="how many runs to show")
+    parser.add_argument("--terminal-status", choices=("completed", "failed", "cancelled"),
+                        help="status explicitly reported by the runtime, never inferred from age")
     args = parser.parse_args()
+    if args.terminal_status and not args.run:
+        parser.error("--terminal-status requires an exact --run")
 
     runs = find_runs()
     if not runs:
@@ -158,7 +184,7 @@ def main() -> int:
         return 1
 
     if args.run:
-        runs = [r for r in runs if args.run in r.name]
+        runs = [r for r in runs if args.run == r.name]
         if not runs:
             print(f"No run matching {args.run!r}.")
             return 1
@@ -166,7 +192,7 @@ def main() -> int:
         runs = runs[: max(1, args.limit)]
 
     for run in runs:
-        report(run)
+        report(run, args.terminal_status)
     return 0
 
 

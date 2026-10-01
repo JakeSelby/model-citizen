@@ -198,6 +198,13 @@ class FigureTests(unittest.TestCase):
                                                                        cutoff="2026-01-01")],
                          ["s-1"])
 
+    def test_structured_summary_reuses_the_figures_and_counts_unknowns(self):
+        data = cache_prefix.summary([session("s-known", 9000, 1000),
+                                     session("s-unknown", None, None)])
+        self.assertEqual([item["session_id"] for item in data["groups"]],
+                         ["s-known", "s-unknown"])
+        self.assertEqual(data["totals"], {"sessions": 2, "stepped": 0, "unknown": 1})
+
 
 class ReportTests(unittest.TestCase):
     """The printed report, over a ledger written to a disposable HOME."""

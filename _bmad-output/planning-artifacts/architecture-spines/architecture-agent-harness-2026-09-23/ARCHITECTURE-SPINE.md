@@ -20,6 +20,8 @@ companions:
   - ../../ux-designs/ux-agent-harness-2026-09-23/EXPERIENCE.md
 ---
 
+> Current delivery assignments: [Delivery annotations — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Architecture Spine: Model Citizen
 
 ## Design Paradigm
@@ -275,7 +277,7 @@ flowchart TB
   - The architecture viewer predates the contract (it lives in `lib/harness_core/upstream_viewer.py`
     and `integrations/architecture-viewer/`). It moves to a descriptor when its mailbox adapter lands.
 
-### AD-11: Local ledgers are the system of record, and grow compatibly [PARTIAL: schema version planned under #636]
+### AD-11: Local ledgers are the system of record, and grow compatibly [ADOPTED]
 
 - **Binds:** FR-11, FR-23 to FR-27, FR-66; usage, pricing, the decision log, export.
 - **Prevents:**
@@ -311,6 +313,11 @@ flowchart TB
   - Micro-tier rows never enter the production series.
   - Every row records the provenance of its arm. Ablations are declared in an ablation manifest, which
     lists arms and is distinct from a module's manifest (AD-22).
+    (Note 2026-09-29, #754: ablation manifests live in `benchmarks/ablations/`, schema 1. A one-policy
+    pair names one tag, one session-scoped factor and its reference and treatment values; the bare arm
+    runs beside it. No rule changes.)
+  - A prefix figure is the first call's whole prompt, every input field summed; a cache write alone is
+    never a prefix figure. (Amended 2026-10-01, #514.)
   - Every figure carries an estimand label. (Amended 2026-09-24. The labels land in v0.14.0 with
     attribution; the soft-estimate report and series land in v0.15.0.)
     - **Measured:** a count read directly from recorded rows, or an estimate from runs. Each names the
@@ -457,7 +464,7 @@ flowchart TB
     three macOS arm64 and three Linux x64 runs, so CI rebuild-and-compare is the selected blocking
     mechanism. This exception does not weaken the standard-library Python 3.9 runtime rule.
 
-### AD-22: Modules declare a manifest [PLANNED: fields and checks v0.14.0, #554; scorecard v0.15.0; slots and adapters v0.16.0]
+### AD-22: Modules declare a manifest [PLANNED: fields and checks v0.14.0, #554; scorecard v0.15.0, #514; slots and adapters v0.16.0]
 
 - **Binds:** FR-15, FR-16, FR-19, FR-58; every switchable module, the selection document and the
   scorecard.
@@ -480,7 +487,7 @@ flowchart TB
     - the configuration values that reach the model or the hooks;
     - the harness version.
 
-### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PLANNED: v0.14.0, #482]
+### AD-23: Observation adds nothing to any arm's model context, and every new row is attributable [PARTIAL: opt-in registration #867 remains]
 
 - **Binds:** FR-11, FR-23, FR-27, FR-56, FR-58; the observation layer, the ledgers, the decision log and
   every benchmark arm.
@@ -846,7 +853,7 @@ flowchart LR
 | Configuration lifecycle (FR-4, FR-5, FR-17, FR-66, FR-69, FR-70) | `bin/harness` (sync, init, config), `lib/harness_core/reconcile.py`, `compatibility/migration.json` | AD-3, AD-18 |
 | Distribution (FR-17, FR-18, FR-53, FR-54) | `scripts/install.sh`, `.claude-plugin/`, `product.json`, `scripts/advance_stable.py`, `scripts/sync_about.py` | AD-19, AD-24 |
 | Measured rules (FR-19 to FR-22, FR-67) | `policy/hooks/rule-detectors.py`, `lib/vendor/ruleprobe` | AD-13, AD-22 |
-| Ledgers, pricing, telemetry (FR-11, FR-23 to FR-27) | `policy/hooks/usage-log.py`, `pricing.py`, `telemetry.py`, `decisions.py`, `otel-headers.py` | AD-11, AD-12, AD-23 |
+| Ledgers, pricing, telemetry (FR-11, FR-23 to FR-27, FR-85) | `policy/hooks/usage-log.py`, `pricing.py`, `telemetry.py`, `decisions.py`, `otel-headers.py`; `lib/harness_core/soft_estimates.py` | AD-11, AD-12, AD-23 |
 | Cost posture (FR-28 to FR-34) | `tier-agent-spawns.py`, `brief-guard.py`, `usage-feed.py`, `posture.py`, `adapters/*/bindings.json` | AD-14 |
 | Guardrails (FR-35 to FR-39) | `grade-bash.py`, `stop-gate.py`, `neutralize-tool-output.py`, `filter-output.py`, `allow-readonly-bash.py`, `lifecycle.py` | AD-7, AD-18 |
 | Role workers and the delivery loop (FR-40 to FR-44, FR-68) | `lib/harness_core/workers.py`, `primitives/workflows/`, `validate-plan-card.py`, `bin/harness` worktree | AD-1, AD-8, AD-9, AD-16 |
@@ -880,3 +887,24 @@ flowchart LR
   to implementation accessibility and bundle review.
 - **Phone network reach.** Responsive phone-width behavior remains required. AH-SP018 (#1003) decides
   whether a separate phone may reach the loopback-only Studio without weakening AD-27.
+
+## Delivery annotations — 2026-09-28
+
+Composition and calibrated-judge delivery previously marked 0.16 is now 0.17; field/Codex/context work previously marked 0.17 is now 0.18; independent Studio work previously marked 0.18 is now 0.16, after Measured lands. AD IDs, shared authority, evidence labels and native-source ownership remain unchanged. This changes scheduling only: no new architectural invariant, result format or implementation is introduced. Pending Studio design decisions remain owned by #962 and are not imported from its feature branch by this roadmap change.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
+
+## Status amendment — 2026-09-29
+
+AD-11 is adopted: usage and decision rows carry `schema_version`, and their readers apply
+`FIELD_FOLDS` (delivered in #835). AD-23 is partial: the observation entry point (#864),
+profile fingerprints (#861), adherence recording (#883) and replay-row surface records (#482)
+have shipped. Opt-in recorder registration (#867) remains open. These status corrections leave
+the recorded decisions and their original rationale unchanged.
+
+## Amendment — 2026-10-01: factor designs (#797)
+
+AD-12 reads "the ablation manifest lists arms". A design manifest (`benchmarks/unit-economy.json`)
+declares factors instead, and the runner derives the arms from them. For the unit-by-economy
+two-by-two these are bare plus four cells, each a declared-selection image. Parity is checked on the
+resolved selections, edge by edge, before any spend. The decision's other invariants are unchanged.

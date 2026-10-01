@@ -19,9 +19,13 @@ by description, the harness arm read all 18 files itself in 10 API calls against
 **Reproducing it.** The replay calls a model and spends real usage, so it is run by hand:
 
 ```sh
-python3 scripts/cost_bench.py replay --model <id> --tag <ref> --exploratory --raw /tmp/replay-raw   # 7 tasks x 2 arms x 2 reps
-grep -o '"name": *"Agent"' /tmp/replay-raw/*.json | wc -l                 # spawns, both arms
+python3 scripts/cost_bench.py replay --model <id> --tag <ref> --exploratory --out /tmp/replay   # 0 tasks x 2 arms x 5 reps; refuses until #796
+python3 scripts/cost_bench.py summarise --results /tmp/replay/<ref>      # the delegation verdict per task; calls no model
 ```
+
+`summarise` prints, under SM-2's report, whether each task's harness arm fired, declined below the
+break-even, missed above it, was never offered the spawn tool, or cannot be told. Rows kept with
+`--raw` from before those fields existed get them from `backfill` without another run.
 
 The per-run `turns` field in `benchmarks/<harness version>/results.jsonl` is the API-call count the
 10-against-11 figure comes from. See [benchmarks.md](benchmarks.md) for what the arms share and

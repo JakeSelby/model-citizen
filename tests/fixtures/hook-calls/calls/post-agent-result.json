@@ -1,0 +1,25 @@
+{
+ "about": "A subagent's result returning to the session.",
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Agent",
+  "tool_input": {
+   "subagent_type": "general-purpose",
+   "description": "Survey the parser",
+   "prompt": "Describe the parser. Return at most 200 words."
+  },
+  "tool_response": {
+   "content": [
+    {
+     "type": "text",
+     "text": "The parser raises on empty input."
+    }
+   ],
+   "totalTokens": 1200
+  }
+ }
+}
