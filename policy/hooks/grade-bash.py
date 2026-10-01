@@ -2797,10 +2797,13 @@ def _operand_context(values, source):
     return context
 
 
+HOME_WORD_RE = re.compile(r"HOME(?:\[[^]]*\])?(?:\+?=|$)")
+
+
 def _mentions_home(tokens):
     """Whether a simple command may assign HOME: any word `HOME`, or an assignment to it, as in
-    `HOME=x`, `export HOME=x`, `read HOME` or `unset HOME`."""
-    return any(token == "HOME" or token.startswith(("HOME=", "HOME+=")) for token in tokens)
+    `HOME=x`, `HOME[0]=x`, `export HOME=x`, `read HOME` or `unset HOME`."""
+    return any(HOME_WORD_RE.match(token) for token in tokens)
 
 
 # Options that make `cd` resolve `..` physically: bash's `set -P` or `set -o physical`, and

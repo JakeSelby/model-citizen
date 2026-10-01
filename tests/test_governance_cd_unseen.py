@@ -108,7 +108,9 @@ class UnseenDirectoryChanges(Fixture):
                         "trap 'setopt cdablevars' DEBUG; b=../beta; cd b; git push",
                         "trap 'set -o physical' DEBUG; cd ../beta/.; git push",
                         "trap 'export HOME=%s' DEBUG; cd ~/beta; git push" % self.repo,
-                        "trap 'x=1; HOME=%s' DEBUG; cd ~/beta && git push" % self.repo):
+                        "trap 'x=1; HOME=%s' DEBUG; cd ~/beta && git push" % self.repo,
+                        "trap 'declare -a HOME[0]=%s' DEBUG; cd ~/beta; git push" % self.repo,
+                        "trap 'HOME[0]=%s' DEBUG; cd ~/beta; git push" % self.repo):
             with self.subTest(command=command):
                 self.assert_unknown(command)
         self.assert_beta("trap 'set -e' DEBUG; cd ../beta && git push")
