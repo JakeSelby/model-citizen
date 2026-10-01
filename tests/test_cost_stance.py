@@ -53,9 +53,15 @@ class TempHome(unittest.TestCase):
 
 
 class CostStanceTests(TempHome):
-    def test_dimension_is_registered_with_three_variants(self):
+    def test_dimension_is_registered_with_four_variants(self):
         self.assertIn("cost", harness.STANCE_NAMES)
-        self.assertEqual(sorted(p.stem for p in COST.glob("*.md")), ["balanced", "frugal", "max"])
+        self.assertEqual(sorted(p.stem for p in COST.glob("*.md")), ["balanced", "frugal", "max", "off"])
+
+    def test_off_keeps_balanceds_role_table_and_turns_the_feed_off(self):
+        sidecar = json.loads((COST / "off.json").read_text(encoding="utf-8"))
+        self.assertEqual(sidecar["extends"], "balanced")
+        self.assertEqual(sidecar["switches"], {"turn_feed": "off"})
+        self.assertNotIn("rows", sidecar)
 
     def test_default_is_balanced(self):
         cfg = harness.load_config(env={})

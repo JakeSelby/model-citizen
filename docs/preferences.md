@@ -90,7 +90,7 @@ dimension.
 | `delegation` | `tiered`, `session-model`, `off` | `tiered` |
 | `testing` | `required`, `pragmatic`, `off` | `required` |
 | `autonomy` | `execute`, `confirm-writes`, `ask` | `execute` |
-| `cost` | `frugal`, `balanced`, `max` | `balanced` |
+| `cost` | `off`, `frugal`, `balanced`, `max` | `balanced` |
 | `voice` | `scannable`, `concise`, `answer-card`, `off` | `scannable` |
 
 `citizen config set stances.testing off` checks the variant exists before writing, and names
@@ -153,6 +153,9 @@ unnamed spawn is routed to. All of it is data in a JSON sidecar beside the varia
   ask for it, `/clear` at task end, and the measured budgets unscaled.
 - `max` leaves effort at the model's default, fans out as widely as the task needs, allows fast
   mode and compaction, and marks nothing as over budget.
+- `off` puts no cost posture in force: no effort, fan-out or handoff guidance and no per-turn
+  usage feed. Spawns still resolve on `balanced`'s table. It is the economy concern's off level in
+  the unit-by-economy two-by-two ([benchmarks.md](benchmarks.md#unit-evals-the-two-by-two)).
 
 Select one with `citizen config set stances.cost frugal`, or for a single session with
 `HARNESS_STANCE_COST=frugal claude`. To write your own, put a `.md` and a sidecar in your

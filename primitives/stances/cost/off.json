@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "extends": "balanced",
+  "switches": {
+    "turn_feed": "off"
+  }
+}
