@@ -1,6 +1,7 @@
 import type { ConfigureSchema, ValidationError } from "./model";
 import type { LibraryPayload, ModuleProjection as LibraryProjection, ProjectedModuleText } from "../library/model";
 import type { AuthoringPreview, AuthoringRead, AuthoringRequest, AuthoringSave } from "./authoringModel";
+import type { ApplyResult, ApplyReview } from "./applyModel";
 
 export type DraftRead = {
   status: "ready" | "error" | "unavailable";
@@ -234,4 +235,18 @@ export async function saveAuthoring(
 
 export async function loadDraftLibrary(draft: string): Promise<LibraryPayload> {
   return post<LibraryPayload>("/api/configure/authoring/library", { draft });
+}
+
+export async function reviewDraftApply(draft: string): Promise<ApplyReview> {
+  return post<ApplyReview>("/api/configure/apply/review", { draft });
+}
+
+/** `confirm` is the draft's name typed back; the server refuses an apply without it. */
+export async function applyDraft(draft: string, revision: string, confirm: string): Promise<ApplyResult> {
+  return post<ApplyResult>("/api/configure/apply", { draft, revision, confirm });
+}
+
+/** Restore or abandon an interrupted apply; `confirm` is its draft's name typed back. */
+export async function recoverApply(action: "restore" | "abandon", confirm: string): Promise<ApplyResult> {
+  return post<ApplyResult>("/api/configure/apply/recover", { action, confirm });
 }
