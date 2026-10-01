@@ -262,7 +262,7 @@ def delegation_read_paths(event):
                 or "\n" in command or "#" in command):
             return []
         try:
-            grader = load("grade-bash")
+            grader = load("bash-grader")
             if grader.ro is None or grader.grade_text(command, cwd)[0] != 0:
                 return []
             values = _bash_read_operands(grader.ro.tokenize(command))
@@ -1308,17 +1308,20 @@ def _dispatch(runtime, payload):
             results.append(invoke("intent-overlap", event))
         if tool == "Bash":
             grading, readonly = enabled("grade-bash"), enabled("allow-readonly-bash")
-            grader = load("grade-bash") if grading or readonly else None
-            if grader is not None and grader.ro is None:
+            # `grade-bash.py` is loaded only while its id is on; the read-only allow reads the
+            # grading library it re-exports, so a switched-off hook is never in the Bash path.
+            grader = load("grade-bash") if grading else None
+            classifier = grader if grading else load("bash-grader") if readonly else None
+            if classifier is not None and getattr(classifier, "ro", None) is None:
                 raise RuntimeError("command classifier unavailable")
             # Shared stance resolution includes explicit project and session selections.
             variant = selected("autonomy", "execute")
             raw = command = event["tool_input"]["command"]
             confirmed = False
             grade = verb = target = family = None
-            if grader is not None:
-                command, confirmed = grader.strip_marker(command)
-                grade, verb, target, family = grader.grade_text(command, event.get("cwd", ""))
+            if classifier is not None:
+                command, confirmed = classifier.strip_marker(command)
+                grade, verb, target, family = classifier.grade_text(command, event.get("cwd", ""))
             asked = grading and bool(grade) and not confirmed and grade >= grader.THRESHOLDS.get(variant, 1)
             # The decision provider, when one is configured, is asked only about what the stance
             # lets through, so it can add a prompt and never remove one.
@@ -1359,7 +1362,7 @@ def _dispatch(runtime, payload):
                 results.append({"hookSpecificOutput": {"permissionDecision": "ask",
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "
-                    + grader.reason(grade, verb, target, family, variant)}})
+                    + classifier.reason(grade, verb, target, family, variant)}})
             results.append(invoke("filter-output", event))
             if grading:
                 log_bash_decision(runtime, event, results, command, confirmed)

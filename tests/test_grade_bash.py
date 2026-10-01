@@ -467,16 +467,16 @@ class GradeTests(unittest.TestCase):
                 self.assertLess(growth, 8)
 
     def _record(self, name, commands):
-        """The length of every text `grader.<name>` received while grading and governing
+        """The length of every text `grader.library.<name>` received while grading and governing
         `commands`; the real function still runs."""
         lengths = []
-        original = getattr(grader, name)
+        original = getattr(grader.library, name)
 
         def spy(text, *args, **kwargs):
             lengths.append(len(text))
             return original(text, *args, **kwargs)
 
-        with mock.patch.object(grader, name, side_effect=spy):
+        with mock.patch.object(grader.library, name, side_effect=spy):
             for command in commands:
                 grader.grade_text(command, CWD)
                 grader.governed_text(command, CWD)
