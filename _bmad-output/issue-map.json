@@ -4,13 +4,13 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 153,
+    "bug": 155,
     "chore": 103,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 331,
-    "task": 39
+    "story": 332,
+    "task": 41
   },
   "items": [
     {
@@ -8347,6 +8347,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-T040",
+      "github_number": 1101,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1101",
+      "title": "Run the registered hook-inventory spawn check for #513",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T040.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B146",
       "github_number": 1109,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1109",
@@ -8354,6 +8367,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B146.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S331",
+      "github_number": 1111,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1111",
+      "title": "Add a Codex plugin manifest for the skills",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S331.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8471,6 +8497,32 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C102.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B153",
+      "github_number": 1154,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1154",
+      "title": "A pack test intermittently fails cleanup while git maintenance writes into its repository",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B153.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B154",
+      "github_number": 1155,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1155",
+      "title": "Installing the harness leaves undeclared files that make every replay arm pair fail parity",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B154.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

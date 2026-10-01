@@ -149,3 +149,13 @@ A marketplace install is a strict subset of `bin/citizen install`. It does not g
 The marketplace path is its own client surface in
 [the compatibility catalog](compatibility.md) and is **unqualified**: no native evidence has been
 recorded for it. `bin/citizen doctor` reports which of the two paths is active.
+
+### The Codex plugin
+
+`.codex-plugin/plugin.json` packages the same skills for Codex, in the compatibility manifest
+format of [OpenAI's plugin packaging guide](https://developers.openai.com/plugins/build/plugins).
+Codex reads that file before `.claude-plugin/plugin.json` at a plugin root, so a Codex install of
+this repository loads the skills under `primitives/skills/` and nothing else: no subagent roles,
+slash commands or output style, and no hooks. Its name, version, description, author, licence,
+homepage, repository and keywords match the Claude Code manifest, and a release bumps both
+versions together. Like the marketplace path above, it is unqualified.

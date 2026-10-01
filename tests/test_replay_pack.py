@@ -28,7 +28,8 @@ SOLUTION = ("# %s\ndef solve(root):\n    (root / 'answer.txt').write_text('42\\n
 
 def git(repo, *args):
     return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@invalid",
-                           "-c", "commit.gpgsign=false"] + list(args), check=True,
+                           "-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false"]
+                          + list(args), check=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
 
 
