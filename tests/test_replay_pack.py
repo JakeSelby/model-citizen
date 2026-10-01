@@ -2,9 +2,12 @@
 into fresh workspaces, and checked for contamination against a harness commit. No model is called
 and no container is started; every pack here is a small one built in a temporary directory."""
 import importlib.util
+import io
 import json
+import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -207,6 +210,102 @@ class LoadSetTests(unittest.TestCase):
             self.assertIn(fragment, str(caught.exception))
 
 
+def tar_bytes(*members):
+    """A tar archive of `(TarInfo, data or None)` pairs, for archives git would never write."""
+    out = io.BytesIO()
+    with tarfile.open(fileobj=out, mode="w") as tar:
+        for info, data in members:
+            if data is not None:
+                info.size = len(data)
+            tar.addfile(info, io.BytesIO(data) if data is not None else None)
+    return out.getvalue()
+
+
+def member(name, kind=tarfile.REGTYPE, linkname=""):
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname = kind, linkname
+    return info
+
+
+class ArchiveSafetyTests(unittest.TestCase):
+    """A pack commit may hold anything git can store. Python before 3.12 extracts with no filter,
+    so every member is checked before any is written, on every Python."""
+
+    def committed_link(self, tmp, name, target):
+        source = make_pack(Path(tmp) / "pack")
+        os.symlink(target, str(source / name))
+        git(source, "add", "-A")
+        git(source, "commit", "-qm", "feat: a link")
+        return source
+
+    def test_a_pack_commit_holding_a_symlink_is_refused_before_extraction(self):
+        for name, target in (("workspaces/ws", "/"), ("workspaces/app/peek", "../../pack.json")):
+            with tempfile.TemporaryDirectory() as tmp:
+                source = self.committed_link(tmp, name, target)
+                extract_to = Path(tmp) / "extract"
+                extract_to.mkdir()
+                with self.assertRaisesRegex(SystemExit, "a link: %s -> " % name):
+                    PACK.open_pack(source, harness_root=Path(tmp) / "harness", tmp=str(extract_to))
+                self.assertEqual(list(extract_to.iterdir()), [])
+
+    def test_hard_links_devices_fifos_absolute_and_parent_paths_are_refused_with_nothing_written(self):
+        ok = (member("pack.json"), b"{}")
+        for bad in ((member("a", tarfile.LNKTYPE, "pack.json"), None),
+                    (member("a", tarfile.SYMTYPE, "/etc"), None),
+                    (member("dev", tarfile.CHRTYPE), None),
+                    (member("pipe", tarfile.FIFOTYPE), None),
+                    (member("/abs.txt"), b"x"),
+                    (member("../up.txt"), b"x")):
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(SystemExit):
+                    PACK.extract(tar_bytes(ok, bad), Path(tmp))
+                self.assertEqual(list(Path(tmp).iterdir()), [], bad[0].name)
+        with tempfile.TemporaryDirectory() as tmp:
+            PACK.extract(tar_bytes(ok, (member("dir", tarfile.DIRTYPE), None)), Path(tmp))
+            self.assertEqual(sorted(p.name for p in Path(tmp).iterdir()), ["dir", "pack.json"])
+
+
+class LoadLinkTests(unittest.TestCase):
+    """Loading reads nothing through a link, even one that reached the extraction root another way."""
+
+    def opened(self, tmp):
+        pack = PACK.open_pack(make_pack(Path(tmp) / "pack"), harness_root=Path(tmp) / "harness")
+        self.addCleanup(PACK.close_pack, pack)
+        outside = Path(tmp) / "outside"
+        outside.mkdir()
+        (outside / "secret.txt").write_text(CANARY, encoding="utf-8")
+        return pack, Path(pack["root"]), outside
+
+    def test_a_link_in_a_workspace_or_a_workspace_that_is_a_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack, root, outside = self.opened(tmp)
+            os.symlink(str(outside / "secret.txt"), str(root / "workspaces" / "app" / "leak.txt"))
+            with self.assertRaisesRegex(SystemExit, "its workspace is a link or holds one"):
+                PACK.load_set(pack, "production", "production")
+        with tempfile.TemporaryDirectory() as tmp:
+            pack, root, outside = self.opened(tmp)
+            os.rename(str(root / "workspaces" / "app"), str(Path(tmp) / "moved"))
+            os.symlink(str(Path(tmp) / "moved"), str(root / "workspaces" / "app"))
+            with self.assertRaisesRegex(SystemExit, "its workspace is a link or holds one"):
+                PACK.load_set(pack, "production", "production")
+
+    def test_a_task_directory_that_is_a_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack, root, outside = self.opened(tmp)
+            os.rename(str(root / "tasks" / "short-one"), str(Path(tmp) / "moved"))
+            os.symlink(str(Path(tmp) / "moved"), str(root / "tasks" / "short-one"))
+            with self.assertRaisesRegex(SystemExit, "task 'short-one' is a link or holds one"):
+                PACK.load_set(pack, "production", "production")
+
+    def test_a_workspace_name_or_task_id_that_is_not_a_plain_name_is_refused(self):
+        document = {"schema_version": 1, "name": "p", "version": "1", "canary": CANARY, "break_even_calls": 7.6,
+                    "workspaces": {"../..": {"gate": [["true"]]}},
+                    "sets": {"production": {"tasks": ["../escape"]}}}
+        errors = PACK.document_errors(document)
+        self.assertIn("workspace name '../..' is not a plain directory name", errors)
+        self.assertIn("set production names a task id that is not a plain directory name", errors)
+
+
 class WorkspaceTests(unittest.TestCase):
     def test_a_workspace_is_a_fresh_one_commit_repository_without_the_check_or_solution(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -225,8 +324,13 @@ class WorkspaceTests(unittest.TestCase):
                 if path.is_file():
                     self.assertNotIn(CANARY.encode(), path.read_bytes())
             self.assertIn("answer.txt", PACK.check_source(task))
-            PACK.apply_solution(task, first)
-            self.assertEqual((first / "answer.txt").read_text(encoding="utf-8"), "42\n")
+            self.assertEqual(PACK.solution_source(task), SOLUTION)
+            self.assertFalse((first / "answer.txt").exists())
+
+    def test_the_module_has_no_way_to_run_pack_code_on_this_machine(self):
+        for name in ("apply_solution", "_module"):
+            self.assertFalse(hasattr(PACK, name), name)
+        self.assertNotIn("exec_module", (REPO / "scripts" / "replay_pack.py").read_text(encoding="utf-8"))
 
     def test_the_preflight_runs_the_workspace_gate(self):
         task = {"pack": {"gate": [["python3", "-m", "unittest", "discover", "-s", "tests"]]}}

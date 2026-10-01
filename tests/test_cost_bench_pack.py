@@ -70,13 +70,17 @@ class PackScoringTests(unittest.TestCase):
 
 
 class PackVerifyTests(unittest.TestCase):
-    def verify(self, tmp, verdicts, gate_exit=0):
-        pack, task = pack_task(tmp)
+    def verify(self, tmp, verdicts, gate_exit=0, solution=None, solved=True):
+        pack = PACK.open_pack(make_pack(Path(tmp) / "pack", **({"solution": solution} if solution else {})),
+                              harness_root=Path(tmp) / "harness")
         self.addCleanup(PACK.close_pack, pack)
+        task = PACK.load_set(pack, "production", "production")[0][0]
         answers, calls = list(verdicts), []
 
         def launch(command, **kwargs):
             calls.append((command, kwargs))
+            if command[-2:] == ["python3", "-"] and BENCH.SOLVED_MARK in kwargs["input"]:
+                return types.SimpleNamespace(stdout=BENCH.SOLVED_MARK + "ok\n" if solved else "", returncode=0)
             if command[-2:] == ["python3", "-"]:
                 return types.SimpleNamespace(stdout=BENCH.ORACLE_MARK + answers.pop(0) + "\n", returncode=0)
             return types.SimpleNamespace(stdout="", returncode=gate_exit)
@@ -88,11 +92,31 @@ class PackVerifyTests(unittest.TestCase):
     def test_the_workspace_gate_runs_then_the_check_fails_before_and_passes_after_the_solution(self):
         with tempfile.TemporaryDirectory() as tmp:
             errors, calls = self.verify(tmp, ('["no answer"]', "[]"))
-            solved = Path(tmp) / "verify" / "short-one-parent" / "answer.txt"
-            self.assertEqual(solved.read_text(encoding="utf-8"), "42\n")
         self.assertEqual(errors, [])
         self.assertEqual(calls[0][0][-6:], ["python3", "-m", "unittest", "discover", "-s", "tests"])
-        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(calls), 4)
+        solve, kwargs = calls[2]
+        self.assertEqual(solve[solve.index("--network") + 1], "none")
+        self.assertEqual(len(mounts(solve)), 1)
+        self.assertTrue(mounts(solve)[0].endswith(":/work"))
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", " ".join(env_flags(solve)))
+        self.assertTrue(kwargs["input"].startswith(SOLUTION))
+        self.assertIn("solve(_Path('/work'))", kwargs["input"])
+
+    def test_a_pack_solution_never_runs_on_this_machine(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "host-side-effect"
+            hostile = ("# %s\nfrom pathlib import Path\nPath(%r).write_text('ran')\n"
+                       "def solve(root):\n    Path(%r).write_text('solved')\n" % (CANARY, str(marker), str(marker)))
+            errors, calls = self.verify(tmp, ('["no answer"]', "[]"), solution=hostile)
+            self.assertFalse(marker.exists())
+        self.assertEqual(errors, [])
+        self.assertIn(str(marker), calls[2][1]["input"])
+
+    def test_a_solution_that_does_not_finish_in_its_container_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "reference solution did not finish"):
+                self.verify(tmp, ('["no answer"]',), solved=False)
 
     def test_a_check_that_already_passes_or_never_passes_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:

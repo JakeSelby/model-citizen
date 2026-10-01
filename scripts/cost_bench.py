@@ -1182,6 +1182,27 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
     return _ran(done)
 
 
+# The last line a container prints once a pack's reference solution has run on the tree.
+SOLVED_MARK = "cost-bench-solved: "
+SOLVE_DRIVER = """
+from pathlib import Path as _Path
+solve(_Path(%r))
+print(%r + "ok")
+"""
+
+
+def solve_in_container(task, workdir, image, launch=subprocess.run, name=None):
+    """Apply a pack task's reference solution to `workdir` in a fresh container of `image`, exactly
+    as `score` runs a check: the solution on stdin, the tree the only mount, no network and no
+    credential. A pack is code from outside this repository, so its solution never runs here."""
+    stdin = replay_pack.solution_source(task) + SOLVE_DRIVER % (arms.WORKDIR, SOLVED_MARK)
+    done = run_check(launch, image, workdir, ["python3", "-"], {},
+                     name or container_name("solve", task["id"]), input=stdin)
+    if done.returncode or not any(line.startswith(SOLVED_MARK) for line in (done.stdout or "").splitlines()):
+        raise RuntimeError("the reference solution did not finish (exit %s)" % done.returncode)
+    return workdir
+
+
 def repo_gate(workdir, commands, image, launch=subprocess.run):
     """Exit codes for the repository's own gate, run in `workdir`, each command in a fresh
     container of `image` exactly as `score` runs a check: the tree the only mount, the image's
@@ -1214,7 +1235,7 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
         if task["kind"] == "issue":
             after = mounted_snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
         elif replay_pack.is_pack(task):
-            after = replay_pack.apply_solution(task, before)
+            after = solve_in_container(task, before, image, launch)
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)

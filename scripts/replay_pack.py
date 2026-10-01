@@ -13,7 +13,10 @@ here can be copied rather than solved (#1019). A pack keeps both out of it by co
 - **Isolated scoring.** An arm sees only a workspace copied into a fresh one-commit git
   repository (`materialize`). The check reaches the scorer on stdin, in a fresh container with no
   network that mounts only the agent's tree (`cost_bench.score`); no arm container holds a byte
-  of the pack beyond its workspace.
+  of the pack beyond its workspace. The reference solution runs the same way under
+  `--verify-tasks`; nothing from a pack is imported or executed on this machine.
+- **Read, never followed.** An archive holding a link, a special file, an absolute path or a `..`
+  component is refused before anything is extracted, and loading reads no path through a link.
 - **Contamination control.** `contamination_errors` refuses a task when the harness commit under
   test, or any commit in its history, holds the exact bytes of the task's check or solution, or
   any file carrying the pack's canary.
@@ -22,7 +25,6 @@ Layout, long tasks and versioning: docs/benchmarks.md and the pack's own README.
 only; nothing here calls a model.
 """
 import hashlib
-import importlib.util
 import io
 import json
 import os
@@ -41,6 +43,8 @@ CHECK_FILE = "check.py"
 SOLUTION_FILE = "solution.py"
 TIERS = ("production", "micro")
 GATE_GREEN = r"^OK\b"
+# A workspace name or task id becomes one path component under the pack's root.
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 # A fixed author and date, so one workspace always becomes the same commit.
 WORKSPACE_GIT_ENV = {"GIT_AUTHOR_NAME": "workspace", "GIT_AUTHOR_EMAIL": "workspace@invalid",
                      "GIT_COMMITTER_NAME": "workspace", "GIT_COMMITTER_EMAIL": "workspace@invalid",
@@ -73,6 +77,24 @@ def _inside(child, parent):
         return True
     except ValueError:
         return False
+
+
+def _contained(path, base):
+    """Whether `path` lies inside `base` with no symbolic link on the way to it or anywhere under
+    it, so reading it never leaves `base`."""
+    path, base = Path(path), Path(base)
+    try:
+        parts = path.relative_to(base).parts
+    except ValueError:
+        return False
+    current = base
+    for part in parts:
+        current = current / part
+        if part == ".." or current.is_symlink():
+            return False
+    if not _inside(path, base):
+        return False
+    return not (path.is_dir() and any(p.is_symlink() for p in path.rglob("*")))
 
 
 def tree_digest(root):
@@ -110,14 +132,7 @@ def open_pack(source, ref="HEAD", expect_digest=None, harness_root=ROOT, tmp=Non
         shutil.rmtree(str(root), ignore_errors=True)
         raise PackError("the extraction directory %s is inside the harness checkout" % root)
     try:
-        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-            for member in tar.getmembers():
-                if member.name.startswith("/") or ".." in Path(member.name).parts:
-                    raise PackError("the archive holds an unsafe path: %s" % member.name)
-            try:
-                tar.extractall(str(root), filter="data")
-            except TypeError:  # Python before 3.12 has no extraction filter; paths are checked above
-                tar.extractall(str(root))
+        extract(archive.stdout, root)
         digest = tree_digest(root)
         if expect_digest and expect_digest != digest:
             raise PackError("pack digest is %s, not the %s named; the pack changed" % (digest, expect_digest))
@@ -130,6 +145,34 @@ def open_pack(source, ref="HEAD", expect_digest=None, harness_root=ROOT, tmp=Non
         raise
     return {"source": str(source), "ref": ref, "commit": commit, "digest": digest, "root": root,
             "document": document, "name": document["name"], "version": document["version"]}
+
+
+def unsafe_members(tar):
+    """Why each member of `tar` may not be extracted: anything but a regular file or a directory
+    (a symbolic or hard link, a device, a FIFO), an absolute name, or a `..` component."""
+    errors = []
+    for member in tar.getmembers():
+        if member.name.startswith("/") or ".." in Path(member.name).parts:
+            errors.append("an unsafe path: %s" % member.name)
+        elif member.issym() or member.islnk():
+            errors.append("a link: %s -> %s" % (member.name, member.linkname))
+        elif not (member.isfile() or member.isdir()):
+            errors.append("a special file: %s" % member.name)
+    return errors
+
+
+def extract(data, root):
+    """Extract the tar bytes `data` into `root`, refusing the whole archive before writing anything
+    when any member is unsafe (`unsafe_members`); on every Python, so the unfiltered extraction of
+    Pythons before 3.12 never meets a link."""
+    with tarfile.open(fileobj=io.BytesIO(data)) as tar:
+        errors = unsafe_members(tar)
+        if errors:
+            raise PackError("the archive holds %s" % "; ".join(errors[:5]))
+        try:
+            tar.extractall(str(root), filter="data")
+        except TypeError:  # Python before 3.12 has no extraction filter; every member is checked above
+            tar.extractall(str(root))
 
 
 def close_pack(pack):
@@ -159,6 +202,8 @@ def document_errors(document):
         errors.append("workspaces is not a non-empty object")
     else:
         for name, spec in sorted(workspaces.items()):
+            if not NAME.match(name):
+                errors.append("workspace name %r is not a plain directory name" % name)
             gate = (spec or {}).get("gate")
             if not isinstance(gate, list) or not gate or not all(
                     isinstance(c, list) and c and all(isinstance(a, str) for a in c) for c in gate):
@@ -171,6 +216,8 @@ def document_errors(document):
             ids = (spec or {}).get("tasks")
             if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
                 errors.append("set %s has no list of unique task ids" % name)
+            elif not all(isinstance(i, str) and NAME.match(i) for i in ids):
+                errors.append("set %s names a task id that is not a plain directory name" % name)
             tier = set_tier(name, spec or {})
             if tier not in TIERS:
                 errors.append("set %s names no tier of %s" % (name, ", ".join(TIERS)))
@@ -235,12 +282,18 @@ def load_set(pack, set_name, tier):
     tasks, errors = [], []
     for task_id in spec["tasks"]:
         task_dir = root / "tasks" / task_id
+        if not _contained(task_dir, root):
+            errors.append("task %r is a link or holds one; nothing is read through a link" % task_id)
+            continue
         if not (task_dir / TASK_FILE).is_file():
             errors.append("task %r has no %s" % (task_id, TASK_FILE))
             continue
         task_spec = json.loads((task_dir / TASK_FILE).read_text(encoding="utf-8"))
         problems = task_errors(task_spec, task_dir, document)
         workspace = root / "workspaces" / str(task_spec.get("workspace"))
+        if not problems and not _contained(workspace, root):
+            problems.append("task %r: its workspace is a link or holds one; nothing is read through a link"
+                            % task_id)
         if not problems and any(document["canary"] in p.read_text(encoding="utf-8", errors="replace")
                                 for p in workspace.rglob("*") if p.is_file()):
             problems.append("task %r: its workspace carries the canary" % task_id)
@@ -291,19 +344,11 @@ def check_source(task):
     return (Path(task["pack"]["task_dir"]) / CHECK_FILE).read_text(encoding="utf-8")
 
 
-def _module(task, name):
-    path = Path(task["pack"]["task_dir"]) / name
-    spec = importlib.util.spec_from_file_location("pack_%s_%s" % (re.sub(r"\W", "_", task["id"]), path.stem),
-                                                  str(path))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def apply_solution(task, root):
-    """Run the reference solution's `solve` on a workspace copy, for `--verify-tasks`."""
-    _module(task, SOLUTION_FILE).solve(Path(root))
-    return root
+def solution_source(task):
+    """The reference solution, as `--verify-tasks` sends it on stdin to the scorer's isolated
+    container (`cost_bench.solve_in_container`). Pack code is never imported or run on this
+    machine: a pack is an outside repository nobody here reviewed."""
+    return (Path(task["pack"]["task_dir"]) / SOLUTION_FILE).read_text(encoding="utf-8")
 
 
 def git_blob_id(data):
