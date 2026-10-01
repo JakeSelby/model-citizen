@@ -243,13 +243,13 @@ class LongPrefixChains(Fixture):
 
 class UnreadableCommands(Fixture):
     def test_a_grader_that_raises_grades_the_command_three(self):
-        with mock.patch.object(grader, "_grade_text", side_effect=RecursionError):
+        with mock.patch.object(grader.library, "_grade_text", side_effect=RecursionError):
             self.assertEqual(grader.grade_text("ls", str(self.repo)), grader.UNREADABLE)
             with self.assertRaises(RecursionError):  # an inner reading leaves it to the top
                 grader.grade_text("ls", str(self.repo), depth=1)
 
     def test_a_walk_that_raises_governs_a_push_at_an_unknown_directory(self):
-        with mock.patch.object(grader, "governed_text", side_effect=RecursionError):
+        with mock.patch.object(grader.library, "governed_text", side_effect=RecursionError):
             answer, sentence = grader.govern("git push", str(self.repo), 2, "execute")
         self.assertEqual(answer, "ask")
         self.assertIn("coding.git_push on repo:unknown/local", sentence)

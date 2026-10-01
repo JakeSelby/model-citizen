@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 152,
+    "bug": 153,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -6992,6 +6992,19 @@
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B152",
+      "github_number": 920,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/920",
+      "title": "Move the Bash command grader out of grade-bash so the read-only allow does not load a switched-off hook",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B152.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
       "provenance": "authored"
     },
     {

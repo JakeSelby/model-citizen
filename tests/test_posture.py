@@ -217,7 +217,7 @@ class HooksUseIt(unittest.TestCase):
     def test_the_grading_hook_fails_closed_when_the_resolver_cannot_be_loaded(self):
         lonely = Path(self.tmp.name) / "lonely"
         lonely.mkdir()
-        for name in ("grade-bash.py", "allow-readonly-bash.py"):
+        for name in ("grade-bash.py", "bash-grader.py", "allow-readonly-bash.py"):
             shutil.copy2(HOOKS / name, lonely / name)
         out = self.bash(lonely / "grade-bash.py", "gh pr create --fill", {})
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "ask")

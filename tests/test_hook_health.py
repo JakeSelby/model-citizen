@@ -168,7 +168,7 @@ class DoctorTests(unittest.TestCase):
 
 class MessageTests(unittest.TestCase):
     def test_the_deny_tail_keeps_the_marker_and_drops_the_mode_jargon(self):
-        text = (REPO / "claude" / "hooks" / "grade-bash.py").read_text()
+        text = (REPO / "claude" / "hooks" / "bash-grader.py").read_text()
         self.assertIn("HARNESS_CONFIRMED=1", text)
         self.assertIn("Nothing can prompt in this permission mode", text)
         self.assertNotIn("No prompt exists in this mode", text)
