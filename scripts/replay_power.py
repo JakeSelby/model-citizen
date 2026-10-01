@@ -21,13 +21,19 @@ and, at a two-sided alpha with z = z(1 - alpha / 2):
 - **pass power**, the lower bound of the pass-rate difference above -delta (0.125) when the arms
   pass equally: Phi(delta / SE_diff - z);
 - **long power**, the long subset's ratio interval wholly below 1.0, from the same formula over
-  its n tasks, with the long tasks' own variance when the pilot has enough long tasks to give one.
+  its n tasks with the long tasks' own variance `long_tau2`.
 
 Decision power is ratio power times pass power and claim power is that times long power, treating
 the tests as independent; their correlation is positive, so the product understates both. The
 search returns the design with the fewest trials per arm, k times m, then the fewest tasks, whose
 claim power and decision power both reach the target, with m at least five (SM-2). SM-2 caps the
 minimum detectable effect at 15%, so a larger `--effect` is refused.
+
+**No long-task variance, no claim power.** Long tasks may vary more than the set, so the whole
+set's `tau2` cannot stand in for theirs. Without `long_tau2` (stated with `--long-tau2`, or read
+from a pilot with at least three long tasks) long and claim power are unknown, never a number: the
+design is sized on decision power alone, reported as not meeting the target, and the command
+exits 1.
 
 **From pilot rows.** `p` is the pooled pass rate of both arms. `cv2` is the pooled within-cell
 variance of cost over the squared cell mean, across task-arm cells. `tau2` is the variance across
@@ -55,7 +61,7 @@ DELTA = replay_stats.DELTA
 MIN_REPS = 5  # SM-2's floor of trials per task and arm
 MAX_REPS = 20
 MAX_TASKS = 200
-MIN_LONG_FOR_VARIANCE = 3  # fewer long tasks than this borrow the whole set's between-task variance
+MIN_LONG_FOR_VARIANCE = 3  # fewer long tasks than this give no long-task variance, so no claim power
 
 
 def phi(x):
@@ -93,7 +99,9 @@ def se_diff(k, m, tau2_pass, pass_rate):
 
 
 def ratio_power(k, m, inputs, effect, alpha, which="all"):
-    tau2 = inputs["long_tau2"] if which == "long" and inputs.get("long_tau2") is not None else inputs["tau2"]
+    tau2 = inputs["long_tau2"] if which == "long" else inputs["tau2"]
+    if tau2 is None:
+        raise ValueError("the long subset's power needs the long tasks' own variance")
     se = se_ratio(k, m, tau2, inputs["cv2"], inputs["pass_rate"])
     return phi(-math.log(1.0 - effect) / se - z_of(1.0 - alpha / 2.0))
 
@@ -106,12 +114,22 @@ def pass_power(k, m, inputs, alpha, delta=DELTA):
 
 
 def design_power(k, n, m, inputs, effect=EFFECT, alpha=ALPHA):
-    """`{ratio, pass, decision, long, claim}` powers for k tasks, n long, m trials per arm."""
+    """`{ratio, pass, decision, long, claim}` powers for k tasks, n long, m trials per arm; long and
+    claim are None when `long_tau2` is unknown."""
     ratio = ratio_power(k, m, inputs, effect, alpha)
     passing = pass_power(k, m, inputs, alpha)
-    long_power = ratio_power(n, m, inputs, effect, alpha, "long") if n else 0.0
+    if inputs.get("long_tau2") is None:
+        long_power = claim = None
+    else:
+        long_power = ratio_power(n, m, inputs, effect, alpha, "long") if n else 0.0
+        claim = ratio * passing * long_power
     return {"ratio": ratio, "pass": passing, "decision": ratio * passing, "long": long_power,
-            "claim": ratio * passing * long_power}
+            "claim": claim}
+
+
+def meets(powers, power=POWER):
+    """Whether decision and claim power both reach `power`; never when claim power is unknown."""
+    return powers["claim"] is not None and powers["decision"] >= power and powers["claim"] >= power
 
 
 def mde(k, m, inputs, power=POWER, alpha=ALPHA):
@@ -123,14 +141,19 @@ def mde(k, m, inputs, power=POWER, alpha=ALPHA):
 def size(inputs, effect=EFFECT, alpha=ALPHA, power=POWER, min_reps=MIN_REPS, max_reps=MAX_REPS,
          max_tasks=MAX_TASKS):
     """The design with the fewest trials per arm (k * m), then the fewest tasks, then the fewest
-    long tasks, whose decision and claim power both reach `power`; None when none does within
-    the bounds."""
+    long tasks, whose decision and claim power both reach `power`, with `meets` true; None when
+    none does within the bounds. With no `long_tau2` it is the fewest-trials design by decision
+    power alone, `n` None, claim power unknown and `meets` false."""
     check_inputs(inputs, effect, alpha, power)
+    known = inputs.get("long_tau2") is not None
     candidates = []
     for m in range(max(min_reps, MIN_REPS), max_reps + 1):
         for k in range(1, max_tasks + 1):
             if design_power(k, 0, m, inputs, effect, alpha)["decision"] < power:
                 continue
+            if not known:
+                candidates.append((k * m, k, None, m))
+                break
             # Long power rises with n, so the first n that reaches the target is the fewest.
             n = next((n for n in range(1, k + 1)
                       if design_power(k, n, m, inputs, effect, alpha)["claim"] >= power), None)
@@ -139,9 +162,9 @@ def size(inputs, effect=EFFECT, alpha=ALPHA, power=POWER, min_reps=MIN_REPS, max
                 break
     if not candidates:
         return None
-    _, k, n, m = min(candidates)
-    return {"k": k, "n": n, "m": m, "power": design_power(k, n, m, inputs, effect, alpha),
-            "mde": mde(k, m, inputs, power, alpha)}
+    _, k, n, m = min(candidates, key=lambda c: (c[0], c[1], c[2] or 0, c[3]))
+    return {"k": k, "n": n, "m": m, "power": design_power(k, n or 0, m, inputs, effect, alpha),
+            "mde": mde(k, m, inputs, power, alpha), "meets": known}
 
 
 def check_inputs(inputs, effect, alpha, power):
@@ -153,8 +176,8 @@ def check_inputs(inputs, effect, alpha, power):
     if not 0 < inputs["pass_rate"] < 1:
         raise ValueError("the pass rate must lie strictly between 0 and 1; a pilot that passes "
                          "everything or nothing has no variance to size from")
-    for key in ("tau2", "cv2", "tau2_pass"):
-        if inputs[key] < 0:
+    for key in ("tau2", "cv2", "tau2_pass", "long_tau2"):
+        if inputs.get(key) is not None and inputs[key] < 0:
             raise ValueError("%s must not be negative" % key)
 
 
@@ -250,7 +273,7 @@ def render(result, inputs, effect, alpha, power, have=None):
              "inputs: tau2 %s, cv2 %s, pass rate %s, tau2_pass %s, long tau2 %s"
              % (_num(inputs["tau2"]), _num(inputs["cv2"]), _num(inputs["pass_rate"]),
                 _num(inputs["tau2_pass"]), _num(inputs.get("long_tau2")) if inputs.get("long_tau2") is not None
-                else "n/a (the whole set's is used)")]
+                else "unknown (claim power is unavailable)")]
     if "tasks" in inputs:
         lines.append("pilot: %d task(s), %d long, %s trial(s) per cell, %d task(s) with no log ratio; "
                      "pass ICC %s" % (inputs["tasks"], inputs["long_tasks"], _num(inputs["reps"], 1),
@@ -260,16 +283,28 @@ def render(result, inputs, effect, alpha, power, have=None):
         lines.append("no design within the bounds reaches the target; raise --max-tasks or --max-reps")
     else:
         p = result["power"]
-        lines.append("design: k = %d task(s), n = %d long, m = %d trial(s) per task and arm, %d run(s) per arm"
-                     % (result["k"], result["n"], result["m"], result["k"] * result["m"]))
-        lines.append("power: ratio %.3f, pass %.3f, decision %.3f, long subset %.3f, claim %.3f; MDE %.1f%%"
-                     % (p["ratio"], p["pass"], p["decision"], p["long"], p["claim"], 100 * result["mde"]))
+        lines.append("design: k = %d task(s), n = %s long, m = %d trial(s) per task and arm, %d run(s) per arm"
+                     % (result["k"], "unknown" if result["n"] is None else result["n"], result["m"],
+                        result["k"] * result["m"]))
+        lines.append("power: ratio %.3f, pass %.3f, decision %.3f, long subset %s, claim %s; MDE %.1f%%"
+                     % (p["ratio"], p["pass"], p["decision"], _power(p["long"]), _power(p["claim"]),
+                        100 * result["mde"]))
+        if not result["meets"]:
+            lines.append(NO_CLAIM)
     if have is not None:
         p = have["power"]
-        lines.append("this set: k = %d, n = %d, m = %d: decision %.3f, claim %.3f, MDE %.1f%%: %s"
-                     % (have["k"], have["n"], have["m"], p["decision"], p["claim"], 100 * have["mde"],
+        lines.append("this set: k = %d, n = %d, m = %d: decision %.3f, claim %s, MDE %.1f%%: %s"
+                     % (have["k"], have["n"], have["m"], p["decision"], _power(p["claim"]), 100 * have["mde"],
                         "meets the target" if have["meets"] else "below the target"))
     return "\n".join(lines)
+
+
+NO_CLAIM = ("the design does not meet the target: claim power is unavailable without the long tasks' own "
+            "variance; pass --long-tau2, or a pilot with at least %d long tasks" % MIN_LONG_FOR_VARIANCE)
+
+
+def _power(value):
+    return "unavailable" if value is None else "%.3f" % value
 
 
 def main(argv=None):
@@ -280,7 +315,8 @@ def main(argv=None):
     parser.add_argument("--cv2", type=float, help="within-cell squared coefficient of variation of cost")
     parser.add_argument("--pass-rate", type=float, help="pooled pass rate of both arms")
     parser.add_argument("--tau2-pass", type=float, help="between-task variance of the pass-rate difference")
-    parser.add_argument("--long-tau2", type=float, help="the long tasks' own tau2; default the whole set's")
+    parser.add_argument("--long-tau2", type=float, help="the long tasks' own tau2; without it, or "
+                        "a pilot with enough long tasks, claim power is unavailable")
     parser.add_argument("--effect", type=float, default=EFFECT, help="the saving to detect, 1 - ratio; "
                         "at most and by default %(default)s")
     parser.add_argument("--alpha", type=float, default=ALPHA, help="two-sided; default %(default)s")
@@ -313,7 +349,7 @@ def main(argv=None):
                 raise ValueError("--have needs 0 < N <= K and M of at least %d" % MIN_REPS)
             powers = design_power(k, n, m, inputs, args.effect, args.alpha)
             have = {"k": k, "n": n, "m": m, "power": powers, "mde": mde(k, m, inputs, args.power, args.alpha),
-                    "meets": powers["decision"] >= args.power and powers["claim"] >= args.power}
+                    "meets": meets(powers, args.power)}
     except (ValueError, OSError) as exc:
         print("replay-power: %s" % exc, file=sys.stderr)
         return 2
@@ -324,7 +360,7 @@ def main(argv=None):
         print(render(result, inputs, args.effect, args.alpha, args.power, have))
     if have is not None and not have["meets"]:
         return 1
-    return 0 if result is not None else 1
+    return 0 if result is not None and result["meets"] else 1
 
 
 if __name__ == "__main__":

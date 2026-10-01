@@ -16,7 +16,8 @@ SPEC = importlib.util.spec_from_file_location("replay_power", REPO / "scripts" /
 POWER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(POWER)
 
-INPUTS = {"tau2": 0.02, "cv2": 0.1, "pass_rate": 0.8, "tau2_pass": 0.005, "long_tau2": None}
+INPUTS = {"tau2": 0.02, "cv2": 0.1, "pass_rate": 0.8, "tau2_pass": 0.005, "long_tau2": 0.02}
+STATED = ("--tau2", "0.02", "--cv2", "0.1", "--pass-rate", "0.8", "--tau2-pass", "0.005", "--long-tau2", "0.02")
 
 
 def pilot_rows(tasks=6, reps=5, long_tasks=3):
@@ -80,6 +81,20 @@ class SizingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not be negative"):
             POWER.size(dict(INPUTS, tau2=-0.1))
 
+    def test_without_a_long_task_variance_claim_power_is_unknown_and_the_design_falls_short(self):
+        unknown = dict(INPUTS, long_tau2=None)
+        powers = POWER.design_power(200, 100, 20, unknown)
+        self.assertIsNone(powers["long"])
+        self.assertIsNone(powers["claim"])
+        self.assertGreater(powers["decision"], 0.8)
+        self.assertFalse(POWER.meets(powers))
+        design = POWER.size(unknown)
+        self.assertFalse(design["meets"])
+        self.assertIsNone(design["n"])
+        self.assertIsNone(design["power"]["claim"])
+        self.assertGreaterEqual(design["power"]["decision"], 0.8)
+        self.assertTrue(POWER.size(INPUTS)["meets"])
+
     def test_no_design_within_the_bounds_is_none(self):
         self.assertIsNone(POWER.size(INPUTS, max_tasks=3, max_reps=5))
 
@@ -94,7 +109,7 @@ class PilotTests(unittest.TestCase):
         self.assertIsNotNone(inputs["long_tau2"])
         self.assertEqual(sorted(inputs["icc_pass"]), ["bare", "harness"])
 
-    def test_few_long_tasks_borrow_the_whole_set_s_variance(self):
+    def test_few_long_tasks_give_no_long_task_variance(self):
         self.assertIsNone(POWER.estimate(pilot_rows(long_tasks=2))["long_tau2"])
 
     def test_a_task_with_no_pass_in_an_arm_is_counted_not_used(self):
@@ -130,16 +145,34 @@ class CommandTests(unittest.TestCase):
         self.assertIn("pilot: 6 task(s), 3 long", out)
 
     def test_stated_inputs_and_a_set_that_falls_short(self):
-        code, out, _ = self.main("--tau2", "0.02", "--cv2", "0.1", "--pass-rate", "0.8", "--tau2-pass",
-                                 "0.005", "--have", "7", "3", "5", "--json")
+        code, out, _ = self.main(*STATED + ("--have", "7", "3", "5", "--json"))
         self.assertEqual(code, 1)  # seven tasks are far short at these variances
         result = json.loads(out)
         self.assertFalse(result["have"]["meets"])
         self.assertGreater(result["design"]["k"], 7)
         design = result["design"]
-        code, _, _ = self.main("--tau2", "0.02", "--cv2", "0.1", "--pass-rate", "0.8", "--tau2-pass", "0.005",
-                               "--have", str(design["k"]), str(design["n"]), str(design["m"]))
+        code, _, _ = self.main(*STATED + ("--have", str(design["k"]), str(design["n"]), str(design["m"])))
         self.assertEqual(code, 0)
+
+    def test_without_a_long_task_variance_no_claim_power_is_printed_and_it_exits_1(self):
+        code, out, _ = self.main(*STATED[:-2])
+        self.assertEqual(code, 1)
+        self.assertIn("claim unavailable", out)
+        self.assertIn("n = unknown long", out)
+        self.assertIn("does not meet the target", out)
+        self.assertNotRegex(out, r"claim \d")
+        code, out, _ = self.main(*STATED[:-2] + ("--have", "200", "100", "20", "--json"))
+        self.assertEqual(code, 1)
+        result = json.loads(out)
+        self.assertIsNone(result["have"]["power"]["claim"])
+        self.assertFalse(result["have"]["meets"])
+        self.assertFalse(result["design"]["meets"])
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "results.jsonl").write_text(
+                "\n".join(json.dumps(r) for r in pilot_rows(long_tasks=2)) + "\n", encoding="utf-8")
+            code, out, _ = self.main("--pilot", tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("claim unavailable", out)
 
     def test_missing_or_mixed_inputs_exit_2(self):
         self.assertEqual(self.main("--tau2", "0.1")[0], 2)
