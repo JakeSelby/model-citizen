@@ -1224,6 +1224,8 @@ per-rule attribution and the two-arm path (v0.15.0: #514, #559, #560); four arms
 **Consequences (testable):**
 - A per-rule report lists each loaded instruction source with its token cost, including sources outside
   the harness.
+  *Amended 2026-10-01 (#514):* a source outside the harness is a local soft estimate or unmeasured, and
+  never enters a published arm.
 - Arms are declared in `benchmarks/ablations.json`. Each metric is reported against control, with n and
   spread.
 

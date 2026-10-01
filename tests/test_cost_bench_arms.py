@@ -95,7 +95,8 @@ class DeclarationTests(unittest.TestCase):
     def test_the_arm_dockerfile_takes_its_base_from_the_runner_and_names_no_other(self):
         text = ARMS.ARM_DOCKERFILE.read_text(encoding="utf-8")
         froms = [line.split()[1] for line in text.splitlines() if line.startswith("FROM ")]
-        self.assertEqual(froms, ["${BASE_IMAGE}", "bare"])
+        # The harness stage and the declared-selection harness stage both build on the bare one.
+        self.assertEqual(froms, ["${BASE_IMAGE}", "bare", "bare"])
 
     def test_each_arm_declares_exactly_its_components(self):
         bare = ARMS.declaration("bare", INPUTS)

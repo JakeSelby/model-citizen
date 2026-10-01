@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "tasks": [
+    {"id": "fixture-one", "kind": "synthetic", "parent_sha": "0000000000000000000000000000000000000001",
+     "good_sha": "0000000000000000000000000000000000000002", "prompt": "A fixture task for an ablation dry run.",
+     "tests": ["tests/test_fixture.py"], "max_turns": 10},
+    {"id": "fixture-two", "kind": "synthetic", "parent_sha": "0000000000000000000000000000000000000003",
+     "good_sha": "0000000000000000000000000000000000000004", "prompt": "A second fixture task for an ablation dry run.",
+     "tests": ["tests/test_fixture.py"], "max_turns": 10}
+  ]
+}
