@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 150,
+    "bug": 152,
     "chore": 101,
     "decision": 14,
     "epic": 27,
@@ -8419,6 +8419,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B149.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B151",
+      "github_number": 1139,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1139",
+      "title": "Wrapper options and unreadable env forms let governed writes and any command through grade-bash",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B151.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

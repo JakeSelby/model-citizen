@@ -67,6 +67,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -152,12 +153,89 @@ WRAPPERS = {
     "npx": ("--package", "-p"),
     "uvx": ("--from", "-p"),
 }
+# Wrappers read only by `_unwrap`, kept out of `NAMED_PROGRAMS` so an interpreter's program that
+# says `script` or `arch` is not read as shell text. `arch` runs its command operand, if any.
+MORE_WRAPPERS = {
+    "builtin": (),
+    "caffeinate": ("-t", "-w"),
+    "setsid": (),
+    "flock": ("-w", "--timeout", "-E", "--conflict-exit-code"),
+    "script": ("-B", "-I", "-O", "-T", "-E", "-m", "--log-io", "--log-in", "--log-out",
+               "--log-timing", "--echo", "--logging-format"),
+    "sandbox-exec": ("-f", "-n", "-p", "-D"),
+    "chrt": ("-T", "-P", "-D", "--sched-runtime", "--sched-period", "--sched-deadline"),
+    "ionice": ("-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"),
+    "taskset": (),
+    "unbuffer": (),
+    "firejail": (),
+    "arch": ("-arch", "-d", "-e"),
+    "bunx": ("--package", "-p"),
+}
+WRAPPERS.update(MORE_WRAPPERS)
+# The most wrappers `_peel` reads in a row; a longer run is a command this hook does not know.
+WRAP_CAP = 32
+# Every option each of these wrappers takes, GNU's and BSD's: (short letters that take a value,
+# short letters that take none, long options that take a value, long options that take none).
+# An option outside its entry makes the command it wraps unknown (`_unwrap`).
+WRAPPER_OPTIONS = {
+    "timeout": ("ks", "fpv", ("--kill-after", "--signal"),
+                ("--foreground", "--preserve-status", "--verbose")),
+    "time": ("fo", "ahlpqv", ("--format", "--output"),
+             ("--append", "--portability", "--quiet", "--verbose")),
+    "nice": ("n", "", ("--adjustment",), ()),
+    "nohup": ("", "", (), ()),
+    "stdbuf": ("eio", "", ("--error", "--input", "--output"), ()),
+    "command": ("", "pvV", (), ()),
+    "exec": ("a", "cl", (), ()),
+    "noglob": ("", "", (), ()),
+    "env": ("CLPSUu", "0iv", ("--chdir", "--split-string", "--unset"),
+            ("--ignore-environment", "--null", "--debug", "--list-signal-handling",
+             "--block-signal", "--default-signal", "--ignore-signal")),
+    "builtin": ("", "", (), ()),
+    "caffeinate": ("tw", "dimsu", (), ()),
+    "setsid": ("", "cfw", (), ("--ctty", "--fork", "--wait")),
+    "flock": ("wEc", "sxenuoFv", ("--timeout", "--conflict-exit-code", "--command"),
+              ("--shared", "--exclusive", "--nonblock", "--nb", "--unlock", "--close",
+               "--no-fork", "--verbose")),
+    "script": ("BIOTEmct", "aeFkqrfdp", ("--log-io", "--log-in", "--log-out", "--log-timing",
+                                         "--echo", "--logging-format", "--command", "--timing"),
+               ("--append", "--return", "--flush", "--force", "--quiet")),
+    "sandbox-exec": ("fnpD", "", (), ()),
+    "chrt": ("TPD", "abdfiormRpv", ("--sched-runtime", "--sched-period", "--sched-deadline"),
+             ("--all-tasks", "--batch", "--deadline", "--fifo", "--idle", "--other", "--rr",
+              "--reset-on-fork", "--pid", "--verbose", "--max")),
+    "ionice": ("cnpPu", "t", ("--class", "--classdata", "--pid", "--pgid", "--uid"),
+               ("--ignore",)),
+    "taskset": ("", "apc", (), ("--all-tasks", "--pid", "--cpu-list")),
+    "unbuffer": ("", "p", (), ()),
+}
+# Options whose value is a file the wrapper itself writes: `time -o f ls` writes f, so a
+# governed file named there is decided as a redirect to it would be. `time` the reserved word
+# takes no `-o`, so a bare leading `time` writes nothing (`_peel`).
+WRAPPER_WRITES = {
+    "time": {"-o", "--output"},
+    "script": {"-B", "-I", "-O", "-T", "-t", "--log-io", "--log-in", "--log-out",
+               "--log-timing", "--timing"},
+    "firejail": {"--output", "--output-stderr", "--trace"},
+}
+# Wrappers that take operands before the command: (how many, whether the first is a file the
+# wrapper creates or writes). `flock` creates its lock file; `script` writes its typescript.
+WRAPPER_OPERANDS = {"flock": (1, True), "script": (1, True), "chrt": (1, False),
+                    "taskset": (1, False)}
+# Options after which a wrapper runs no command of its own: `chrt -p 5 123`, `ionice -p 123`.
+WRAPPER_NO_COMMAND = {"chrt": {"p", "--pid", "m", "--max"}, "ionice": {"p", "P", "u", "--pid",
+                      "--pgid", "--uid"}, "taskset": {"p", "--pid"}, "script": {"p"}}
+NICE_LEGACY_RE = re.compile(r"^-[-+]?\d+$")
 # Runners that execute the rest of the line in a managed environment, like `npx`.
 RUNNERS = {("bundle", "exec"), ("poetry", "run"), ("uv", "run"), ("pipx", "run"),
            ("pnpm", "dlx"), ("pnpm", "exec"), ("yarn", "dlx"), ("yarn", "exec"),
-           ("npm", "exec"), ("rye", "run"), ("hatch", "run")}
+           ("npm", "exec"), ("rye", "run"), ("hatch", "run"), ("pipenv", "run"),
+           ("mise", "exec"), ("mise", "x"), ("asdf", "exec"), ("direnv", "exec")}
 SUDO = {"sudo": ("-u", "-g", "-U", "--user", "--group", "-p", "--prompt"),
         "doas": ("-u", "-C"),
+        "pkexec": ("--user",),
+        "runuser": ("-u", "-g", "-G", "--user", "--group", "--supp-group", "-s", "--shell",
+                    "-w", "--whitelist-environment"),
         "su": ("-c", "-s", "--shell", "--command")}
 SHELLS = {"bash", "sh", "zsh", "ksh", "mksh", "dash", "csh", "tcsh", "fish"}
 # A word naming one of these makes any here-document body on the line a script (`_runs_input`).
@@ -1112,6 +1190,185 @@ def strip_options(args, value_flags):
     return args[i:]
 
 
+def _peel(tokens, keyword_time=False):
+    """(the command a run of wrappers ends in, the first thing `_unwrap` could not read or None,
+    whether it may run in another directory, the files the wrappers themselves write, whether
+    the run is longer than `WRAP_CAP`). Iterative, so no run of wrappers can exhaust the stack;
+    past the cap the command is unknown. With `keyword_time`, a leading bare `time` is bash's
+    reserved word, which takes no `-o`."""
+    tokens, unread, moved, written = list(tokens), None, False, []
+    for hop in range(WRAP_CAP + 1):
+        while tokens and ASSIGN_RE.match(tokens[0]):
+            tokens = tokens[1:]
+        prog = tokens[0].rpartition("/")[2] if tokens else ""
+        if prog not in WRAPPERS:
+            return tokens, unread, moved, written, False
+        if hop == WRAP_CAP:
+            return tokens, unread or "%d wrappers" % WRAP_CAP, moved, written, True
+        keyword = keyword_time and hop == 0 and tokens[0] == "time"
+        tokens, why, chdir, wrote = _unwrap(prog, tokens[1:], keyword)
+        unread, moved = unread or why, moved or chdir
+        written.extend(wrote)
+    return tokens, unread, moved, written, True
+
+
+def _split_text(text, what):
+    """The words of a command string a wrapper hands to a shell or splits itself, and what of
+    it this hook could not read or None: a quote, a backslash, a `$`, a `#` (a comment to BSD
+    env and to a shell) or a shell operator makes the string unread."""
+    if any(c in text for c in "\\'\"$#`;&|<>(){}*?[~\n"):
+        try:
+            return shlex.split(text), what
+        except ValueError:
+            return text.split(), what
+    return text.split(), None
+
+
+def _unwrap(prog, args, keyword=False):
+    """(the command a wrapper in `WRAPPERS` runs, what of it this hook could not read or None,
+    whether it may run in another directory, the files the wrapper itself writes). Options are
+    read from `WRAPPER_OPTIONS`; an option not listed there, or an `env -S`, `flock -c` or
+    `script -c` string `_split_text` cannot read, is named as unread, and the command returned
+    is then only the likeliest reading. `env` takes every word holding a `=` as an assignment,
+    whatever its name, so `env 'X%=1' rm -rf /` runs the `rm`. A file named by an option in
+    `WRAPPER_WRITES` or an operand in `WRAPPER_OPERANDS` is written; the bare reserved word
+    `time` (`keyword`) writes none."""
+    if prog in ("firejail", "arch"):
+        return _unwrap_words(prog, args)
+    if prog not in WRAPPER_OPTIONS:  # `npx`, `uvx`, `bunx`: past options and assignments
+        rest = strip_options(args, WRAPPERS[prog])
+        while rest and ASSIGN_RE.match(rest[0]):
+            rest = rest[1:]
+        return rest, None, False, []
+    shorts, flags, longs, long_flags = WRAPPER_OPTIONS[prog]
+    writes = set() if keyword else WRAPPER_WRITES.get(prog, set())
+    idle = WRAPPER_NO_COMMAND.get(prog, set())
+    args, unread, moved, i, written, text, quiet = list(args), None, False, 0, [], None, False
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if prog == "env" and a == "-":  # the same as `-i`
+            i += 1
+            continue
+        if not a.startswith("-") or a == "-":
+            break
+        if prog == "nice" and NICE_LEGACY_RE.match(a):
+            i += 1
+            continue
+        split = None
+        if a.startswith("--"):
+            name, eq, value = a.partition("=")
+            if name in longs:
+                if not eq:
+                    value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+                if name == "--split-string":
+                    split = value
+                elif name == "--command":
+                    text = value
+                elif name in writes:
+                    written.append(value)
+                moved = moved or name == "--chdir"
+            elif name not in long_flags:
+                unread = unread or "%s %s" % (prog, name)
+            quiet = quiet or name in idle
+            i += 1
+        else:
+            for j, letter in enumerate(a[1:]):
+                quiet = quiet or letter in idle
+                if letter in shorts:
+                    value = a[j + 2:]
+                    if prog == "script" and letter == "t" and not value:
+                        # GNU's `-t[file]` takes no separate value; BSD's `-t time` does.
+                        nxt = args[i + 1] if i + 1 < len(args) else ""
+                        value, i = (nxt, i + 1) if nxt.isdigit() else ("", i)
+                    elif not value:
+                        value, i = (args[i + 1] if i + 1 < len(args) else ""), i + 1
+                    if letter == "S" and prog == "env":
+                        split = value
+                    elif letter == "c" and prog in ("flock", "script"):
+                        text = value
+                    elif "-" + letter in writes and value and not value.isdigit():
+                        written.append(value)
+                    moved = moved or (letter == "C" and prog == "env")
+                    break
+                if letter not in flags:
+                    unread = unread or "%s -%s" % (prog, letter)
+                    break
+            i += 1
+        if split is not None and prog == "env":
+            # GNU and BSD env read quotes, backslash escapes (`\c` ends the string), `${…}` and,
+            # to BSD, a `#` starting a comment, so env, not this hook, decides what then runs.
+            if any(c in split for c in "\\'\"$#"):
+                unread = unread or "env -S"
+                try:
+                    words = shlex.split(split)
+                except ValueError:
+                    words = split.split()
+            else:
+                words = split.split()
+            args, i = words + args[i:], 0
+    rest = args[i:]
+    if prog == "env":
+        while rest and "=" in rest[0]:
+            rest = rest[1:]
+    elif prog == "timeout":
+        rest = rest[1:]  # the duration
+    elif prog in WRAPPER_OPERANDS:
+        count, writes_first = WRAPPER_OPERANDS[prog]
+        if writes_first and rest[:1] and not (prog == "flock" and rest[0].isdigit()):
+            written.append(rest[0])
+        rest = rest[count:]
+        if prog == "flock" and rest[:1] in (["-c"], ["--command"]):
+            text, rest = (rest[1] if len(rest) > 1 else ""), []
+    if text is not None:
+        rest, why = _split_text(text, "%s -c" % prog)
+        unread = unread or why
+    if quiet:
+        rest = []
+    return rest, unread, moved, [w for w in written if w and w != "/dev/null"]
+
+
+def _unwrap_words(prog, args):
+    """`_unwrap` for `firejail`, whose every option is one word (`--net=none`), and `arch`,
+    whose options name architectures (`-arm64`) and of which only `-arch`, `-d` and `-e` take
+    the next word."""
+    i, written = 0, []
+    while i < len(args):
+        a = args[i]
+        if a == "--":
+            i += 1
+            break
+        if not a.startswith("-") or a == "-":
+            break
+        if prog == "arch" and a in WRAPPERS["arch"]:
+            i += 1
+        elif prog == "firejail" and a.partition("=")[0] in WRAPPER_WRITES["firejail"]:
+            written.append(a.partition("=")[2])
+        i += 1
+    return args[i:], None, False, [w for w in written if w and w != "/dev/null"]
+
+
+def _runner_readings(rest):
+    """Each way the words after a runner such as `uv run` may begin the command it runs. Its
+    options are not modelled, so each one without a `=` may or may not take the next word."""
+    starts, seen, readings = [0], set(), []
+    while starts:
+        p = starts.pop()
+        if p in seen or p >= len(rest):
+            continue
+        seen.add(p)
+        word = rest[p]
+        if ASSIGN_RE.match(word) or (word.startswith("-") and "=" in word):
+            starts.append(p + 1)
+        elif word.startswith("-") and word != "-":
+            starts.extend((p + 1, p + 2))
+        else:
+            readings.append(rest[p:])
+    return sorted(readings, key=len, reverse=True)
+
+
 def _joined(args, limit=2):
     return " ".join(operands(args)[:limit])
 
@@ -1377,7 +1634,8 @@ RAILS_G3 = re.compile(r"^db:(migrate|drop|reset|schema:load|rollback)$")
 # The programs `grade_tokens` may grade above 1, by name: a line or string of an interpreter's
 # program that names none of them is not graded as shell text (`_grade_program`).
 NAMED_PROGRAMS = (SHELL_RUNNERS | CLOUD | SQL_CLIENTS | set(PUBLISH) | set(G3_SUBCOMMANDS)
-                  | set(G2_SUBCOMMANDS) | set(SUDO) | set(WRAPPERS) | {p for p, _s in RUNNERS}
+                  | set(G2_SUBCOMMANDS) | set(SUDO) | (set(WRAPPERS) - set(MORE_WRAPPERS))
+                  | {p for p, _s in RUNNERS}
                   | {"git", "gh", "curl", "wget", "http", "https", "httpie", "rm", "find",
                      "redis-cli", "prisma", "rails", "rake", "manage.py", "dbmate", "docker",
                      "docker-compose", "kubectl", "vercel", "netlify", "chmod", "chown",
@@ -1392,8 +1650,31 @@ NAMED_RE = re.compile(r"(?:%s)(?![\w-])"
 NAME_BEFORE = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
 
 
-def grade_tokens(tokens, cwd, depth):
-    """(grade, verb, target, family) for one simple command."""
+def grade_tokens(tokens, cwd, depth, keyword_time=False):
+    """(grade, verb, target, family) for one simple command. One that redirects into a file
+    grades at least 1 whatever it runs, since bash opens the file before it starts a wrapper:
+    `nice -n 5 echo x > f` writes `f`. `keyword_time` says a leading `time` is written bare, so
+    it is bash's reserved word (`_peel`)."""
+    hit = _grade_tokens(tokens, cwd, depth, keyword_time)
+    if hit[0] == 0:
+        wrote = [t for t in _redirects(list(tokens))[1] if t and t != "/dev/null"]
+        if wrote:
+            return 1, "redirect to", wrote[-1], None
+    return hit
+
+
+def _runner(readings, cwd, depth):
+    """The worst grade over the readings `_runner_readings` gives of a runner's command."""
+    if depth >= MAX_DEPTH:
+        return max(_scan(" ".join(readings[0])), (3, "runner", "", "opaque"),
+                   key=lambda h: h[0])
+    if len(readings) == 1:
+        return grade_tokens(readings[0], cwd, depth + 1)
+    return max((grade_tokens(r, cwd, depth + 1) for r in readings), key=lambda h: h[0])
+
+
+def _grade_tokens(tokens, cwd, depth, keyword_time=False):
+    keyword_time = keyword_time and tokens[:1] == ["time"]
     tokens, written = _redirects(tokens)
     wrote = ""
     for target in written:
@@ -1415,11 +1696,13 @@ def grade_tokens(tokens, cwd, depth):
     if PLACEHOLDER in head or head.startswith("$"):
         return _scan(text)  # the program comes from a substitution or a variable
     if (prog, ops[0] if ops else "") in RUNNERS:
-        rest = args[args.index(ops[0]) + 1:]
-        while rest and (rest[0].startswith("-") or ASSIGN_RE.match(rest[0])):
-            rest = rest[1:]
-        if rest:
-            return grade_tokens(rest, cwd, depth)
+        readings = _runner_readings(_runner_words(prog, args, ops))
+        if readings:
+            return _runner(readings, cwd, depth)
+    if prog == "nix-shell":
+        for i, a in enumerate(args):
+            if a in ("--run", "--command") and i + 1 < len(args):
+                return _inner(args[i + 1], cwd, depth)
     if prog == "cargo" and ops[:1] == ["run"] and "--" in args:
         rest = args[args.index("--") + 1:]
         if rest:
@@ -1453,14 +1736,19 @@ def grade_tokens(tokens, cwd, depth):
             return 3, "xargs rm -rf", "", "delete"
         return _inner_tokens(rest, cwd, depth)
     if prog in WRAPPERS:
-        rest = strip_options(args, WRAPPERS[prog])
-        while rest and ASSIGN_RE.match(rest[0]):
-            rest = rest[1:]
-        if prog == "timeout" and rest:
-            rest = rest[1:]  # the duration
-        if rest:
-            return grade_tokens(rest, cwd, depth)
-        return 1, prog, "", None
+        rest, unread, _moved, wrote, capped = _peel(tokens, keyword_time)
+        if capped:
+            return 3, unread, "", "opaque"
+        hit = grade_tokens(rest, cwd, depth) if rest else (1, prog, "", None)
+        if unread and hit[0] < 3:
+            # What the wrapper runs is not known, so it may be anything: never let it through.
+            return 3, unread, "", "opaque"
+        if hit[0] < 2 and _names_push(args) and not _names_push(rest):
+            # `timeout -k 5 git push`: the wrapper took `git` as a value; it may still push.
+            return 2, "git push", "", "remote"
+        if wrote and hit[0] < 1:
+            return 1, "write to", wrote[-1], None
+        return hit
     if prog == "git":
         return _git(args, cwd)
     if prog == "gh":
@@ -1556,7 +1844,29 @@ def grade_tokens(tokens, cwd, depth):
         return 3, "history -c", "", "system"
     if prog == "shred":
         return 3, "shred", _joined(args, 1), "delete"
+    if _names_push(args):
+        # A program this hook does not model, handed `git … push` as words: it may run it.
+        return 2, "git push", "", "remote"
     return 1, prog, _joined(args, 1), None
+
+
+def _names_push(words):
+    """Whether `words` hold a `git` word with a `push` word after it."""
+    for i, word in enumerate(words):
+        if word.rpartition("/")[2] == "git" and "push" in words[i + 1:]:
+            return True
+    return False
+
+
+def _runner_words(prog, args, ops):
+    """The words after a runner's subcommand that its command starts in: past the directory
+    `direnv exec` takes, and after the `--` that `mise exec` needs before a command."""
+    rest = args[args.index(ops[0]) + 1:]
+    if prog == "direnv":
+        return rest[1:]
+    if prog == "mise" and "--" in rest:
+        return rest[rest.index("--") + 1:]
+    return rest
 
 
 def grade_text(cmd, cwd="", depth=0):
@@ -1611,8 +1921,9 @@ def _grade_reading(text, bodies, cwd, depth):
             hit = _sql(body)
             if hit and hit[0] > best[0]:
                 best = hit
+    bare = _bare_times(stripped, parts)
     for tokens in parts:
-        hit = grade_tokens(tokens, cwd, depth)
+        hit = grade_tokens(tokens, cwd, depth, bare)
         if hit[0] > best[0]:
             best = hit
         if best[0] == 3:
@@ -3305,14 +3616,17 @@ def _written(prog, args, targets, cwd):
     return out
 
 
-def _governed(tokens, cwd, depth, variables=None, causes=None):
+def _governed(tokens, cwd, depth, variables=None, causes=None, keyword_time=False):
     """[(action class, grade, directory, paths written)] for one simple command.
 
     Wrappers, runners, `sudo` and a shell's `-c` text are looked through, as the grader looks
-    through them, and the inner command is governed at the higher of the two grades. Each push
+    through them, and the inner command is governed at the higher of the two grades; a run of
+    wrappers is one step (`_peel`), and a command still to look through at `MAX_DEPTH` is grade
+    3 at an unknown directory, a push when it names one. A command this hook does not model
+    that is handed `git … push` as words is a push at an unknown directory. Each push
     found appends to `causes` the `git -C` operand that left its directory unknown, or None, so
     the list pairs one to one, in order, with the push entries returned."""
-    grade, verb, _target, family = grade_tokens(list(tokens), cwd or "", depth)
+    grade, verb, _target, family = grade_tokens(list(tokens), cwd or "", depth, keyword_time)
     body, targets = _redirects(list(tokens))
     while body and ASSIGN_RE.match(body[0]):
         body = body[1:]
@@ -3321,30 +3635,44 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
     prog, args = body[0].rpartition("/")[2], body[1:]
     ops = operands(args)
     written = _written(prog, args, targets, cwd)
-    inner = None
-    if depth < MAX_DEPTH:
-        if prog in WRAPPERS:
-            if prog == "env" and any(a in ("-C", "--chdir") or a.startswith("--chdir=")
-                                     for a in args):
-                cwd = None  # `env -C` moves the inner command; no literal is trusted here
-            rest = strip_options(args, WRAPPERS[prog])
-            while rest and ASSIGN_RE.match(rest[0]):
-                rest = rest[1:]
-            inner = ("tokens", rest[1:] if prog == "timeout" else rest)
-        elif prog in SUDO:
-            inner = ("tokens", strip_options(args, SUDO[prog]))
-        elif (prog, ops[0] if ops else "") in RUNNERS:
-            rest = args[args.index(ops[0]) + 1:]
-            while rest and (rest[0].startswith("-") or ASSIGN_RE.match(rest[0])):
-                rest = rest[1:]
-            inner = ("tokens", rest)
-        elif prog in SHELLS:
-            for i, a in enumerate(args):
-                if DASH_C_RE.match(a) and i + 1 < len(args):
-                    inner = ("text", args[i + 1])
-                    break
-        elif prog == "eval":
-            inner = ("text", " ".join(args))
+    inner, readings = None, []
+    if prog in WRAPPERS:
+        keyword = keyword_time and tokens[:1] == ["time"]
+        rest, _unread, chdir, wrote, capped = _peel(body, keyword)
+        written += _written("", [], wrote, None if chdir else cwd)
+        if chdir:
+            cwd = None  # `env -C` moves the inner command; no literal is trusted here
+        inner = ("tokens", rest)
+        if capped:
+            depth = MAX_DEPTH
+        elif _names_push(args) and not _names_push(rest):
+            inner = None  # a `git` its options took: governed below as a possible push
+    elif prog in SUDO:
+        inner = ("tokens", strip_options(args, SUDO[prog]))
+    elif (prog, ops[0] if ops else "") in RUNNERS:
+        # Every reading is governed, as every one is graded (`_runner`).
+        readings = _runner_readings(_runner_words(prog, args, ops))
+        inner = ("tokens", readings[0]) if readings else None
+    elif prog in SHELLS:
+        for i, a in enumerate(args):
+            if DASH_C_RE.match(a) and i + 1 < len(args):
+                inner = ("text", args[i + 1])
+                break
+    elif prog == "eval":
+        inner = ("text", " ".join(args))
+    elif prog == "nix-shell":
+        for i, a in enumerate(args):
+            if a in ("--run", "--command") and i + 1 < len(args):
+                inner = ("text", args[i + 1])
+                break
+    if inner is not None and inner[1] and depth >= MAX_DEPTH:
+        # Too deep to look through: never dropped, but governed as unknown.
+        words = inner[1] if inner[0] == "tokens" else inner[1].split()
+        if _names_push(words) or _names_push(args):
+            if causes is not None:
+                causes.append(None)
+            return [(PUSH, 3, None, written)]
+        return [(SHELL, 3, None, written)]
     if inner is not None and inner[1]:
         if inner[0] == "tokens":
             if _mentions_home(tokens):  # `env HOME=x bash -c '…'` hands the shell that HOME
@@ -3353,7 +3681,9 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
             if _moves_cd_resolution(tokens):  # and `env CDPATH=w bash -c '…'` its CDPATH
                 variables = dict(variables or {})
                 variables[_CD_UNKNOWN] = True
-            found = _governed(inner[1], cwd, depth + 1, variables, causes)
+            found = []
+            for reading in readings or [inner[1]]:
+                found.extend(_governed(reading, cwd, depth + 1, variables, causes))
         else:
             # An inner shell inherits HOME: from this line, or from an assignment prefixed to
             # the command that runs it, as `HOME=x bash -c '…'` and `env HOME=x sh -c '…'` do.
@@ -3374,6 +3704,11 @@ def _governed(tokens, cwd, depth, variables=None, causes=None):
         return [(MERGE, grade, cwd, written)]
     if family == "deploy" or verb in DEPLOY_VERBS:
         return [(DEPLOY, grade, cwd, written)]
+    if inner is None and grade > 0 and _names_push(body):
+        # `xargs git push`, `$X git push`, a wrapper this hook does not know: may push.
+        if causes is not None:
+            causes.append(None)
+        return [(PUSH, max(grade, 2), None, written)]
     return [(SHELL, grade, cwd, written)]
 
 
@@ -3497,7 +3832,7 @@ def _walk(text, cwd, depth, isolated, causes, home_unknown=False, cd_unknown=Fal
             pending = ((dest, own) if may_skip and dest is not None and own is not None
                        and "!" not in tokens else None)
             continue
-        found.extend(_governed(tokens, at, depth, variables, causes))
+        found.extend(_governed(tokens, at, depth, variables, causes, plain_times))
         if _runs_unseen(tokens):
             here = pending = None  # `eval cd d`, `{cd,d}` or `$c d` may move this shell
     # Any the segments did not account for: fail closed, HOME included.
