@@ -1,0 +1,385 @@
+# SPDX-License-Identifier: MIT
+"""Review a draft and apply it through the governed path: checks, the sync lock, core refusals,
+and an applied state equal to running the commands the review shows."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "lib"))
+
+from harness_core import reconcile  # noqa: E402
+from harness_core.studio import apply as draft_apply  # noqa: E402
+from harness_core.studio import drafts, module_authoring, selection_editing, server  # noqa: E402
+
+import draft_support  # noqa: E402
+
+CLI = ROOT / "bin" / "harness"
+PASS = [sys.executable, "-c", "raise SystemExit(0)"]
+SWITCHED = "cache-hygiene"
+# Built at run time so this file never carries the secret shape the lint looks for.
+SECRET = "AKIA" + "Q" * 16
+
+
+def _rule(name, description="Greets the reader first."):
+    return {"action": "add", "kind": "rules", "name": name, "description": description,
+            "create_root": True}
+
+
+def _tree(root):
+    if not root.is_dir():
+        return {}
+    return {path.relative_to(root).as_posix(): path.read_bytes()
+            for path in sorted(root.rglob("*")) if path.is_file()}
+
+
+class Home:
+    """One isolated user: its configuration, state and the environment that points at it."""
+
+    def __init__(self, base, label, config):
+        self.path = Path(os.path.realpath(str(base))) / label
+        self.config = draft_apply.config_file(self.path)
+        self.config.parent.mkdir(parents=True)
+        self.config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+        self.state = self.path / ".local" / "state" / "agent-harness"
+        self.dest = draft_apply.destination(self.path)
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("HARNESS_") and key != "CLAUDE_CONFIG_DIR"}
+        env.update({"HOME": str(self.path), "HARNESS_HOME": str(self.path),
+                    "HARNESS_WORKTREE_ROOT": str(Path(base) / "worktrees")})
+        self.env = env
+
+    def cli(self, *args, timeout=300):
+        return subprocess.run([sys.executable, str(CLI), *args], cwd=ROOT, env=self.env,
+                              capture_output=True, text=True, timeout=timeout)
+
+    def normalized(self, relative):
+        path = self.path / relative
+        return path.read_text(encoding="utf-8").replace(str(self.path), "<HOME>") if path.is_file() else None
+
+
+class DraftApplyTests(unittest.TestCase):
+    def setUp(self):
+        config = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        config["primitive_roots"] = []
+        self.initial = config
+
+    @contextmanager
+    def real_draft(self, prefix):
+        name = prefix + "-" + uuid.uuid4().hex[:10]
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Home(temporary, "home", self.initial)
+            created = home.cli("draft", "create", name, "--json", timeout=60)
+            self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+            try:
+                with mock.patch.dict(os.environ, home.env, clear=True):
+                    yield name, json.loads(created.stdout), home, Path(temporary)
+            finally:
+                draft_support.discard_draft(self, name, home.env)
+
+    def _add_rule(self, name, revision, rule="greeting"):
+        added = module_authoring.save(ROOT, name, revision, "add-" + rule, _rule(rule))
+        self.assertTrue(added["saved"], added)
+        return added["result"]["revision"]
+
+    def _review(self, home, name):
+        done = home.cli("draft", "review", name, "--json")
+        self.assertIn(done.returncode, (0, 1), done.stderr)
+        return json.loads(done.stdout)
+
+    def _apply(self, home, name, revision):
+        done = home.cli("draft", "apply", name, "--revision", revision, "--json")
+        return done.returncode, json.loads(done.stdout)
+
+    def assertNothingApplied(self, home):
+        self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), self.initial)
+        self.assertFalse(home.dest.exists())
+        self.assertFalse((home.state / "manifest.json").exists())
+
+    def test_applied_state_equals_running_the_commands_the_review_shows(self):
+        """AC4: apply, then run the shown commands in a second identical home; they agree."""
+        with self.real_draft("apply-equal") as (name, initial, home, base):
+            revision = self._add_rule(name, initial["revision"])
+            switched = selection_editing.save(ROOT, name, revision, "switch-off",
+                                              {"rules." + SWITCHED: "off"})
+            self.assertTrue(switched["saved"], switched)
+            revision = switched["result"]["revision"]
+            twin = Home(base, "twin", self.initial)
+
+            review = self._review(home, name)
+            self.assertTrue(review["can_apply"], review["refusals"])
+            self.assertEqual(review["draft"]["revision"], revision)
+            self.assertEqual([(item["path"], item["scope"]) for item in review["files"]], [
+                ("personal-primitives/manifests.json", "personal"),
+                ("personal-primitives/rules/greeting.md", "personal")])
+            self.assertEqual({row["key"]: row["action"] for row in review["config"]},
+                             {"primitive_roots": "set", "rules." + SWITCHED: "set"})
+            roots = next(row for row in review["config"] if row["key"] == "primitive_roots")
+            self.assertEqual(roots["after"], [str(home.dest)])
+            self.assertEqual(review["checks"]["status"], "passed")
+            self.assertIsInstance(review["budget"]["delta_lines"], int)
+            steps = [item["step"] for item in review["commands"]]
+            self.assertEqual(steps, ["root", "config", "config", "sync", "check"])
+            self.assertTrue(review["nothing_applied"])
+            self.assertNothingApplied(home)
+
+            shown = self._review(twin, name)
+            self.assertTrue(shown["can_apply"], shown["refusals"])
+
+            code, result = self._apply(home, name, revision)
+            self.assertEqual(code, 0, result)
+            self.assertEqual(result["status"], "applied")
+            self.assertIn(result["doctor"]["status"], ("passed", "attention"))
+            self.assertIn("drift: none", [check["message"] for check in result["doctor"]["checks"]])
+
+            for item in shown["commands"]:
+                if item["step"] == "check":
+                    continue
+                command = item["command"]
+                if command.startswith("citizen "):
+                    command = "%s %s %s" % (sys.executable, CLI, command[len("citizen "):])
+                ran = subprocess.run(["/bin/sh", "-c", command], cwd=ROOT, env=twin.env,
+                                     capture_output=True, text=True, timeout=300)
+                self.assertEqual(ran.returncode, 0, command + "\n" + ran.stdout + ran.stderr)
+
+            self.assertEqual(home.normalized(".config/agent-harness/config.json"),
+                             twin.normalized(".config/agent-harness/config.json"))
+            applied = json.loads(home.config.read_text(encoding="utf-8"))
+            self.assertEqual(applied["primitive_roots"], [str(home.dest)])
+            self.assertEqual(applied["rules"][SWITCHED], "off")
+            self.assertEqual(_tree(home.dest), _tree(twin.dest))
+            self.assertIn("rules/greeting.md", _tree(home.dest))
+            ledger = ".local/state/agent-harness/ownership.json"
+            self.assertEqual(home.normalized(ledger), twin.normalized(ledger))
+            manifests = [json.loads(side.normalized(".local/state/agent-harness/manifest.json"))
+                         for side in (home, twin)]
+            for manifest in manifests:
+                manifest.pop("synced_at")
+            self.assertEqual(manifests[0], manifests[1])
+            projected = [sorted(path.relative_to(side.path / ".claude").as_posix()
+                                for path in (side.path / ".claude").rglob("*"))
+                         for side in (home, twin)]
+            self.assertEqual(projected[0], projected[1])
+            self.assertTrue(any(item.endswith("/greeting.md") for item in projected[0]), projected[0])
+
+            # The decision log and the apply journal name the draft and the actor.
+            events = [json.loads(line) for line in
+                      (home.state / "decisions.jsonl").read_text(encoding="utf-8").splitlines()]
+            event = next(row for row in events if row.get("event") == "studio.apply")
+            self.assertEqual(event["detail"]["draft"], name)
+            self.assertEqual(event["detail"]["actor"], "citizen")
+            self.assertEqual(event["detail"]["outcome"], "completed")
+            journal = [json.loads(line) for line in
+                       draft_apply.journal_path(home.path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["phase"] for row in journal], ["intent", "completed"])
+            self.assertEqual({row["draft"] for row in journal}, {name})
+            self.assertEqual(journal[0]["config"][0]["prior"], [])
+
+            # Applied: a second review has nothing left to do, and apply refuses rather than repeat.
+            again = self._review(home, name)
+            self.assertEqual([item["code"] for item in again["refusals"]], ["nothing-to-apply"])
+            self.assertEqual({row["action"] for row in again["config"]}, {"none"})
+
+    def test_lint_findings_refuse_apply_with_the_findings(self):
+        """AC1."""
+        with self.real_draft("apply-lint") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            leaky = drafts.checkpoint(
+                ROOT, name, revision, "leak",
+                files={"personal-primitives/rules/leaky.md": ("# Leaky\n\nkey " + SECRET + "\n").encode()},
+                check_command=PASS)
+            review = self._review(home, name)
+            self.assertFalse(review["can_apply"])
+            self.assertEqual(review["checks"]["status"], "failed")
+            self.assertTrue(any("leaky.md" in line for line in review["checks"]["findings"]),
+                            review["checks"]["findings"])
+            self.assertIn("checks-failed", [item["code"] for item in review["refusals"]])
+            code, result = self._apply(home, name, leaky["revision"])
+            self.assertEqual(code, 1)
+            self.assertEqual(result["status"], "refused")
+            self.assertEqual(result["error_code"], "checks-failed")
+            self.assertTrue(any("leaky.md" in line for line in result["review"]["checks"]["findings"]))
+            self.assertNothingApplied(home)
+            self.assertFalse(draft_apply.journal_path(home.path).exists())
+
+    def test_a_held_sync_lock_refuses_apply_naming_its_holder(self):
+        """AC2: refused at once, naming the holder, with nothing written."""
+        with self.real_draft("apply-lock") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            for directory, holder in ((home.state, "citizen sync"),
+                                      (home.config.parent, "citizen config set mode")):
+                with self.subTest(holder=holder):
+                    with reconcile.lock(directory, holder=holder):
+                        code, result = self._apply(home, name, revision)
+                    self.assertEqual(code, 1)
+                    self.assertEqual(result["error_code"], "busy")
+                    self.assertTrue(result["holder"].startswith(holder + " (pid %d" % os.getpid()),
+                                    result["holder"])
+                    self.assertIn("nothing was applied", result["message"])
+                    self.assertNothingApplied(home)
+                    self.assertFalse(draft_apply.journal_path(home.path).exists())
+
+    def test_apply_holds_the_sync_lock_so_a_sync_cannot_interleave_and_a_failure_restores(self):
+        """AC2: while apply runs, `citizen sync` is refused naming the apply; the failed apply
+        restores the configuration and the personal root."""
+        with self.real_draft("apply-interleave") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            outputs = []
+
+            def blocked_sync():
+                ran = home.cli("sync")
+                outputs.append(ran.stdout + ran.stderr)
+                return ran.returncode
+
+            set_keys = []
+            operations = draft_apply.Operations(
+                lock=lambda holder: reconcile.lock(home.state, holder=holder),
+                config_lock=lambda holder: reconcile.lock(home.config.parent, holder=holder),
+                config_set=lambda key, value: set_keys.append(key) or home.config.write_text("{}\n"),
+                config_unset=lambda key: None,
+                sync=blocked_sync, doctor=lambda: [], record=lambda row: None)
+            result = draft_apply.apply(ROOT, name, revision, operations, actor="studio", home=home.path)
+            self.assertEqual(result["status"], "failed", result)
+            self.assertEqual(result["error_code"], "sync-refused")
+            self.assertTrue(result["restored"])
+            self.assertEqual(set_keys, ["primitive_roots"])
+            self.assertIn("citizen draft apply %s from Studio (pid %d" % (name, os.getpid()), outputs[0])
+            self.assertNothingApplied(home)
+            journal = [json.loads(line) for line in
+                       draft_apply.journal_path(home.path).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([row["phase"] for row in journal], ["intent", "failed"])
+            self.assertTrue(journal[1]["restored"])
+
+    def test_a_core_edit_is_refused_with_a_fork_and_a_contribution_branch(self):
+        """AC3."""
+        with self.real_draft("apply-core") as (name, initial, home, _base):
+            core = "primitives/rules/" + SWITCHED + ".md"
+            worktree = drafts.find(ROOT, name)[0]
+            edited = (worktree / core).read_text(encoding="utf-8") + "\nAn in-place edit.\n"
+            saved = drafts.checkpoint(ROOT, name, initial["revision"], "core-edit",
+                                      files={core: edited.encode("utf-8")}, check_command=PASS)
+            review = self._review(home, name)
+            self.assertFalse(review["can_apply"])
+            self.assertIn("core-change", [item["code"] for item in review["refusals"]])
+            self.assertEqual(review["files"], [{"path": core, "status": "modified", "scope": "core"}])
+            self.assertEqual(review["core"]["files"], [core])
+            self.assertEqual(review["core"]["fork"]["modules"],
+                             [{"source": "core:rules:" + SWITCHED, "kind": "rules", "name": SWITCHED}])
+            self.assertIn("citizen draft module plan " + name, review["core"]["fork"]["command"])
+            branch = review["core"]["branch"]
+            self.assertEqual((branch["name"], branch["revision"]), ("draft/" + name, saved["revision"]))
+            self.assertIn("push origin draft/%s:refs/heads/contrib/%s" % (name, name), branch["commands"][0])
+            self.assertIn("gh pr create --head contrib/" + name, branch["commands"][1])
+            code, result = self._apply(home, name, saved["revision"])
+            self.assertEqual((code, result["error_code"]), (1, "core-change"))
+            self.assertNothingApplied(home)
+            self.assertEqual((ROOT / core).read_text(encoding="utf-8") + "\nAn in-place edit.\n", edited)
+
+    def test_a_later_live_edit_is_never_overwritten_and_a_stale_revision_is_refused(self):
+        with self.real_draft("apply-diverged") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            code, stale = self._apply(home, name, initial["revision"])
+            self.assertEqual((code, stale["error_code"]), (1, "stale-revision"))
+            home.dest.joinpath("rules").mkdir(parents=True)
+            home.dest.joinpath("rules", "greeting.md").write_text("mine\n", encoding="utf-8")
+            live = json.loads(home.config.read_text(encoding="utf-8"))
+            live["primitive_roots"] = ["/somewhere/else"]
+            home.config.write_text(json.dumps(live, indent=2) + "\n", encoding="utf-8")
+            review = self._review(home, name)
+            codes = [item["code"] for item in review["refusals"]]
+            self.assertIn("root-diverged", codes)
+            self.assertIn("config-diverged", codes)
+            row = next(item for item in review["config"] if item["key"] == "primitive_roots")
+            self.assertEqual((row["action"], row["live"]), ("conflict", ["/somewhere/else"]))
+            code, result = self._apply(home, name, revision)
+            self.assertEqual(code, 1)
+            self.assertEqual(home.dest.joinpath("rules", "greeting.md").read_text(encoding="utf-8"), "mine\n")
+            self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), live)
+
+    def test_review_of_a_missing_draft_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Home(temporary, "home", self.initial)
+            review = draft_apply.review(ROOT, "no-such-draft-" + uuid.uuid4().hex[:8], home.path)
+        self.assertFalse(review["can_apply"])
+        self.assertEqual(review["refusals"][0]["code"], "not-found")
+
+
+class PlanningTests(unittest.TestCase):
+    def test_keys_flatten_to_what_config_set_accepts_and_values_render_as_its_arguments(self):
+        flat = draft_apply._flatten({"mode": "minimal", "stances": {"voice": "concise"},
+                                     "rules": {}, "claude": {"manage": False},
+                                     "governance": {"jev": {"timeout": 3}},
+                                     "init_defaults": {"stances": {"voice": "concise"}}})
+        self.assertEqual(flat, {"mode": "minimal", "stances.voice": "concise", "claude.manage": False,
+                                "governance.jev.timeout": 3})
+        self.assertEqual(draft_apply._value_text(False), "false")
+        self.assertEqual(draft_apply._value_text(["/a"]), '["/a"]')
+        self.assertEqual(draft_apply._value_text("on"), "on")
+        self.assertEqual(draft_apply._citizen({"action": "set", "key": "identity.name", "value": "A B"}),
+                         "citizen config set identity.name 'A B'")
+
+    def test_only_the_drafts_own_root_is_rewritten_out_of_the_checkout(self):
+        repo, worktree, dest = Path("/repo"), Path("/wt/draft-x"), Path("/h/.config/agent-harness/personal-primitives")
+        self.assertEqual(draft_apply._root_target(
+            repo, worktree, ["/repo/personal-primitives", "/elsewhere", str(dest)], dest),
+            [str(dest), "/elsewhere"])
+        own, others = draft_apply._registered_root(
+            repo, worktree, {"primitive_roots": ["/repo/personal-primitives", "/repo/other", "/elsewhere"]})
+        self.assertEqual((own, others), (True, ["/repo/other"]))
+
+    def test_the_lock_names_its_holder_and_clears_the_record_on_release(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            with reconcile.lock(directory, holder="citizen sync"):
+                with self.assertRaisesRegex(ValueError, r"running: citizen sync \(pid %d" % os.getpid()):
+                    with reconcile.lock(directory):
+                        self.fail("second writer entered")
+            self.assertIsNone(reconcile.lock_holder(directory))
+            (directory / reconcile.HOLDER_FILE).write_text('{"holder": "crashed"}', encoding="utf-8")
+            with reconcile.lock(directory):
+                self.assertIsNone(reconcile.lock_holder(directory))
+            with reconcile.lock(directory):
+                with self.assertRaises(ValueError) as caught:
+                    with reconcile.lock(directory):
+                        pass
+            self.assertEqual(str(caught.exception), "another harness configuration operation is running")
+
+
+class RouteTests(unittest.TestCase):
+    def test_apply_routes_name_their_cli_equivalents(self):
+        routes = {route.path: route for route in server.ROUTES.entries}
+        self.assertEqual(routes["/api/configure/apply/review"].cli_command, draft_apply.CLI_COMMANDS["review"])
+        self.assertEqual(routes["/api/configure/apply"].cli_command, draft_apply.CLI_COMMANDS["apply"])
+        for path in ("/api/configure/apply/review", "/api/configure/apply"):
+            self.assertEqual(routes[path].method, "POST")
+            self.assertIsNone(routes[path].parity_exemption)
+
+    def test_the_studio_apply_runs_the_cli_without_the_quiet_flag(self):
+        completed = subprocess.CompletedProcess([], 0, stdout='noise\n{"status": "applied"}\n', stderr="")
+        with mock.patch.dict(os.environ, {"HARNESS_QUIET": "1"}), \
+                mock.patch.object(server.subprocess, "run", return_value=completed) as run:
+            payload = server._run_draft_apply(ROOT, "tuning", "a" * 40)
+        self.assertEqual(payload, {"status": "applied"})
+        argv = run.call_args[0][0]
+        self.assertEqual(argv[1:], [str(ROOT / "bin" / "harness"), "draft", "apply", "tuning",
+                                    "--revision", "a" * 40, "--via-studio", "--json"])
+        self.assertNotIn("HARNESS_QUIET", run.call_args[1]["env"])
+        with mock.patch.object(server.subprocess, "run",
+                               return_value=subprocess.CompletedProcess([], 2, stdout="", stderr="boom")):
+            failed = server._run_draft_apply(ROOT, "tuning", "a" * 40)
+        self.assertEqual((failed["status"], failed["error_code"]), ("failed", "apply-unavailable"))
+        server.APPLY_RESULT.validate(failed)
+
+
+if __name__ == "__main__":
+    unittest.main()

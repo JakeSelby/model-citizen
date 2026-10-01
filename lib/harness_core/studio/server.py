@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -26,6 +27,7 @@ from harness_core import overview, workers
 from . import (activity, auth, drafts, free_suites, live_updates, module_authoring,
                module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
+from . import apply as draft_apply
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -1307,6 +1309,56 @@ def _draft_library(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _draft_apply_review(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    if not isinstance(request["draft"], str) or not request["draft"]:
+        handler._error(400, "invalid_request")
+        return
+    # Read-only and lock-free: a review never makes a save beside it fail busy.
+    payload = draft_apply.review(handler.server.repo_root, request["draft"])
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, object]:
+    """Run `citizen draft apply` itself, so a Studio apply takes the CLI's locks in the CLI."""
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "apply", draft,
+               "--revision", revision, "--via-studio", "--json"]
+    try:
+        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
+                              text=True, timeout=1800)
+        payload = json.loads(done.stdout.strip().splitlines()[-1])
+        if not isinstance(payload, dict):
+            raise ValueError("apply did not answer with an object")
+        return payload
+    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+        return draft_apply._result("failed", "apply-unavailable",
+                                   "citizen draft apply did not report a result; check Activity "
+                                   "and `citizen doctor` before retrying")
+
+
+def _draft_apply(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft", "revision", "confirm"))
+    if request is None:
+        return
+    if any(not isinstance(request[name], str) or not request[name]
+           for name in ("draft", "revision", "confirm")):
+        handler._error(400, "invalid_request")
+        return
+    if not hmac.compare_digest(request["confirm"].encode("utf-8"), request["draft"].encode("utf-8")):
+        # Applying changes the live harness, so the request must name the draft it applies.
+        handler._error(400, "confirmation_required")
+        return
+    payload = handler.server.mutations.call(lambda: _run_draft_apply(
+        handler.server.repo_root, request["draft"], request["revision"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1416,6 +1468,22 @@ AUTHORING_PREVIEW = ResponseSchema("json-object", (("valid", "boolean"), ("error
                                                     ("nothing_applied", "boolean")))
 AUTHORING_SAVE = ResponseSchema("json-object", AUTHORING_PREVIEW.fields +
                                  (("saved", "boolean"), ("result", "object-or-null")))
+APPLY_REVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
+                                               ("draft", "object"), ("destination", "string"),
+                                               ("files", "array"), ("root", "array"),
+                                               ("config", "array"), ("checks", "object"),
+                                               ("budget", "object-or-null"),
+                                               ("commands", "array"),
+                                               ("core", "object-or-null"),
+                                               ("refusals", "array"), ("can_apply", "boolean"),
+                                               ("apply_command", "string"),
+                                               ("nothing_applied", "boolean")))
+APPLY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                               ("status", "string"), ("applied", "boolean"),
+                                               ("error_code", "string"), ("message", "string"),
+                                               ("holder", "string"), ("apply_id", "string"),
+                                               ("review", "object"), ("doctor", "object"),
+                                               ("restored", "boolean"), ("log", "array")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1555,6 +1623,10 @@ ROUTES = RouteRegistry((
           _draft_authoring_save, None, "application/json", module_authoring.CLI_COMMANDS["save"]),
     Route("POST", "/api/configure/authoring/library", "application/json", LIBRARY,
           _draft_library, None, "application/json", module_authoring.CLI_COMMANDS["library"]),
+    Route("POST", "/api/configure/apply/review", "application/json", APPLY_REVIEW,
+          _draft_apply_review, None, "application/json", draft_apply.CLI_COMMANDS["review"]),
+    Route("POST", "/api/configure/apply", "application/json", APPLY_RESULT,
+          _draft_apply, None, "application/json", draft_apply.CLI_COMMANDS["apply"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

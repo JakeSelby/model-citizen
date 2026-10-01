@@ -2,10 +2,12 @@ import {
   Alert, Badge, Button, Checkbox, Code, Group, MultiSelect, NumberInput,
   Paper, Select, Stack, Text, Textarea, TextInput, Title,
 } from "@mantine/core";
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
 import { CommandChip } from "../components/StudioKit";
+import { DraftApply } from "./DraftApply";
 import { DraftSelectionEditor } from "./DraftSelectionEditor";
 import { ModuleAuthoring } from "./ModuleAuthoring";
 import { ModuleEditor } from "./ModuleEditor";
@@ -125,6 +127,7 @@ function Field({ field, value, error, disabled, onChange }: FieldProps) {
 }
 
 export function ConfigurePage() {
+  const queryClient = useQueryClient();
   const [schema, setSchema] = useState<ConfigureSchema | null>(null);
   const [draft, setDraft] = useState("");
   const [loadedDraft, setLoadedDraft] = useState("");
@@ -305,6 +308,11 @@ export function ConfigurePage() {
 
       {loadedDraft && baseRevision && (
         <ModuleAuthoring draft={loadedDraft} revision={baseRevision} onRevision={setBaseRevision} />
+      )}
+
+      {loadedDraft && baseRevision && (
+        <DraftApply draft={loadedDraft} revision={baseRevision}
+          onApplied={() => { void queryClient.invalidateQueries({ queryKey: ["overview"] }); }} />
       )}
 
       <GovernedSyncReview />

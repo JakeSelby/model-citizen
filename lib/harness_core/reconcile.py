@@ -27,19 +27,54 @@ def atomic_text(path, text):
             os.unlink(temporary)
 
 
+HOLDER_FILE = "sync.lock.holder"
+
+
+def lock_holder(directory):
+    """The operation a caller named when it took `directory`'s lock, or None when it named none."""
+    try:
+        record = json.loads((Path(directory) / HOLDER_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("holder"), str):
+        return None
+    return "%s (pid %s, since %s)" % (record["holder"], record.get("pid"), record.get("since"))
+
+
 @contextlib.contextmanager
-def lock(directory):
+def lock(directory, holder=None):
+    """Refuse at once, never wait, while another operation holds `directory`'s lock.
+
+    A caller that passes `holder` is named in the refusal a second caller sees. The record is
+    written only after the lock is taken and removed before it is released, so it never names a
+    process that no longer holds the lock; a stale one a crash left is cleared by the next holder.
+    """
+    import datetime
     import fcntl
+    directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    named = directory / HOLDER_FILE
     with open(directory / "sync.lock", "a") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            raise ValueError("another harness configuration operation is running")
+            current = lock_holder(directory)
+            raise ValueError("another harness configuration operation is running"
+                             + (": " + current if current else ""))
         try:
+            if holder:
+                since = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+                atomic_text(named, json.dumps({"holder": holder, "pid": os.getpid(),
+                                               "since": since.isoformat()}) + "\n")
+            elif named.exists():
+                named.unlink()
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            try:
+                if holder and named.exists():
+                    named.unlink()
+            finally:
+                fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def update_toml(text, wanted):
