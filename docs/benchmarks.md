@@ -462,7 +462,7 @@ against control. A schema-1 pair file given to `--ablations` runs exactly as `--
 python3 scripts/cost_bench.py replay --tasks tests/fixtures/ablation-tasks.json \
     --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --exploratory --dry-run
 python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack-digest <digest> \
-    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --run-cap 0.10 --dry-run
+    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --run-cap 0.10 --dry-run --exploratory
 python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni]
 ```
 

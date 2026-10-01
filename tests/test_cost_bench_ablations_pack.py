@@ -5,6 +5,7 @@ states the worst-case cost at the run's own `--run-cap` beside the minimum detec
 image is built, no container started and no model called: Docker and the arms are fakes."""
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -14,6 +15,7 @@ from unittest import mock
 from test_cost_bench import BENCH, TASK, Launch
 from test_cost_bench_ablations import ABL, ablation_options, manifest, run_output, write
 from test_cost_bench_tags import FakeArms, fake_replay, git, harness_repo, replay_args
+from test_replay_pair import MANIFEST as PAIR
 from test_replay_pack import CANARY, SOLUTION, make_pack, task_spec
 
 PACK = BENCH.replay_pack
@@ -170,6 +172,21 @@ class AblationPackTests(unittest.TestCase):
             harness_repo(Path(tmp) / "repo")
             with self.assertRaisesRegex(SystemExit, "--pair is refused with --pack"):
                 BENCH.open_pack_for(self.args(tmp, pair="benchmarks/ablations/x.json", ablations=None))
+
+
+    def test_a_pair_file_given_to_ablations_is_refused_with_a_pack_before_anything_opens(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            harness_repo(Path(tmp) / "repo")
+            pair = Path(tmp) / "pair.json"
+            pair.write_text(json.dumps(PAIR), encoding="utf-8")
+            args = self.args(tmp, ablations=str(pair), exploratory=True, dry_run=True)
+            with mock.patch.object(BENCH.replay_pack, "open_pack") as opened:
+                code, _, _, fake, calls = self.cli(tmp, args)
+            self.assertIsInstance(code, SystemExit)
+            self.assertIn("schema-1 pair file given to --ablations is refused with --pack", str(code))
+            self.assertIsNone(args.pair)
+            opened.assert_not_called()
+            self.assertEqual((fake.built, calls), ([], []))
 
 
 class AblationPackRowTests(unittest.TestCase):

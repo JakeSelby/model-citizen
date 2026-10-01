@@ -2076,7 +2076,7 @@ def verify_command(args, tasks):
 
 def open_pack_for(args):
     """The evaluator pack `--pack` names, opened at `--pack-ref` and its tier's set loaded, or None
-    without one. Refused first: a pack beside `--tasks` or `--pair`, and a ref or digest with no
+    without one. Refused first: a pack beside `--tasks`, `--pair` or a schema-1 `--ablations`, and a ref or digest with no
     pack. `--ablations` takes a pack: `replay_ablations` runs its contamination check and pins it. The caller closes it (`replay_pack.close_pack`)."""
     if not getattr(args, "pack", None):
         if any(getattr(args, flag, None) for flag in ("pack_ref", "pack_digest", "pack_set")):
@@ -2087,6 +2087,9 @@ def open_pack_for(args):
     if getattr(args, "pair", None):
         raise SystemExit("cost-bench: --pair is refused with --pack: a pair's manifest digest is "
                          "taken over a task file, which a pack does not have")
+    if getattr(args, "ablations", None) and ablations.load(args.ablations).get("schema") == ablations.PAIR_SCHEMA:
+        raise SystemExit("cost-bench: a schema-1 pair file given to --ablations is refused with --pack: "
+                         "a pair's manifest digest is taken over a task file, which a pack does not have")
     pack = replay_pack.open_pack(args.pack, args.pack_ref or "HEAD", args.pack_digest, ROOT,
                                  getattr(args, "tmp", None))
     try:
