@@ -154,6 +154,13 @@ class CommandTests(unittest.TestCase):
         code, _, _ = self.main(*STATED + ("--have", str(design["k"]), str(design["n"]), str(design["m"])))
         self.assertEqual(code, 0)
 
+    def test_a_set_that_meets_the_target_exits_0_when_no_design_fits_the_bounds(self):
+        code, out, _ = self.main(*STATED + ("--have", "250", "120", "5", "--max-tasks", "20", "--json"))
+        result = json.loads(out)
+        self.assertIsNone(result["design"])
+        self.assertTrue(result["have"]["meets"])
+        self.assertEqual(code, 0)
+
     def test_without_a_long_task_variance_no_claim_power_is_printed_and_it_exits_1(self):
         code, out, _ = self.main(*STATED[:-2])
         self.assertEqual(code, 1)

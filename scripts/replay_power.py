@@ -358,8 +358,8 @@ def main(argv=None):
                           "design": result, "have": have}, indent=2, sort_keys=True))
     else:
         print(render(result, inputs, args.effect, args.alpha, args.power, have))
-    if have is not None and not have["meets"]:
-        return 1
+    if have is not None:
+        return 0 if have["meets"] else 1
     return 0 if result is not None and result["meets"] else 1
 
 

@@ -46,7 +46,9 @@ class PackScoringTests(unittest.TestCase):
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", " ".join(env_flags(command)))
         self.assertTrue(kwargs["input"].startswith("# " + CANARY))
         self.assertIn("check(_Path('/work'))", kwargs["input"])
-        self.assertNotIn(str(Path(tmp) / "pack"), " ".join(command))
+        joined = " ".join(command)
+        self.assertNotIn(str(pack["root"]), joined)
+        self.assertNotIn(task["pack"]["task_dir"], joined)
 
     def test_a_run_starts_in_the_workspace_and_never_sees_the_check_or_the_solution(self):
         seen = {}
