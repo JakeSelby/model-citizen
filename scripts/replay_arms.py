@@ -83,6 +83,11 @@ EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
 # Declaration keys that change how an arm is launched and not what its image holds; the image
 # name and build label are the digest of the rest, so changing one never rebuilds an image.
 LAUNCH_INPUTS = ("effort",)
+# A declared selection: its component name, the build-context file the Dockerfile installs as the
+# image user's configuration, and the stage that does so.
+SELECTION = "selection"
+SELECTION_FILE = "selection.json"
+SELECTED_TARGET = "harness-selected"
 
 
 def digest(value):
@@ -115,13 +120,38 @@ def qualification_inputs(path=QUALIFICATION_DOCKERFILE):
     return {"base_image": base.group(1), "claude_code_version": version.group(1)}
 
 
-def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None):
+def selection_bytes(selection):
+    """The user configuration a declared selection is installed as, byte for byte: canonical JSON
+    with a trailing newline. The `selection` component's version is the sha256 of these bytes."""
+    return (json.dumps(selection, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def _selection_problem(selection):
+    """Why `selection` is not a selection in the user-config shape, or None."""
+    if not isinstance(selection, dict):
+        return "a selection is an object of kind to {unit: value}"
+    for kind, units in selection.items():
+        if not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z-]*", kind) or not isinstance(units, dict) \
+                or not units or any(not isinstance(unit, str) or not isinstance(value, str) or not value
+                                    for unit, value in units.items()):
+            return "selection kind %r is not an object of unit to a non-empty value" % (kind,)
+    return None
+
+
+def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None, selection=None):
     """What one arm is built from, as a dict: every input that could change what it holds.
 
     `harness` is `{ref, commit}` for the harness arm and None for the bare one; the commit is the
     full sha the ref resolved to, so a moved tag is a different declaration. The Dockerfile and
     the manifest lister are inputs too, by content. `effort` is the pinned launch input: the
-    reasoning effort every run of the arm is started at, None for an arm that is only built."""
+    reasoning effort every run of the arm is started at, None for an arm that is only built.
+
+    `selection` is a declared selection in the user-config shape `bin/harness sync` reads, such as
+    `{"rules": {"secrets": "off"}}`, for the harness arm only. It is installed as the image user's
+    configuration before the sync, so the sync withholds what it switches off, and it is declared
+    as a `selection` component whose version is the digest of the installed bytes; admission
+    accepts that file only when it matches (`_user_config_problem`). An arm with no selection
+    has no `selection` key at all, so its declaration and image name are what they always were."""
     if effort is not None and effort not in EFFORT_LEVELS:
         raise SystemExit("replay-arms: effort %r is not one of %s" % (effort, ", ".join(EFFORT_LEVELS)))
     if arm not in ARMS:
@@ -130,18 +160,30 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
         raise SystemExit("replay-arms: the harness arm needs a ref and commit, and only it")
     if harness and not re.fullmatch(r"[0-9a-f]{40}", harness.get("commit") or ""):
         raise SystemExit("replay-arms: harness commit %r is not a full sha" % harness.get("commit"))
+    if selection is not None:
+        if not harness:
+            raise SystemExit("replay-arms: only the harness arm takes a declared selection")
+        problem = _selection_problem(selection)
+        if problem:
+            raise SystemExit("replay-arms: %s" % problem)
     version = claude_code_version or inputs["claude_code_version"]
     components = [{"name": "base-image", "version": inputs["base_image"]},
                   {"name": "@anthropic-ai/claude-code", "version": version},
                   {"name": "model-citizen-observer", "version": "sha256:" + file_sha(OBSERVER_SOURCE)}]
     if harness:
         components.append({"name": "model-citizen", "version": harness["ref"], "commit": harness["commit"]})
-    return {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
-            "claude_code_version": version,
-            "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
-            "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
-            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort,
-            "observer_settings_sha256": digest(observer_settings())}
+    if selection is not None:
+        components.append({"name": SELECTION,
+                           "version": "sha256:" + hashlib.sha256(selection_bytes(selection)).hexdigest()})
+    out = {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
+           "claude_code_version": version,
+           "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
+           "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
+           "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort,
+           "observer_settings_sha256": digest(observer_settings())}
+    if selection is not None:
+        out[SELECTION] = json.loads(json.dumps(selection))
+    return out
 
 
 def build_inputs(decl):
@@ -169,11 +211,19 @@ def build_context(decl, parent, snapshot, repo=ROOT):
     shutil.copyfile(str(OBSERVER_SOURCE), str(observer / "observe.py"))
     if decl["harness"]:
         snapshot(repo, decl["harness"]["commit"], context / "harness")
+    if decl.get(SELECTION) is not None:
+        (context / SELECTION_FILE).write_bytes(selection_bytes(decl[SELECTION]))
     return context
 
 
+def target(decl):
+    """The Dockerfile stage an arm builds: its own name, or `SELECTED_TARGET` for a harness arm
+    with a declared selection, which installs the selection before the sync."""
+    return SELECTED_TARGET if decl.get(SELECTION) is not None else decl["arm"]
+
+
 def build_command(decl, context, image, no_cache=False):
-    command = ["docker", "build", "--quiet", "-f", str(ARM_DOCKERFILE), "--target", decl["arm"],
+    command = ["docker", "build", "--quiet", "-f", str(ARM_DOCKERFILE), "--target", target(decl),
                "--build-arg", "BASE_IMAGE=" + decl["base_image"],
                "--build-arg", "CLAUDE_CODE_VERSION=" + decl["claude_code_version"],
                "--label", "org.model-citizen.arm.declaration=" + digest(build_inputs(decl))]
@@ -380,7 +430,10 @@ HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md
                   "home:.local/state/agent-harness/manifest.json",
                   "home:.local/state/agent-harness/applied.json")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
-NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer")
+NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION)
+# The image user's configuration, and the file a sync copies there when it finds none.
+USER_CONFIG = "home:.config/agent-harness/config.json"
+EXAMPLE_CONFIG = "harness:config.example.json"
 
 
 def _matches_its_declaration(record):
@@ -499,6 +552,9 @@ def _configuration_is_declared(record):
     if normalised != expected or set(actual) - set(expected):
         return "the manifest summary does not match its entries"
     problems = []
+    config = _user_config_problem(decl, entries)
+    if config:
+        problems.append(config)
     generated = _generated_writes(listed)
     for kind, paths in sorted((manifest.get("summary") or {}).items()):
         for path in sorted(paths):
@@ -508,6 +564,39 @@ def _configuration_is_declared(record):
                 continue
             problems.append("%s entry %s is not in the declaration" % (kind, path))
     return "; ".join(problems) or None
+
+
+def _user_config_problem(decl, entries):
+    """Why the image user's configuration is not the declared one, or None.
+
+    With a declared selection the file must be exactly `selection_bytes` of it, matching the
+    `selection` component. Without one, a harness arm's file may only be the copy of the commit's
+    `config.example.json` the sync writes when it finds none, and a bare arm holds none at all: a
+    selection nobody declared is refused rather than measured as the harness's default."""
+    entry = entries.get(USER_CONFIG)
+    selection = decl.get(SELECTION)
+    declared = [c.get("version") for c in decl.get("components") or []
+                if isinstance(c, dict) and c.get("name") == SELECTION]
+    if selection is not None:
+        expected = None if _selection_problem(selection) else \
+            "sha256:" + hashlib.sha256(selection_bytes(selection)).hexdigest()
+        if expected is None or declared != [expected]:
+            return "the selection component does not match the declared selection"
+        if not isinstance(entry, dict) or entry.get("kind") != "file":
+            return "the declared selection is not installed as %s" % USER_CONFIG
+        if "sha256:%s" % entry.get("sha256") != expected:
+            return "%s differs from the declared selection" % USER_CONFIG
+        return None
+    if declared:
+        return "a selection component is declared with no selection"
+    if entry is None:
+        return None
+    example = entries.get(EXAMPLE_CONFIG)
+    if not decl.get("harness") or not isinstance(example, dict) or entry.get("kind") != "file" \
+            or entry.get("sha256") != example.get("sha256"):
+        return "%s is not in the declaration: no selection is declared and it is not the sync's " \
+               "copy of config.example.json" % USER_CONFIG
+    return None
 
 
 def host_paths(base=None, home=None):
@@ -606,7 +695,7 @@ def admit(record, checks=None):
 # --- Pair parity: the two arms differ by the declared treatment and nothing else ----------------
 
 # Declaration keys that name the treatment itself; every other one must be equal across the pair.
-TREATMENT_KEYS = ("arm", "harness", "components")
+TREATMENT_KEYS = ("arm", "harness", "components", SELECTION)
 # Manifest keys that describe the treatment or are derived from the entries compared below.
 MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
 
@@ -636,7 +725,7 @@ def pair_differences(bare, harness):
     for key in sorted((set(left) | set(right)) - set(TREATMENT_KEYS)):
         if left.get(key) != right.get(key):
             out.append("declaration %s: bare %r, harness %r" % (key, left.get(key), right.get(key)))
-    shared = [c for c in right.get("components") or [] if c.get("name") != "model-citizen"]
+    shared = [c for c in right.get("components") or [] if c.get("name") not in ("model-citizen", SELECTION)]
     if (left.get("components") or []) != shared:
         out.append("declaration components: bare %r, harness less its own %r" % (left.get("components"), shared))
     left, right = bare.get("manifest") or {}, harness.get("manifest") or {}
