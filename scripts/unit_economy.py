@@ -181,19 +181,21 @@ def base_selection(manifest, unit, posture, root, env=None):
     for member in economy:
         _set(selection, member, manifest["economy"][member]["off"])
     declared = posture.manifests({}, root)[0]
-    dependencies, queue = [], [unit]
-    while queue:
-        entry = queue.pop(0)
+    dependencies = []
+
+    def walk(entry, path):
         kind_of, name_of = entry.split("/", 1)
         for dependency in ((declared.get(kind_of) or {}).get(name_of) or {}).get("dependencies") or []:
             if dependency in economy:
                 errors.append("the unit %s depends on %s, a member of the economy concern" % (unit, dependency))
-            elif dependency == unit:
-                errors.append("the unit %s and its dependency %s depend on each other, so the unit cannot be "
-                              "switched on alone" % (unit, entry))
-            elif dependency not in dependencies and dependency != unit:
+            elif dependency in path:
+                errors.append("the unit %s reaches the dependency cycle %s, so it cannot be switched on alone"
+                              % (unit, " -> ".join(path[path.index(dependency):] + [dependency])))
+            elif dependency not in dependencies:
                 dependencies.append(dependency)
-                queue.append(dependency)
+                walk(dependency, path + [dependency])
+
+    walk(unit, [unit])
     for dependency in dependencies:
         _set(selection, dependency, "on")
     return selection, dependencies, errors

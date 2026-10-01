@@ -279,9 +279,37 @@ class GridTests(unittest.TestCase):
         for unit, expected in (("hooks/usage-feed", "member of the economy concern"),
                                ("hooks/stop-gate", "core hook"), ("stances/voice", "not a rule, skill"),
                                ("rules/no-such-rule", "not one the tag ships"),
-                               ("skills/design-loop", "depend on each other")):
+                               ("skills/design-loop", "dependency cycle")):
             with self.subTest(unit=unit):
                 self.assertTrue(any(expected in e for e in self.grid(unit)["errors"]), self.grid(unit)["errors"])
+
+    def with_dependencies(self, graph):
+        """The grid for rules/secrets with `graph` ({entry: [dependencies]}) as the declared dependencies."""
+        real = self.posture
+
+        class Posture:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def manifests(self, config, root):
+                found = real.manifests(config, root)
+                declared = copy.deepcopy(found[0])
+                for entry, dependencies in graph.items():
+                    kind, name = entry.split("/", 1)
+                    declared.setdefault(kind, {}).setdefault(name, {})["dependencies"] = dependencies
+                return (declared,) + tuple(found[1:])
+
+        return UE.grid(self.manifest, "rules/secrets", Posture(), REPO)
+
+    def test_a_cycle_the_unit_reaches_is_refused_even_when_it_excludes_the_unit(self):
+        spec = self.with_dependencies({"rules/secrets": ["rules/b"], "rules/b": ["rules/c"], "rules/c": ["rules/b"]})
+        self.assertTrue(any("rules/b -> rules/c -> rules/b" in e for e in spec["errors"]), spec["errors"])
+
+    def test_a_diamond_of_dependencies_is_accepted(self):
+        spec = self.with_dependencies({"rules/secrets": ["rules/b", "rules/c"], "rules/b": ["rules/d"],
+                                       "rules/c": ["rules/d"], "rules/d": []})
+        self.assertEqual(spec["errors"], [])
+        self.assertEqual(spec["dependencies"], ["rules/b", "rules/d", "rules/c"])
 
     def test_the_unit_flag_takes_the_config_set_form(self):
         self.assertEqual(UE.unit_entry("rules.secrets"), "rules/secrets")
