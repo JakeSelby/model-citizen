@@ -403,6 +403,62 @@ selection, with the bare arm beside them in every trial.
   `--spend-cap` is required for a live pair, since the default is sized for two arms;
   `--stance-cost` is refused, and `--tag`, if given, must be the manifest's.
 
+### Ablation runs
+
+`replay --ablations benchmarks/ablations.json` attributes cost to single entries of the harness:
+bare, control (the harness at the tag) and one arm per entry the manifest toggles, each reported
+against control. A schema-1 pair file given to `--ablations` runs exactly as `--pair` does.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks tests/fixtures/ablation-tasks.json \
+    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni]
+```
+
+- **The manifest is schema 2.** It holds `name`, `planning` (`cv`, the assumed per-attempt
+  coefficient of variation, and its `source`) and `arms`, each an `id` and exactly one of
+  `removes: "<kind>/<unit>"`, which switches a module off, or `sets: {"<kind>/<unit>": "<variant>"}`,
+  which gives a variant kind another variant. Bare and control are implicit, so N arms run N + 2.
+- **Each arm's selection is in its image, not its environment.** The arm is declared with its
+  selection in the user-config shape (`{"rules": {"secrets": "off"}}`); the image installs it as
+  the agent user's configuration before the sync, which then withholds what it switches off.
+  Admission accepts that file only when its sha256 is the declared `selection` component, and
+  refuses a configuration nobody declared. Pairs keep their by-value factor; the two paths do not
+  mix.
+- **Refused before any spend:** an id the tag's default selection does not hold switched on, a
+  variant the tag does not ship, a selection the tag's resolver refuses, more than one `--tag` or
+  `--stance-cost`; then, once the images are built, an arm whose declaration differs from
+  control's in anything but its selection, or whose selection resolves to control's profile.
+- **The minimum detectable effect is printed before the schedule**, from the manifest's `cv` at
+  80% power and 95% two-sided, alone and with Bonferroni over the arms. It is a planning figure
+  from an assumption, not a measurement; an effect below it reads `inconclusive`.
+- **The order is drawn from a recorded seed.** The leading arm rotates with the rep, as for any
+  replay, and the arms after it follow a permutation from `--schedule-seed`, which defaults to the
+  manifest's digest. Every row records `schedule_seed`, its `ablation` (name, digest, schema 2,
+  the arm ids), the entry its arm removed (`ablation_removes`) or set (`ablation_sets`) and its
+  `selection`; its `context_attribution` is resolved with that selection, so a removed module's
+  key is absent from it.
+- **Each arm is reported against control on six measures, separately:** cost, output tokens, the
+  standing prefix, turns, tool calls and pass rate, then Cost-of-Pass last, never as the headline.
+  Each carries n, its spread (SD, and the worst per-task max over min) and a paired interval from
+  the task-clustered bootstrap SM-2 uses. An interval spanning no effect reads `inconclusive`;
+  fewer than five paired trials per task, or several arms with no `--correction`, reads
+  exploratory. Arms are ranked by the size of their cost effect.
+- **The prefix is the first call's whole prompt.** `first_call_context` sums the first call's
+  input, cache-write and cache-read tokens, so a cold and a warm run of one prompt agree, and a
+  missing field makes it None, never a smaller sum. An arm's prefix is compared only when every run
+  of it and of control lies within 2% of its (task, date) median; otherwise its summed
+  `context_attribution` stands in, labelled a soft estimate.
+- **Parity after the run.** `summarise` exits 1 when an arm loaded a surface that differs from
+  control's beyond the fields its entry may move (a skill or workflow its skill and command
+  listings, a role the agent listing, a rule or stance the memory paths), or when a removed entry
+  is still in a row's attribution. A pair's treatment declares no surface change, so any
+  difference still refuses it.
+- **No history row**, as for a pair; `citizen scorecard --results <dir>` reads the rows to fill each
+  module's measured effect. One-at-a-time toggling finds main effects only: two entries that matter
+  only together read as two inconclusive results. A sweep over a profile of your own is a local
+  diagnostic, not a publishable figure.
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
@@ -441,7 +497,7 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
 ## Limits
 
 - Claude Code only. Codex instructions are rendered at sync time and are not counted.
-- Your own `CLAUDE.personal.md`, memory files, MCP servers and hook output are not counted. They
-  are yours, not the harness's, and MCP tool definitions alone can outweigh everything measured
-  here.
+- Your own instruction files, memory, MCP servers and hooks are not counted here; `citizen usage
+  --surface` lists them locally beside the harness's modules (see [usage](usage.md#the-loaded-instruction-surface)),
+  and they never enter an arm.
 - Full agent and skill bodies load only when used, so only their descriptions are counted.

@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-30"
+generated: "2026-10-01"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -250,7 +250,7 @@ development_status:
   ah-s256-run-every-hook-against-recorded-tool-calls-under: ready-for-dev
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: ready-for-dev
   ah-s258-nudge-delegation-from-the-existing-detector: ready-for-dev
-  ah-s259-per-rule-cost-attribution-across-the-whole: backlog
+  ah-s259-per-rule-cost-attribution-across-the-whole: ready-for-dev
 
   ah-e014-qualify-a-release-in-one-round-and-let-its: in-progress
   ah-b073-a-resumed-qualification-round-reruns-completed: done
