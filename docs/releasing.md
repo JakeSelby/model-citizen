@@ -83,10 +83,11 @@ untouched; do not move or replace either tag.
    release skips it. No framework workflow is a `required_cases` entry.
 3. Merge reviewed changes through the repository's PR gate. Keep stacked PR bases current without
    overwriting other contributors' history. Preserve personal configuration and the live checkout.
-4. Set `VERSION`, `compatibility/catalog.json` and `compatibility/migration.json` to the same
-   release. Record exact migration actions and recovery even when the only action is reviewing a
-   dry run. Regenerate projections and release notes. Fold the changelog into the version section:
-   with
+4. Set `VERSION`, `compatibility/catalog.json`, `compatibility/migration.json` and the `version`
+   in `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and
+   `.codex-plugin/plugin.json` to the same release. Record exact migration actions and recovery
+   even when the only action is reviewing a dry run. Regenerate projections and release notes.
+   Fold the changelog into the version section: with
    `python3 scripts/release_notes.py --changelog <version>`, which assembles the `changelog.d/`
    fragments in a stable order and deletes them (see
    [`changelog.d/README.md`](../changelog.d/README.md)). That assembly satisfies the lint's

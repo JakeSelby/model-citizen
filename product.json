@@ -59,7 +59,7 @@
         },
         {
           "name": "Shared primitives",
-          "line": "Rules, skills, roles and workflows live in one place and sync into each runtime's native settings. Switch one off and sync leaves it out of both.",
+          "line": "Rules, skills, roles and workflows live in one place and sync into both runtimes, leaving out any you switch off. Skills also install as a Claude Code or Codex plugin.",
           "doc": "docs/sync-model.md"
         },
         {
