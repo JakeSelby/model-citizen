@@ -50,9 +50,12 @@ Pilot rows are never proof-set rows. The protocol is the
   under the normal approximation in `replay_power.py`'s docstring. `summarise`'s paired,
   task-clustered percentile bootstrap (seed 795, 10,000 resamples) is printed for the exploratory
   ratio.
-- **Undefined case:** if either arm passes nothing, or no long task has enough clean rows for
-  `long_tau2`, the power command reports claim power unavailable and exits 1; that is reported as
-  "set not sizable from this pilot", with the reason.
+- **Undefined case:** `estimate()` leaves `long_tau2` undefined when fewer than three tasks are
+  marked long, or when fewer than two long tasks have a usable ratio (at least one pass in each
+  arm and positive cost); error rows count as failures there, as `attempts()` scores them. The
+  power command then reports claim power unavailable and exits 1. If either arm passes nothing,
+  no ratio is usable and the estimate fails outright. Either way it is reported as "set not
+  sizable from this pilot", with the reason.
 
 ## Guardrails
 
@@ -119,6 +122,14 @@ The pilot is read in two parts, whatever they show, and both are posted on #560:
   is on the same side of 7.6 as the mark, and refuted otherwise; a refuted mark is corrected in a
   new pack version before #560. With fewer than three clean bare runs a task's size reads unknown
   and its mark stays pending.
+
+Rules for the analysis:
+
+1. If the pilot refutes any long mark, the posted result uses the corrected labels: the analysis
+   relabels each refuted task's `task_long` before estimating, and `replay_power.py` is re-run
+   with `--have 7 <corrected long-task count> 5` in place of the fixed `--have 7 4 5`. That
+   corrected run decides the sizing reading above, and both are done before the result is posted
+   or #560 is sized.
 
 Command:
 
