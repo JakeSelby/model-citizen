@@ -20,12 +20,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import drafts, run_store, runs, spend_guard, targets
+from . import drafts, packs, run_store, runs, spend_guard, targets
 
 TARGET_KINDS = frozenset(("installed", "release", "branch", "worktree", "draft"))
 ARM_NAMES = ("bare", "harness")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+PACK_KEYS = frozenset(("name", "version", "commit", "digest", "source"))
 RELEASE_REF = re.compile(r"^v[0-9]+(?:\.[0-9]+){2}(?:[-+][A-Za-z0-9._-]+)?$")
 SUMMARY_NAME = "replay-summary.json"
 RESULTS_NAME = "results.jsonl"
@@ -142,13 +145,14 @@ class ReplayRequest:
     max_budget_usd: str
     spend_cap_usd: str
     pre_registration: Optional[str]
+    pack: Optional[Dict[str, str]] = None
 
     @classmethod
     def parse(cls, value: Any) -> "ReplayRequest":
         if not isinstance(value, dict):
             raise ReplayError("replay request must be an object")
         _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                             "spend_cap_usd", "pre_registration"}, "replay request")
+                             "spend_cap_usd", "pre_registration", "pack"}, "replay request")
         raw_targets = value.get("targets")
         if not isinstance(raw_targets, list) or len(raw_targets) != 2:
             raise ReplayError("replay requires exactly two explicit targets")
@@ -179,22 +183,34 @@ class ReplayRequest:
             raise ReplayError("pre-registration must name a file")
         if any(target.kind == "release" for target in targets) and not registration:
             raise ReplayError("a release replay needs a pre-registration before it can write history")
-        return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration)
+        pack = value.get("pack")
+        if pack is not None and (
+                not isinstance(pack, dict) or set(pack) != PACK_KEYS
+                or any(not isinstance(pack[key], str) or not pack[key] or "\0" in pack[key]
+                       for key in PACK_KEYS)
+                or not HEX40.fullmatch(pack["commit"]) or not HEX64.fullmatch(pack["digest"])
+                or not Path(pack["source"]).is_absolute()):
+            raise ReplayError("replay pack must be a resolved evaluator pack")
+        return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration,
+                   dict(pack) if pack is not None else None)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"targets": [target.as_dict() for target in self.targets], "model": self.model,
                 "repetitions": self.repetitions, "tasks": list(self.tasks),
                 "max_budget_usd": self.max_budget_usd, "spend_cap_usd": self.spend_cap_usd,
-                "pre_registration": self.pre_registration}
+                "pre_registration": self.pre_registration, "pack": self.pack}
 
 
 def resolve_request(value: Any,
-                    resolver: Callable[[str, str], Mapping[str, Any]]) -> ReplayRequest:
-    """Resolve the two UI references through AH-S301 before spend preview or launch."""
+                    resolver: Callable[[str, str], Mapping[str, Any]],
+                    pack_resolver: Optional[Callable[[Any, Any], Mapping[str, Any]]] = None
+                    ) -> ReplayRequest:
+    """Resolve the two UI references through AH-S301, and the chosen pack by name and digest,
+    before spend preview or launch."""
     if not isinstance(value, dict):
         raise ReplayError("replay request must be an object")
     _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                         "spend_cap_usd", "pre_registration"}, "replay request")
+                         "spend_cap_usd", "pre_registration", "pack"}, "replay request")
     supplied = value.get("targets")
     if not isinstance(supplied, list) or len(supplied) != 2:
         raise ReplayError("replay requires exactly two explicit targets")
@@ -209,6 +225,13 @@ def resolve_request(value: Any,
             raise ReplayError("target resolver returned an invalid result")
         resolved.append(dict(result))
     normalized = dict(value, targets=resolved)
+    chosen = value.get("pack")
+    if chosen is not None:
+        if (not isinstance(chosen, dict) or set(chosen) != {"name", "digest"}
+                or pack_resolver is None):
+            raise ReplayError("pack selection must contain only name and digest")
+        found = pack_resolver(chosen["name"], chosen["digest"])
+        normalized["pack"] = {key: found[key] for key in PACK_KEYS}
     if normalized.get("pre_registration") == "":
         normalized["pre_registration"] = None
     return ReplayRequest.parse(normalized)
@@ -345,12 +368,22 @@ class ReplayAdmission:
                 "from the commit's defaults and cannot apply it; checkpoint the change as "
                 "source or restore the inherited configuration" % name)
 
+    def _resolve_pack(self, name: Any, digest: Any) -> Mapping[str, Any]:
+        try:
+            return packs.select(self.repository, name, digest)
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+
     def resolve(self, value: Any) -> ReplayRequest:
-        request = resolve_request(value, self._resolve)
+        request = resolve_request(value, self._resolve, self._resolve_pack)
         validate_task_selection(self.repository, request)
         return request
 
     def _confirm_resolved(self, request: ReplayRequest) -> None:
+        if request.pack is not None:
+            found = self._resolve_pack(request.pack["name"], request.pack["digest"])
+            if {key: found[key] for key in PACK_KEYS} != request.pack:
+                raise ReplayError("replay pack identity changed after spend preview")
         for expected in request.targets:
             actual = ReplayTarget.parse(self._resolve(expected.kind, expected.ref))
             if actual.identity != expected.identity or actual.version != expected.version:
@@ -414,6 +447,10 @@ def _native_arguments(request: ReplayRequest, target: ReplayTarget, cap: str) ->
     arguments = ["--tag", target.execution_ref, "--model", request.model,
                  "--reps", str(request.repetitions), "--run-cap", request.max_budget_usd,
                  "--spend-cap", cap]
+    if request.pack is not None:
+        # Pinned: the run reads this commit and refuses any other content.
+        arguments.extend(("--pack", request.pack["source"], "--pack-ref", request.pack["commit"],
+                          "--pack-digest", request.pack["digest"]))
     for task in request.tasks:
         arguments.extend(("--task", task))
     return arguments
@@ -694,7 +731,7 @@ def _verify_target_output(request: ReplayRequest, target: ReplayTarget, native_o
         raise _NothingSpent("replay target was refused before any spend (exit %s)" % returncode)
     result_path, spend_path = native_out / RESULTS_NAME, native_out / SPEND_NAME
     rows = _read_rows(result_path) if result_path.is_file() else []
-    _verify_target_rows(target, rows)
+    _verify_target_rows(target, rows, request.pack)
     _reconcile_target_rows(request, rows, complete=returncode == 0)
     spend = _read_spend(spend_path, target, request.max_budget_usd, remaining, rows)
     if (returncode != 0 and not rows and spend["charged_spend_usd"] == 0
@@ -723,8 +760,12 @@ def preflight_case_id(target_index: int) -> str:
     return "target-%d-preflight" % target_index
 
 
-def _verify_target_rows(target: ReplayTarget, rows: Sequence[Mapping[str, Any]]) -> None:
+def _verify_target_rows(target: ReplayTarget, rows: Sequence[Mapping[str, Any]],
+                        pack: Optional[Mapping[str, str]] = None) -> None:
     for row in rows:
+        if pack is not None and (row.get("pack_digest") != pack["digest"]
+                                 or row.get("pack_commit") != pack["commit"]):
+            raise ReplayError("replay result does not carry the pinned evaluator pack")
         if row.get("harness_sha") != target.revision:
             raise ReplayError("replay result does not match its resolved target revision")
         if row.get("tag") != target.execution_ref:
@@ -965,8 +1006,7 @@ def read_summary(path: Path) -> Dict[str, Any]:
     return value
 
 
-def task_catalog(repository: Path) -> Dict[str, Any]:
-    """Expose only stable benchmark task identities needed by the replay form."""
+def _repository_tasks(repository: Path) -> List[Dict[str, str]]:
     try:
         value = json.loads((Path(repository) / "benchmarks" / "tasks.json").read_text(
             encoding="utf-8"))
@@ -978,15 +1018,32 @@ def task_catalog(repository: Path) -> Dict[str, Any]:
             or any(not isinstance(item, dict) or not IDENTIFIER.fullmatch(str(item.get("id", "")))
                    for item in raw)):
         raise ReplayError("replay task catalog is invalid")
-    tasks = [{"id": item["id"], "label": item["id"].replace("-", " ").title()}
-             for item in raw]
-    return {"schema_version": 1, "tasks": tasks, "target_kinds": sorted(TARGET_KINDS),
+    return [{"id": item["id"], "label": item["id"].replace("-", " ").title()} for item in raw]
+
+
+def task_catalog(repository: Path) -> Dict[str, Any]:
+    """Expose only stable task identities the replay form needs: the repository's own tasks, and
+    each evaluator pack found beside the checkout with its production tasks (`packs.discover`).
+    The path of a pack stays on the server; the form chooses one by name and digest."""
+    tasks = _repository_tasks(repository)
+    found = packs.discover(Path(repository))
+    public = [{key: item[key] for key in ("name", "version", "commit", "digest", "short_digest",
+                                           "tasks")} for item in found["packs"]]
+    return {"schema_version": 1, "tasks": tasks, "packs": public,
+            "default_pack": found["default_digest"], "target_kinds": sorted(TARGET_KINDS),
             "default_model": "claude-haiku-4-5",
             "commands": {"run": " ".join(NATIVE_COMMAND)}}
 
 
 def validate_task_selection(repository: Path, request: ReplayRequest) -> None:
-    available = {item["id"] for item in task_catalog(repository)["tasks"]}
+    if request.pack is not None:
+        try:
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+        available = {item["id"] for item in chosen["tasks"]}
+    else:
+        available = {item["id"] for item in _repository_tasks(repository)}
     unknown = sorted(set(request.tasks) - available)
     if unknown:
         raise ReplayError("replay requested unknown benchmark tasks: " + ", ".join(unknown))
@@ -1021,7 +1078,7 @@ def read_progress_rows(path: Path, target: ReplayTarget,
         except (ValueError, RecursionError) as exc:
             raise ReplayError("replay progress line %d is not JSON" % number) from exc
         rows.append(_validate_native_row(row, number))
-    _verify_target_rows(target, rows)
+    _verify_target_rows(target, rows, request.pack)
     _reconcile_target_rows(request, rows, complete=False)
     return rows
 

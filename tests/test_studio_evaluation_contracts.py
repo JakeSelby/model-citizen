@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_harness import REPO, harness
-from harness_core.studio import evaluation, run_store, runs
+from harness_core.studio import evaluation, run_store, runs, server
 from studio_target_support import FixtureTargetService
 
 import test_evidence_bundle as bundle_tests  # a module import keeps its tests out of this module
@@ -161,6 +161,9 @@ class RunStoreContractTests(unittest.TestCase):
         grid = next(r for r in self.records() if r["evaluation"]["shape"] == "four-cell")
         contract = self.supervisor.run_evaluation(grid["run_id"])
         self.assertEqual(contract["design"]["manifest_sha256"], "9" * 64)
+        detail = self.supervisor.run_detail(grid["run_id"])
+        server.RUN_DETAIL.validate(detail)
+        self.assertEqual(detail["evaluation"], contract)
 
     def test_the_pack_digest_and_manifest_digest_separate_cohorts(self):
         first = dict(PACK)

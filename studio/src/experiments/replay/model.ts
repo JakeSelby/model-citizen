@@ -20,11 +20,26 @@ export type ReplayLaunchInput = {
   max_budget_usd: string;
   spend_cap_usd: string;
   pre_registration: string;
+  /** The evaluator pack, chosen by name and digest; null runs the repository's own tasks. */
+  pack?: { name: string; digest: string } | null;
 };
 
-export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration"> & {
+/** A pack as the server resolved and pinned it. */
+export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string };
+
+export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration" | "pack"> & {
   targets: [ReplayTarget, ReplayTarget];
   pre_registration: string | null;
+  pack: ResolvedPack | null;
+};
+
+export type ReplayPack = {
+  name: string;
+  version: string;
+  commit: string;
+  digest: string;
+  short_digest: string;
+  tasks: Array<{ id: string; label: string }>;
 };
 
 export type ReplayMetricRow = {
@@ -50,6 +65,8 @@ export type ReplayProgressRow = {
 export type ReplayCatalog = {
   schema_version: number;
   tasks: Array<{ id: string; label: string }>;
+  packs: ReplayPack[];
+  default_pack: string | null;
   target_kinds: ReplayTargetKind[];
   default_model: string;
   commands: { run: string };
@@ -180,4 +197,20 @@ export function formatPercent(value: number | null): string {
 
 export function formatCost(value: number | null): string {
   return value === null ? "Unavailable" : `$${value.toFixed(4)}`;
+}
+
+/** One picker option per pack: its name, version and short digest, keyed by the full digest. */
+export function packOptions(packs: ReplayPack[]): Array<{ value: string; label: string }> {
+  return packs.map((pack) => ({ value: pack.digest, label: `${pack.name} ${pack.version} (${pack.short_digest})` }));
+}
+
+/** The pack a new replay starts on: the catalog's default, else the first, else none. */
+export function initialPack(packs: ReplayPack[], defaultDigest: string | null): ReplayPack | null {
+  return packs.find((pack) => pack.digest === defaultDigest) ?? packs[0] ?? null;
+}
+
+/** The task ids a replay may choose: the chosen pack's, or the repository's own without one. */
+export function tasksFor(packs: ReplayPack[], digest: string | null, repositoryTasks: string[]): string[] {
+  const pack = packs.find((item) => item.digest === digest);
+  return pack ? pack.tasks.map((task) => task.id) : repositoryTasks;
 }

@@ -1510,6 +1510,8 @@ class RunSupervisor:
                 elif source_kind == PLUGIN_EVAL_SOURCE and position == 0:
                     item["label"] = "Result JSON"
                 detail["artifacts"].append(item)
+        # The landed contract the source declared, as indexed; nothing is derived here.
+        detail["evaluation"] = evaluation.detail_contract(indexed)
         return detail
 
     def run_evaluation(self, run_id: str) -> Optional[Dict[str, Any]]:

@@ -17,9 +17,6 @@ from harness_core.studio import replay, replay_runner, run_store, runs, server, 
 from studio_target_support import FixtureTargetService
 
 
-_TASK_CATALOG = replay.task_catalog
-
-
 @contextlib.contextmanager
 def fixture_tasks(*identities):
     """Read the task catalog from a fixture, since the repository's own tasks.json retires every
@@ -28,7 +25,10 @@ def fixture_tasks(*identities):
         (Path(root) / "benchmarks").mkdir()
         (Path(root) / "benchmarks" / "tasks.json").write_text(json.dumps(
             {"schema_version": 1, "tasks": [{"id": item} for item in identities]}), encoding="utf-8")
-        with mock.patch.object(replay, "task_catalog", lambda _repository: _TASK_CATALOG(root)):
+        tasks = replay._repository_tasks
+        with mock.patch.object(replay, "_repository_tasks", lambda _repository: tasks(root)), \
+                mock.patch.object(replay.packs, "discover", lambda _repository: {
+                    "packs": [], "default_digest": None, "skipped": []}):
             yield Path(root)
 
 
@@ -579,6 +579,7 @@ class StudioReplayTests(unittest.TestCase):
         with fixture_tasks("link-alias") as root:
             catalog = replay.task_catalog(root)
         self.assertEqual(catalog["tasks"], [{"id": "link-alias", "label": "Link Alias"}])
+        server.REPLAY_CATALOG.validate(catalog)
         self.assertIn("release", catalog["target_kinds"])
 
     def test_unknown_benchmark_task_is_refused_before_spend_preview(self):

@@ -231,6 +231,8 @@ export function ExperimentsPage() {
 
       {replayCatalog && <ReplayPanel
         tasks={replayCatalog.tasks.map((task) => task.id)}
+        packs={replayCatalog.packs}
+        defaultPack={replayCatalog.default_pack}
         defaultModel={replayCatalog.default_model}
         rows={replayResult?.result?.table ?? []}
         progress={replayResult?.progress ?? []}

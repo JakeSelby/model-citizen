@@ -1554,7 +1554,7 @@ RUN_DETAIL = ResponseSchema("json-object", (
     ("duration_ms", "integer-or-null"), ("rerun_of", "string-or-null"),
     ("case_count", "integer"), ("flaky_count", "integer"), ("cases", "array"),
     ("reruns", "object"), ("exact_command", "string-or-null"), ("rerun", "object"),
-    ("artifacts", "array")))
+    ("artifacts", "array"), ("evaluation", "object-or-null")))
 CASE_HISTORY = ResponseSchema("json-object", (("case_id", "string"),
                                                  ("items", "array"),
                                                  ("next_cursor", "string-or-null")))
@@ -1595,6 +1595,8 @@ NATIVE_SELECTION = ResponseSchema("json-object", (("client", "string"), ("cases"
                                                     ("retry_case", "string")))
 REPLAY_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                                   ("tasks", "array"),
+                                                  ("packs", "array"),
+                                                  ("default_pack", "string-or-null"),
                                                   ("target_kinds", "array"),
                                                   ("default_model", "string"),
                                                   ("commands", "object")))
