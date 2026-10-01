@@ -564,6 +564,7 @@ development_status:
   ah-c098-bring-ad-11-s-and-ad-23-s-status-tags-in-the: ready-for-dev
   ah-c099-add-resume-tests-that-change-the-model-or-the: ready-for-dev
   ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
+  ah-c102-run-the-registered-796-pilot-and-power-analysis: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
