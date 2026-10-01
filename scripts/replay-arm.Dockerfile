@@ -38,3 +38,19 @@ RUN cd /opt/model-citizen \
     && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness sync \
     && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness trust /work
 CMD ["bash"]
+
+# A harness arm with a declared selection (an ablation arm): the same commit, with the runner's
+# `selection.json` installed as the agent user's configuration before the sync, so the sync
+# withholds what it switches off and the session resolves the same selection. The file's digest
+# is the declaration's `selection` component, and admission accepts it only when they match.
+FROM bare AS harness-selected
+ARG HARNESS_COMMIT
+COPY --chown=agent:agent harness /opt/model-citizen
+COPY --chown=agent:agent selection.json /tmp/model-citizen-selection.json
+RUN mkdir -p "$HOME/.config/agent-harness" \
+    && mv /tmp/model-citizen-selection.json "$HOME/.config/agent-harness/config.json" \
+    && cd /opt/model-citizen \
+    && test "$(git rev-parse HEAD)" = "${HARNESS_COMMIT}" \
+    && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness sync \
+    && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness trust /work
+CMD ["bash"]

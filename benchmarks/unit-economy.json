@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "design": "unit-economy",
+  "name": "unit-economy",
+  "planning": {
+    "cv": 0.25,
+    "source": "assumed, not measured: the surface sweep's planning figure; replace with the pilot variance of #796 before any registered grid"
+  },
+  "economy": {
+    "hooks/tier-agent-spawns": {"off": "off", "on": "on"},
+    "hooks/usage-feed": {"off": "off", "on": "on"},
+    "stances/cost": {"off": "off", "on": "balanced"},
+    "stances/delegation": {"off": "session-model", "on": "tiered"}
+  }
+}

@@ -7,7 +7,8 @@ estimate from characters (`CHARS_PER_TOKEN`), good for a trend between versions 
 billing; dollars come from `policy/prices.json`. Codex is not counted: its instructions are
 rendered at sync time.
 
-`replay` runs pinned tasks headlessly in two fresh containers, a bare arm and the harness at a
+`replay` runs pinned tasks, from `benchmarks/tasks.json` or an evaluator pack kept outside this
+repository (`replay_pack.py`), headlessly in two fresh containers, a bare arm and the harness at a
 pinned git ref of this repository, one history row per `--tag`. Nothing from the machine running
 it reaches either arm (`replay_arms.py`). It reads cost from the CLI's own JSON result and scores
 each run with a held-back check, itself run in a fresh container. It calls a model and spends real
@@ -46,6 +47,10 @@ import delegation_verdict  # noqa: E402  whether the delegation stance fired, pe
 import replay_pair  # noqa: E402  the one-policy pair: manifest, parity, re-spawns and decision roll-up
 import replay_detect  # noqa: E402  which rules fired, read from the saved streams
 import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
+import replay_pack  # noqa: E402  the evaluator pack: tasks and checks kept outside this repository
+import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
+import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
+import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -86,6 +91,8 @@ CHECK_TIMEOUT = 900
 KEPT_ENV = ("HOME", "USER", "PATH", "TERM")
 TOKEN_KINDS = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 MODEL_USAGE_KEYS = ("inputTokens", "outputTokens", "cacheCreationInputTokens", "cacheReadInputTokens")
+# The first call's whole prompt: every input field, so the figure does not move with cache warmth.
+PREFIX_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 # The web tools run in the CLI's own process and would reach the web through the egress proxy's
 # refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
 # the harness arm's settings carry.
@@ -304,7 +311,7 @@ def load_tasks(path):
     for task in tasks:
         missing = [k for k in ("id", "kind", "parent_sha", "good_sha", "prompt", "tests", "max_turns")
                    if k not in task]
-        if missing or task["kind"] not in ("issue", "synthetic"):
+        if missing or task["kind"] not in ("issue", "synthetic", "pack"):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
@@ -508,9 +515,17 @@ def arm_profile(arm, env, opts):
             return module.BARE_FINGERPRINT
         home = opts.get("home")
         return module.fingerprint(dict(env, HOME=str(home)) if home else env,
+                                  config=declared_selection(opts, arm),
                                   root=Path(opts.get("profile_root") or ROOT))
     except Exception:
         return None
+
+
+def declared_selection(opts, arm):
+    """An ablation arm's declared selection, which its image holds as the user configuration, so
+    its profile and attribution resolve with it; None for every other arm, which resolves with
+    the empty home's own (absent) configuration as before."""
+    return (opts.get("ablation_selections") or {}).get(arm)
 
 
 def arm_attribution(arm, env, opts):
@@ -523,6 +538,7 @@ def arm_attribution(arm, env, opts):
             return {"estimand": module.SOFT_ESTIMATE, "method": module.ATTRIBUTION_METHOD, "modules": {}}
         home = opts.get("home")
         return module.context_attribution(dict(env, HOME=str(home)) if home else env,
+                                          config=declared_selection(opts, arm),
                                           root=Path(opts.get("profile_root") or ROOT))
     except Exception:
         return None
@@ -608,6 +624,15 @@ def run_check(launch, image, workdir, argv, env=None, name=None, **kwargs):
 def mounted_snapshot(repo, sha, dest):
     """`snapshot`, opened so the image's user can write it (`replay_arms.open_for_image`)."""
     return arms.open_for_image(snapshot(repo, sha, dest))
+
+
+def task_workdir(task, repo, dest):
+    """The tree an arm starts a task in, opened for the image's user: a pack task's workspace as
+    a fresh one-commit repository (`replay_pack.materialize`), any other task this repository
+    rewound to its parent commit."""
+    if replay_pack.is_pack(task):
+        return arms.open_for_image(replay_pack.materialize(task, dest))
+    return mounted_snapshot(repo, task["parent_sha"], dest)
 
 
 def check_observer_settings(record):
@@ -976,8 +1001,9 @@ def _stream_diagnostics(messages, streamed):
             continue
         if first_write is None:
             first_write = int(body["usage"].get("cache_creation_input_tokens") or 0)
-            first_context = sum(int(body["usage"].get(key) or 0) for key in
-                                ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            # A field the CLI left out makes the prefix unknown, never a smaller prefix.
+            first_context = None if any(not isinstance(body["usage"].get(key), int) for key in PREFIX_FIELDS) \
+                else sum(body["usage"][key] for key in PREFIX_FIELDS)
         for field, key in (("cache_read", "cache_read_input_tokens"),
                            ("cache_write", "cache_creation_input_tokens")):
             if key not in body["usage"]:
@@ -1026,7 +1052,9 @@ def parse_result(stdout):
     carrying a usage block, which is what the session paid to put its instruction layer in the
     cache, as against the run's total writes. `first_call_context` is that message's whole input,
     `input + cache_creation + cache_read`: the write alone moves with how warm the cache was, the
-    total does not, so compare runs on the total and read the pair for warmth. `tool_counts` counts every `tool_use` content block
+    total does not, so compare runs on the total and read the pair for warmth. It is the
+    warmth-free prefix figure an ablation report compares (`first_call_prompt_tokens` in #514's
+    terms), and None when any of the three fields is missing, never a smaller sum. `tool_counts` counts every `tool_use` content block
     by name; `spawns` counts only the spawn calls `counted_spawns` accepts, so a denied spawn or one
     inside a `Workflow` agent is in `tool_counts` and not in `spawns`.
 
@@ -1155,8 +1183,9 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
     workdir = Path(workdir)
     tests = task["tests"]
     name = name or container_name("check", task["id"])
-    if task["kind"] == "synthetic":
-        source = (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8")
+    if task["kind"] in ("synthetic", "pack"):
+        source = (replay_pack.check_source(task) if task["kind"] == "pack" else
+                  (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8"))
         stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR)
         done = run_check(launch, image, workdir, ["python3", "-"], {}, name, input=stdin)
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
@@ -1168,6 +1197,27 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
     done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
     return _ran(done)
+
+
+# The last line a container prints once a pack's reference solution has run on the tree.
+SOLVED_MARK = "cost-bench-solved: "
+SOLVE_DRIVER = """
+from pathlib import Path as _Path
+solve(_Path(%r))
+print(%r + "ok")
+"""
+
+
+def solve_in_container(task, workdir, image, launch=subprocess.run, name=None):
+    """Apply a pack task's reference solution to `workdir` in a fresh container of `image`, exactly
+    as `score` runs a check: the solution on stdin, the tree the only mount, no network and no
+    credential. A pack is code from outside this repository, so its solution never runs here."""
+    stdin = replay_pack.solution_source(task) + SOLVE_DRIVER % (arms.WORKDIR, SOLVED_MARK)
+    done = run_check(launch, image, workdir, ["python3", "-"], {},
+                     name or container_name("solve", task["id"]), input=stdin)
+    if done.returncode or not any(line.startswith(SOLVED_MARK) for line in (done.stdout or "").splitlines()):
+        raise RuntimeError("the reference solution did not finish (exit %s)" % done.returncode)
+    return workdir
 
 
 def repo_gate(workdir, commands, image, launch=subprocess.run):
@@ -1189,10 +1239,11 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
     and every check run in containers of `image`, the bare arm, as the replay's checks do."""
     errors = []
     for task in tasks:
-        before = mounted_snapshot(repo, task["parent_sha"], Path(parent) / (task["id"] + "-parent"))
+        before = task_workdir(task, repo, Path(parent) / (task["id"] + "-parent"))
         if task["kind"] == "issue" and reaches(before, task["good_sha"]):
             errors.append("%s: the commit that solved it is present in the snapshot" % task["id"])
-        for command, code in repo_gate(before, gate or [], image, launch):
+        commands = task["pack"]["gate"] if replay_pack.is_pack(task) else gate or []
+        for command, code in repo_gate(before, commands, image, launch):
             if code:
                 errors.append("%s: `%s` already fails in a clean snapshot (exit %d)"
                               % (task["id"], command, code))
@@ -1200,6 +1251,8 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
             errors.append("%s: the check already passes at the parent sha" % task["id"])
         if task["kind"] == "issue":
             after = mounted_snapshot(repo, task["good_sha"], Path(parent) / (task["id"] + "-good"))
+        elif replay_pack.is_pack(task):
+            after = solve_in_container(task, before, image, launch)
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)
@@ -1210,31 +1263,44 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
 
 
 def contamination_errors(tasks, repo, harness_commit, tmp=None):
-    """Tasks whose answer is present in the checkout installed in the harness image.
+    """Errors for the tasks whose answer may be present in the checkout installed in the harness
+    image; `contamination_by_task` gives them per task."""
+    return [error for _, errors in contamination_by_task(tasks, repo, harness_commit, tmp) for error in errors]
+
+
+def contamination_by_task(tasks, repo, harness_commit, tmp=None):
+    """`[(task id, [error, ...])]`, one entry per task, an empty list meaning clean, checked against
+    `harness_commit` exactly as the harness image installs it: a clone with its history.
 
     An issue task mined from this repository is refused while the installed image contains this
     repository: ancestry cannot rule out a cherry-pick, squash or equivalent implementation in
     its files. A same-repository synthetic task is refused too: an arbitrary oracle failure does
-    not prove the answer absent, and its installed oracle source can expose `solve`. This check is
-    local and deterministic, and therefore runs before the first model call.
+    not prove the answer absent, and its installed oracle source can expose `solve`. A pack task
+    is clean only when no commit of that history holds its check's or solution's bytes and nothing
+    carries the pack's canary (`replay_pack.contamination_errors`). This check is local and
+    deterministic, and therefore runs before the first model call and in `--dry-run`.
     """
     parent = Path(tempfile.mkdtemp(prefix="cost-contamination-", dir=tmp))
     try:
-        errors = []
+        out, cache = [], {}
         checkout = snapshot(repo, harness_commit, parent / "checkout") if tasks else None
         for task in tasks:
             if task["kind"] == "issue":
-                errors.append("%s: same-repository issue task cannot prove its fixed files are "
-                              "absent from the installed checkout" % task["id"])
+                out.append((task["id"], ["%s: same-repository issue task cannot prove its fixed files "
+                                         "are absent from the installed checkout" % task["id"]]))
                 continue
-            oracle_path = checkout / ORACLES / (task["tests"]["oracle"] + ".py")
-            if oracle_path.is_file():
-                errors.append("%s: installed checkout exposes the held-back oracle source and "
-                              "its reference solution" % task["id"])
+            if replay_pack.is_pack(task):
+                out.append((task["id"], replay_pack.contamination_errors(task, checkout, cache)))
+                continue
+            # A dry-run fixture may name test files rather than an oracle; it is refused all the same.
+            oracle = task["tests"].get("oracle") if isinstance(task["tests"], dict) else None
+            if oracle and (checkout / ORACLES / (oracle + ".py")).is_file():
+                out.append((task["id"], ["%s: installed checkout exposes the held-back oracle source "
+                                         "and its reference solution" % task["id"]]))
             else:
-                errors.append("%s: answer absence cannot be established for this same-repository "
-                              "synthetic task" % task["id"])
-        return errors
+                out.append((task["id"], ["%s: answer absence cannot be established for this "
+                                         "same-repository synthetic task" % task["id"]]))
+        return out
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
 
@@ -1330,6 +1396,10 @@ def _attempt(task, rep, arm, opts, launch):
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    if opts.get("ablation") is not None:
+        row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
+    if opts.get("design") is not None:
+        row.update(unit_economy.row_stamp(opts["design"], arm, opts["schedule_seed"], opts["ablation_selections"]))
     pair = opts.get("pair")
     kept = pair is not None and arm != "bare"
     if pair is not None:
@@ -1352,7 +1422,7 @@ def _attempt(task, rep, arm, opts, launch):
     started = time.time()
     try:
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
-        mounted_snapshot(opts["repo"], task["parent_sha"], workdir)
+        task_workdir(task, opts["repo"], workdir)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
         timeout = None
@@ -1426,12 +1496,14 @@ def gate_output(stdout):
     return "\n".join(parts)
 
 
-def gate_passed(stdout):
+def gate_passed(stdout, green=None):
     """Green means lint reported no findings and nothing was refused. A suite verdict in the
     output is ignored either way: it is not the bar, and on a bench profile it is red for reasons
-    that are not the arm's."""
+    that are not the arm's. A pack's preflight runs its workspace's own gate instead, and is green
+    when that gate's output matches `green` (`replay_pack.GATE_GREEN`) and nothing was refused."""
     out = gate_output(stdout)
-    return "lint: 0 finding(s)" in out and PREFLIGHT_RED.search(out) is None
+    passed = re.search(green, out, re.M) is not None if green else "lint: 0 finding(s)" in out
+    return passed and PREFLIGHT_RED.search(out) is None
 
 
 def reply_text(stdout):
@@ -1457,10 +1529,10 @@ def preflight(tasks, opts, launch=subprocess.run):
         workdir = Path(tempfile.mkdtemp(prefix="cost-preflight-", dir=opts.get("tmp"))) / "repo"
         collector = None
         try:
-            mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], workdir)
+            task_workdir(tasks[0], opts["repo"], workdir)
             env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
             collector = observation_run(opts, "preflight-%s" % arm, arm_profile(arm, env, opts))
-            command = arm_command("claude", opts["model"], PREFLIGHT_PROMPT, cap,
+            command = arm_command("claude", opts["model"], opts.get("preflight_prompt", PREFLIGHT_PROMPT), cap,
                                   PREFLIGHT_TURNS, opts["arms"][arm]["declaration"]["effort"])
             try:
                 done = launch_arm(opts["arms"][arm], workdir, command, opts,
@@ -1490,7 +1562,8 @@ def preflight(tasks, opts, launch=subprocess.run):
             problems = ([] if effort_matches else
                         ["observed effort %s, pinned %s" % (observed_effort, effort)])
             problems += [observation_problem] if observation_problem else []
-            checks.append({"arm": arm, "passed": gate_passed(done.stdout) and effort_matches
+            checks.append({"arm": arm, "passed": gate_passed(done.stdout, opts.get("preflight_green"))
+                           and effort_matches
                            and not observation_problem,
                            "reply": "; ".join(problems) if problems else reply,
                            "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
@@ -1505,7 +1578,7 @@ def probe_workdirs(tasks, opts, launch=subprocess.run):
     git will use it there (`replay_arms.probe_workdir`), before anything is spent."""
     parent = Path(tempfile.mkdtemp(prefix="cost-probe-", dir=opts.get("tmp")))
     try:
-        workdir = mounted_snapshot(opts["repo"], tasks[0]["parent_sha"], parent / "repo")
+        workdir = task_workdir(tasks[0], opts["repo"], parent / "repo")
         for arm in arm_names(opts):
             arms.probe_workdir(opts["arms"][arm], workdir, launch, container_name("probe", arm))
     finally:
@@ -1558,6 +1631,25 @@ def admit_pair_arms(opts):
         raise SystemExit("replay-pair: refusing the pair %s: %s" % (pair["name"], reason))
 
 
+def admit_ablation_arms(opts):
+    """An ablation run's refusal before any spend (`ablations.admit_arms`): every arm's declaration
+    must equal control's less its selection, and its selection must resolve to a profile other
+    than control's. Selections are in the images, so the launch environments are equal by
+    construction; the fingerprints are resolved with each arm's declared selection."""
+    names = [arm for arm in arm_names(opts) if arm != "bare"]
+    fingerprints = {arm: arm_profile(arm, arm_env(arm, opts.get("stance_cost"), opts.get("proxy")), opts)
+                    for arm in names}
+    ablations.admit_arms({arm: opts["arms"][arm] for arm in names}, fingerprints)
+
+
+def admit_design_cells(opts):
+    """A grid's refusal before any spend (`unit_economy.admit_cells`): the four cells' declarations
+    must be equal less their selections, and each must resolve to its own profile."""
+    fingerprints = {cell: arm_profile(cell, arm_env(cell, opts.get("stance_cost"), opts.get("proxy")), opts)
+                    for cell in unit_economy.CELLS}
+    unit_economy.admit_cells(opts["arms"], fingerprints)
+
+
 def _replay(tasks, opts, launch, sink):
     refuse_observation_collisions(tasks, opts)
     names = arm_names(opts)
@@ -1568,6 +1660,10 @@ def _replay(tasks, opts, launch, sink):
         arms.admit_pair(opts["arms"]["bare"], opts["arms"][arm])
     if opts.get("pair") is not None:
         admit_pair_arms(opts)
+    if opts.get("ablation") is not None:
+        admit_ablation_arms(opts)
+    if opts.get("design") is not None:
+        admit_design_cells(opts)
     check_contamination = opts.get("contamination_checker", contamination_errors)
     contaminated = check_contamination(tasks, opts["repo"],
                                        opts["arms"][harness_arms[0]]["harness_commit"], opts.get("tmp"))
@@ -1589,7 +1685,10 @@ def _replay(tasks, opts, launch, sink):
             raise SystemExit(2)
         opts = dict(opts, preflight="passed")
     firsts, allowed = {}, bool(opts["stamp"].get("surface_drift_allowed"))
-    for task, rep, arm in schedule(tasks, opts["reps"], names):
+    seeded = opts.get("ablation") is not None or opts.get("design") is not None
+    order = ablations.schedule(tasks, opts["reps"], names, opts["schedule_seed"]) \
+        if seeded else schedule(tasks, opts["reps"], names)
+    for task, rep, arm in order:
         if spent + opts["run_cap"] > opts["spend_cap"]:
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
@@ -1819,6 +1918,12 @@ def cmd_summarise(args):
     if not path.is_file():
         raise SystemExit("cost-bench: %s does not exist" % path)
     rows = read_jsonl(path)
+    if unit_economy.is_design(rows):
+        return summarise_design(rows, path, args)
+    if ablations.is_ablation(rows):
+        return summarise_ablation(rows, path, args)
+    if getattr(args, "correction", None):
+        raise SystemExit("cost-bench: --correction applies to an ablation run's arms only")
     if replay_pair.is_pair(rows):
         return summarise_pair(rows, path, args)
     try:
@@ -1837,6 +1942,34 @@ def cmd_summarise(args):
     sys.stdout.write(json.dumps(dict(result, delegation=delegation), indent=2, sort_keys=True) + "\n"
                      if args.json else replay_stats.render(result) + delegation_verdict.render(delegation))
     return 0
+
+
+def summarise_ablation(rows, path, args):
+    """An ablation run's report (`ablations.summarise`): each arm against control on every measure,
+    ranked by effect size. Exit 1 when the post-run parity or the attribution check refuses it."""
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws a two-arm result; an ablation run's report is text or JSON")
+    try:
+        result = ablations.summarise(rows, args.seed, args.resamples, getattr(args, "correction", None),
+                                     surface=surface_of)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the ablation run in %s: %s" % (path, exc))
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else ablations.render(result))
+    return 0 if result["parity"]["ok"] else 1
+
+
+def summarise_design(rows, path, args):
+    """A grid's report (`unit_economy.summarise`), result schema 1 with `--json`: the unit's and the
+    economy concern's effects and their interaction on three metrics. Exit 1 when the post-run
+    parity refuses the rows."""
+    if args.plot or getattr(args, "correction", None):
+        raise SystemExit("cost-bench: --plot and --correction do not apply to a grid; its report is text or JSON")
+    try:
+        result = unit_economy.summarise(rows, None, args.seed, args.resamples, surface=surface_of)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the grid in %s: %s" % (path, exc))
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else unit_economy.render(result))
+    return 0 if result["parity"]["ok"] else 1
 
 
 def summarise_pair(rows, path, args):
@@ -1972,7 +2105,41 @@ def verify_command(args, tasks):
     return 1 if errors else 0
 
 
-def resolve_tier(args):
+def open_pack_for(args):
+    """The evaluator pack `--pack` names, opened at `--pack-ref` and its tier's set loaded, or None
+    without one. Refused first: a pack beside `--tasks` or `--pair`, and a ref or digest with no
+    pack. The caller closes it (`replay_pack.close_pack`)."""
+    if not getattr(args, "pack", None):
+        if any(getattr(args, flag, None) for flag in ("pack_ref", "pack_digest", "pack_set")):
+            raise SystemExit("cost-bench: --pack-ref, --pack-digest and --pack-set need --pack")
+        return None
+    if getattr(args, "tasks", None):
+        raise SystemExit("cost-bench: --tasks and --pack name two task sources; name one")
+    if getattr(args, "pair", None):
+        raise SystemExit("cost-bench: --pair is refused with --pack: a pair's manifest digest is "
+                         "taken over a task file, which a pack does not have")
+    if getattr(args, "ablations", None):
+        raise SystemExit("cost-bench: --ablations is refused with --pack: the ablation runner does "
+                         "not yet run the pack's contamination check or pin its digest")
+    pack = replay_pack.open_pack(args.pack, args.pack_ref or "HEAD", args.pack_digest, ROOT,
+                                 getattr(args, "tmp", None))
+    try:
+        tier = getattr(args, "tier", None) or micro.PRODUCTION
+        tasks, manifest = replay_pack.load_set(pack, getattr(args, "pack_set", None) or tier, tier)
+    except BaseException:
+        replay_pack.close_pack(pack)
+        raise
+    pack.update(tasks=tasks, manifest=manifest)
+    return pack
+
+
+def full_set_size(args):
+    """How many tasks the whole set holds, so a `--task` subset never writes a history row."""
+    size = getattr(args, "set_size", None)
+    return size if size is not None else len(load_tasks(args.tasks))
+
+
+def resolve_tier(args, pack=None):
     """Fill the tier's defaults into `args`, and refuse what the micro tier cannot run.
 
     The micro tier reads its manifest's pinned model, the protocol in `replay_micro` and its own
@@ -1982,18 +2149,20 @@ def resolve_tier(args):
     Namespaces built without `tier`, as older callers build them, are the production tier."""
     args.tier = getattr(args, "tier", None) or micro.PRODUCTION
     if args.tier != micro.MICRO:
-        args.tasks = args.tasks or str(ROOT / TASKS)
+        if pack is None:
+            args.tasks = args.tasks or str(ROOT / TASKS)
         args.reps = DEFAULT_REPS if args.reps is None else args.reps
         args.run_cap = RUN_CAP_USD if args.run_cap is None else args.run_cap
         return None
-    args.tasks = args.tasks or str(ROOT / micro.TASKS)
-    document = micro.load_document(args.tasks)
+    if pack is None:
+        args.tasks = args.tasks or str(ROOT / micro.TASKS)
+    document = pack["manifest"] if pack is not None else micro.load_document(args.tasks)
     errors = micro.check_manifest(document, replay_detect.load_detectors().DETECTORS)
     if errors:
         raise SystemExit("cost-bench: invalid micro manifest:\n  " + "\n  ".join(errors))
-    if getattr(args, "pair", None):
-        raise SystemExit("cost-bench: --pair is refused with --tier micro: the micro tier runs bare "
-                         "against harness")
+    if getattr(args, "pair", None) or getattr(args, "ablations", None):
+        raise SystemExit("cost-bench: --%s is refused with --tier micro: the micro tier runs bare "
+                         "against harness" % ("pair" if getattr(args, "pair", None) else "ablations"))
     if args.model and args.model != document["model"]:
         raise SystemExit("cost-bench: the micro manifest pins model %s, not %s" % (document["model"], args.model))
     args.model = document["model"]
@@ -2007,8 +2176,22 @@ def resolve_tier(args):
 
 
 def cmd_replay(args):
-    resolve_tier(args)
-    tasks = load_tasks(args.tasks)
+    pack = open_pack_for(args)
+    try:
+        return _cmd_replay(args, pack)
+    finally:
+        replay_pack.close_pack(pack)
+
+
+def _cmd_replay(args, pack):
+    resolve_tier(args, pack)
+    tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
+    args.set_size = len(tasks)
+    if pack:
+        args.series_source = json.dumps({"pack": replay_pack.identity(pack), "set": pack["manifest"]["set"],
+                                         "tasks": [t["id"] for t in tasks]}, sort_keys=True).encode()
+        print("pack %s %s at %s, digest %s, set %s (%s tier)" % (
+            pack["name"], pack["version"], pack["commit"], pack["digest"], pack["manifest"]["set"], args.tier))
     if args.task:
         tasks = [t for t in tasks if t["id"] in args.task]
     if not tasks:
@@ -2016,6 +2199,13 @@ def cmd_replay(args):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    if getattr(args, "design", None):
+        return replay_design(args, tasks, protocol)
+    if getattr(args, "unit", None):
+        raise SystemExit("cost-bench: --unit names a grid's unit; it needs --design unit-economy")
+    manifest = ablation_manifest(args)
+    if manifest is not None:
+        return replay_ablations(args, tasks, protocol, manifest)
     pair = pair_manifest(args)
     if not pair and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
@@ -2041,14 +2231,28 @@ def cmd_replay(args):
     if args.allow_surface_drift:
         print("cost-bench: --allow-surface-drift: a set whose loaded surface moves runs on, and every "
               "row says surface_drift_allowed")
-    if args.dry_run:  # nothing is built and nothing is spent
+    if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
+        for task in tasks if pack else ():
+            print("  task %s: %s, expected absorbed calls %s" % (
+                task["id"], "long" if task.get("long") else "short", task.get("expected_absorbed_calls")))
+        refused = 0
         for tag, decl in harness_decls:
             print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],
                                                    arms.image_name(decl)))
+            for task_id, errors in contamination_by_task(tasks, ROOT, decl["harness"]["commit"], args.tmp):
+                print("    contamination %s: %s" % (task_id, "; ".join(errors) if errors else "clean"))
+                refused += bool(errors)
             for task, rep, arm in plan:
                 print("    %s rep %d %s" % (task["id"], rep, arm))
+        if refused:
+            print("cost-bench: %d task check(s) refused by the contamination control; the run would "
+                  "stop before any model call" % refused, file=sys.stderr)
+            return 2
         return 0
+    if pack and not args.exploratory and not args.pack_digest:
+        raise SystemExit("cost-bench: a registered run pins its pack: pass --pack-digest %s, the digest "
+                         "its pre-registration names" % pack["digest"])
     if pair and args.spend_cap is None:
         raise SystemExit("cost-bench: a pair needs --spend-cap: the default is sized for two arms, and a "
                          "pair runs three")
@@ -2063,7 +2267,8 @@ def cmd_replay(args):
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
               "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
               "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
-              "protocol": protocol, "pair": pair}
+              "protocol": protocol, "pair": pair,
+              "pack_stamp": replay_pack.identity(pack) if pack else {}}
     status = 0
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
@@ -2071,6 +2276,188 @@ def cmd_replay(args):
             status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
                                             harness))
     return status
+
+
+def ablation_manifest(args):
+    """The schema-2 manifest `--ablations` names, or None. A schema-1 file there is #754's pair,
+    so it becomes `--pair` and runs the pair path unchanged."""
+    path = getattr(args, "ablations", None)
+    if not path:
+        return None
+    if getattr(args, "pair", None):
+        raise SystemExit("cost-bench: name one manifest, with --pair or with --ablations")
+    manifest = ablations.load(path)
+    if manifest.get("schema") == ablations.PAIR_SCHEMA:
+        args.pair = path
+        return None
+    if args.stance_cost:
+        raise SystemExit("cost-bench: --stance-cost is refused with --ablations: each arm's declared "
+                         "entry is its only difference from control")
+    if len(args.tag or []) != 1:
+        raise SystemExit("cost-bench: an ablation run names exactly one --tag, the harness its control "
+                         "and every arm are built from")
+    return manifest
+
+
+def ablation_entry_errors(manifest, commit, tmp=None):
+    """`ablations.check_entries` against a clone of `commit`, read by that commit's own resolver
+    with an empty home. No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-ablation-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        return ablations.check_entries(manifest, catalog.posture_module(root), root)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def replay_ablations(args, tasks, protocol, manifest):
+    """An N-arm ablation run: bare, control and one declared-selection image per manifest arm.
+
+    Every entry is checked against the tag before anything is printed as a plan, so an unknown id
+    costs nothing; the minimum detectable effect is stated next; then the schedule, ordered from
+    the recorded seed with the leading arm rotating. A dry run stops there. A real run builds every
+    image, and `_replay` refuses any arm whose declaration differs from control's beyond its
+    selection before the first model call. Rows go to the results directory; no history row."""
+    tags = args.tag
+    refuse_candidate(tags)
+    if not args.model:
+        raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
+    bare_decl, [(tag, control_decl)] = declarations(tags, effort=args.effort)
+    errors = ablation_entry_errors(manifest, control_decl["harness"]["commit"], args.tmp)
+    if errors:
+        raise SystemExit("cost-bench: refusing the ablation manifest before any spend:\n  %s" % "\n  ".join(errors))
+    seed = args.schedule_seed if getattr(args, "schedule_seed", None) is not None else ablations.default_seed(manifest)
+    names = ablations.arm_names(manifest)
+    plan = ablations.schedule(tasks, args.reps, names, seed)
+    inputs = arms.qualification_inputs()
+    selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
+                                         control_decl["claude_code_version"], args.effort, selection=selection))
+                for ident, selection in ablations.selections(manifest).items()]
+    print("%d run(s): %d task(s) x %d arm(s) (bare, control and %d ablation arm(s)) x %d rep(s), model %s at "
+          "effort %s, %g USD per run, %s; schedule seed %d"
+          % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
+             "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
+             else "a real run must name its --spend-cap", seed))
+    print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
+    print("ablation %s (manifest %s); each arm's selection is declared into its own image"
+          % (manifest["name"], manifest["sha256"][:12]))
+    if args.dry_run:  # nothing is built and nothing is spent
+        print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
+        print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), control_decl["harness"]["commit"],
+                                                        arms.image_name(control_decl)))
+        for spec, (ident, decl) in zip(manifest["arms"], selected):
+            change = "removes %s" % spec["removes"] if "removes" in spec else \
+                "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
+            print("  arm %s %s: %s" % (ident, change, arms.image_name(decl)))
+        for task, rep, arm in plan:
+            print("    %s rep %d %s" % (task["id"], rep, arm))
+        return 0
+    if args.spend_cap is None:
+        raise SystemExit("cost-bench: an ablation run needs --spend-cap: the default is sized for two arms")
+    if not os.environ.get(arms.CREDENTIAL):
+        raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
+                         % arms.CREDENTIAL)
+    arms_dir = Path(args.arms_dir) if args.arms_dir else Path(tempfile.mkdtemp(prefix="model-citizen-arms-"))
+    print("cost-bench: arm declarations and manifests go in %s" % arms_dir)
+    bare = arms.build_arm(bare_decl, arms_dir, snapshot, tmp=args.tmp)
+    common = {"tasks": tasks, "plan": plan, "bare": bare, "arms_dir": arms_dir,
+              "out": Path(args.out) if args.out else None,
+              "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
+              "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
+              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
+              "protocol": protocol, "pair": None, "ablation": manifest, "schedule_seed": seed}
+    with arms.egress(bare["image"]) as net:
+        control = arms.build_arm(control_decl, arms_dir, snapshot, tmp=args.tmp)
+        common["ablation_records"] = {ident: arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+                                      for ident, decl in selected}
+        return replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]), control)
+
+
+def design_grid(manifest, unit, commit, tmp=None):
+    """`unit_economy.grid` against a clone of `commit`, read by that commit's own resolver with an
+    empty home. No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-design-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        return unit_economy.grid(manifest, unit, catalog.posture_module(root), root)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def replay_design(args, tasks, protocol):
+    """The unit-by-economy grid: bare and four declared-selection cells from one tag.
+
+    The grid is resolved and its parity checked against the tag before anything is printed as a
+    plan, so a unit the design cannot separate costs nothing; the minimum detectable effect and the
+    nominal cost follow, then the schedule from the recorded seed with the leading arm rotating. A
+    dry run stops there. A real run needs `--spend-cap` and `--raw`, since rule adherence is read
+    from the saved streams; `_replay` refuses cells whose declarations differ beyond their
+    selections before the first model call. Rows go to the results directory; no history row."""
+    if args.design != unit_economy.MANIFEST_DESIGN:
+        raise SystemExit("cost-bench: --design takes %s" % unit_economy.MANIFEST_DESIGN)
+    if not args.unit:
+        raise SystemExit("cost-bench: --design unit-economy needs --unit <kind>.<id>, such as rules.secrets")
+    if getattr(args, "ablations", None) or getattr(args, "pair", None) or args.stance_cost:
+        raise SystemExit("cost-bench: --design is refused with --ablations, --pair or --stance-cost: the "
+                         "two factors are each cell's only difference")
+    tags = args.tag or []
+    if len(tags) != 1:
+        raise SystemExit("cost-bench: a grid names exactly one --tag, the harness every cell is built from")
+    refuse_candidate(tags)
+    if not args.model:
+        raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
+    manifest = unit_economy.load(args.design_manifest)
+    unit = unit_economy.unit_entry(args.unit)
+    bare_decl, [(tag, control_decl)] = declarations(tags, effort=args.effort)
+    spec = design_grid(manifest, unit, control_decl["harness"]["commit"], args.tmp)
+    if spec["errors"]:
+        raise SystemExit("cost-bench: refusing the grid before any spend:\n  %s" % "\n  ".join(spec["errors"]))
+    seed = args.schedule_seed if args.schedule_seed is not None else int(manifest["sha256"][:8], 16)
+    names = unit_economy.ARM_NAMES
+    plan = ablations.schedule(tasks, args.reps, names, seed)
+    inputs = arms.qualification_inputs()
+    selected = [(cell, arms.declaration("harness", inputs, control_decl["harness"], control_decl["claude_code_version"],
+                                        args.effort, selection=spec["selections"][cell]))
+                for cell in unit_economy.CELLS]
+    print("%d run(s): %d task(s) x %d arm(s) (bare and the four cells) x %d rep(s), model %s at effort %s, "
+          "%g USD per run, %g USD nominal if every run reaches its cap, %s; schedule seed %d"
+          % (len(plan), len(tasks), len(names), args.reps, args.model, args.effort, args.run_cap,
+             len(plan) * args.run_cap, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
+             else "a real run must name its --spend-cap", seed))
+    print(unit_economy.planned_mde(manifest, len(tasks), args.reps))
+    print("grid %s (manifest %s): unit %s, economy %s; base selection %s; unit detectors %s"
+          % (manifest["name"], manifest["sha256"][:12], unit, ", ".join(spec["economy"]),
+             spec["base_selection_sha256"][:12], ", ".join(spec["instruments"]) or "none, so adherence is unmeasured"))
+    if args.dry_run:  # nothing is built and nothing is spent
+        print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
+        for cell, decl in selected:
+            print("  cell %s (unit %s, economy %s): %s" % (cell, *("on" if f else "off" for f in unit_economy.FACTORS[cell]),
+                                                         arms.image_name(decl)))
+        for task, rep, arm in plan:
+            print("    %s rep %d %s" % (task["id"], rep, arm))
+        return 0
+    if args.spend_cap is None:
+        raise SystemExit("cost-bench: a grid needs --spend-cap: the default is sized for two arms, and a grid runs five")
+    if not args.raw:
+        raise SystemExit("cost-bench: a grid needs --raw: rule adherence is read from each run's saved stream")
+    if not os.environ.get(arms.CREDENTIAL):
+        raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
+                         % arms.CREDENTIAL)
+    arms_dir = Path(args.arms_dir) if args.arms_dir else Path(tempfile.mkdtemp(prefix="model-citizen-arms-"))
+    print("cost-bench: arm declarations and manifests go in %s" % arms_dir)
+    bare = arms.build_arm(bare_decl, arms_dir, snapshot, tmp=args.tmp)
+    common = {"tasks": tasks, "plan": plan, "bare": bare, "arms_dir": arms_dir,
+              "out": Path(args.out) if args.out else None,
+              "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
+              "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
+              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
+              "protocol": protocol, "pair": None, "schedule_seed": seed,
+              "design": unit_economy.stamp_of(manifest, spec), "design_selections": spec["selections"]}
+    with arms.egress(bare["image"]) as net:
+        common["design_records"] = {cell: arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+                                    for cell, decl in selected}
+        return replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
+                          common["design_records"]["base"])
 
 
 def pair_manifest(args):
@@ -2103,7 +2490,8 @@ def replay_tag(tag, args, common, harness):
     is_micro = tier == micro.MICRO
     # The production series keeps its original seed; the micro tier's adds its name, so the two
     # can never share a series even over identical bytes.
-    series = hashlib.sha256(Path(args.tasks).read_bytes() + args.model.encode()
+    source = getattr(args, "series_source", None) or Path(args.tasks).read_bytes()
+    series = hashlib.sha256(source + args.model.encode()
                             + b"|container" + (b"|micro" if is_micro else b"")).hexdigest()[:8]
     home = micro.HISTORY_DIR if is_micro else Path("benchmarks")
     out = (common["out"] or ROOT / home / version) / tag
@@ -2126,6 +2514,7 @@ def replay_tag(tag, args, common, harness):
                           "harness_version": version, "harness_sha": commit,
                           "surface_drift_allowed": bool(args.allow_surface_drift),
                           **({"tier": micro.MICRO} if is_micro else {}),
+                          **common.get("pack_stamp", {}),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
         if pair:
@@ -2135,6 +2524,22 @@ def replay_tag(tag, args, common, harness):
                         decisions=out / replay_pair.DECISIONS, tasks_sha256=replay_pair.sha256(args.tasks),
                         prices_sha256=replay_pair.sha256(ROOT / "policy" / "prices.json"))
             opts["stamp"]["prices_sha256"] = opts["prices_sha256"]
+        if tasks and replay_pack.is_pack(tasks[0]):
+            opts.update(preflight_prompt=replay_pack.preflight_prompt(tasks[0]),
+                        preflight_green=replay_pack.GATE_GREEN)
+        ablation = common.get("ablation")
+        if ablation:
+            # Control is the tag's own image; each arm is its own declared-selection image.
+            opts.update(arm_names=ablations.arm_names(ablation), ablation=ablation,
+                        schedule_seed=common["schedule_seed"],
+                        ablation_selections=ablations.selections(ablation),
+                        arms=dict({"bare": common["bare"], "harness": harness}, **common["ablation_records"]))
+        design = common.get("design")
+        if design:
+            # Every cell is its own declared-selection image; there is no undeclared control.
+            opts.update(arm_names=unit_economy.ARM_NAMES, design=design, schedule_seed=common["schedule_seed"],
+                        ablation_selections=common["design_selections"],
+                        arms=dict({"bare": common["bare"]}, **common["design_records"]))
         out.mkdir(parents=True, exist_ok=True)
         opts["observation_dir"] = prepare_observation_dir(out)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
@@ -2146,6 +2551,13 @@ def replay_tag(tag, args, common, harness):
         # from the streams this tag's runs saved: a timeout saves none.
         detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
         write_jsonl(out / DETECTIONS, detections)
+    design = common.get("design")
+    if design and rows:
+        # Rewritten whole, after the set: adherence is read from the streams this set saved.
+        module = replay_detect.load_detectors()
+        rows = rule_adherence.stamp(rows, detections, design["instruments"], rule_adherence.registry_ids(module),
+                                    rule_adherence.detectors_sha256())
+        write_jsonl(out / RESULTS, rows)
     if is_micro and rows:
         # Rewritten whole, after the set: `replay` streams each row as it lands, before any
         # detector has read its stream.
@@ -2156,12 +2568,12 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if pair:
-        print("cost-bench: a pair writes no history row; results are in %s, and summarise reads them"
-              % out, file=sys.stderr)
+    if pair or common.get("ablation") or design:
+        print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
+              % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
-    elif rows and len(tasks) == len(load_tasks(args.tasks)) and not stopped:
+    elif rows and len(tasks) == full_set_size(args) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / home
         home_dir.mkdir(parents=True, exist_ok=True)
         if is_micro:
@@ -2260,6 +2672,15 @@ def main(argv=None):
     run.add_argument("--tasks", help="the task manifest; default the tier's own, %s or %s"
                      % (TASKS.as_posix(), micro.TASKS.as_posix()))
     run.add_argument("--task", action="append", help="run only this task id; repeatable")
+    run.add_argument("--pack", help="an evaluator pack: a git repository outside this one holding the "
+                     "tasks, workspaces, held-back checks and reference solutions; the tier picks its "
+                     "set. Replaces --tasks")
+    run.add_argument("--pack-ref", help="with --pack, the commit, tag or branch to read; default HEAD. "
+                     "The pack is read from that commit, never its working tree")
+    run.add_argument("--pack-set", help="with --pack, the set to run; default the one named after "
+                     "--tier. A set of the micro tier pins its model")
+    run.add_argument("--pack-digest", help="with --pack, the digest the pack must have; required for "
+                     "a registered run, which names it in its pre-registration")
     run.add_argument("--tag", action="append", help="the harness ref the harness arm is built from: a "
                      "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
                      "writes its own history row. Required")
@@ -2281,6 +2702,17 @@ def main(argv=None):
     run.add_argument("--pair", help="an ablation manifest (benchmarks/ablations/<name>.json): run its "
                      "tag as a reference and a treatment arm that differ in its one factor, beside the "
                      "bare arm; writes no history row")
+    run.add_argument("--ablations", help="an ablation manifest: benchmarks/ablations.json (schema 2) runs "
+                     "bare, control and one declared-selection arm per entry, after stating the minimum "
+                     "detectable effect; a schema-1 pair file runs as --pair does; writes no history row")
+    run.add_argument("--schedule-seed", type=int, help="with --ablations or --design, the seed the schedule's order is "
+                     "drawn from; default derived from the manifest's digest; recorded on every row")
+    run.add_argument("--design", choices=(unit_economy.MANIFEST_DESIGN,),
+                     help="run the unit-by-economy two-by-two for --unit: bare and four cells from one tag")
+    run.add_argument("--unit", help="with --design, the rule, skill, role, workflow or hook under test, as "
+                     "<kind>.<id>, such as rules.secrets")
+    run.add_argument("--design-manifest", default=str(ROOT / "benchmarks" / "unit-economy.json"),
+                     help="with --design, the manifest naming the economy concern's members")
     run.add_argument("--bucket", default="", help="the one change this run measures, e.g. A; names the "
                      "history row so several buckets can share a day and a commit")
     run.add_argument("--predicted-ratio", type=float, help="the ratio the plan predicts for this bucket; "
@@ -2332,6 +2764,8 @@ def main(argv=None):
                       help="absorbed calls above which a task should delegate; default FR-34's "
                       "%(default)s, hypothetical")
     summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
+    summ.add_argument("--correction", choices=("bonferroni",), help="for an ablation run, the multiplicity "
+                      "correction its pre-registration names; without one, several arms read exploratory")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")

@@ -342,8 +342,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   on 2026-09-25 because its held-back tests pin live prices and helper names its prompt never gives.
 
 **Status.** The current manifest has no eligible replay tasks, so the runner refuses before probes,
-preflight or model calls. #796 owns an adequately powered replacement task set whose answers the
-installed harness cannot carry. The earlier live tier
+preflight or model calls. The replacement set is the evaluator pack below, whose answers the
+installed harness cannot carry (#796); a powered run of it waits on its pilot. The earlier live tier
 produced one result of 1.052 on a four-task set, above
 the 0.85 threshold, so no cost claim is published. Two earlier figures in either direction were
 artifacts of the runner's sandbox and of a test-suite defect, both since fixed. A review on
@@ -352,6 +352,55 @@ turn cap, the stop gate, web access, `usage-prices` and hook capture. Each is fi
 above, and no result has been taken since. The arms have since moved from host profiles to
 containers, which starts a new series. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
 figure to rely on today.
+
+### Evaluator pack
+
+`--pack` runs tasks kept outside this repository, so the harness arm's installed checkout cannot
+hold a task's check or answer. The pack is its own git repository, `model-citizen-evals`: a
+`pack.json`, starting workspaces, and per task a `task.json`, a held-back `check.py` and a reference
+`solution.py`. Its README gives the layout.
+
+```sh
+python3 scripts/cost_bench.py replay --pack <pack repo> --verify-tasks                # every check fails, then passes once solved
+python3 scripts/cost_bench.py replay --pack <pack repo> --tag <full commit> --exploratory --dry-run  # schedule and contamination per task
+python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack-digest <digest> \
+    --model <id> --tag <full commit> --pre-registration <plan>
+python3 scripts/cost_bench.py replay --tier micro --pack <pack repo> --pack-set delegation-nudge ...
+python3 scripts/replay_power.py --pilot <results dir>                   # k, n and m for SM-2
+```
+
+- **It is read from a pinned commit, never a working tree.** `--pack-ref` (default `HEAD`) is
+  extracted with `git archive`; the digest is the sha256 of every archived path and its bytes. A
+  registered run must name `--pack-digest`, the run refuses any other, and every row carries
+  `pack`, `pack_version`, `pack_commit` and `pack_digest`. Any change to the pack bumps its
+  version, so a frozen set is a version and a digest. A pack inside this repository, or containing
+  it, is refused.
+- **An arm sees only the task's workspace.** It is copied into a fresh git repository with one
+  commit; no check, solution or pack file goes with it. The check is sent on stdin to the scorer, a
+  fresh container of the bare image with no network and no credential that mounts only the agent's
+  tree, as every synthetic check is. `--verify-tasks` runs each workspace's own gate, then proves
+  the check fails on the workspace and passes after the reference solution.
+- **The contamination control checks every pack task at the exact harness commit,** before any
+  model call and in `--dry-run`, which prints one line per task and exits 2 when any is refused.
+  A task is refused when any commit in the installed checkout's history holds the exact bytes of
+  its check or solution, or when the checkout or its history carries the pack's canary, a string
+  every check and solution includes. The transcript check on `/opt/model-citizen` still applies.
+- **A set is chosen by tier.** `production` runs by default; `--tier micro` runs the `micro` set, or
+  the set `--pack-set` names, at the model that set pins. `--pair` and `--tasks` are refused with
+  `--pack`.
+- **Long tasks and absorbed calls.** A task's absorbed-call size is the median, over clean bare-arm
+  runs, of its `gather_calls`: the `Read`, `Grep` and `Glob` calls in every thread. The bare arm
+  never delegates, so that count is all the gathering a subagent could have absorbed. A task is
+  long when the median is above 7.6, FR-34's upper break-even. Each pack task states
+  `expected_absorbed_calls`, the files a correct solution must read plus one search, and the pack
+  refuses a `long` mark that disagrees with it; the pilot's rows confirm each mark or a new pack
+  version removes it.
+- **The power command sizes the set.** `scripts/replay_power.py` takes pilot rows, or the
+  variances stated directly, and prints the design with the fewest trials per arm whose decision
+  power (the ratio test and the pass-rate test) and claim power (those and the long subset's ratio
+  test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
+  and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
+  in its docstring.
 
 ### Pairs
 
@@ -403,6 +452,125 @@ selection, with the bare arm beside them in every trial.
   `--spend-cap` is required for a live pair, since the default is sized for two arms;
   `--stance-cost` is refused, and `--tag`, if given, must be the manifest's.
 
+### Ablation runs
+
+`replay --ablations benchmarks/ablations.json` attributes cost to single entries of the harness:
+bare, control (the harness at the tag) and one arm per entry the manifest toggles, each reported
+against control. A schema-1 pair file given to `--ablations` runs exactly as `--pair` does.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks tests/fixtures/ablation-tasks.json \
+    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni]
+```
+
+- **The manifest is schema 2.** It holds `name`, `planning` (`cv`, the assumed per-attempt
+  coefficient of variation, and its `source`) and `arms`, each an `id` and exactly one of
+  `removes: "<kind>/<unit>"`, which switches a module off, or `sets: {"<kind>/<unit>": "<variant>"}`,
+  which gives a variant kind another variant. Bare and control are implicit, so N arms run N + 2.
+- **Each arm's selection is in its image, not its environment.** The arm is declared with its
+  selection in the user-config shape (`{"rules": {"secrets": "off"}}`); the image installs it as
+  the agent user's configuration before the sync, which then withholds what it switches off.
+  Admission accepts that file only when its sha256 is the declared `selection` component, and
+  refuses a configuration nobody declared. Pairs keep their by-value factor; the two paths do not
+  mix.
+- **Refused before any spend:** an id the tag's default selection does not hold switched on, a
+  variant the tag does not ship, a selection the tag's resolver refuses, more than one `--tag` or
+  `--stance-cost`; then, once the images are built, an arm whose declaration differs from
+  control's in anything but its selection, or whose selection resolves to control's profile.
+- **The minimum detectable effect is printed before the schedule**, from the manifest's `cv` at
+  80% power and 95% two-sided, alone and with Bonferroni over the arms. It is a planning figure
+  from an assumption, not a measurement; an effect below it reads `inconclusive`.
+- **The order is drawn from a recorded seed.** The leading arm rotates with the rep, as for any
+  replay, and the arms after it follow a permutation from `--schedule-seed`, which defaults to the
+  manifest's digest. Every row records `schedule_seed`, its `ablation` (name, digest, schema 2,
+  the arm ids), the entry its arm removed (`ablation_removes`) or set (`ablation_sets`) and its
+  `selection`; its `context_attribution` is resolved with that selection, so a removed module's
+  key is absent from it.
+- **Each arm is reported against control on six measures, separately:** cost, output tokens, the
+  standing prefix, turns, tool calls and pass rate, then Cost-of-Pass last, never as the headline.
+  Each carries n, its spread (SD, and the worst per-task max over min) and a paired interval from
+  the task-clustered bootstrap SM-2 uses. An interval spanning no effect reads `inconclusive`;
+  fewer than five paired trials per task, or several arms with no `--correction`, reads
+  exploratory. Arms are ranked by the size of their cost effect.
+- **The prefix is the first call's whole prompt.** `first_call_context` sums the first call's
+  input, cache-write and cache-read tokens, so a cold and a warm run of one prompt agree, and a
+  missing field makes it None, never a smaller sum. An arm's prefix is compared only when every run
+  of it and of control lies within 2% of its (task, date) median; otherwise its summed
+  `context_attribution` stands in, labelled a soft estimate.
+- **Parity after the run.** `summarise` exits 1 when an arm loaded a surface that differs from
+  control's beyond the fields its entry may move (a skill or workflow its skill and command
+  listings, a role the agent listing, a rule or stance the memory paths), or when a removed entry
+  is still in a row's attribution. A pair's treatment declares no surface change, so any
+  difference still refuses it.
+- **No history row**, as for a pair; `citizen scorecard --results <dir>` reads the rows to fill each
+  module's measured effect. One-at-a-time toggling finds main effects only: two entries that matter
+  only together read as two inconclusive results. A sweep over a profile of your own is a local
+  diagnostic, not a publishable figure.
+
+### Unit evals: the two-by-two
+
+`replay --design unit-economy --unit <kind>.<id>` measures one rule, skill, role, workflow or hook
+in a minimal profile, alone and with the economy concern switched on, so a unit eval never pays
+for the full context. It separates the unit's effect from the economy concern's and measures how
+the two interact.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks <manifest> --design unit-economy --unit rules.secrets \
+    --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [--json]
+```
+
+- **Four cells from one base, plus bare.** The cells are `base` (nothing added), `unit` (the unit
+  alone), `economy` (the economy concern alone) and `both`. Bare, with no harness, runs as a fifth
+  arm outside the factor analysis, and each cell's Cost-of-Pass ratio to bare is descriptive.
+- **The base is derived from the tag's catalog, not hand-listed.** Every rule, skill, role,
+  workflow and non-core hook is off, the four core hooks stay on, every stance is at `off` or its
+  smallest variant, and the economy members are at their off values. The unit's declared
+  dependencies are on in every cell.
+- **The economy concern is declared in `benchmarks/unit-economy.json`.** It lists each member with
+  its off and on values: `cost` from `off` to `balanced`, `delegation` from `session-model` to
+  `tiered`, and the `tier-agent-spawns` and `usage-feed` hooks from off to on. `brief-guard` is
+  core, so it is on in every cell.
+- **Refused before any spend.** The tag's own resolver reads all four selections. Each edge of the
+  square must then differ in exactly its factor, and the diagonal in exactly both. Also refused:
+  a unit that is a member of the economy concern or depends on one, a core hook, a stance, a unit
+  in a dependency cycle, and any resolver refusal. Once the images are built, a cell whose
+  declaration differs from the others' beyond its selection is refused, as are two cells that
+  resolve to one profile.
+- **Every cell is its own declared-selection image**, as for an ablation arm. The schedule is the
+  ablation's: the leading arm rotates with the rep, so at five reps each arm leads once per task.
+  The rest follow `--schedule-seed`, which defaults to the manifest's digest. A real run needs
+  `--spend-cap`, because the default is sized for two arms, and `--raw`. The dry run prints the
+  nominal cost, which is every run at its cap.
+- **Rule adherence comes from the unit's own detectors.** After the set, each `detector:`
+  instrument in the unit's manifest is run over every saved stream, ungated, so a cell that does
+  not load the unit is measured on the same behaviour. A run is `hit` when any detector fired,
+  `compliant` when none did, and `unknown` when a stream could not be read and none fired. A unit
+  with no detector is `unmeasured` on every run, never zero.
+- **The report gives three simple effects and their interaction on three metrics:** the unit
+  alone (`unit` against `base`), the unit with economy on (`both` against `economy`), and economy
+  alone (`economy` against `base`). For Cost-of-Pass each is a ratio, and the interaction is the
+  ratio of the two unit ratios. For pass rate and rule adherence each is a difference, and the
+  interaction is the difference of the two unit differences. One task-clustered paired bootstrap
+  computes every figure from the same task draws. A resample with an infinite cost on both sides
+  is indeterminate: it is counted, and it can only widen an interval.
+- **One primary contrast.** SM-2's decision rule applies only to the contrast the pre-registration
+  names, which defaults to the unit alone on Cost-of-Pass with pass-rate non-inferiority. Every
+  other figure is descriptive. Every effect is intention to treat.
+- **Result schema 1** (`summarise --json`) holds `schema`, `design` (`unit-economy-2x2`), `unit`
+  (kind, id, instruments), `economy.members`, `base_selection_sha256` and `cells`. Each cell gives
+  its attempts, passes, errors, cost, Cost-of-Pass, a pass rate with a descriptive Wilson interval,
+  and `rule_adherence` (scored, compliant, unknown, rate, interval) or `unmeasured`. The schema
+  also holds `bare`, `effects.<metric>.<contrast>` (value, interval, undefined reason), `primary`,
+  `verdict`, `reason`, `claim`, `sm2_eligible`, `limitation`, `estimand`, `method`, `seed`,
+  `resamples`, `indeterminate_resamples` and the post-run `parity`.
+  `tests/fixtures/unit-economy/result.v1.json` is the committed example.
+- **Parity after the run.** `summarise` exits 1 when the rows hold two values of the model, Claude
+  Code version, commit, effort, schedule seed or design record. It does the same when a row's
+  factor levels contradict its arm, or a cell loaded a surface that differs from `base`'s beyond
+  its factors' entries. A grid writes no history row.
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
@@ -429,10 +597,11 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   to `benchmarks/micro/micro-history.jsonl` and `micro-history.md`; `upsert_history` refuses to
   write one tier's row into a file holding the other's, whichever `--history-dir` is named. The
   micro history carries no ratio and no verdict.
-- **It is refused by the contamination control, as every same-repository task is.** Its oracles
-  are in this repository, so the harness arm's installed checkout exposes them, and the replay
-  refuses the set before any model call. It cannot run until its tasks have independent provenance
-  or the control is changed for this tier.
+- **Its manifest here is refused by the contamination control, as every same-repository task is.**
+  Its oracles are in this repository, so the harness arm's installed checkout exposes them. The
+  evaluator pack's `micro` set re-homes the three mechanisms in a workspace of their own, with its
+  checks outside this repository; run it with `--tier micro --pack <pack repo>`. Its
+  `delegation-nudge` set holds the delegation task above break-even and its two-file control.
 - **What it can claim:** that a mechanism can fire, and did, on the pinned small model in these
   tasks. **What it cannot:** that it fires on the production model, how often it would, or
   anything about what the harness costs or saves. A small model's behaviour is not the production
@@ -441,7 +610,7 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
 ## Limits
 
 - Claude Code only. Codex instructions are rendered at sync time and are not counted.
-- Your own `CLAUDE.personal.md`, memory files, MCP servers and hook output are not counted. They
-  are yours, not the harness's, and MCP tool definitions alone can outweigh everything measured
-  here.
+- Your own instruction files, memory, MCP servers and hooks are not counted here; `citizen usage
+  --surface` lists them locally beside the harness's modules (see [usage](usage.md#the-loaded-instruction-surface)),
+  and they never enter an arm.
 - Full agent and skill bodies load only when used, so only their descriptions are counted.

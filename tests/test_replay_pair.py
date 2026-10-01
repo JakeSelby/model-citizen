@@ -12,6 +12,7 @@ import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from test_cost_bench import BENCH, PRICES, TASK, Launch, arm_record, load, options
 from test_harness import REPO
@@ -260,7 +261,9 @@ class ScheduleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tasks, pair, _ = self.write(tmp)
             out = io.StringIO()
-            with redirect_stdout(out):
+            # The dry run's contamination check has its own tests; this one is about the schedule.
+            clean = lambda tasks, repo, commit, tmp=None: [(t["id"], []) for t in tasks]  # noqa: E731
+            with redirect_stdout(out), mock.patch.object(BENCH, "contamination_by_task", clean):
                 code = BENCH.main(["replay", "--tasks", str(tasks), "--pair", str(pair), "--model", "m",
                                    "--reps", "2", "--exploratory", "--dry-run"])
         self.assertEqual(code, 0)

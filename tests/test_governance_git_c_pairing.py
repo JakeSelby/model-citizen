@@ -23,7 +23,7 @@ class GradeZeroPushPairing(Home):
             causes.extend(["$ZERO", "$SECOND"])
             return [(grader.PUSH, 0, None, []), (grader.PUSH, 2, None, [])]
 
-        with mock.patch.object(grader, "governed_text", walk):
+        with mock.patch.object(grader.library, "governed_text", walk):
             outcome, sentence = grader.govern("git -C $ZERO push; git -C $SECOND push",
                                               str(self.repo), 2, self.stance)
         self.assertEqual(outcome, "ask")

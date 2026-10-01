@@ -318,7 +318,7 @@ class GradeDenyTests(unittest.TestCase):
     """The hook-composition case must read a hook's decision, not the stance name in prose."""
 
     def test_the_marker_is_text_only_the_grade_bash_hook_writes(self):
-        hook = (REPO / "policy" / "hooks" / "grade-bash.py").read_text()
+        hook = (REPO / "policy" / "hooks" / "bash-grader.py").read_text()
         self.assertIn('HOOK = "grade-bash hook"', hook)
         self.assertIn("autonomy=%s", hook)
         self.assertIn("grade-bash hook, autonomy=", MODULE.GRADE_DENY)

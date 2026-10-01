@@ -11,6 +11,7 @@
   "commits=off",
   "cost=frugal",
   "cost=max",
+  "cost=off",
   "delegation=off",
   "delegation=session-model",
   "licensing=off",

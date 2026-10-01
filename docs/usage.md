@@ -33,6 +33,49 @@ The JSON and text renderers share the aggregation that assigns Workflow-tool run
 stderr without printing a success document. `usage export` is a separate OTLP action and rejects
 `--json` rather than silently ignoring it.
 
+## The loaded instruction surface
+
+`bin/citizen usage --surface` lists every instruction source a Claude Code session in this
+directory would load, whoever owns it, with a token figure or `unmeasured`. It reads files only;
+no ledger, no model, and nothing leaves the machine.
+
+```sh
+bin/citizen usage --surface          # grouped by owner, a total per owner
+bin/citizen usage --surface --json   # the same as one document, every source with its reason
+```
+
+- **Owners:** `harness` (its modules, taken from the same attribution a replay row carries, and
+  the harness's own linked `CLAUDE.md`), `own` (your files under `~/.claude`: instructions, their
+  `@` imports, rules, skill, agent and command listings, the output style, auto memory's
+  `MEMORY.md`), `project` (`CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` from here up,
+  or `AGENTS.md` when none exists, their imports to four hops, the project's rules and listings),
+  then `plugin`, `mcp`, `hooks` and `runtime`.
+- **Figures are soft estimates**, characters over four of the text as read; a listing counts its
+  name and description, which is what a session lists. A file the harness linked is counted once,
+  as its module. A harness rule or stance row shows its `usage --rules` coverage state.
+- **Plugins, MCP servers, hook events and the CLI's own system prompt read `unmeasured`, never 0**,
+  each with its reason: their text is served at run time or arrives per event. An unreadable file
+  is `unmeasured` with why. `--surface` refuses `--by`, `--rules`, `--stance`, `--conflicts` and
+  `--rescan`, which ask about the ledger.
+
+## The module scorecard
+
+`bin/citizen scorecard` gives one row per module in the selection in force: its state, the
+surface its manifest declares, how it is measured (its instruments, or `unmeasured`), its
+`usage --rules` coverage state for a rule or stance, its resident tokens as a soft estimate (a
+switched-off module is `not loaded`, a hook `unmeasured`), and its effect. The first line is the
+share of modules with an instrument, floored.
+
+```sh
+bin/citizen scorecard
+bin/citizen scorecard --results <ablation results dir> --json
+```
+
+The effect is `unmeasured` unless `--results` names an ablation run ([benchmarks](benchmarks.md#ablation-runs))
+with an arm that removed or set the module; then it is that arm's cost effect against control,
+with its interval, n and reading, labelled measured. No row ever says a module has no effect: a
+module nobody toggled is unmeasured, and a null result reads `inconclusive` with its interval.
+
 ## Which rules fired
 
 The same report that sums the tokens scores the rules. `bin/citizen usage --rules` counts

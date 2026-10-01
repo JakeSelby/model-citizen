@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-09-30"
+generated: "2026-10-01"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -238,8 +238,8 @@ development_status:
   ah-s237-replay-fix-the-six-defects-that-keep-the-two: done
   ah-s238-an-evidence-standard-and-a-pre-registration: done
   ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
-  ah-s240-replay-a-task-set-sized-by-power-analysis-long: backlog
-  ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: backlog
+  ah-s240-replay-a-task-set-sized-by-power-analysis-long: ready-for-dev
+  ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: ready-for-dev
   ah-s242-the-soft-estimate-report-adherence-rate-and-the: ready-for-dev
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
@@ -250,7 +250,7 @@ development_status:
   ah-s256-run-every-hook-against-recorded-tool-calls-under: ready-for-dev
   ah-s257-add-a-micro-task-tier-on-a-cheap-model-that: ready-for-dev
   ah-s258-nudge-delegation-from-the-existing-detector: ready-for-dev
-  ah-s259-per-rule-cost-attribution-across-the-whole: backlog
+  ah-s259-per-rule-cost-attribution-across-the-whole: ready-for-dev
 
   ah-e014-qualify-a-release-in-one-round-and-let-its: in-progress
   ah-b073-a-resumed-qualification-round-reruns-completed: done
@@ -500,6 +500,7 @@ development_status:
   ah-b149-grade-bash-size-ratio-timing-test-still-fails: ready-for-dev
   ah-b150-grade-bash-misses-directory-changes-from-sourced: ready-for-dev
   ah-b151-wrapper-options-and-unreadable-env-forms-let: ready-for-dev
+  ah-b152-move-the-bash-command-grader-out-of-grade-bash: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done

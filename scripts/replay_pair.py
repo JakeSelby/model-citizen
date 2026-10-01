@@ -342,8 +342,10 @@ def attempt_decision_cost(row, decisions, table, pricing):
 
 def is_pair(rows):
     """True when the rows answer an ablation, whichever of its arms ran: a pair stopped at its
-    spend cap before every arm ran is still a pair, and its decision costs are still reported."""
-    return ablation_of(rows) is not None
+    spend cap before every arm ran is still a pair, and its decision costs are still reported.
+    Rows of an N-arm manifest (`ablations`, schema 2) are not a pair."""
+    ablation = ablation_of(rows)
+    return ablation is not None and ablation.get("schema", SCHEMA) == SCHEMA
 
 
 def incomplete(rows):
@@ -363,20 +365,39 @@ def default_surface(row):
     return {k: v for k, v in row.items() if k.startswith("init_") or k == "observed_effort"}
 
 
-def surface_parity(rows, surface=default_surface):
-    """One reason per trial whose reference and treatment surfaces differ. A trial that lacks one
-    arm compares nothing and is named by `incomplete` instead."""
-    by = {(r.get("task"), r.get("rep"), r.get("arm")): r for r in rows if r.get("arm") in HARNESS_ARMS}
+def surface_parity(rows, surface=default_surface, control=REFERENCE, allowed=None):
+    """One reason per trial whose compared arm loaded a surface that differs from `control`'s in
+    anything but its declared entry. A trial that lacks an arm compares nothing and is named by
+    `incomplete` instead.
+
+    `allowed` maps each compared arm to the surface fields its declared entry may move. For the
+    pair it is `{treatment: ()}`: its factor is passed by value and declares no loaded-surface
+    change, so any difference refuses it. An N-arm ablation passes each arm's removed entry's
+    fields (`ablations.surface_parity`), and every other difference still refuses the trial."""
+    pair = allowed is None
+    allowed = {TREATMENT: ()} if pair else allowed
+    by = {(r.get("task"), r.get("rep"), r.get("arm")): r for r in rows
+          if r.get("arm") == control or r.get("arm") in allowed}
     reasons = []
     for task, rep in sorted({(t, p) for t, p, _ in by}, key=lambda k: (str(k[0]), k[1] or 0)):
-        ref, treat = by.get((task, rep, REFERENCE)), by.get((task, rep, TREATMENT))
-        if ref is None or treat is None:
-            continue
-        left, right = surface(ref), surface(treat)
-        if left != right:
+        ref = by.get((task, rep, control))
+        for arm in sorted(allowed):
+            treat = by.get((task, rep, arm))
+            if ref is None or treat is None:
+                continue
+            left, right = surface(ref), surface(treat)
+            if left == right:
+                continue
             left, right = left or {}, right or {}
             fields = sorted(k for k in set(left) | set(right) if left.get(k) != right.get(k)) or ["init event"]
-            reasons.append("%s rep %s: loaded surface differs in %s" % (task, rep, ", ".join(fields)))
+            beyond = [f for f in fields if f not in allowed[arm]]
+            if not beyond:
+                continue
+            if pair:
+                reasons.append("%s rep %s: loaded surface differs in %s" % (task, rep, ", ".join(beyond)))
+            else:
+                reasons.append("%s rep %s: %s loaded a surface that differs from %s beyond its declared "
+                               "entry, in %s" % (task, rep, arm, control, ", ".join(beyond)))
     return reasons
 
 

@@ -310,6 +310,8 @@ flowchart TB
     (Note 2026-09-29, #754: ablation manifests live in `benchmarks/ablations/`, schema 1. A one-policy
     pair names one tag, one session-scoped factor and its reference and treatment values; the bare arm
     runs beside it. No rule changes.)
+  - A prefix figure is the first call's whole prompt, every input field summed; a cache write alone is
+    never a prefix figure. (Amended 2026-10-01, #514.)
   - Every figure carries an estimand label. (Amended 2026-09-24. The labels land in v0.14.0 with
     attribution; the soft-estimate report and series land in v0.15.0.)
     - **Measured:** a count read directly from recorded rows, or an estimate from runs. Each names the
@@ -448,7 +450,7 @@ flowchart TB
   - Third-party code enters only as a pinned wheel in `lib/vendor/`, loaded by path, after a licensing
     review. There are no package-manager dependencies at runtime.
 
-### AD-22: Modules declare a manifest [PLANNED: fields and checks v0.14.0, #554; scorecard v0.15.0; slots and adapters v0.16.0]
+### AD-22: Modules declare a manifest [PLANNED: fields and checks v0.14.0, #554; scorecard v0.15.0, #514; slots and adapters v0.16.0]
 
 - **Binds:** FR-15, FR-16, FR-19, FR-58; every switchable module, the selection document and the
   scorecard.
@@ -647,3 +649,10 @@ AD-11 is adopted: usage and decision rows carry `schema_version`, and their read
 profile fingerprints (#861), adherence recording (#883) and replay-row surface records (#482)
 have shipped. Opt-in recorder registration (#867) remains open. These status corrections leave
 the recorded decisions and their original rationale unchanged.
+
+## Amendment — 2026-10-01: factor designs (#797)
+
+AD-12 reads "the ablation manifest lists arms". A design manifest (`benchmarks/unit-economy.json`)
+declares factors instead, and the runner derives the arms from them. For the unit-by-economy
+two-by-two these are bare plus four cells, each a declared-selection image. Parity is checked on the
+resolved selections, edge by edge, before any spend. The decision's other invariants are unchanged.
