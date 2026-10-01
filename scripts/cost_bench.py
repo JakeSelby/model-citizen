@@ -2077,7 +2077,7 @@ def verify_command(args, tasks):
 def open_pack_for(args):
     """The evaluator pack `--pack` names, opened at `--pack-ref` and its tier's set loaded, or None
     without one. Refused first: a pack beside `--tasks` or `--pair`, and a ref or digest with no
-    pack. The caller closes it (`replay_pack.close_pack`)."""
+    pack. `--ablations` takes a pack: `replay_ablations` runs its contamination check and pins it. The caller closes it (`replay_pack.close_pack`)."""
     if not getattr(args, "pack", None):
         if any(getattr(args, flag, None) for flag in ("pack_ref", "pack_digest", "pack_set")):
             raise SystemExit("cost-bench: --pack-ref, --pack-digest and --pack-set need --pack")
@@ -2087,9 +2087,6 @@ def open_pack_for(args):
     if getattr(args, "pair", None):
         raise SystemExit("cost-bench: --pair is refused with --pack: a pair's manifest digest is "
                          "taken over a task file, which a pack does not have")
-    if getattr(args, "ablations", None):
-        raise SystemExit("cost-bench: --ablations is refused with --pack: the ablation runner does "
-                         "not yet run the pack's contamination check or pin its digest")
     pack = replay_pack.open_pack(args.pack, args.pack_ref or "HEAD", args.pack_digest, ROOT,
                                  getattr(args, "tmp", None))
     try:
@@ -2153,6 +2150,8 @@ def cmd_replay(args):
 
 
 def _cmd_replay(args, pack):
+    # Named in the cost lines, so a figure built on the default cap never reads as a chosen one.
+    args.run_cap_source = "--run-cap" if getattr(args, "run_cap", None) is not None else "default run cap"
     resolve_tier(args, pack)
     tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
     args.set_size = len(tasks)
@@ -2170,7 +2169,7 @@ def _cmd_replay(args, pack):
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
     manifest = ablation_manifest(args)
     if manifest is not None:
-        return replay_ablations(args, tasks, protocol, manifest)
+        return replay_ablations(args, tasks, protocol, manifest, pack)
     pair = pair_manifest(args)
     if not pair and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
@@ -2275,22 +2274,30 @@ def ablation_entry_errors(manifest, commit, tmp=None):
         shutil.rmtree(str(parent), ignore_errors=True)
 
 
-def replay_ablations(args, tasks, protocol, manifest):
+def replay_ablations(args, tasks, protocol, manifest, pack=None):
     """An N-arm ablation run: bare, control and one declared-selection image per manifest arm.
 
-    Every entry is checked against the tag before anything is printed as a plan, so an unknown id
-    costs nothing; the minimum detectable effect is stated next; then the schedule, ordered from
-    the recorded seed with the leading arm rotating. A dry run stops there. A real run builds every
-    image, and `_replay` refuses any arm whose declaration differs from control's beyond its
-    selection before the first model call. Rows go to the results directory; no history row."""
+    Control is built from the commit `--tag` resolves to, and every arm is declared from that same
+    commit. Every entry is checked against it before anything is printed as a plan, so an unknown id
+    costs nothing. With an evaluator pack, each task's contamination check (`contamination_by_task`)
+    then runs at that exact commit: a dry run prints every result and exits 2 on a refusal, and a
+    real run is refused before any image is built or arm launched, as is a registered run whose
+    pack digest is not pinned. The worst-case cost at the run's own caps and the minimum detectable
+    effect are stated next; then the schedule, ordered from the recorded seed with the leading arm
+    rotating. A dry run stops there. A real run builds every image, and `_replay` refuses any arm
+    whose declaration differs from control's beyond its selection before the first model call.
+    Every row carries the pack's identity. Rows go to the results directory; no history row."""
     tags = args.tag
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
     bare_decl, [(tag, control_decl)] = declarations(tags, effort=args.effort)
-    errors = ablation_entry_errors(manifest, control_decl["harness"]["commit"], args.tmp)
+    commit = control_decl["harness"]["commit"]
+    errors = ablation_entry_errors(manifest, commit, args.tmp)
     if errors:
         raise SystemExit("cost-bench: refusing the ablation manifest before any spend:\n  %s" % "\n  ".join(errors))
+    contamination = contamination_by_task(tasks, ROOT, commit, args.tmp) if pack else []
+    contaminated = [error for _, task_errors in contamination for error in task_errors]
     seed = args.schedule_seed if getattr(args, "schedule_seed", None) is not None else ablations.default_seed(manifest)
     names = ablations.arm_names(manifest)
     plan = ablations.schedule(tasks, args.reps, names, seed)
@@ -2298,25 +2305,46 @@ def replay_ablations(args, tasks, protocol, manifest):
     selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
                                          control_decl["claude_code_version"], args.effort, selection=selection))
                 for ident, selection in ablations.selections(manifest).items()]
+    cap_source = getattr(args, "run_cap_source", "--run-cap")
+    preflight_cap = 0.0 if args.skip_preflight else PREFLIGHT_CAP_USD
     print("%d run(s): %d task(s) x %d arm(s) (bare, control and %d ablation arm(s)) x %d rep(s), model %s at "
-          "effort %s, %g USD per run, %s; schedule seed %d"
+          "effort %s, %g USD per run (%s), %s; schedule seed %d"
           % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
-             "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
+             cap_source, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
              else "a real run must name its --spend-cap", seed))
+    print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
+          "reach %g USD" % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, preflight_cap),
+                            len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
+                            preflight_cap))
     print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
     print("ablation %s (manifest %s); each arm's selection is declared into its own image"
           % (manifest["name"], manifest["sha256"][:12]))
-    if args.dry_run:  # nothing is built and nothing is spent
+    if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
-        print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), control_decl["harness"]["commit"],
+        print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), commit,
                                                         arms.image_name(control_decl)))
         for spec, (ident, decl) in zip(manifest["arms"], selected):
             change = "removes %s" % spec["removes"] if "removes" in spec else \
                 "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
             print("  arm %s %s: %s" % (ident, change, arms.image_name(decl)))
+        for task_id, task_errors in contamination:
+            print("  contamination %s at %s: %s" % (task_id, commit, "; ".join(task_errors) if task_errors
+                                                     else "clean"))
         for task, rep, arm in plan:
             print("    %s rep %d %s" % (task["id"], rep, arm))
+        if contaminated:
+            print("cost-bench: %d task check(s) refused by the contamination control; the run would "
+                  "stop before any arm launches" % sum(bool(e) for _, e in contamination), file=sys.stderr)
+            return 2
         return 0
+    if contaminated:
+        for error in contaminated:
+            print("cost-bench: contamination: %s" % error, file=sys.stderr)
+        print("cost-bench: refusing the ablation run before any arm launches", file=sys.stderr)
+        raise SystemExit(2)
+    if pack and not args.exploratory and not args.pack_digest:
+        raise SystemExit("cost-bench: a registered run pins its pack: pass --pack-digest %s, the digest "
+                         "its pre-registration names" % pack["digest"])
     if args.spend_cap is None:
         raise SystemExit("cost-bench: an ablation run needs --spend-cap: the default is sized for two arms")
     if not os.environ.get(arms.CREDENTIAL):
@@ -2330,7 +2358,8 @@ def replay_ablations(args, tasks, protocol, manifest):
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
               "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
               "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
-              "protocol": protocol, "pair": None, "ablation": manifest, "schedule_seed": seed}
+              "protocol": protocol, "pair": None, "ablation": manifest, "schedule_seed": seed,
+              "pack_stamp": replay_pack.identity(pack) if pack else {}}
     with arms.egress(bare["image"]) as net:
         control = arms.build_arm(control_decl, arms_dir, snapshot, tmp=args.tmp)
         common["ablation_records"] = {ident: arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)

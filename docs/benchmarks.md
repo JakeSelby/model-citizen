@@ -387,7 +387,7 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   every check and solution includes. The transcript check on `/opt/model-citizen` still applies.
 - **A set is chosen by tier.** `production` runs by default; `--tier micro` runs the `micro` set, or
   the set `--pack-set` names, at the model that set pins. `--pair` and `--tasks` are refused with
-  `--pack`.
+  `--pack`; `--ablations` takes one, as [Ablation runs](#ablation-runs) describes.
 - **Long tasks and absorbed calls.** A task's absorbed-call size is the median, over clean bare-arm
   runs, of its `gather_calls`: the `Read`, `Grep` and `Glob` calls in every thread. The bare arm
   never delegates, so that count is all the gathering a subagent could have absorbed. A task is
@@ -461,6 +461,8 @@ against control. A schema-1 pair file given to `--ablations` runs exactly as `--
 ```sh
 python3 scripts/cost_bench.py replay --tasks tests/fixtures/ablation-tasks.json \
     --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack-digest <digest> \
+    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --run-cap 0.10 --dry-run
 python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni]
 ```
 
@@ -478,6 +480,13 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   variant the tag does not ship, a selection the tag's resolver refuses, more than one `--tag` or
   `--stance-cost`; then, once the images are built, an arm whose declaration differs from
   control's in anything but its selection, or whose selection resolves to control's profile.
+- **On an evaluator pack, the contamination control runs at control's commit,** the one `--tag`
+  resolves to and every arm installs, before any image is built or arm launched: `--dry-run`
+  prints one line per task and exits 2 when any is refused, and a real run stops with exit 2. A
+  registered run must pin `--pack-digest`, and every row carries `pack`, `pack_version`,
+  `pack_commit` and `pack_digest`. The micro tier and `--pair` stay refused with ablations.
+- **The worst-case cost is printed before the schedule:** every run at the run's `--run-cap`, or
+  the named default when none is given, and every preflight at its cap.
 - **The minimum detectable effect is printed before the schedule**, from the manifest's `cv` at
   80% power and 95% two-sided, alone and with Bonferroni over the arms. It is a planning figure
   from an assumption, not a measurement; an effect below it reads `inconclusive`.
