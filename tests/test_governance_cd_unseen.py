@@ -198,6 +198,15 @@ class LongPrefixChains(Fixture):
                     self.assertEqual(grade[2], policy)
                     self.assertEqual(self.bash(command)[0], "ask")
 
+    def test_a_chain_past_the_cap_writing_through_a_wrapper_output_file_is_held(self):
+        # Past the cap the walk never reaches `time`, so its `-o` file is not named; the
+        # capped grade alone must still hold the write.
+        policy = ".agent-harness/" + "governance.json"
+        command = "nice " * (ro.MAX_PREFIXES + 1) + "/usr/bin/time -o " + policy + " ls"
+        self.assertGreaterEqual(grader.grade_text(command, str(self.repo))[0], 3)
+        self.assertEqual(self.bash(command)[0], "ask")
+        self.assertEqual(self.bash(command, mode="bypassPermissions")[0], "deny")
+
     def test_a_chain_past_the_cap_writing_the_approval_store_is_denied(self):
         command = "nice " * (ro.MAX_PREFIXES + 1) + "echo '{}' > %s" % approvals.store_path(SESSION)
         self.assertGreaterEqual(grader.grade_text(command, str(self.repo))[0], 3)
