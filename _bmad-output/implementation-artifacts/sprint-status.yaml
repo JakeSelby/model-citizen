@@ -499,6 +499,7 @@ development_status:
   ah-b148-grade-bash-follows-cd-into-the-wrong-directory: ready-for-dev
   ah-b149-grade-bash-size-ratio-timing-test-still-fails: ready-for-dev
   ah-b150-grade-bash-misses-directory-changes-from-sourced: ready-for-dev
+  ah-b151-wrapper-options-and-unreadable-env-forms-let: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
