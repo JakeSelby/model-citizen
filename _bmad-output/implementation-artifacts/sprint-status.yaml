@@ -238,7 +238,7 @@ development_status:
   ah-s237-replay-fix-the-six-defects-that-keep-the-two: done
   ah-s238-an-evidence-standard-and-a-pre-registration: done
   ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
-  ah-s240-replay-a-task-set-sized-by-power-analysis-long: backlog
+  ah-s240-replay-a-task-set-sized-by-power-analysis-long: ready-for-dev
   ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: ready-for-dev
   ah-s242-the-soft-estimate-report-adherence-rate-and-the: ready-for-dev
   ah-s249-a-factorial-screening-runner-for-switch: backlog
