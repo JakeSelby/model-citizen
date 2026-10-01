@@ -501,6 +501,7 @@ development_status:
   ah-b150-grade-bash-misses-directory-changes-from-sourced: ready-for-dev
   ah-b151-wrapper-options-and-unreadable-env-forms-let: ready-for-dev
   ah-b152-move-the-bash-command-grader-out-of-grade-bash: ready-for-dev
+  ah-b153-a-pack-test-intermittently-fails-cleanup-while: ready-for-dev
   ah-b154-installing-the-harness-leaves-undeclared-files: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
