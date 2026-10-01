@@ -10,7 +10,7 @@
     "epic": 27,
     "spike": 19,
     "story": 332,
-    "task": 39
+    "task": 41
   },
   "items": [
     {
@@ -8341,6 +8341,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B144.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-T040",
+      "github_number": 1101,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1101",
+      "title": "Run the registered hook-inventory spawn check for #513",
+      "type": "task",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-T040.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
