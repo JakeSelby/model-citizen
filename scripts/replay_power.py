@@ -314,7 +314,7 @@ def main(argv=None):
             powers = design_power(k, n, m, inputs, args.effect, args.alpha)
             have = {"k": k, "n": n, "m": m, "power": powers, "mde": mde(k, m, inputs, args.power, args.alpha),
                     "meets": powers["decision"] >= args.power and powers["claim"] >= args.power}
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print("replay-power: %s" % exc, file=sys.stderr)
         return 2
     if args.json:

@@ -144,6 +144,9 @@ class CommandTests(unittest.TestCase):
     def test_missing_or_mixed_inputs_exit_2(self):
         self.assertEqual(self.main("--tau2", "0.1")[0], 2)
         self.assertEqual(self.main("--pilot", "x", "--tau2", "0.1")[0], 2)
+
+    def test_a_missing_pilot_path_exits_2(self):
+        self.assertEqual(self.main("--pilot", "/nonexistent/pilot-results")[0], 2)
         self.assertEqual(self.main("--tau2", "0.02", "--cv2", "0.1", "--pass-rate", "0.8", "--tau2-pass",
                                    "0.005", "--effect", "0.3")[0], 2)
 
