@@ -239,7 +239,7 @@ development_status:
   ah-s238-an-evidence-standard-and-a-pre-registration: done
   ah-s239-replay-cost-of-pass-and-pass-rate-with-paired: ready-for-dev
   ah-s240-replay-a-task-set-sized-by-power-analysis-long: ready-for-dev
-  ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: backlog
+  ah-s241-unit-evals-the-two-by-two-of-one-rule-and-the: ready-for-dev
   ah-s242-the-soft-estimate-report-adherence-rate-and-the: ready-for-dev
   ah-s249-a-factorial-screening-runner-for-switch: backlog
   ah-s250-an-external-task-set-from-harbor-after-a: backlog
@@ -666,6 +666,7 @@ development_status:
   ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
   ah-s329-add-a-json-output-to-citizen-usage: ready-for-dev
   ah-s330-a-workflow-script-s-agent-calls-bypass-band: ready-for-dev
+  ah-s331-add-a-codex-plugin-manifest-for-the-skills: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog

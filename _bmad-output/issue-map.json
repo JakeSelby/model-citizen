@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 331,
+    "story": 332,
     "task": 41
   },
   "items": [
@@ -8367,6 +8367,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B146.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S331",
+      "github_number": 1111,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1111",
+      "title": "Add a Codex plugin manifest for the skills",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S331.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

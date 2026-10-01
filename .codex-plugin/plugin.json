@@ -1,0 +1,29 @@
+{
+  "name": "model-citizen",
+  "version": "0.14.2",
+  "description": "Skills, subagent roles, slash commands and an output style from the Model Citizen checkout, installable on their own.",
+  "author": { "name": "Jake Selby", "url": "https://github.com/JakeSelby" },
+  "license": "MIT",
+  "homepage": "https://model-citizen.dev",
+  "repository": "https://github.com/JakeSelby/model-citizen.git",
+  "keywords": ["claude-code", "codex", "agent-skills", "subagents", "context-engineering"],
+  "skills": "./primitives/skills/",
+  "interface": {
+    "displayName": "Model Citizen",
+    "shortDescription": "Plan, review, delegate, verify",
+    "longDescription": "The Model Citizen skills on their own: Review Card plans, tiered delegation, bounded subagent returns, API verification, licensing review, migration safety and worktree-per-agent isolation. The skills only; hooks, stances and the Codex projection come from a synced checkout.",
+    "developerName": "Jake Selby",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://model-citizen.dev",
+    "supportURL": "https://github.com/JakeSelby/model-citizen/issues",
+    "privacyPolicyURL": "https://github.com/JakeSelby/model-citizen/blob/main/docs/privacy.md",
+    "defaultPrompt": [
+      "Write a Review Card plan for this change.",
+      "Check this dependency's licence before we add it."
+    ],
+    "brandColor": "#2C2418",
+    "composerIcon": "./.claude-plugin/icon.svg",
+    "logo": "./.claude-plugin/icon.svg"
+  }
+}

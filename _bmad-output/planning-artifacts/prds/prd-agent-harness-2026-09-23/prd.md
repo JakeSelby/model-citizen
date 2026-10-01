@@ -2035,3 +2035,17 @@ answer.
 Current assignments are Measured v0.15.0, Studio v0.16.0, Composable v0.17.0 and Real work v0.18.0. This supersedes the earlier roadmap/version annotations, while preserving requirement IDs and capability meaning. FR-71–74 bot work moves to 0.18; the measured MVP and proof gate remain after 0.15. Independent FR-75–84 Studio work follows landed 0.15; four-arm/layer-swap and composition/judge interfaces follow in 0.17, factorial/proposal and field/Codex interfaces in 0.18. Studio design work pending in #961/#962, including any already planned AI assessment, is preserved rather than overwritten here.
 
 See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
+
+## Amendment — 2026-10-01: the unit-by-economy two-by-two (#797)
+
+Appended for #797 (AH-S241). The requirement IDs and the earlier text stand; these lines add to them.
+
+- **FR-28.** The shipped postures gain `off`, which puts no cost posture in force. It extends
+  `balanced`, so a spawn still resolves, and its per-turn feed is off. It is the economy concern's
+  off level in a unit eval.
+- **§1, Economy.** The economy concern's members for a unit eval are declared in
+  `benchmarks/unit-economy.json`: the `cost` and `delegation` stances and the `tier-agent-spawns` and
+  `usage-feed` hooks, each with its off and on value. `brief-guard` belongs to the concern too, but it
+  is a core hook, so it is on in every cell.
+- **FR-58.** An ablation manifest lists arms. A design manifest declares factors instead, and the runner
+  derives its arms from them: bare plus four cells for the two-by-two.
