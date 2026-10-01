@@ -4,12 +4,12 @@ import { MantineProvider } from "@mantine/core";
 import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { applyDraft, reviewDraftApply } from "../src/configure/api.ts";
+import { applyDraft, recoverApply, reviewDraftApply } from "../src/configure/api.ts";
 import {
-  applyBlocker, budgetDelta, canApply, coreFiles, outcomeAction, personalFiles, resultHeadline,
+  applyBlocker, budgetDelta, canApply, canRecover, changedLive, coreFiles, outcomeAction, personalFiles, resultHeadline,
   type ApplyResult, type ApplyReview,
 } from "../src/configure/applyModel.ts";
-import { ApplyControls, ApplyOutcome, ApplyReviewDetails, DraftApply } from "../src/configure/DraftApply.tsx";
+import { ApplyControls, ApplyOutcome, ApplyReviewDetails, DraftApply, RecoverControls } from "../src/configure/DraftApply.tsx";
 
 const CLEAN: ApplyReview = {
   schema_version: 1,
@@ -27,6 +27,7 @@ const CLEAN: ApplyReview = {
     { step: "check", command: "citizen doctor" },
   ],
   core: null,
+  interrupted: null,
   refusals: [],
   can_apply: true,
   apply_command: "citizen draft apply tuning --revision rev-2 --json",
@@ -176,4 +177,55 @@ test("an apply outcome is shown only on the panel that started it, but always re
   assert.deepEqual(outcomeAction(true, 3, 3), { refreshOverview: true, show: true });
   assert.deepEqual(outcomeAction(true, 3, 4), { refreshOverview: true, show: false });
   assert.deepEqual(outcomeAction(false, 3, 4), { refreshOverview: false, show: false });
+});
+
+const INTERRUPTED: ApplyReview = {
+  ...CLEAN,
+  interrupted: { apply_id: "a1", draft: "older", started: "t", recover_command: "citizen draft recover --json",
+    abandon_command: "citizen draft recover --abandon --json" },
+  refusals: [{ code: "interrupted-apply", message: "an earlier apply of draft older was interrupted" }],
+  can_apply: false,
+};
+
+test("a recovery is a change: it has its own headline and refreshes the overview", () => {
+  const recovered = result({ status: "recovered", applied: false, restored: true, message: "restored" });
+  assert.equal(resultHeadline(recovered), "An interrupted apply was rolled back and synced. Review the draft again.");
+  assert.equal(changedLive(recovered), true);
+  assert.equal(changedLive(result({ status: "abandoned", applied: false })), false);
+  assert.equal(changedLive(result({ status: "refused", applied: false })), false);
+  assert.doesNotMatch(render(h(ApplyOutcome, { result: recovered })), /Not applied/);
+});
+
+test("an open interrupted apply offers Restore and Abandon behind the draft's name", () => {
+  assert.equal(canRecover(INTERRUPTED, ""), false);
+  assert.equal(canRecover(INTERRUPTED, "older"), true);
+  assert.equal(canRecover(CLEAN, "older"), false);
+  const props = { review: INTERRUPTED, busy: "" as const, onConfirm: () => {}, onRecover: () => {} };
+  const blocked = render(h(RecoverControls, { ...props, confirmation: "" }));
+  assert.match(blocked, /An apply of older was interrupted/);
+  assert.match(blocked, /Restore/);
+  assert.match(blocked, /Abandon/);
+  assert.match(blocked, /aria-describedby="draft-recover-blocker"/);
+  assert.match(blocked, /citizen draft recover --json/);
+  assert.doesNotMatch(render(h(RecoverControls, { ...props, confirmation: "older" })), /aria-disabled/);
+  assert.doesNotMatch(render(h(RecoverControls, { ...props, review: CLEAN, confirmation: "" })), /interrupted|Restore/);
+});
+
+test("the recover API posts the action and the typed draft with CSRF", async () => {
+  const original = globalThis.fetch;
+  const calls: Array<{ input: string; body: unknown }> = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input) === "/api/session") {
+      return new Response(JSON.stringify({ csrf_token: "c" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    assert.equal((init?.headers as Record<string, string>)["X-Studio-CSRF"], "c");
+    calls.push({ input: String(input), body: JSON.parse(String(init?.body)) });
+    return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await recoverApply("abandon", "older");
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(calls, [{ input: "/api/configure/apply/recover", body: { action: "abandon", confirm: "older" } }]);
 });

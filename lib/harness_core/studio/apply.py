@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import copy
 import datetime
 import hashlib
 import json
@@ -37,6 +38,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from harness_core import reconcile
+
 from . import drafts, module_authoring, module_editing
 
 
@@ -45,6 +48,7 @@ OWN_ROOT = module_authoring.OWN_ROOT
 CLI_COMMANDS = {
     "review": ("citizen", "draft", "review", "{draft}", "--json"),
     "apply": ("citizen", "draft", "apply", "{draft}", "--revision", "{revision}", "--json"),
+    "recover": ("citizen", "draft", "recover", "--draft", "{draft}", "[--abandon]", "--json"),
 }
 # Written by `config set` itself as a consequence of a stance key, never set on its own.
 DERIVED_KEYS = ("init_defaults",)
@@ -523,13 +527,37 @@ def _dirty(worktree: Path) -> List[str]:
     return sorted(entry[3:] for entry in entries if len(entry) > 3)
 
 
-def checks_for(repo: Path, worktree: Path, raw_config: Dict[str, Any]) -> Dict[str, Any]:
-    return _checks(Path(worktree).resolve(),
-                   module_editing._mapped_config(Path(repo).resolve(), Path(worktree).resolve(), raw_config))
+@contextlib.contextmanager
+def _revision_checkout(worktree: Path, revision: str):
+    """A detached, throwaway checkout of exactly `revision`: what apply writes, not the working copy."""
+    with tempfile.TemporaryDirectory(prefix="studio-apply-check-") as temporary:
+        checkout = Path(os.path.realpath(temporary)) / "checkout"
+        added = _git(worktree, "worktree", "add", "--detach", "--quiet", str(checkout), revision)
+        if added.returncode:
+            raise ApplyError("checks-unavailable", "the draft revision could not be checked out to check it")
+        try:
+            yield checkout
+        finally:
+            removed = _git(worktree, "worktree", "remove", "--force", str(checkout))
+            if removed.returncode:
+                _git(worktree, "worktree", "prune")
+
+
+def checks_for(repo: Path, worktree: Path, raw_config: Dict[str, Any], revision: str) -> Dict[str, Any]:
+    """The checks, run on a checkout of `revision` itself.
+
+    Lint and resolution read files, and apply writes the revision's blobs, so the checks read the
+    same blobs: a working-copy edit made before or during the run can change neither.
+    """
+    repo = Path(repo).resolve()
+    with _revision_checkout(Path(worktree).resolve(), revision) as checkout:
+        result = _checks(checkout, module_editing._mapped_config(repo, checkout, raw_config))
+    result["findings"] = [line.replace(str(checkout), "<draft>") for line in result["findings"]]
+    return result
 
 
 def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[str, Any],
-          home: Path, checks: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+          home: Path, checks: Optional[Dict[str, Any]] = None, applying: bool = False) -> Dict[str, Any]:
     """Everything an apply would do, checked and simulated, without writing anything live."""
     repo, worktree = Path(repo).resolve(), Path(worktree).resolve()
     dest = destination(home)
@@ -549,11 +577,16 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
             "the draft's working copy has %d change(s) no checkpoint holds (%s); checks read the "
             "working copy and apply writes the checkpoint, so save or discard them first"
             % (len(dirty), ", ".join(dirty[:5])))})
+    # Inside apply the sync lock's holder is this apply itself.
+    running = "" if applying else running_apply(home)
     interrupted = unfinished_applies(home)
-    if interrupted:
+    if running:
+        refusals.append({"code": "apply-running", "message": running + " is applying now; review again "
+                                                                      "when it finishes"})
+    elif interrupted:
         refusals.append({"code": "interrupted-apply", "message": (
-            "an earlier apply of draft %s was interrupted; the next `citizen draft apply` restores "
-            "it before anything else" % interrupted[0].get("draft", "?"))})
+            "an earlier apply of draft %s was interrupted; restore it (`citizen draft recover`) or "
+            "abandon it (`citizen draft recover --abandon`) first" % interrupted[-1].get("draft", "?"))})
     described = drafts.describe(repo, worktree, state)
     if described["rebase_conflicted"]:
         refusals.append({"code": "draft-rebasing", "message": "the draft is in the middle of a rebase"})
@@ -589,7 +622,7 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
                        for key in order]
     mapped = module_editing._mapped_config(repo, worktree, raw_config)
     if checks is None:
-        checks = _checks(worktree, mapped)
+        checks = checks_for(repo, worktree, raw_config, state["revision"])
     if checks["status"] == "failed":
         refusals.append({"code": "checks-failed",
                          "message": "the draft has %d check finding(s); fix them in the draft first"
@@ -620,6 +653,7 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
         "budget": _budget(repo, worktree, live, mapped),
         "commands": commands,
         "core": _core_offer(repo, state, core) if core else None,
+        "interrupted": None if running or not interrupted else _interrupted_offer(interrupted[-1]),
         "refusals": refusals,
         "can_apply": not refusals,
         "apply_command": " ".join(CLI_COMMANDS["apply"]).format(
@@ -639,7 +673,7 @@ def unavailable(code: str, message: str) -> Dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "draft": {}, "destination": "", "files": [],
             "root": [], "config": [], "checks": {"status": "unavailable", "findings": [],
                                                  "truncated": False, "command": "citizen lint"},
-            "budget": None, "commands": [], "core": None,
+            "budget": None, "commands": [], "core": None, "interrupted": None,
             "refusals": [{"code": code, "message": message}], "can_apply": False,
             "apply_command": "", "nothing_applied": True}
 
@@ -683,7 +717,8 @@ class Operations:
         self.record = record
 
 
-TERMINAL_PHASES = ("completed", "failed", "recovered")
+# A `failed` row closes its intent only when it says the restore finished.
+TERMINAL_PHASES = ("completed", "recovered", "abandoned")
 
 
 def journal_path(home: Path) -> Path:
@@ -706,10 +741,19 @@ def _journal(home: Path, row: Dict[str, Any]) -> None:
     """One appended line per phase: intent before the first write, then the outcome."""
     path = journal_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    data = (json.dumps(dict(row, schema_version=SCHEMA_VERSION), sort_keys=True) + "\n").encode("utf-8")
+    descriptor = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_APPEND, 0o600)
     try:
-        os.write(descriptor, (json.dumps(dict(row, schema_version=SCHEMA_VERSION), sort_keys=True)
-                              + "\n").encode("utf-8"))
+        size = os.fstat(descriptor).st_size
+        if size and os.pread(descriptor, 1, size - 1) != b"\n":
+            # A row an earlier full disk cut short stays its own unreadable line.
+            data = b"\n" + data
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("the apply journal accepted no bytes")
+            view = view[written:]
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
@@ -740,9 +784,29 @@ def unfinished_applies(home: Path) -> List[Dict[str, Any]]:
             continue
         if row.get("phase") == "intent":
             intents[row["apply_id"]] = row
-        elif row.get("phase") in TERMINAL_PHASES:
+        elif row.get("phase") in TERMINAL_PHASES or (
+                row.get("phase") == "failed" and row.get("restored") is True):
             finished.add(row["apply_id"])
     return [row for key, row in intents.items() if key not in finished]
+
+
+def running_apply(home: Path) -> str:
+    """The apply holding the sync lock right now, by its live holder record, or ""."""
+    record = reconcile.lock_holder_record(journal_path(home).parent)
+    if not record or not str(record.get("holder", "")).startswith("citizen draft apply"):
+        return ""
+    try:
+        os.kill(int(record.get("pid")), 0)
+    except (OSError, TypeError, ValueError):
+        return ""  # a holder record a killed apply left behind
+    return str(record["holder"])
+
+
+def _interrupted_offer(intent: Mapping[str, Any]) -> Dict[str, Any]:
+    return {"apply_id": str(intent.get("apply_id", "")), "draft": str(intent.get("draft", "")),
+            "started": str(intent.get("ts", "")),
+            "recover_command": "citizen draft recover --json",
+            "abandon_command": "citizen draft recover --abandon --json"}
 
 
 def _result(status: str, code: str, message: str, planned: Optional[Mapping[str, Any]] = None,
@@ -799,7 +863,7 @@ def apply(repo: Path, name: str, revision: str, operations: Operations, actor: s
             if state["revision"] != revision:
                 return _result("refused", "stale-revision",
                                "the draft changed since it was reviewed; review it again")
-            checks = checks_for(repo, worktree, raw_config)
+            checks = checks_for(repo, worktree, raw_config, state["revision"])
             try:
                 stack.enter_context(operations.lock(holder))
                 stack.enter_context(operations.config_lock(holder))
@@ -809,8 +873,8 @@ def apply(repo: Path, name: str, revision: str, operations: Operations, actor: s
                 return _result("refused", "busy", text + "; nothing was applied", holder=named)
             interrupted = unfinished_applies(home)
             if interrupted:
-                return _recover(home, interrupted[-1], operations, log)
-            planned = _plan(repo, worktree, state, raw_config, home, checks=checks)
+                return _recover(home, interrupted[-1], operations, log, actor)
+            planned = _plan(repo, worktree, state, raw_config, home, checks=checks, applying=True)
             if planned["refusals"]:
                 first = planned["refusals"][0]
                 return _result("refused", first["code"], first["message"] + "; nothing was applied",
@@ -879,8 +943,8 @@ def _execute(home: Path, state: Mapping[str, Any], planned: Dict[str, Any],
             raise
         return _result("failed", getattr(exc, "code", "apply-failed"),
                        message + ("; the previous configuration and files were restored" if restored
-                                  else "; restoring the previous state did not complete, so run "
-                                       "`citizen doctor` and `citizen sync`") + note,
+                                  else "; restoring the previous state did not complete and stays "
+                                       "open, so run `citizen draft recover`") + note,
                        planned, apply_id=apply_id, restored=restored, log=log[-MAX_LOG_LINES:])
     try:
         doctor = _doctor(operations.doctor())
@@ -912,33 +976,52 @@ def _restore(live_path: Path, prior_config: Optional[bytes], prior_mode: int, de
         return False
 
 
-def _recover(home: Path, intent: Dict[str, Any], operations: Operations,
-             log: List[str]) -> Dict[str, Any]:
-    """Restore an apply that was interrupted, when nothing has changed since but what it wrote.
+def _set_path(document: Dict[str, Any], key: str, present: bool, value: Any) -> None:
+    parts = key.split(".")
+    node = document
+    for part in parts[:-1]:
+        child = node.get(part)
+        if not isinstance(child, dict):
+            if not present:
+                return
+            child = node[part] = {}
+        node = child
+    if present:
+        node[parts[-1]] = copy.deepcopy(value)
+    else:
+        node.pop(parts[-1], None)
 
-    Each key it set must hold its prior or applied value, every other key its prior value, and
-    each file its prior or applied bytes. Anything else is a later edit, so recovery refuses and
-    writes nothing.
+
+def _recover(home: Path, intent: Dict[str, Any], operations: Operations, log: List[str],
+             actor: str = "citizen") -> Dict[str, Any]:
+    """Restore an apply that was interrupted: only the keys and files it wrote.
+
+    Each of those must still hold its prior or its applied value; anything else is a later edit,
+    so recovery refuses and writes nothing. Keys and files the apply never touched are left as
+    they are now, whatever happened to them since.
     """
-    identity = {key: intent.get(key) for key in ("apply_id", "actor", "draft", "draft_id",
+    identity = {key: intent.get(key) for key in ("apply_id", "draft", "draft_id",
                                                   "revision", "base_revision", "destination")}
+    identity["actor"] = actor
     live_path = config_file(home)
     dest = Path(str(intent.get("destination") or destination(home)))
     conflicts: List[str] = []
     try:
         prior_config = _decoded(intent.get("prior_config"))
-        current = _flatten(_read_json_bytes(live_path.read_bytes() if live_path.is_file() else None))
+        current_bytes = live_path.read_bytes() if live_path.is_file() else None
+        current_document = _read_json_bytes(current_bytes)
+        current = _flatten(current_document)
         prior = _flatten(_read_json_bytes(prior_config))
-        applied = {item["key"]: item.get("applied") for item in intent.get("config", [])}
-        for key in sorted(set(current) | set(prior)):
-            now, before = current.get(key), prior.get(key)
-            if key in current and key in prior and _canonical(now) == _canonical(before):
+        written = {item["key"]: item for item in intent.get("config", [])}
+        for key, item in sorted(written.items()):
+            if key in current and key in prior and _canonical(current[key]) == _canonical(prior[key]):
                 continue
             if key not in current and key not in prior:
                 continue
-            if key in applied and (
-                    (applied[key] is None and key not in current)
-                    or (key in current and _canonical(now) == _canonical(applied[key]))):
+            if item.get("action") == "unset" and key not in current:
+                continue
+            if item.get("action") == "set" and key in current and \
+                    _canonical(current[key]) == _canonical(item.get("applied")):
                 continue
             conflicts.append("configuration key " + key)
         operations_list = []
@@ -951,19 +1034,32 @@ def _recover(home: Path, intent: Dict[str, Any], operations: Operations,
                                     "prior_mode": item.get("prior_mode")})
     except (ApplyError, OSError, ValueError, KeyError, TypeError) as exc:
         conflicts.append("the journal row could not be read back (%s)" % exc)
-        operations_list = []
-        prior_config = None
     if conflicts:
         return _result("refused", "interrupted-apply-conflict", (
-            "an earlier apply of draft %s was interrupted, and %s changed since; restore it by hand "
-            "from %s, then record a `recovered` row for apply %s. Nothing was applied"
-            % (identity["draft"], ", ".join(conflicts), journal_path(home), identity["apply_id"])))
+            "an earlier apply of draft %s was interrupted, and %s changed since. Put those back "
+            "yourself and run `citizen draft recover`, or keep them with `citizen draft recover "
+            "--abandon`. Nothing was applied" % (identity["draft"], ", ".join(conflicts))),
+            apply_id=str(identity["apply_id"] or ""))
+    interrupt: Optional[BaseException] = None
     try:
-        if prior_config is None:
+        untouched = {key: value for key, value in current.items() if key not in written}
+        if prior_config is not None and untouched == {
+                key: value for key, value in prior.items() if key not in written}:
+            restored_bytes: Optional[bytes] = prior_config  # nothing else moved: byte for byte
+        else:
+            document = copy.deepcopy(current_document)
+            for key in written:
+                _set_path(document, key, key in prior, prior.get(key))
+            if any(key.startswith("stances.") for key in written):
+                prior_document = _read_json_bytes(prior_config)
+                _set_path(document, "init_defaults", "init_defaults" in prior_document,
+                          prior_document.get("init_defaults"))
+            restored_bytes = (json.dumps(document, indent=2) + "\n").encode("utf-8")
+        if prior_config is None and not untouched:
             if live_path.exists():
                 live_path.unlink()
-        else:
-            drafts._atomic_bytes(live_path, prior_config, int(intent.get("prior_mode") or 0o600))
+        elif restored_bytes != current_bytes:
+            drafts._atomic_bytes(live_path, restored_bytes, int(intent.get("prior_mode") or 0o600))
         created = list(intent.get("created") or [])
         for item in operations_list:
             parent = (dest / item["path"]).parent
@@ -972,19 +1068,71 @@ def _recover(home: Path, intent: Dict[str, Any], operations: Operations,
                 parent = parent.parent
         _restore_root(dest, operations_list, created)
         restored = _sync_settled(operations.sync(False), intent.get("attention") or [])[0]
-    except BaseException:  # noqa: B036 - reported, and the intent stays open for the next apply
+    except BaseException as exc:  # noqa: B036 - the intent stays open; an interrupt propagates
         restored = False
+        if not isinstance(exc, Exception):
+            interrupt = exc
+    note = ""
     if restored:
         note = _journal_outcome(home, dict(identity, ts=_now(), phase="recovered"))
-        _decision(operations, identity, [], "failed",
-                  "An interrupted apply was rolled back before any new apply.")
-    else:
-        note = ""
-    return _result("refused", "interrupted-apply-restored" if restored else "interrupted-apply-failed", (
-        "an earlier apply of draft %s was interrupted; %s. Review the draft and apply again"
-        % (identity["draft"], "its configuration and files were restored and synced" if restored
-           else "restoring it did not complete, so run `citizen doctor`")) + note,
-        restored=restored, apply_id=str(identity["apply_id"] or ""), log=log[-MAX_LOG_LINES:])
+        _decision(operations, identity, [], "recovered",
+                  "An interrupted apply of draft %s was rolled back." % identity["draft"])
+    if interrupt is not None:
+        raise interrupt
+    if restored:
+        return _result("recovered", "", (
+            "an earlier apply of draft %s was interrupted; its configuration keys and files were "
+            "restored and synced. Review the draft and apply again" % identity["draft"]) + note,
+            restored=True, apply_id=str(identity["apply_id"] or ""), log=log[-MAX_LOG_LINES:])
+    return _result("failed", "interrupted-apply-failed", (
+        "an earlier apply of draft %s was interrupted, and restoring it did not complete; it stays "
+        "open, so run `citizen draft recover` again" % identity["draft"]),
+        apply_id=str(identity["apply_id"] or ""), log=log[-MAX_LOG_LINES:])
+
+
+def recover(operations: Operations, abandon: bool = False, draft: str = "", actor: str = "citizen",
+            home: Optional[Path] = None, log: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Restore, or explicitly abandon, the open interrupted apply, under the sync and config locks.
+
+    Abandoning keeps the current configuration and files as they are and closes the intent; it is
+    the way out when the user has deliberately kept what the interrupted apply wrote. `draft`, when
+    given, must name the interrupted apply's draft, as the Studio's confirmation does.
+    """
+    home = home_dir() if home is None else Path(home)
+    log = [] if log is None else log
+    holder = "citizen draft recover%s" % (" from Studio" if actor == "studio" else "")
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(operations.lock(holder))
+            stack.enter_context(operations.config_lock(holder))
+        except ValueError as exc:
+            text = str(exc)
+            return _result("refused", "busy", text + "; nothing was changed",
+                           holder=text.partition(": ")[2])
+        open_intents = unfinished_applies(home)
+        if not open_intents:
+            return _result("refused", "nothing-to-recover", "no interrupted apply is open")
+        intent = open_intents[-1]
+        if draft and draft != intent.get("draft"):
+            return _result("refused", "confirmation-mismatch", (
+                "the open interrupted apply is of draft %s, not %s; nothing was changed"
+                % (intent.get("draft"), draft)), apply_id=str(intent.get("apply_id", "")))
+        if abandon:
+            identity = {key: intent.get(key) for key in ("apply_id", "draft", "revision")}
+            identity["actor"] = actor
+            try:
+                _journal(home, dict(identity, ts=_now(), phase="abandoned"))
+            except OSError as exc:
+                return _result("failed", "journal-unavailable",
+                               "the apply journal could not record the abandon (%s)" % exc)
+            _decision(operations, identity, [], "abandoned",
+                      "An interrupted apply of draft %s was abandoned; its writes were kept."
+                      % identity["draft"])
+            return _result("abandoned", "", (
+                "the interrupted apply of draft %s was abandoned: its configuration and files are "
+                "kept as they are now. Run `citizen sync` if the projection needs it"
+                % identity["draft"]), apply_id=str(identity["apply_id"] or ""))
+        return _recover(home, intent, operations, log, actor)
 
 
 def _decision(operations: Operations, identity: Mapping[str, Any], files: List[str], outcome: str,

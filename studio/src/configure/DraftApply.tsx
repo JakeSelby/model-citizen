@@ -2,9 +2,10 @@ import { Alert, Button, Code, Group, Paper, Stack, Text, TextInput, Title } from
 import { useEffect, useRef, useState } from "react";
 
 import { CommandChip } from "../components/StudioKit";
-import { applyDraft, reviewDraftApply } from "./api";
+import { applyDraft, recoverApply, reviewDraftApply } from "./api";
 import {
-  applyBlocker, budgetDelta, canApply, coreFiles, outcomeAction, personalFiles, resultHeadline, shown,
+  applyBlocker, budgetDelta, canApply, canRecover, changedLive, coreFiles, outcomeAction, personalFiles,
+  resultHeadline, shown,
   type ApplyResult, type ApplyReview,
 } from "./applyModel";
 
@@ -70,7 +71,8 @@ export function ApplyReviewDetails({ review }: { review: ApplyReview }) {
 }
 
 export function ApplyOutcome({ result }: { result: ApplyResult }) {
-  const color = result.applied ? (result.doctor.status === "attention" ? "yellow" : "green") : "red";
+  const color = result.applied ? (result.doctor.status === "attention" ? "yellow" : "green")
+    : changedLive(result) || result.status === "abandoned" ? "blue" : "red";
   return (
     <Alert color={color} title={resultHeadline(result)}>
       <Text size="sm">{result.message}</Text>
@@ -115,6 +117,40 @@ export function ApplyControls({ draft, revision, review, confirmation, busy, onC
   );
 }
 
+type RecoverProps = {
+  review: ApplyReview;
+  confirmation: string;
+  busy: "" | "reviewing" | "applying";
+  onConfirm: (value: string) => void;
+  onRecover: (action: "restore" | "abandon") => void;
+};
+
+/** An interrupted apply blocks every apply until it is restored or explicitly abandoned. */
+export function RecoverControls({ review, confirmation, busy, onConfirm, onRecover }: RecoverProps) {
+  const interrupted = review.interrupted;
+  if (!interrupted) return null;
+  const ready = canRecover(review, confirmation);
+  return (
+    <Alert color="yellow" title={`An apply of ${interrupted.draft} was interrupted`}>
+      <Stack gap="sm">
+        <Text size="sm">Restore puts back only the keys and files it wrote, then syncs. Abandon keeps them as they are now.</Text>
+        <TextInput label="Confirm the interrupted draft" description={`Type ${interrupted.draft} to confirm.`}
+          onChange={(event) => onConfirm(event.currentTarget.value)} value={confirmation} />
+        <Group>
+          <Button aria-describedby={ready ? undefined : "draft-recover-blocker"} aria-disabled={!ready || undefined}
+            data-disabled={!ready || undefined} disabled={busy !== ""} loading={busy === "applying"}
+            onClick={() => { if (ready) onRecover("restore"); }}>Restore</Button>
+          <Button aria-describedby={ready ? undefined : "draft-recover-blocker"} aria-disabled={!ready || undefined}
+            data-disabled={!ready || undefined} disabled={busy !== ""} variant="default"
+            onClick={() => { if (ready) onRecover("abandon"); }}>Abandon</Button>
+          <CommandChip command={interrupted.recover_command} label="Restore from the CLI" />
+        </Group>
+        {ready ? null : <Text c="dimmed" id="draft-recover-blocker" size="sm">Type {interrupted.draft} to confirm.</Text>}
+      </Stack>
+    </Alert>
+  );
+}
+
 export function DraftApply({ draft, revision, onApplied }: Props) {
   const [review, setReview] = useState<ApplyReview | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
@@ -156,16 +192,38 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
     setMessage(`Applying ${draft} under the sync lock…`);
     try {
       const outcome = await applyDraft(draft, review.draft.revision, confirmation);
-      const action = outcomeAction(outcome.applied, current, generation.current);
+      const action = outcomeAction(changedLive(outcome), current, generation.current);
       if (action.refreshOverview) onApplied?.();
       if (!action.show) return;
       setResult(outcome);
       setMessage(resultHeadline(outcome));
       setConfirmation("");
-      if (outcome.applied) setReview(null);
+      if (changedLive(outcome)) setReview(null);
     } catch (reason) {
       if (current !== generation.current) return;
       setMessage(reason instanceof Error ? reason.message : "The apply did not report a result. Check Activity before retrying.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function runRecover(action: "restore" | "abandon") {
+    const confirm = review?.interrupted?.draft ?? "";
+    const current = generation.current;
+    setBusy("applying");
+    setMessage(action === "restore" ? "Restoring the interrupted apply under the sync lock…" : "Abandoning the interrupted apply…");
+    try {
+      const outcome = await recoverApply(action, confirm);
+      const next = outcomeAction(changedLive(outcome), current, generation.current);
+      if (next.refreshOverview) onApplied?.();
+      if (!next.show) return;
+      setResult(outcome);
+      setMessage(resultHeadline(outcome));
+      setConfirmation("");
+      if (outcome.status === "recovered" || outcome.status === "abandoned") setReview(null);
+    } catch (reason) {
+      if (current !== generation.current) return;
+      setMessage(reason instanceof Error ? reason.message : "The recovery did not report a result.");
     } finally {
       setBusy("");
     }
@@ -186,6 +244,10 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
           {message ? <Text size="sm">{message}</Text> : null}
           {result ? <ApplyOutcome result={result} /> : null}
         </div>
+        {review?.interrupted && (
+          <RecoverControls busy={busy} confirmation={confirmation} onConfirm={setConfirmation}
+            onRecover={(action) => { void runRecover(action); }} review={review} />
+        )}
         {review && <ApplyReviewDetails review={review} />}
         {review?.can_apply && (
           <ApplyControls busy={busy} confirmation={confirmation} draft={draft} onApply={runApply}

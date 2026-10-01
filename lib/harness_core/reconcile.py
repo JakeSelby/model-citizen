@@ -30,13 +30,21 @@ def atomic_text(path, text):
 HOLDER_FILE = "sync.lock.holder"
 
 
-def lock_holder(directory):
-    """The operation a caller named when it took `directory`'s lock, or None when it named none."""
+def lock_holder_record(directory):
+    """The holder record of `directory`'s lock as written, or None when there is none."""
     try:
         record = json.loads((Path(directory) / HOLDER_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(record, dict) or not isinstance(record.get("holder"), str):
+        return None
+    return record
+
+
+def lock_holder(directory):
+    """The operation a caller named when it took `directory`'s lock, or None when it named none."""
+    record = lock_holder_record(directory)
+    if record is None:
         return None
     return "%s (pid %s, since %s)" % (record["holder"], record.get("pid"), record.get("since"))
 

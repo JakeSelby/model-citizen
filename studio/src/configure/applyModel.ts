@@ -25,6 +25,9 @@ export type ApplyReview = {
     fork: { modules: Array<{ source: string; kind: string; name: string }>; command: string; note: string };
     branch: { name: string; revision: string; commands: string[] };
   } | null;
+  interrupted: {
+    apply_id: string; draft: string; started: string; recover_command: string; abandon_command: string;
+  } | null;
   refusals: ApplyRefusal[];
   can_apply: boolean;
   apply_command: string;
@@ -35,7 +38,7 @@ export type DoctorCheck = { id: string; status: "attention" | "informational"; m
 
 export type ApplyResult = {
   schema_version: number;
-  status: "applied" | "refused" | "failed";
+  status: "applied" | "refused" | "failed" | "recovered" | "abandoned";
   applied: boolean;
   error_code: string;
   message: string;
@@ -86,6 +89,8 @@ export function shown(value: unknown): string {
 
 /** The headline the live region announces after an apply. */
 export function resultHeadline(result: ApplyResult): string {
+  if (result.status === "recovered") return "An interrupted apply was rolled back and synced. Review the draft again.";
+  if (result.status === "abandoned") return "The interrupted apply was abandoned. Its changes were kept.";
   if (result.applied) return result.doctor.status === "attention"
     ? "Applied. The doctor checks need attention."
     : "Applied. The doctor checks ran.";
@@ -103,6 +108,16 @@ export function resultHeadline(result: ApplyResult): string {
  * on screen, so an applied outcome always refreshes the overview; it is shown only on the panel
  * that started it, never under a draft opened since.
  */
-export function outcomeAction(applied: boolean, started: number, current: number): { refreshOverview: boolean; show: boolean } {
-  return { refreshOverview: applied, show: started === current };
+export function outcomeAction(changed: boolean, started: number, current: number): { refreshOverview: boolean; show: boolean } {
+  return { refreshOverview: changed, show: started === current };
+}
+
+/** Whether a result changed the live harness: an apply, or a recovery that restored and synced. */
+export function changedLive(result: Pick<ApplyResult, "status">): boolean {
+  return result.status === "applied" || result.status === "recovered";
+}
+
+/** Recover needs an interrupted apply on screen and its draft's name typed back. */
+export function canRecover(review: ApplyReview | null, confirmation: string): boolean {
+  return review?.interrupted != null && confirmation === review.interrupted.draft;
 }

@@ -346,14 +346,119 @@ class DraftApplyTests(unittest.TestCase):
             self._interrupted(home, name, revision)
             review = self._review(home, name)
             self.assertIn("interrupted-apply", [item["code"] for item in review["refusals"]])
+            self.assertEqual(review["interrupted"]["draft"], name)
             code, result = self._apply(home, name, revision)
-            self.assertEqual((code, result["error_code"]), (1, "interrupted-apply-restored"), result)
+            self.assertEqual((code, result["status"], result["error_code"]), (1, "recovered", ""), result)
             self.assertTrue(result["restored"])
             self.assertNothingApplied_but_synced(home)
             self.assertEqual(self._journal(home)[-1]["phase"], "recovered")
             self.assertEqual(draft_apply.unfinished_applies(home.path), [])
             code, result = self._apply(home, name, revision)
             self.assertEqual((code, result["status"]), (0, "applied"), result["message"])
+
+    def _recover_cli(self, home, *args):
+        done = home.cli("draft", "recover", "--json", *args)
+        return done.returncode, json.loads(done.stdout)
+
+    def test_a_second_interrupt_during_the_restore_keeps_the_intent_open(self):
+        with self.real_draft("apply-double-interrupt") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            settled = {"code": 0, "attention": [], "refused": False}
+
+            def first(key, value):
+                raise KeyboardInterrupt()
+
+            with mock.patch.object(draft_apply, "_restore_root", side_effect=KeyboardInterrupt()), \
+                    self.assertRaises(KeyboardInterrupt):
+                draft_apply.apply(ROOT, name, revision,
+                                  self._operations(home, lambda dry: settled, config_set=first),
+                                  home=home.path)
+            phases = [(row["phase"], row.get("restored")) for row in self._journal(home)]
+            self.assertEqual(phases, [("intent", None), ("failed", False)])
+            self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+            self.assertTrue(home.dest.joinpath("rules", "greeting.md").is_file())
+            code, result = self._recover_cli(home)
+            self.assertEqual((code, result["status"]), (0, "recovered"), result["message"])
+            self.assertNothingApplied_but_synced(home)
+            self.assertEqual(draft_apply.unfinished_applies(home.path), [])
+
+    def test_recovery_restores_only_what_the_interrupted_apply_wrote(self):
+        with self.real_draft("apply-recover-scope") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+            live = json.loads(home.config.read_text(encoding="utf-8"))
+            live["identity"]["name"] = "Changed Later"
+            home.config.write_text(json.dumps(live, indent=2) + "\n", encoding="utf-8")
+            code, result = self._apply(home, name, revision)
+            self.assertEqual(result["status"], "recovered", result["message"])
+            restored = json.loads(home.config.read_text(encoding="utf-8"))
+            self.assertEqual(restored["identity"]["name"], "Changed Later")
+            self.assertEqual(restored["primitive_roots"], [])
+            self.assertEqual(_tree(home.dest), {})
+
+    def test_recover_can_abandon_explicitly_and_checks_the_draft_named(self):
+        with self.real_draft("apply-abandon") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+            code, result = self._recover_cli(home, "--abandon", "--draft", "someone-else")
+            self.assertEqual((code, result["error_code"]), (1, "confirmation-mismatch"))
+            self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+            code, result = self._recover_cli(home, "--abandon", "--draft", name)
+            self.assertEqual((code, result["status"]), (0, "abandoned"), result["message"])
+            self.assertEqual(draft_apply.unfinished_applies(home.path), [])
+            self.assertTrue(home.dest.joinpath("rules", "greeting.md").is_file())
+            self.assertEqual(self._journal(home)[-1]["phase"], "abandoned")
+            code, result = self._recover_cli(home)
+            self.assertEqual((code, result["error_code"]), (1, "nothing-to-recover"))
+
+    def test_an_interrupt_during_recovery_propagates_and_leaves_the_intent_open(self):
+        with self.real_draft("apply-recover-interrupt") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+
+            def interrupted_sync(dry):
+                raise KeyboardInterrupt()
+
+            with self.assertRaises(KeyboardInterrupt):
+                draft_apply.recover(self._operations(home, interrupted_sync), home=home.path)
+            self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+
+    def test_a_review_beside_a_running_apply_does_not_call_it_interrupted(self):
+        with self.real_draft("apply-running") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+            with reconcile.lock(home.state, holder="citizen draft apply " + name):
+                review = draft_apply.review(ROOT, name, home.path)
+            codes = [item["code"] for item in review["refusals"]]
+            self.assertIn("apply-running", codes)
+            self.assertNotIn("interrupted-apply", codes)
+            self.assertIsNone(review["interrupted"])
+            review = draft_apply.review(ROOT, name, home.path)
+            self.assertIn("interrupted-apply", [item["code"] for item in review["refusals"]])
+            self.assertEqual(review["interrupted"]["draft"], name)
+
+    def test_checks_read_the_revision_not_the_working_copy(self):
+        with self.real_draft("apply-check-revision") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            leaked = drafts.checkpoint(
+                ROOT, name, revision, "leak",
+                files={"personal-primitives/rules/leaky.md": ("# Leaky\n\nkey " + SECRET + "\n").encode()},
+                check_command=PASS)
+            worktree, state = drafts.find(ROOT, name)
+            leaky = worktree / "personal-primitives" / "rules" / "leaky.md"
+            leaky.write_text("# Leaky\n\nclean now\n", encoding="utf-8")
+            try:
+                raw = drafts.read_config(ROOT, name)["config"]
+                before = draft_support.draft_worktree_registered(name)
+                checks = draft_apply.checks_for(ROOT, worktree, raw, leaked["revision"])
+                self.assertEqual(checks["status"], "failed")
+                self.assertTrue(any("leaky.md" in line for line in checks["findings"]), checks)
+                listed = subprocess.run(["git", "-C", str(ROOT), "worktree", "list", "--porcelain"],
+                                        capture_output=True, text=True, check=True).stdout
+                self.assertNotIn("studio-apply-check-", listed)
+                self.assertEqual(before, draft_support.draft_worktree_registered(name))
+            finally:
+                subprocess.run(["git", "-C", str(worktree), "checkout", "--", "."], check=True)
 
     def assertNothingApplied_but_synced(self, home):
         self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), self.initial)
@@ -561,6 +666,29 @@ class PlanningTests(unittest.TestCase):
                     draft_apply._contained(dest, bad)
             self.assertEqual(draft_apply._contained(dest, "skills/a/SKILL.md"), dest / "skills/a/SKILL.md")
 
+    def test_journal_rows_are_written_whole_and_never_joined_to_a_cut_row(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            path = draft_apply.journal_path(home)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'{"apply_id": "cut", "pha')
+            real = os.write
+            with mock.patch.object(draft_apply.os, "write",
+                                   side_effect=lambda fd, data: real(fd, bytes(data[:7]))):
+                draft_apply._journal(home, {"apply_id": "a1", "phase": "intent", "draft": "x" * 200})
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], '{"apply_id": "cut", "pha')
+            self.assertEqual(json.loads(lines[1])["draft"], "x" * 200)
+            self.assertEqual([row["apply_id"] for row in draft_apply.unfinished_applies(home)], ["a1"])
+
+    def test_a_failed_row_closes_its_intent_only_when_the_restore_finished(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            for apply_id, restored in (("a", True), ("b", False)):
+                draft_apply._journal(home, {"apply_id": apply_id, "phase": "intent"})
+                draft_apply._journal(home, {"apply_id": apply_id, "phase": "failed", "restored": restored})
+            self.assertEqual([row["apply_id"] for row in draft_apply.unfinished_applies(home)], ["b"])
+
     def test_only_new_attention_items_or_a_refusal_unsettle_a_sync(self):
         settled = draft_apply._sync_settled
         self.assertEqual(settled({"code": 0}, []), (True, []))
@@ -592,7 +720,8 @@ class RouteTests(unittest.TestCase):
         routes = {route.path: route for route in server.ROUTES.entries}
         self.assertEqual(routes["/api/configure/apply/review"].cli_command, draft_apply.CLI_COMMANDS["review"])
         self.assertEqual(routes["/api/configure/apply"].cli_command, draft_apply.CLI_COMMANDS["apply"])
-        for path in ("/api/configure/apply/review", "/api/configure/apply"):
+        self.assertEqual(routes["/api/configure/apply/recover"].cli_command, draft_apply.CLI_COMMANDS["recover"])
+        for path in ("/api/configure/apply/review", "/api/configure/apply", "/api/configure/apply/recover"):
             self.assertEqual(routes[path].method, "POST")
             self.assertIsNone(routes[path].parity_exemption)
 

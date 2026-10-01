@@ -1351,6 +1351,40 @@ def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, ob
                                    "and `citizen doctor` before retrying")
 
 
+def _run_draft_recover(repo_root: Path, action: str, draft: str) -> Dict[str, object]:
+    """Run `citizen draft recover` itself, under the CLI's own locks."""
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "recover",
+               "--draft", draft, "--via-studio", "--json"] + (["--abandon"] if action == "abandon" else [])
+    try:
+        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
+                              text=True, timeout=1800)
+        payload = json.loads(done.stdout.strip().splitlines()[-1])
+        if not isinstance(payload, dict):
+            raise ValueError("recover did not answer with an object")
+        return payload
+    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+        return draft_apply._result("failed", "recover-unavailable",
+                                   "citizen draft recover did not report a result; run it from a "
+                                   "terminal to see why")
+
+
+def _draft_recover(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("action", "confirm"))
+    if request is None:
+        return
+    if request["action"] not in ("restore", "abandon") or not isinstance(request["confirm"], str) \
+            or not request["confirm"]:
+        handler._error(400, "invalid_request")
+        return
+    # `confirm` is the interrupted apply's draft, typed back; the CLI refuses any other draft.
+    payload = handler.server.mutations.call(lambda: _run_draft_recover(
+        handler.server.repo_root, request["action"], request["confirm"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _draft_apply(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("draft", "revision", "confirm"))
     if request is None:
@@ -1486,6 +1520,7 @@ APPLY_REVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
                                                ("budget", "object-or-null"),
                                                ("commands", "array"),
                                                ("core", "object-or-null"),
+                                               ("interrupted", "object-or-null"),
                                                ("refusals", "array"), ("can_apply", "boolean"),
                                                ("apply_command", "string"),
                                                ("nothing_applied", "boolean")))
@@ -1638,6 +1673,8 @@ ROUTES = RouteRegistry((
           _draft_apply_review, None, "application/json", draft_apply.CLI_COMMANDS["review"]),
     Route("POST", "/api/configure/apply", "application/json", APPLY_RESULT,
           _draft_apply, None, "application/json", draft_apply.CLI_COMMANDS["apply"]),
+    Route("POST", "/api/configure/apply/recover", "application/json", APPLY_RESULT,
+          _draft_recover, None, "application/json", draft_apply.CLI_COMMANDS["recover"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

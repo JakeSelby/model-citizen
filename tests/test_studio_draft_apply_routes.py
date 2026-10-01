@@ -21,14 +21,16 @@ from harness_core.studio import module_authoring  # noqa: E402
 
 import draft_support  # noqa: E402
 
-ROUTES = ("/api/configure/apply/review", "/api/configure/apply")
+ROUTES = ("/api/configure/apply/review", "/api/configure/apply", "/api/configure/apply/recover")
 VALID = {
     "/api/configure/apply/review": {"draft": "missing"},
     "/api/configure/apply": {"draft": "missing", "revision": "a" * 40, "confirm": "missing"},
+    "/api/configure/apply/recover": {"action": "restore", "confirm": "missing"},
 }
 MALFORMED = {
     "/api/configure/apply/review": {"draft": 7},
     "/api/configure/apply": {"draft": "missing", "revision": None, "confirm": "missing"},
+    "/api/configure/apply/recover": {"action": "rewind", "confirm": "missing"},
 }
 
 
@@ -70,6 +72,9 @@ class DraftApplyRouteTests(StudioSecurityFixture):
                 if path.endswith("/review"):
                     self.assertFalse(payload["can_apply"])
                     self.assertEqual(payload["refusals"][0]["code"], "not-found")
+                elif path.endswith("/recover"):
+                    self.assertEqual((payload["status"], payload["error_code"]),
+                                     ("refused", "nothing-to-recover"))
                 else:
                     self.assertEqual((payload["status"], payload["error_code"]), ("refused", "not-found"))
         status, body = self._post("/api/configure/apply",

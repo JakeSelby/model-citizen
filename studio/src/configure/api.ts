@@ -245,3 +245,8 @@ export async function reviewDraftApply(draft: string): Promise<ApplyReview> {
 export async function applyDraft(draft: string, revision: string, confirm: string): Promise<ApplyResult> {
   return post<ApplyResult>("/api/configure/apply", { draft, revision, confirm });
 }
+
+/** Restore or abandon an interrupted apply; `confirm` is its draft's name typed back. */
+export async function recoverApply(action: "restore" | "abandon", confirm: string): Promise<ApplyResult> {
+  return post<ApplyResult>("/api/configure/apply/recover", { action, confirm });
+}
