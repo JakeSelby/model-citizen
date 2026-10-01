@@ -209,6 +209,8 @@ class PackCliTests(unittest.TestCase):
                 self.replay_cli(tmp, args)
             with self.assertRaisesRegex(SystemExit, "--pair is refused with --pack"):
                 self.replay_cli(tmp, self.args(tmp, pair="benchmarks/ablations/x.json"))
+            with self.assertRaisesRegex(SystemExit, "--ablations is refused with --pack"):
+                self.replay_cli(tmp, self.args(tmp, ablations="benchmarks/ablations.json"))
             with self.assertRaisesRegex(SystemExit, "need --pack"):
                 self.replay_cli(tmp, self.args(tmp, pack=None, pack_digest="0" * 64))
 

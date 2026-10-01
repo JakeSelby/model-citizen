@@ -2087,6 +2087,9 @@ def open_pack_for(args):
     if getattr(args, "pair", None):
         raise SystemExit("cost-bench: --pair is refused with --pack: a pair's manifest digest is "
                          "taken over a task file, which a pack does not have")
+    if getattr(args, "ablations", None):
+        raise SystemExit("cost-bench: --ablations is refused with --pack: the ablation runner does "
+                         "not yet run the pack's contamination check or pin its digest")
     pack = replay_pack.open_pack(args.pack, args.pack_ref or "HEAD", args.pack_digest, ROOT,
                                  getattr(args, "tmp", None))
     try:
