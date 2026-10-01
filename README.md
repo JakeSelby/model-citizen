@@ -58,7 +58,7 @@ Hooks handle the few things that should be deterministic, and each has an id you
 Sync keeps a journal of what it changed and refuses to overwrite what it does not own. Uninstall puts it back. The same rules then go to both runtimes.
 
 - [Reversible](docs/settings-ownership.md): Sync has a dry run, diff shows drift, an ownership journal records prior and applied values, and uninstall restores what it adopted.
-- [Shared primitives](docs/sync-model.md): Rules, skills, roles and workflows live in one place and sync into each runtime's native settings. Switch one off and sync leaves it out of both.
+- [Shared primitives](docs/sync-model.md): Rules, skills, roles and workflows live in one place and sync into both runtimes, leaving out any you switch off. Skills also install as a Claude Code or Codex plugin.
 - [Same policy on both](docs/runtime-controls.md): A Claude Code spawn and a Codex spawn resolve to the same delegation policy.
 - [Declared integrations](docs/bmad.md): A planning framework declares itself in one descriptor. bin/citizen integration check|apply installs its overrides, and the spawn hook confines its review layers.
 - [Honest compatibility](docs/compatibility.md): The catalog says which clients are qualified and where the gaps are: two runtimes today, and the headline does not claim more.

@@ -649,3 +649,10 @@ AD-11 is adopted: usage and decision rows carry `schema_version`, and their read
 profile fingerprints (#861), adherence recording (#883) and replay-row surface records (#482)
 have shipped. Opt-in recorder registration (#867) remains open. These status corrections leave
 the recorded decisions and their original rationale unchanged.
+
+## Amendment — 2026-10-01: factor designs (#797)
+
+AD-12 reads "the ablation manifest lists arms". A design manifest (`benchmarks/unit-economy.json`)
+declares factors instead, and the runner derives the arms from them. For the unit-by-economy
+two-by-two these are bare plus four cells, each a declared-selection image. Parity is checked on the
+resolved selections, edge by edge, before any spend. The decision's other invariants are unchanged.

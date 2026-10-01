@@ -49,6 +49,8 @@ import replay_detect  # noqa: E402  which rules fired, read from the saved strea
 import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
 import replay_pack  # noqa: E402  the evaluator pack: tasks and checks kept outside this repository
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
+import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
+import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -1396,6 +1398,8 @@ def _attempt(task, rep, arm, opts, launch):
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
+    if opts.get("design") is not None:
+        row.update(unit_economy.row_stamp(opts["design"], arm, opts["schedule_seed"], opts["ablation_selections"]))
     pair = opts.get("pair")
     kept = pair is not None and arm != "bare"
     if pair is not None:
@@ -1638,6 +1642,14 @@ def admit_ablation_arms(opts):
     ablations.admit_arms({arm: opts["arms"][arm] for arm in names}, fingerprints)
 
 
+def admit_design_cells(opts):
+    """A grid's refusal before any spend (`unit_economy.admit_cells`): the four cells' declarations
+    must be equal less their selections, and each must resolve to its own profile."""
+    fingerprints = {cell: arm_profile(cell, arm_env(cell, opts.get("stance_cost"), opts.get("proxy")), opts)
+                    for cell in unit_economy.CELLS}
+    unit_economy.admit_cells(opts["arms"], fingerprints)
+
+
 def _replay(tasks, opts, launch, sink):
     refuse_observation_collisions(tasks, opts)
     names = arm_names(opts)
@@ -1650,6 +1662,8 @@ def _replay(tasks, opts, launch, sink):
         admit_pair_arms(opts)
     if opts.get("ablation") is not None:
         admit_ablation_arms(opts)
+    if opts.get("design") is not None:
+        admit_design_cells(opts)
     check_contamination = opts.get("contamination_checker", contamination_errors)
     contaminated = check_contamination(tasks, opts["repo"],
                                        opts["arms"][harness_arms[0]]["harness_commit"], opts.get("tmp"))
@@ -1671,8 +1685,9 @@ def _replay(tasks, opts, launch, sink):
             raise SystemExit(2)
         opts = dict(opts, preflight="passed")
     firsts, allowed = {}, bool(opts["stamp"].get("surface_drift_allowed"))
+    seeded = opts.get("ablation") is not None or opts.get("design") is not None
     order = ablations.schedule(tasks, opts["reps"], names, opts["schedule_seed"]) \
-        if opts.get("ablation") is not None else schedule(tasks, opts["reps"], names)
+        if seeded else schedule(tasks, opts["reps"], names)
     for task, rep, arm in order:
         if spent + opts["run_cap"] > opts["spend_cap"]:
             return rows, True
@@ -1903,6 +1918,8 @@ def cmd_summarise(args):
     if not path.is_file():
         raise SystemExit("cost-bench: %s does not exist" % path)
     rows = read_jsonl(path)
+    if unit_economy.is_design(rows):
+        return summarise_design(rows, path, args)
     if ablations.is_ablation(rows):
         return summarise_ablation(rows, path, args)
     if getattr(args, "correction", None):
@@ -1938,6 +1955,20 @@ def summarise_ablation(rows, path, args):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot summarise the ablation run in %s: %s" % (path, exc))
     sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else ablations.render(result))
+    return 0 if result["parity"]["ok"] else 1
+
+
+def summarise_design(rows, path, args):
+    """A grid's report (`unit_economy.summarise`), result schema 1 with `--json`: the unit's and the
+    economy concern's effects and their interaction on three metrics. Exit 1 when the post-run
+    parity refuses the rows."""
+    if args.plot or getattr(args, "correction", None):
+        raise SystemExit("cost-bench: --plot and --correction do not apply to a grid; its report is text or JSON")
+    try:
+        result = unit_economy.summarise(rows, None, args.seed, args.resamples, surface=surface_of)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the grid in %s: %s" % (path, exc))
+    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else unit_economy.render(result))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2170,6 +2201,10 @@ def _cmd_replay(args, pack):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    if getattr(args, "design", None):
+        return replay_design(args, tasks, protocol)
+    if getattr(args, "unit", None):
+        raise SystemExit("cost-bench: --unit names a grid's unit; it needs --design unit-economy")
     manifest = ablation_manifest(args)
     if manifest is not None:
         return replay_ablations(args, tasks, protocol, manifest, pack)
@@ -2370,6 +2405,93 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
         return replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]), control)
 
 
+def design_grid(manifest, unit, commit, tmp=None):
+    """`unit_economy.grid` against a clone of `commit`, read by that commit's own resolver with an
+    empty home. No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-design-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        return unit_economy.grid(manifest, unit, catalog.posture_module(root), root)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def replay_design(args, tasks, protocol):
+    """The unit-by-economy grid: bare and four declared-selection cells from one tag.
+
+    The grid is resolved and its parity checked against the tag before anything is printed as a
+    plan, so a unit the design cannot separate costs nothing; the minimum detectable effect and the
+    nominal cost follow, then the schedule from the recorded seed with the leading arm rotating. A
+    dry run stops there. A real run needs `--spend-cap` and `--raw`, since rule adherence is read
+    from the saved streams; `_replay` refuses cells whose declarations differ beyond their
+    selections before the first model call. Rows go to the results directory; no history row."""
+    if args.design != unit_economy.MANIFEST_DESIGN:
+        raise SystemExit("cost-bench: --design takes %s" % unit_economy.MANIFEST_DESIGN)
+    if not args.unit:
+        raise SystemExit("cost-bench: --design unit-economy needs --unit <kind>.<id>, such as rules.secrets")
+    if getattr(args, "ablations", None) or getattr(args, "pair", None) or args.stance_cost:
+        raise SystemExit("cost-bench: --design is refused with --ablations, --pair or --stance-cost: the "
+                         "two factors are each cell's only difference")
+    tags = args.tag or []
+    if len(tags) != 1:
+        raise SystemExit("cost-bench: a grid names exactly one --tag, the harness every cell is built from")
+    refuse_candidate(tags)
+    if not args.model:
+        raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
+    manifest = unit_economy.load(args.design_manifest)
+    unit = unit_economy.unit_entry(args.unit)
+    bare_decl, [(tag, control_decl)] = declarations(tags, effort=args.effort)
+    spec = design_grid(manifest, unit, control_decl["harness"]["commit"], args.tmp)
+    if spec["errors"]:
+        raise SystemExit("cost-bench: refusing the grid before any spend:\n  %s" % "\n  ".join(spec["errors"]))
+    seed = args.schedule_seed if args.schedule_seed is not None else int(manifest["sha256"][:8], 16)
+    names = unit_economy.ARM_NAMES
+    plan = ablations.schedule(tasks, args.reps, names, seed)
+    inputs = arms.qualification_inputs()
+    selected = [(cell, arms.declaration("harness", inputs, control_decl["harness"], control_decl["claude_code_version"],
+                                        args.effort, selection=spec["selections"][cell]))
+                for cell in unit_economy.CELLS]
+    print("%d run(s): %d task(s) x %d arm(s) (bare and the four cells) x %d rep(s), model %s at effort %s, "
+          "%g USD per run, %g USD nominal if every run reaches its cap, %s; schedule seed %d"
+          % (len(plan), len(tasks), len(names), args.reps, args.model, args.effort, args.run_cap,
+             len(plan) * args.run_cap, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
+             else "a real run must name its --spend-cap", seed))
+    print(unit_economy.planned_mde(manifest, len(tasks), args.reps))
+    print("grid %s (manifest %s): unit %s, economy %s; base selection %s; unit detectors %s"
+          % (manifest["name"], manifest["sha256"][:12], unit, ", ".join(spec["economy"]),
+             spec["base_selection_sha256"][:12], ", ".join(spec["instruments"]) or "none, so adherence is unmeasured"))
+    if args.dry_run:  # nothing is built and nothing is spent
+        print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
+        for cell, decl in selected:
+            print("  cell %s (unit %s, economy %s): %s" % (cell, *("on" if f else "off" for f in unit_economy.FACTORS[cell]),
+                                                         arms.image_name(decl)))
+        for task, rep, arm in plan:
+            print("    %s rep %d %s" % (task["id"], rep, arm))
+        return 0
+    if args.spend_cap is None:
+        raise SystemExit("cost-bench: a grid needs --spend-cap: the default is sized for two arms, and a grid runs five")
+    if not args.raw:
+        raise SystemExit("cost-bench: a grid needs --raw: rule adherence is read from each run's saved stream")
+    if not os.environ.get(arms.CREDENTIAL):
+        raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
+                         % arms.CREDENTIAL)
+    arms_dir = Path(args.arms_dir) if args.arms_dir else Path(tempfile.mkdtemp(prefix="model-citizen-arms-"))
+    print("cost-bench: arm declarations and manifests go in %s" % arms_dir)
+    bare = arms.build_arm(bare_decl, arms_dir, snapshot, tmp=args.tmp)
+    common = {"tasks": tasks, "plan": plan, "bare": bare, "arms_dir": arms_dir,
+              "out": Path(args.out) if args.out else None,
+              "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
+              "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
+              "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
+              "protocol": protocol, "pair": None, "schedule_seed": seed,
+              "design": unit_economy.stamp_of(manifest, spec), "design_selections": spec["selections"]}
+    with arms.egress(bare["image"]) as net:
+        common["design_records"] = {cell: arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+                                    for cell, decl in selected}
+        return replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
+                          common["design_records"]["base"])
+
+
 def pair_manifest(args):
     """The ablation manifest `--pair` names, with the flags a pair refuses refused; None without one.
     The manifest's tag becomes the one `--tag`."""
@@ -2444,6 +2566,12 @@ def replay_tag(tag, args, common, harness):
                         schedule_seed=common["schedule_seed"],
                         ablation_selections=ablations.selections(ablation),
                         arms=dict({"bare": common["bare"], "harness": harness}, **common["ablation_records"]))
+        design = common.get("design")
+        if design:
+            # Every cell is its own declared-selection image; there is no undeclared control.
+            opts.update(arm_names=unit_economy.ARM_NAMES, design=design, schedule_seed=common["schedule_seed"],
+                        ablation_selections=common["design_selections"],
+                        arms=dict({"bare": common["bare"]}, **common["design_records"]))
         out.mkdir(parents=True, exist_ok=True)
         opts["observation_dir"] = prepare_observation_dir(out)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
@@ -2455,6 +2583,13 @@ def replay_tag(tag, args, common, harness):
         # from the streams this tag's runs saved: a timeout saves none.
         detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
         write_jsonl(out / DETECTIONS, detections)
+    design = common.get("design")
+    if design and rows:
+        # Rewritten whole, after the set: adherence is read from the streams this set saved.
+        module = replay_detect.load_detectors()
+        rows = rule_adherence.stamp(rows, detections, design["instruments"], rule_adherence.registry_ids(module),
+                                    rule_adherence.detectors_sha256())
+        write_jsonl(out / RESULTS, rows)
     if is_micro and rows:
         # Rewritten whole, after the set: `replay` streams each row as it lands, before any
         # detector has read its stream.
@@ -2465,9 +2600,9 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if pair or common.get("ablation"):
+    if pair or common.get("ablation") or design:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
-              % ("a pair" if pair else "an ablation run", out), file=sys.stderr)
+              % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == full_set_size(args) and not stopped:
@@ -2602,8 +2737,14 @@ def main(argv=None):
     run.add_argument("--ablations", help="an ablation manifest: benchmarks/ablations.json (schema 2) runs "
                      "bare, control and one declared-selection arm per entry, after stating the minimum "
                      "detectable effect; a schema-1 pair file runs as --pair does; writes no history row")
-    run.add_argument("--schedule-seed", type=int, help="with --ablations, the seed the schedule's order is "
+    run.add_argument("--schedule-seed", type=int, help="with --ablations or --design, the seed the schedule's order is "
                      "drawn from; default derived from the manifest's digest; recorded on every row")
+    run.add_argument("--design", choices=(unit_economy.MANIFEST_DESIGN,),
+                     help="run the unit-by-economy two-by-two for --unit: bare and four cells from one tag")
+    run.add_argument("--unit", help="with --design, the rule, skill, role, workflow or hook under test, as "
+                     "<kind>.<id>, such as rules.secrets")
+    run.add_argument("--design-manifest", default=str(ROOT / "benchmarks" / "unit-economy.json"),
+                     help="with --design, the manifest naming the economy concern's members")
     run.add_argument("--bucket", default="", help="the one change this run measures, e.g. A; names the "
                      "history row so several buckets can share a day and a commit")
     run.add_argument("--predicted-ratio", type=float, help="the ratio the plan predicts for this bucket; "
