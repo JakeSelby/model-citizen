@@ -459,6 +459,69 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   only together read as two inconclusive results. A sweep over a profile of your own is a local
   diagnostic, not a publishable figure.
 
+### Unit evals: the two-by-two
+
+`replay --design unit-economy --unit <kind>.<id>` measures one rule, skill, role, workflow or hook
+in a minimal profile, alone and with the economy concern switched on, so a unit eval never pays
+for the full context. It separates the unit's effect from the economy concern's and measures how
+the two interact.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks <manifest> --design unit-economy --unit rules.secrets \
+    --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [--json]
+```
+
+- **Four cells from one base, plus bare.** The cells are `base` (nothing added), `unit` (the unit
+  alone), `economy` (the economy concern alone) and `both`. Bare, with no harness, runs as a fifth
+  arm outside the factor analysis, and each cell's Cost-of-Pass ratio to bare is descriptive.
+- **The base is derived from the tag's catalog, not hand-listed.** Every rule, skill, role,
+  workflow and non-core hook is off, the four core hooks stay on, every stance is at `off` or its
+  smallest variant, and the economy members are at their off values. The unit's declared
+  dependencies are on in every cell.
+- **The economy concern is declared in `benchmarks/unit-economy.json`.** It lists each member with
+  its off and on values: `cost` from `off` to `balanced`, `delegation` from `session-model` to
+  `tiered`, and the `tier-agent-spawns` and `usage-feed` hooks from off to on. `brief-guard` is
+  core, so it is on in every cell.
+- **Refused before any spend.** The tag's own resolver reads all four selections. Each edge of the
+  square must then differ in exactly its factor, and the diagonal in exactly both. Also refused:
+  a unit that is a member of the economy concern or depends on one, a core hook, a stance, a unit
+  in a dependency cycle, and any resolver refusal. Once the images are built, a cell whose
+  declaration differs from the others' beyond its selection is refused, as are two cells that
+  resolve to one profile.
+- **Every cell is its own declared-selection image**, as for an ablation arm. The schedule is the
+  ablation's: the leading arm rotates with the rep, so at five reps each arm leads once per task.
+  The rest follow `--schedule-seed`, which defaults to the manifest's digest. A real run needs
+  `--spend-cap`, because the default is sized for two arms, and `--raw`. The dry run prints the
+  nominal cost, which is every run at its cap.
+- **Rule adherence comes from the unit's own detectors.** After the set, each `detector:`
+  instrument in the unit's manifest is run over every saved stream, ungated, so a cell that does
+  not load the unit is measured on the same behaviour. A run is `hit` when any detector fired,
+  `compliant` when none did, and `unknown` when a stream could not be read and none fired. A unit
+  with no detector is `unmeasured` on every run, never zero.
+- **The report gives three simple effects and their interaction on three metrics:** the unit
+  alone (`unit` against `base`), the unit with economy on (`both` against `economy`), and economy
+  alone (`economy` against `base`). For Cost-of-Pass each is a ratio, and the interaction is the
+  ratio of the two unit ratios. For pass rate and rule adherence each is a difference, and the
+  interaction is the difference of the two unit differences. One task-clustered paired bootstrap
+  computes every figure from the same task draws. A resample with an infinite cost on both sides
+  is indeterminate: it is counted, and it can only widen an interval.
+- **One primary contrast.** SM-2's decision rule applies only to the contrast the pre-registration
+  names, which defaults to the unit alone on Cost-of-Pass with pass-rate non-inferiority. Every
+  other figure is descriptive. Every effect is intention to treat.
+- **Result schema 1** (`summarise --json`) holds `schema`, `design` (`unit-economy-2x2`), `unit`
+  (kind, id, instruments), `economy.members`, `base_selection_sha256` and `cells`. Each cell gives
+  its attempts, passes, errors, cost, Cost-of-Pass, a pass rate with a descriptive Wilson interval,
+  and `rule_adherence` (scored, compliant, unknown, rate, interval) or `unmeasured`. The schema
+  also holds `bare`, `effects.<metric>.<contrast>` (value, interval, undefined reason), `primary`,
+  `verdict`, `reason`, `claim`, `sm2_eligible`, `limitation`, `estimand`, `method`, `seed`,
+  `resamples`, `indeterminate_resamples` and the post-run `parity`.
+  `tests/fixtures/unit-economy/result.v1.json` is the committed example.
+- **Parity after the run.** `summarise` exits 1 when the rows hold two values of the model, Claude
+  Code version, commit, effort, schedule seed or design record. It does the same when a row's
+  factor levels contradict its arm, or a cell loaded a surface that differs from `base`'s beyond
+  its factors' entries. A grid writes no history row.
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at

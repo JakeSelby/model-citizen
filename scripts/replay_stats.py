@@ -105,7 +105,8 @@ def cost_of_pass(cost, passes):
 
 def _cells(atts, arms=ARMS):
     """Per task, per arm: `[cost or None, passes, attempts]`, and the sorted task ids. ValueError
-    when a task has attempts in one arm only, since a paired interval cannot use it."""
+    when a task lacks attempts in any of `arms`, or its arms hold different trial ids, since a
+    paired interval cannot use it. Two arms or more; the unit-by-economy grid passes five."""
     cells, trial_ids = {}, {}
     for a in atts:
         cell = cells.setdefault(a["task"], {arm: [0.0, 0, 0] for arm in arms})[a["arm"]]
@@ -114,11 +115,16 @@ def _cells(atts, arms=ARMS):
         cell[1] += 1 if a["passed"] else 0
         cell[2] += 1
     unpaired = sorted(t for t, c in cells.items() if not all(c[arm][2] for arm in arms))
-    if unpaired:
+    if unpaired and len(arms) == 2:
         raise ValueError("task %s has attempts in one arm only; a paired interval needs both" % unpaired[0])
-    mismatched = sorted(t for t in cells if trial_ids[t][arms[0]] != trial_ids[t][arms[1]])
+    if unpaired:
+        empty = [arm for arm in arms if not cells[unpaired[0]][arm][2]]
+        raise ValueError("task %s has no attempts in the %s arm; a paired interval needs every arm"
+                         % (unpaired[0], empty[0]))
+    mismatched = sorted(t for t in cells if any(trial_ids[t][arms[0]] != trial_ids[t][arm] for arm in arms[1:]))
     if mismatched:
-        raise ValueError("task %s has different trial ids in its two arms" % mismatched[0])
+        raise ValueError("task %s has different trial ids in its %s arms"
+                         % (mismatched[0], "two" if len(arms) == 2 else "%d" % len(arms)))
     tasks = sorted(cells)
     if tasks and any(trial_ids[t][arms[0]] != trial_ids[tasks[0]][arms[0]] for t in tasks):
         raise ValueError("tasks have different trial ids; a fixed sample needs one trial set")
