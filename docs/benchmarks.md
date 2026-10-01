@@ -132,9 +132,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   version, Dockerfile, lister or effort), when their manifests differ in Claude Code, agent
   clients or roots, or when any manifest entry outside the harness component is not identical in
   both. The harness treatment is its checkout, links whose targets are inside that checkout, the
-  exact regular files its sync and trust commands generate, and only the parent directories needed
-  to reach those entries. Unrelated files and links remain part of pair parity even when they sit
-  under `.claude`, `.codex` or `.local/bin`.
+  exact regular files its sync and trust commands generate (the global git ignore file, the sync's
+  ownership record and its lock file, only while that is empty, among them), the empty plans
+  directory the sync makes, and only the parent directories needed to reach those entries. A
+  treatment file the bare arm holds is refused too. Unrelated files and links remain part of pair
+  parity even when they sit under `.claude`, `.codex` or `.local/bin`.
 - **Every run pins its reasoning effort.** `--effort` (`low`, `medium`, `high`, `xhigh` or `max`;
   default `high`) is recorded in each arm's declaration and passed to Claude Code as `--effort` on
   every launch, the pre-flight's included, so no arm takes its model's default, which differs by

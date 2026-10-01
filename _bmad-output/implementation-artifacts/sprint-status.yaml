@@ -501,6 +501,8 @@ development_status:
   ah-b150-grade-bash-misses-directory-changes-from-sourced: ready-for-dev
   ah-b151-wrapper-options-and-unreadable-env-forms-let: ready-for-dev
   ah-b152-move-the-bash-command-grader-out-of-grade-bash: ready-for-dev
+  ah-b153-a-pack-test-intermittently-fails-cleanup-while: ready-for-dev
+  ah-b154-installing-the-harness-leaves-undeclared-files: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -667,6 +669,7 @@ development_status:
   ah-s323-finish-the-model-citizen-rename-and-prepare-v0: done
   ah-s329-add-a-json-output-to-citizen-usage: ready-for-dev
   ah-s330-a-workflow-script-s-agent-calls-bypass-band: ready-for-dev
+  ah-s331-add-a-codex-plugin-manifest-for-the-skills: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
@@ -690,3 +693,4 @@ development_status:
   ah-t034-let-bmad-code-review-run-without-halts-inside-an: done
   ah-t037-governance-decision-rows-lose-their-segment: ready-for-dev
   ah-t038-register-the-zero-footprint-observation-recorder: ready-for-dev
+  ah-t040-run-the-registered-hook-inventory-spawn-check: ready-for-dev
