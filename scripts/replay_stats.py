@@ -593,7 +593,7 @@ def render_compare(result):
                                    ", Bonferroni over %d" % result["comparisons"] if result["correction"] else "")]
     for rank, arm in enumerate(result["arms"], 1):
         lines.append("  %d. %s%s: %d task(s), %d paired trial(s) per task%s"
-                     % (rank, arm["arm"], " (removes %s)" % arm["removed"] if arm["removed"] else "", arm["tasks"],
+                     % (rank, arm["arm"], " (changes %s)" % arm["removed"] if arm["removed"] else "", arm["tasks"],
                         arm["trials"], "; %s: %s" % (EXPLORATORY, "; ".join(arm["exploratory_reasons"]))
                         if arm["exploratory"] else ""))
         for key, _label, kind in MEASURES:

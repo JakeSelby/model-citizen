@@ -321,7 +321,9 @@ class SummariseTests(unittest.TestCase):
         self.assertEqual(status, 0)
         text = out.getvalue()
         self.assertIn("Ablation sweep", text)
-        self.assertIn("1. no-secrets (removes rules/secrets)", text)
+        # An arm may remove an entry or set it to another variant; the label names neither.
+        self.assertIn("1. no-secrets (changes rules/secrets)", text)
+        self.assertNotIn("(removes ", text)
         self.assertIn("post-run parity: every arm differed from control only in its declared entry", text)
 
     def test_a_correction_on_a_plain_replay_is_refused(self):
