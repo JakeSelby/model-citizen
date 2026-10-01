@@ -1309,6 +1309,9 @@ def _draft_library(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+_REVIEW_SLOTS = threading.BoundedSemaphore(1)
+
+
 def _draft_apply_review(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("draft",))
     if request is None:
@@ -1316,8 +1319,16 @@ def _draft_apply_review(handler: Handler, route: Route) -> None:
     if not isinstance(request["draft"], str) or not request["draft"]:
         handler._error(400, "invalid_request")
         return
-    # Read-only and lock-free: a review never makes a save beside it fail busy.
-    payload = draft_apply.review(handler.server.repo_root, request["draft"])
+    # A review runs lint and `config set` processes for up to minutes, so one runs at a time and
+    # a second is refused rather than queued. It stays off the mutation lane: a review is
+    # read-only and lock-free, and never makes a save beside it fail busy.
+    if not _REVIEW_SLOTS.acquire(blocking=False):
+        handler._error(429, "review_busy")
+        return
+    try:
+        payload = draft_apply.review(handler.server.repo_root, request["draft"])
+    finally:
+        _REVIEW_SLOTS.release()
     route.response_schema.validate(payload)
     handler._json(200, payload)
 

@@ -183,7 +183,9 @@ class DraftApplyTests(unittest.TestCase):
                        draft_apply.journal_path(home.path).read_text(encoding="utf-8").splitlines()]
             self.assertEqual([row["phase"] for row in journal], ["intent", "completed"])
             self.assertEqual({row["draft"] for row in journal}, {name})
-            self.assertEqual(journal[0]["config"][0]["prior"], [])
+            recorded = {item["key"]: item["applied"] for item in journal[0]["config"]}
+            self.assertEqual(recorded["primitive_roots"], [str(home.dest)])
+            self.assertEqual(json.loads(draft_apply._decoded(journal[0]["prior_config"])), self.initial)
 
             # Applied: a second review has nothing left to do, and apply refuses rather than repeat.
             again = self._review(home, name)
@@ -229,36 +231,223 @@ class DraftApplyTests(unittest.TestCase):
                     self.assertNothingApplied(home)
                     self.assertFalse(draft_apply.journal_path(home.path).exists())
 
-    def test_apply_holds_the_sync_lock_so_a_sync_cannot_interleave_and_a_failure_restores(self):
-        """AC2: while apply runs, `citizen sync` is refused naming the apply; the failed apply
-        restores the configuration and the personal root."""
+    def _operations(self, home, sync, config_set=None, record=None, set_keys=None):
+        set_keys = [] if set_keys is None else set_keys
+
+        def default_set(key, value):
+            set_keys.append(key)
+            current = json.loads(home.config.read_text(encoding="utf-8"))
+            current[key] = json.loads(value) if key == "primitive_roots" else value
+            home.config.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+
+        return draft_apply.Operations(
+            lock=lambda holder: reconcile.lock(home.state, holder=holder),
+            config_lock=lambda holder: reconcile.lock(home.config.parent, holder=holder),
+            config_set=config_set or default_set, config_unset=lambda key: None,
+            sync=sync, doctor=lambda: [], record=record or (lambda row: None))
+
+    @staticmethod
+    def _journal(home):
+        return [json.loads(line) for line in
+                draft_apply.journal_path(home.path).read_text(encoding="utf-8").splitlines()]
+
+    def test_apply_holds_the_sync_lock_so_a_sync_cannot_interleave(self):
+        """AC2: while apply runs, `citizen sync` is refused naming the apply. Both syncs here are
+        refused, the re-projection included, so the restore is reported incomplete."""
         with self.real_draft("apply-interleave") as (name, initial, home, _base):
             revision = self._add_rule(name, initial["revision"])
             outputs = []
 
-            def blocked_sync():
+            def blocked_sync(dry):
+                if dry:
+                    return {"code": 0, "attention": [], "refused": False}
                 ran = home.cli("sync")
                 outputs.append(ran.stdout + ran.stderr)
-                return ran.returncode
+                return {"code": ran.returncode, "attention": [], "refused": True}
 
             set_keys = []
-            operations = draft_apply.Operations(
-                lock=lambda holder: reconcile.lock(home.state, holder=holder),
-                config_lock=lambda holder: reconcile.lock(home.config.parent, holder=holder),
-                config_set=lambda key, value: set_keys.append(key) or home.config.write_text("{}\n"),
-                config_unset=lambda key: None,
-                sync=blocked_sync, doctor=lambda: [], record=lambda row: None)
-            result = draft_apply.apply(ROOT, name, revision, operations, actor="studio", home=home.path)
+            result = draft_apply.apply(ROOT, name, revision,
+                                       self._operations(home, blocked_sync, set_keys=set_keys),
+                                       actor="studio", home=home.path)
             self.assertEqual(result["status"], "failed", result)
             self.assertEqual(result["error_code"], "sync-refused")
-            self.assertTrue(result["restored"])
+            self.assertFalse(result["restored"])
+            self.assertIn("did not complete", result["message"])
             self.assertEqual(set_keys, ["primitive_roots"])
-            self.assertIn("citizen draft apply %s from Studio (pid %d" % (name, os.getpid()), outputs[0])
+            self.assertEqual(len(outputs), 2)
+            for output in outputs:
+                self.assertIn("citizen draft apply %s from Studio (pid %d" % (name, os.getpid()), output)
             self.assertNothingApplied(home)
-            journal = [json.loads(line) for line in
-                       draft_apply.journal_path(home.path).read_text(encoding="utf-8").splitlines()]
+            journal = self._journal(home)
             self.assertEqual([row["phase"] for row in journal], ["intent", "failed"])
-            self.assertTrue(journal[1]["restored"])
+            self.assertFalse(journal[1]["restored"])
+
+    def test_a_failed_sync_restores_and_reports_restored_when_the_reprojection_settles(self):
+        with self.real_draft("apply-restore") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            outcomes = iter([{"code": 0, "attention": [], "refused": False},
+                             {"code": 2, "attention": ["new item"], "refused": False},
+                             {"code": 0, "attention": [], "refused": False}])
+            result = draft_apply.apply(ROOT, name, revision,
+                                       self._operations(home, lambda dry: next(outcomes)), home=home.path)
+            self.assertEqual((result["status"], result["error_code"]), ("failed", "sync-refused"))
+            self.assertIn("new item", result["message"])
+            self.assertTrue(result["restored"])
+            self.assertNothingApplied(home)
+
+    def test_attention_items_that_predate_the_draft_do_not_fail_the_apply(self):
+        """Sync exits 2 for an unmanaged file the user already had; apply still completes."""
+        with self.real_draft("apply-attention") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            commands = home.path / ".claude" / "commands"
+            commands.mkdir(parents=True)
+            (commands / "review.md").write_text("mine\n", encoding="utf-8")
+            code, result = self._apply(home, name, revision)
+            self.assertEqual((code, result["status"]), (0, "applied"), result["message"])
+            self.assertEqual((commands / "review.md").read_text(encoding="utf-8"), "mine\n")
+            self.assertTrue((home.dest / "rules" / "greeting.md").is_file())
+
+    def test_an_interrupt_restores_then_propagates(self):
+        with self.real_draft("apply-interrupt") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+
+            def interrupted(key, value):
+                raise KeyboardInterrupt()
+
+            settled = {"code": 0, "attention": [], "refused": False}
+            with self.assertRaises(KeyboardInterrupt):
+                draft_apply.apply(ROOT, name, revision,
+                                  self._operations(home, lambda dry: settled, config_set=interrupted),
+                                  home=home.path)
+            self.assertNothingApplied(home)
+            self.assertEqual([row["phase"] for row in self._journal(home)], ["intent", "failed"])
+
+    def _interrupted(self, home, name, revision):
+        """Leave an apply as a kill would: files and keys written, only the intent journalled."""
+        settled = {"code": 0, "attention": [], "refused": False}
+
+        def killed(dry):
+            if dry:
+                return settled
+            raise draft_apply.ApplyError("killed", "killed")
+
+        real = draft_apply._journal
+        with mock.patch.object(draft_apply, "_journal",
+                               side_effect=lambda home_path, row: real(home_path, row)
+                               if row["phase"] == "intent" else None), \
+                mock.patch.object(draft_apply, "_restore", return_value=False):
+            draft_apply.apply(ROOT, name, revision, self._operations(home, killed), home=home.path)
+        self.assertTrue(home.dest.joinpath("rules", "greeting.md").is_file())
+        self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+
+    def test_an_interrupted_apply_is_restored_before_anything_else(self):
+        with self.real_draft("apply-recover") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+            review = self._review(home, name)
+            self.assertIn("interrupted-apply", [item["code"] for item in review["refusals"]])
+            code, result = self._apply(home, name, revision)
+            self.assertEqual((code, result["error_code"]), (1, "interrupted-apply-restored"), result)
+            self.assertTrue(result["restored"])
+            self.assertNothingApplied_but_synced(home)
+            self.assertEqual(self._journal(home)[-1]["phase"], "recovered")
+            self.assertEqual(draft_apply.unfinished_applies(home.path), [])
+            code, result = self._apply(home, name, revision)
+            self.assertEqual((code, result["status"]), (0, "applied"), result["message"])
+
+    def assertNothingApplied_but_synced(self, home):
+        self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), self.initial)
+        self.assertEqual(_tree(home.dest), {})
+
+    def test_an_interrupted_apply_with_a_later_edit_is_refused_and_left_alone(self):
+        with self.real_draft("apply-recover-conflict") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            self._interrupted(home, name, revision)
+            home.dest.joinpath("rules", "greeting.md").write_text("edited later\n", encoding="utf-8")
+            before = home.config.read_bytes()
+            code, result = self._apply(home, name, revision)
+            self.assertEqual((code, result["error_code"]), (1, "interrupted-apply-conflict"))
+            self.assertIn("greeting.md", result["message"])
+            self.assertEqual(home.dest.joinpath("rules", "greeting.md").read_text(encoding="utf-8"),
+                             "edited later\n")
+            self.assertEqual(home.config.read_bytes(), before)
+            self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+
+    def test_an_unrecordable_outcome_is_reported_not_raised(self):
+        with self.real_draft("apply-journal") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            settled = {"code": 0, "attention": [], "refused": False}
+            real = draft_apply._journal
+
+            def failing(home_path, row):
+                if row["phase"] != "intent":
+                    raise OSError("disk full")
+                real(home_path, row)
+
+            with mock.patch.object(draft_apply, "_journal", side_effect=failing):
+                result = draft_apply.apply(ROOT, name, revision,
+                                           self._operations(home, lambda dry: settled), home=home.path)
+            self.assertEqual(result["status"], "applied")
+            self.assertIn("could not record this outcome (disk full)", result["message"])
+
+    def test_checks_run_before_the_sync_lock_is_taken(self):
+        with self.real_draft("apply-lock-order") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            free = []
+            real = draft_apply._checks
+
+            def probing(worktree, mapped):
+                with reconcile.lock(home.state):
+                    free.append(True)
+                return real(worktree, mapped)
+
+            settled = {"code": 0, "attention": [], "refused": False}
+            with mock.patch.object(draft_apply, "_checks", side_effect=probing):
+                result = draft_apply.apply(ROOT, name, revision,
+                                           self._operations(home, lambda dry: settled), home=home.path)
+            self.assertEqual(result["status"], "applied", result)
+            self.assertEqual(free, [True])
+
+    def test_a_dirty_working_copy_is_refused_so_checked_content_is_written_content(self):
+        with self.real_draft("apply-dirty") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            leaked = drafts.checkpoint(
+                ROOT, name, revision, "leak",
+                files={"personal-primitives/rules/leaky.md": ("# Leaky\n\nkey " + SECRET + "\n").encode()},
+                check_command=PASS)
+            worktree = drafts.find(ROOT, name)[0]
+            leaky = worktree / "personal-primitives" / "rules" / "leaky.md"
+            leaky.write_text("# Leaky\n\nclean now\n", encoding="utf-8")
+            try:
+                review = self._review(home, name)
+                self.assertIn("draft-dirty", [item["code"] for item in review["refusals"]])
+                code, result = self._apply(home, name, leaked["revision"])
+                self.assertEqual((code, result["error_code"]), (1, "draft-dirty"))
+                self.assertNothingApplied(home)
+            finally:
+                subprocess.run(["git", "-C", str(worktree), "checkout", "--", "."], check=True)
+
+    def test_a_link_inside_the_personal_root_is_never_followed(self):
+        with self.real_draft("apply-link") as (name, initial, home, base):
+            revision = self._add_rule(name, initial["revision"])
+            outside = base / "outside"
+            outside.mkdir()
+            home.dest.mkdir(parents=True)
+            (home.dest / "rules").symlink_to(outside, target_is_directory=True)
+            review = self._review(home, name)
+            self.assertIn("root-symlink", [item["code"] for item in review["refusals"]])
+            code, result = self._apply(home, name, revision)
+            self.assertEqual(code, 1)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_decision_logging_switched_off_writes_no_ledger(self):
+        self.initial = dict(self.initial, telemetry=dict(self.initial.get("telemetry") or {}, decisions=False))
+        with self.real_draft("apply-quiet-ledger") as (name, initial, home, _base):
+            revision = self._add_rule(name, initial["revision"])
+            code, result = self._apply(home, name, revision)
+            self.assertEqual((code, result["status"]), (0, "applied"), result["message"])
+            self.assertFalse((home.state / "decisions.jsonl").exists())
+            self.assertEqual([row["phase"] for row in self._journal(home)], ["intent", "completed"])
 
     def test_a_core_edit_is_refused_with_a_fork_and_a_contribution_branch(self):
         """AC3."""
@@ -337,6 +526,49 @@ class PlanningTests(unittest.TestCase):
             repo, worktree, {"primitive_roots": ["/repo/personal-primitives", "/repo/other", "/elsewhere"]})
         self.assertEqual((own, others), (True, ["/repo/other"]))
 
+    def test_a_restore_keeps_permission_bits_and_drops_directories_apply_made(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dest = Path(temporary) / "personal-primitives"
+            (dest / "bin").mkdir(parents=True)
+            script = dest / "bin" / "run.sh"
+            script.write_bytes(b"old\n")
+            script.chmod(0o755)
+            operations = [
+                {"path": "bin/run.sh", "action": "write", "content": b"new\n", "prior": b"old\n",
+                 "prior_mode": 0o755, "executable": False},
+                {"path": "rules/deep/new.md", "action": "write", "content": b"x\n", "prior": None,
+                 "prior_mode": 0, "executable": False},
+            ]
+            created = []
+            draft_apply._write_root(dest, operations, created)
+            self.assertEqual(created, [str(dest / "rules"), str(dest / "rules" / "deep")])
+            draft_apply._restore_root(dest, operations, created)
+            self.assertEqual(script.read_bytes(), b"old\n")
+            self.assertEqual(script.stat().st_mode & 0o777, 0o755)
+            self.assertFalse((dest / "rules").exists())
+            self.assertTrue(dest.is_dir())
+
+    def test_a_path_through_a_link_is_refused(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dest = Path(temporary) / "root"
+            dest.mkdir()
+            (dest / "rules").symlink_to(Path(temporary), target_is_directory=True)
+            with self.assertRaises(draft_apply.ApplyError) as caught:
+                draft_apply._contained(dest, "rules/x.md")
+            self.assertEqual(caught.exception.code, "root-symlink")
+            for bad in ("../x", "/etc/x", ""):
+                with self.assertRaises(draft_apply.ApplyError):
+                    draft_apply._contained(dest, bad)
+            self.assertEqual(draft_apply._contained(dest, "skills/a/SKILL.md"), dest / "skills/a/SKILL.md")
+
+    def test_only_new_attention_items_or_a_refusal_unsettle_a_sync(self):
+        settled = draft_apply._sync_settled
+        self.assertEqual(settled({"code": 0}, []), (True, []))
+        self.assertEqual(settled({"code": 2, "attention": ["a"], "refused": False}, ["a"]), (True, []))
+        self.assertEqual(settled({"code": 2, "attention": ["a", "b"], "refused": False}, ["a"]), (False, ["b"]))
+        self.assertEqual(settled({"code": 2, "attention": [], "refused": True}, []), (False, []))
+        self.assertEqual(settled({"code": 1, "attention": [], "refused": False}, []), (False, []))
+
     def test_the_lock_names_its_holder_and_clears_the_record_on_release(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
@@ -363,6 +595,27 @@ class RouteTests(unittest.TestCase):
         for path in ("/api/configure/apply/review", "/api/configure/apply"):
             self.assertEqual(routes[path].method, "POST")
             self.assertIsNone(routes[path].parity_exemption)
+
+    def test_a_second_concurrent_review_is_refused_not_queued(self):
+        handler = mock.Mock()
+        handler.request_json = {"draft": "tuning"}
+        route = {route.path: route for route in server.ROUTES.entries}["/api/configure/apply/review"]
+        self.assertTrue(server._REVIEW_SLOTS.acquire(blocking=False))
+        try:
+            with mock.patch.object(server.draft_apply, "review") as review:
+                server._draft_apply_review(handler, route)
+            review.assert_not_called()
+            handler._error.assert_called_once_with(429, "review_busy")
+        finally:
+            server._REVIEW_SLOTS.release()
+        with mock.patch.object(server.draft_apply, "review",
+                               return_value=draft_apply.unavailable("not-found", "gone")):
+            handler = mock.Mock()
+            handler.request_json = {"draft": "tuning"}
+            server._draft_apply_review(handler, route)
+        handler._json.assert_called_once()
+        self.assertTrue(server._REVIEW_SLOTS.acquire(blocking=False))
+        server._REVIEW_SLOTS.release()
 
     def test_the_studio_apply_runs_the_cli_without_the_quiet_flag(self):
         completed = subprocess.CompletedProcess([], 0, stdout='noise\n{"status": "applied"}\n', stderr="")

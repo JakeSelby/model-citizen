@@ -3800,15 +3800,37 @@ def _draft_apply_operations(log: List[str]) -> "studio_apply.Operations":
         module = load_hook_module("decisions")
         if module is None:
             raise ValueError("this checkout has no decision log writer")
-        module._append(row)
+        # `telemetry.decisions: false` means no ledger at all; the apply journal still records.
+        if module.enabled():
+            module._append(row)
+
+    def sync(dry: bool) -> Dict[str, Any]:
+        output = io.StringIO()
+        # The attention items are read from what sync says, so a quiet shell must not hide them.
+        quiet = os.environ.pop("HARNESS_QUIET", None)
+        try:
+            with contextlib.redirect_stdout(output):
+                code = _cmd_sync_unlocked(argparse.Namespace(
+                    dry_run=dry, adopt=False, adopt_codex=False, print_only=False))
+        finally:
+            if quiet is not None:
+                os.environ["HARNESS_QUIET"] = quiet
+            if not dry:
+                log.extend(output.getvalue().splitlines())
+        lines = output.getvalue().splitlines()
+        attention = []
+        if "Needs your attention:" in lines:
+            attention = [line[4:] for line in lines[lines.index("Needs your attention:") + 1:]
+                         if line.startswith("  - ")]
+        return {"code": code, "attention": attention,
+                "refused": any(line.startswith("sync refused") for line in lines)}
 
     return studio_apply.Operations(
         lock=lambda holder: reconcile.lock(state_dir(), holder=holder),
         config_lock=lambda holder: reconcile.lock(config_path().parent, holder=holder),
         config_set=lambda key, value: captured(lambda: config_set_locked(key, value)),
         config_unset=lambda key: captured(lambda: config_unset_locked(key)),
-        sync=lambda: captured(lambda: _cmd_sync_unlocked(argparse.Namespace(
-            dry_run=False, adopt=False, adopt_codex=False, print_only=False))),
+        sync=sync,
         doctor=doctor,
         record=record,
     )

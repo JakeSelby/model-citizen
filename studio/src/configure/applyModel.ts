@@ -97,3 +97,12 @@ export function resultHeadline(result: ApplyResult): string {
     : "Apply failed and the previous state was not fully restored. Run citizen doctor.";
   return "Not applied. Nothing changed.";
 }
+
+/**
+ * What an apply response may still do once it lands. The live harness changed whichever draft is
+ * on screen, so an applied outcome always refreshes the overview; it is shown only on the panel
+ * that started it, never under a draft opened since.
+ */
+export function outcomeAction(applied: boolean, started: number, current: number): { refreshOverview: boolean; show: boolean } {
+  return { refreshOverview: applied, show: started === current };
+}

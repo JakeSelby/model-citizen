@@ -6,10 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { applyDraft, reviewDraftApply } from "../src/configure/api.ts";
 import {
-  applyBlocker, budgetDelta, canApply, coreFiles, personalFiles, resultHeadline,
+  applyBlocker, budgetDelta, canApply, coreFiles, outcomeAction, personalFiles, resultHeadline,
   type ApplyResult, type ApplyReview,
 } from "../src/configure/applyModel.ts";
-import { ApplyOutcome, ApplyReviewDetails, DraftApply } from "../src/configure/DraftApply.tsx";
+import { ApplyControls, ApplyOutcome, ApplyReviewDetails, DraftApply } from "../src/configure/DraftApply.tsx";
 
 const CLEAN: ApplyReview = {
   schema_version: 1,
@@ -155,4 +155,25 @@ test("the apply API posts the draft, reviewed revision and typed confirmation wi
     { input: "/api/configure/apply/review", body: { draft: "tuning" } },
     { input: "/api/configure/apply", body: { draft: "tuning", revision: "rev-2", confirm: "tuning" } },
   ]);
+});
+
+test("a blocked Apply stays focusable and its reason is announced through aria-describedby", () => {
+  const controls = (confirmation: string) => render(h(ApplyControls, {
+    draft: "tuning", revision: "rev-2", review: CLEAN, confirmation, busy: "",
+    onConfirm: () => {}, onApply: () => {},
+  }));
+  const blocked = controls("");
+  assert.match(blocked, /aria-describedby="draft-apply-blocker"/);
+  assert.match(blocked, /aria-disabled="true"/);
+  assert.match(blocked, /id="draft-apply-blocker"[^>]*>Type tuning to confirm\./);
+  assert.doesNotMatch(blocked, /<button[^>]*disabled=""[^>]*>[^<]*<[^>]*>[^<]*Apply tuning/);
+  const ready = controls("tuning");
+  assert.doesNotMatch(ready, /aria-describedby="draft-apply-blocker"/);
+  assert.doesNotMatch(ready, /aria-disabled/);
+});
+
+test("an apply outcome is shown only on the panel that started it, but always refreshes the overview", () => {
+  assert.deepEqual(outcomeAction(true, 3, 3), { refreshOverview: true, show: true });
+  assert.deepEqual(outcomeAction(true, 3, 4), { refreshOverview: true, show: false });
+  assert.deepEqual(outcomeAction(false, 3, 4), { refreshOverview: false, show: false });
 });

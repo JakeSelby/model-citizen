@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { CommandChip } from "../components/StudioKit";
 import { applyDraft, reviewDraftApply } from "./api";
 import {
-  applyBlocker, budgetDelta, canApply, coreFiles, personalFiles, resultHeadline, shown,
+  applyBlocker, budgetDelta, canApply, coreFiles, outcomeAction, personalFiles, resultHeadline, shown,
   type ApplyResult, type ApplyReview,
 } from "./applyModel";
 
@@ -82,6 +82,39 @@ export function ApplyOutcome({ result }: { result: ApplyResult }) {
   );
 }
 
+type ControlsProps = {
+  draft: string;
+  revision: string;
+  review: ApplyReview;
+  confirmation: string;
+  busy: "" | "reviewing" | "applying";
+  onConfirm: (value: string) => void;
+  onApply: () => void;
+};
+
+/** The confirmation and Apply button. A blocked button stays focusable and reads out why. */
+export function ApplyControls({ draft, revision, review, confirmation, busy, onConfirm, onApply }: ControlsProps) {
+  const blocker = applyBlocker(review, revision, draft, confirmation);
+  const blocked = blocker !== "";
+  return (
+    <Stack gap="sm">
+      <TextInput
+        description={`Apply changes your live configuration and personal root, then runs citizen sync. Type ${draft} to confirm.`}
+        label="Confirm the draft to apply"
+        onChange={(event) => onConfirm(event.currentTarget.value)}
+        value={confirmation}
+      />
+      <Group>
+        <Button aria-describedby={blocked ? "draft-apply-blocker" : undefined} aria-disabled={blocked || undefined}
+          color="red" data-disabled={blocked || undefined} disabled={busy !== ""} loading={busy === "applying"}
+          onClick={() => { if (!blocked && canApply(review, revision, draft, confirmation)) onApply(); }}>Apply {draft}</Button>
+        <CommandChip command={review.apply_command} label="Apply from the CLI" />
+      </Group>
+      {blocked ? <Text c="dimmed" id="draft-apply-blocker" size="sm">{blocker}</Text> : null}
+    </Stack>
+  );
+}
+
 export function DraftApply({ draft, revision, onApplied }: Props) {
   const [review, setReview] = useState<ApplyReview | null>(null);
   const [result, setResult] = useState<ApplyResult | null>(null);
@@ -93,6 +126,8 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
   useEffect(() => {
     generation.current += 1;
     setReview(null);
+    setResult(null);
+    setMessage("");
     setConfirmation("");
   }, [draft, revision]);
 
@@ -116,25 +151,26 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
 
   async function runApply() {
     if (!review?.draft.revision) return;
+    const current = generation.current;
     setBusy("applying");
     setMessage(`Applying ${draft} under the sync lock…`);
     try {
       const outcome = await applyDraft(draft, review.draft.revision, confirmation);
+      const action = outcomeAction(outcome.applied, current, generation.current);
+      if (action.refreshOverview) onApplied?.();
+      if (!action.show) return;
       setResult(outcome);
       setMessage(resultHeadline(outcome));
       setConfirmation("");
-      if (outcome.applied) {
-        setReview(null);
-        onApplied?.();
-      }
+      if (outcome.applied) setReview(null);
     } catch (reason) {
+      if (current !== generation.current) return;
       setMessage(reason instanceof Error ? reason.message : "The apply did not report a result. Check Activity before retrying.");
     } finally {
       setBusy("");
     }
   }
 
-  const blocker = applyBlocker(review, revision, draft, confirmation);
   return (
     <Paper aria-labelledby="draft-apply-title" className="settings-section" id="draft-apply" p="xl" withBorder>
       <Title id="draft-apply-title" order={2}>Review and apply this draft</Title>
@@ -152,20 +188,8 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
         </div>
         {review && <ApplyReviewDetails review={review} />}
         {review?.can_apply && (
-          <Stack gap="sm">
-            <TextInput
-              description={`Apply changes your live configuration and personal root, then runs citizen sync. Type ${draft} to confirm.`}
-              label="Confirm the draft to apply"
-              onChange={(event) => setConfirmation(event.currentTarget.value)}
-              value={confirmation}
-            />
-            <Group>
-              <Button color="red" disabled={!canApply(review, revision, draft, confirmation) || busy !== ""}
-                loading={busy === "applying"} onClick={runApply} title={blocker || undefined}>Apply {draft}</Button>
-              <CommandChip command={review.apply_command} label="Apply from the CLI" />
-            </Group>
-            {blocker ? <Text c="dimmed" size="sm">{blocker}</Text> : null}
-          </Stack>
+          <ApplyControls busy={busy} confirmation={confirmation} draft={draft} onApply={runApply}
+            onConfirm={setConfirmation} review={review} revision={revision} />
         )}
       </Stack>
     </Paper>
