@@ -32,7 +32,10 @@ where the micro tier cannot answer them; each replacement says so and why. The p
 - **Secondary:** (1) the bare arm, which has no harness hooks or rules, fires each mechanism less
   often than the harness arm; reported as counts beside the harness arm's, with no test. (2) The
   small model accepts `--effort high`: every launch, the preflights included, starts without an
-  effort error, recorded from the rows' `effort`, `observed_effort` and `error` fields.
+  effort error. For scored trials this is recorded from the rows' `effort`, `observed_effort` and
+  `error` fields. A red preflight exits before any row is written, so a preflight outcome is
+  recorded from the saved raw preflight output (`preflight-<arm>.json` under `--raw`) and the
+  run's stderr and exit status, all three named in the results comment.
 - **Exploratory:** wall time per run and for the whole set (the pace #1131 asks for); pass rate and
   cost per arm; the raw Stop-hook input kept by `--raw`, for #1100's recorded native Stop payload.
   None of these supports a claim.
