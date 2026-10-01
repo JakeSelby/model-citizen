@@ -210,7 +210,10 @@ class ReplayCliTests(unittest.TestCase):
     def test_an_exploratory_dry_run_proceeds_and_says_so(self):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
-            code, out, err = self.main(tmp, "--exploratory")
+            # The dry run's contamination check has its own tests; this one is about the protocol.
+            clean = lambda tasks, repo, commit, tmp=None: [(t["id"], []) for t in tasks]  # noqa: E731
+            with mock.patch.object(BENCH, "contamination_by_task", clean):
+                code, out, err = self.main(tmp, "--exploratory")
             self.assertEqual(code, 0)
             self.assertIn("exploratory run", err)
             self.assertIn("demo rep 1", out)

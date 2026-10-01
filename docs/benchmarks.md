@@ -342,8 +342,8 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   on 2026-09-25 because its held-back tests pin live prices and helper names its prompt never gives.
 
 **Status.** The current manifest has no eligible replay tasks, so the runner refuses before probes,
-preflight or model calls. #796 owns an adequately powered replacement task set whose answers the
-installed harness cannot carry. The earlier live tier
+preflight or model calls. The replacement set is the evaluator pack below, whose answers the
+installed harness cannot carry (#796); a powered run of it waits on its pilot. The earlier live tier
 produced one result of 1.052 on a four-task set, above
 the 0.85 threshold, so no cost claim is published. Two earlier figures in either direction were
 artifacts of the runner's sandbox and of a test-suite defect, both since fixed. A review on
@@ -352,6 +352,55 @@ turn cap, the stop gate, web access, `usage-prices` and hook capture. Each is fi
 above, and no result has been taken since. The arms have since moved from host profiles to
 containers, which starts a new series. Treat this tier as an instrument whose methodology is under review, not as a result; the static tier above is the
 figure to rely on today.
+
+### Evaluator pack
+
+`--pack` runs tasks kept outside this repository, so the harness arm's installed checkout cannot
+hold a task's check or answer. The pack is its own git repository, `model-citizen-evals`: a
+`pack.json`, starting workspaces, and per task a `task.json`, a held-back `check.py` and a reference
+`solution.py`. Its README gives the layout.
+
+```sh
+python3 scripts/cost_bench.py replay --pack <pack repo> --verify-tasks                # every check fails, then passes once solved
+python3 scripts/cost_bench.py replay --pack <pack repo> --tag <full commit> --exploratory --dry-run  # schedule and contamination per task
+python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack-digest <digest> \
+    --model <id> --tag <full commit> --pre-registration <plan>
+python3 scripts/cost_bench.py replay --tier micro --pack <pack repo> --pack-set delegation-nudge ...
+python3 scripts/replay_power.py --pilot <results dir>                   # k, n and m for SM-2
+```
+
+- **It is read from a pinned commit, never a working tree.** `--pack-ref` (default `HEAD`) is
+  extracted with `git archive`; the digest is the sha256 of every archived path and its bytes. A
+  registered run must name `--pack-digest`, the run refuses any other, and every row carries
+  `pack`, `pack_version`, `pack_commit` and `pack_digest`. Any change to the pack bumps its
+  version, so a frozen set is a version and a digest. A pack inside this repository, or containing
+  it, is refused.
+- **An arm sees only the task's workspace.** It is copied into a fresh git repository with one
+  commit; no check, solution or pack file goes with it. The check is sent on stdin to the scorer, a
+  fresh container of the bare image with no network and no credential that mounts only the agent's
+  tree, as every synthetic check is. `--verify-tasks` runs each workspace's own gate, then proves
+  the check fails on the workspace and passes after the reference solution.
+- **The contamination control checks every pack task at the exact harness commit,** before any
+  model call and in `--dry-run`, which prints one line per task and exits 2 when any is refused.
+  A task is refused when any commit in the installed checkout's history holds the exact bytes of
+  its check or solution, or when the checkout or its history carries the pack's canary, a string
+  every check and solution includes. The transcript check on `/opt/model-citizen` still applies.
+- **A set is chosen by tier.** `production` runs by default; `--tier micro` runs the `micro` set, or
+  the set `--pack-set` names, at the model that set pins. `--pair` and `--tasks` are refused with
+  `--pack`.
+- **Long tasks and absorbed calls.** A task's absorbed-call size is the median, over clean bare-arm
+  runs, of its `gather_calls`: the `Read`, `Grep` and `Glob` calls in every thread. The bare arm
+  never delegates, so that count is all the gathering a subagent could have absorbed. A task is
+  long when the median is above 7.6, FR-34's upper break-even. Each pack task states
+  `expected_absorbed_calls`, the files a correct solution must read plus one search, and the pack
+  refuses a `long` mark that disagrees with it; the pilot's rows confirm each mark or a new pack
+  version removes it.
+- **The power command sizes the set.** `scripts/replay_power.py` takes pilot rows, or the
+  variances stated directly, and prints the design with the fewest trials per arm whose decision
+  power (the ratio test and the pass-rate test) and claim power (those and the long subset's ratio
+  test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
+  and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
+  in its docstring.
 
 ### Pairs
 
@@ -485,10 +534,11 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   to `benchmarks/micro/micro-history.jsonl` and `micro-history.md`; `upsert_history` refuses to
   write one tier's row into a file holding the other's, whichever `--history-dir` is named. The
   micro history carries no ratio and no verdict.
-- **It is refused by the contamination control, as every same-repository task is.** Its oracles
-  are in this repository, so the harness arm's installed checkout exposes them, and the replay
-  refuses the set before any model call. It cannot run until its tasks have independent provenance
-  or the control is changed for this tier.
+- **Its manifest here is refused by the contamination control, as every same-repository task is.**
+  Its oracles are in this repository, so the harness arm's installed checkout exposes them. The
+  evaluator pack's `micro` set re-homes the three mechanisms in a workspace of their own, with its
+  checks outside this repository; run it with `--tier micro --pack <pack repo>`. Its
+  `delegation-nudge` set holds the delegation task above break-even and its two-file control.
 - **What it can claim:** that a mechanism can fire, and did, on the pinned small model in these
   tasks. **What it cannot:** that it fires on the production model, how often it would, or
   anything about what the harness costs or saves. A small model's behaviour is not the production
