@@ -28,6 +28,7 @@ from . import (activity, auth, drafts, free_suites, live_updates, module_authori
                module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
+from . import first_run
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -1402,6 +1403,71 @@ def _draft_apply(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _first_run_request(handler: Handler) -> Optional[str]:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return None
+    if not first_run.valid_name(request["draft"]):
+        handler._error(400, "invalid_request")
+        return None
+    return str(request["draft"])
+
+
+def _first_run_status(handler: Handler, route: Route) -> None:
+    name = _first_run_request(handler)
+    if name is None:
+        return
+    try:
+        payload = first_run.status(handler.server.repo_root, name)
+    except first_run.FirstRunError as exc:
+        handler._error(409, exc.code)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _run_draft_create(repo_root: Path, draft: str) -> str:
+    """Run `citizen draft create` itself, so the draft is the CLI's managed worktree."""
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "create", draft, "--json"]
+    try:
+        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
+                              text=True, timeout=120)
+        payload = json.loads(done.stdout.strip().splitlines()[-1])
+    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+        return "create-unavailable"
+    if not isinstance(payload, dict):
+        return "create-unavailable"
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("code") or "create-failed")
+    return ""
+
+
+def _first_run_start(handler: Handler, route: Route) -> None:
+    name = _first_run_request(handler)
+    if name is None:
+        return
+
+    def start() -> Dict[str, object]:
+        # Resuming is starting again: an existing draft of this name is the run to continue.
+        current = first_run.status(handler.server.repo_root, name)
+        if current["state"] != "not-started":
+            return current
+        failure = _run_draft_create(handler.server.repo_root, name)
+        if failure:
+            raise first_run.FirstRunError(failure, "the first-run draft could not be created")
+        return first_run.status(handler.server.repo_root, name)
+
+    try:
+        payload = handler.server.mutations.call(start)
+    except first_run.FirstRunError as exc:
+        handler._error(409, exc.code)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1613,6 +1679,17 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))
+FIRST_RUN = ResponseSchema("json-object", (("schema_version", "integer"),
+                                            ("state", "string"),
+                                            ("fresh", "boolean"),
+                                            ("nothing_live_changed", "boolean"),
+                                            ("draft_name", "string"),
+                                            ("draft", "object"),
+                                            ("applied", "object"),
+                                            ("interrupted", "object"),
+                                            ("steps", "array"),
+                                            ("choices", "array"),
+                                            ("commands", "object")))
 REPLAY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                  ("run", "object"),
                                                  ("progress", "array"),
@@ -1676,6 +1753,10 @@ ROUTES = RouteRegistry((
           _draft_apply, None, "application/json", draft_apply.CLI_COMMANDS["apply"]),
     Route("POST", "/api/configure/apply/recover", "application/json", APPLY_RESULT,
           _draft_recover, None, "application/json", draft_apply.CLI_COMMANDS["recover"]),
+    Route("POST", "/api/first-run", "application/json", FIRST_RUN,
+          _first_run_status, None, "application/json", first_run.CLI_COMMANDS["status"]),
+    Route("POST", "/api/first-run/start", "application/json", FIRST_RUN,
+          _first_run_start, None, "application/json", first_run.CLI_COMMANDS["start"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

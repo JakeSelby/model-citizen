@@ -8,6 +8,7 @@ export const NAVIGATION = [
 ] as const;
 
 export function pageTitle(pathname: string): string {
+  if (pathname === "/setup") return "First run";
   return NAVIGATION.find((item) => item.path === pathname
     || (item.path !== "/" && pathname.startsWith(`${item.path}/`)))?.label ?? "Hub";
 }

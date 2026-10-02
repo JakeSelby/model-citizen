@@ -24,6 +24,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen draft create NAME [--base installed|TAG] [--json]
     citizen draft list|diff|rebase|discard [NAME] [--json]
+    citizen draft first-run [NAME] [--json]
     citizen draft settings schema|read|preview|save [OPTIONS] [--json]
     citizen draft selection read|preview|save [OPTIONS] [--json]
     citizen draft module read|preview|save [OPTIONS] [--json]
@@ -88,6 +89,7 @@ from harness_core.studio import module_authoring as studio_module_authoring
 from harness_core import rule_coverage
 from harness_core import instruction_surface, scorecard
 from harness_core.studio import apply as studio_apply
+from harness_core.studio import first_run as studio_first_run
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -3872,6 +3874,21 @@ def cmd_draft(args: argparse.Namespace) -> int:
     # Draft configuration and managed roots are relative to the installed checkout that owns
     # this CLI, not the shared Git common directory behind a linked worktree.
     repo = REPO.resolve()
+    if args.action == "first-run":
+        try:
+            status = studio_first_run.status(repo, args.name, home())
+        except studio_first_run.FirstRunError as exc:
+            say(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, sort_keys=True)
+                if args.json else "draft first-run: " + str(exc))
+            return 1
+        if args.json:
+            say(json.dumps(status, sort_keys=True))
+            return 0
+        say("first run: %s (draft %s)" % (status["state"], status["draft_name"]))
+        say("reproduce it headless:")
+        for line in status["commands"]["headless"]:
+            say("  " + line)
+        return 0
     if args.action == "review":
         result = studio_apply.review(repo, args.name, home())
         if args.json:
@@ -4539,6 +4556,7 @@ def init_defaults(args: argparse.Namespace, path: Path) -> int:
         say("  still at the example value: " + ", ".join(left))
         for field in left:
             say(f"    citizen config set identity.{field} \"…\"")
+    say(f"guided setup: {REPO / 'bin' / 'citizen'} studio")
     return 0
 
 
@@ -4592,6 +4610,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     write_json_atomic(path, cfg)
     print(f"\nwrote {path}")
     print(f"next: {REPO / 'bin' / 'citizen'} sync")
+    print(f"or set up step by step in the browser: {REPO / 'bin' / 'citizen'} studio")
     return 0
 
 
@@ -7132,6 +7151,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     listing = draft_sub.add_parser("list", help="list managed drafts and installed-version drift")
     listing.add_argument("--json", action="store_true")
     listing.set_defaults(func=cmd_draft)
+    first_run = draft_sub.add_parser(
+        "first-run", help="show where the guided first run stands and the commands that reproduce it")
+    first_run.add_argument("name", nargs="?", default=studio_first_run.DRAFT)
+    first_run.add_argument("--json", action="store_true")
+    first_run.set_defaults(func=cmd_draft)
     review_parser = draft_sub.add_parser(
         "review", help="show every file and configuration key a draft changes, its checks, budget "
                        "delta and the exact commands applying it runs")
