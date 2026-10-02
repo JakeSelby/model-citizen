@@ -264,7 +264,9 @@ class MicroSetTests(unittest.TestCase):
 
         def replay(tasks, opts, launch=None, out=None):
             seen.update(opts)
-            return fake_replay(tasks, opts, launch, out)
+            rows, stopped = fake_replay(tasks, opts, launch, out)
+            # Every repetition the tier pins, so the history writer's matrix check holds.
+            return [dict(row, rep=rep) for rep in range(1, opts["reps"] + 1) for row in rows], stopped
 
         with mock.patch.object(BENCH, "ROOT", repo), \
                 mock.patch.object(BENCH.arms, "build_arm", fake.build_arm), \
@@ -280,8 +282,10 @@ class MicroSetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             printed, opts = self.run_set(tmp)
             rows = BENCH.read_jsonl(Path(tmp) / "out" / "v1" / BENCH.RESULTS)
-            self.assertEqual([(r["arm"], r["tier"], r["mechanism"], r["mechanism_fired"]) for r in rows],
+            first = [r for r in rows if r["rep"] == 1]
+            self.assertEqual([(r["arm"], r["tier"], r["mechanism"], r["mechanism_fired"]) for r in first],
                              [("bare", "micro", "voice", False), ("harness", "micro", "voice", True)])
+            self.assertEqual(len(rows), 2 * opts["reps"])
             history = Path(tmp) / "history"
             kept = BENCH.read_jsonl(history / MICRO.HISTORY_NAME)
             self.assertEqual([r["tier"] for r in kept], ["micro"])

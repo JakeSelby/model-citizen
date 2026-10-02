@@ -1636,7 +1636,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     A saved result is created exclusively before probes or model calls, so an existing path can
     never mix attempts from two cohorts."""
     if not tasks:
-        _write_spend_sidecar(out, opts, 0.0, 0.0, False)  # refused before any paid call
+        if out is not None and not Path(out).parent.joinpath(SPEND).exists():
+            _write_spend_sidecar(out, opts, 0.0, 0.0, False)  # refused before any paid call
         raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if out is None:
         return _replay(tasks, opts, launch, None, None)
@@ -1695,6 +1696,11 @@ def _replay(tasks, opts, launch, sink, out):
         if sink is not None and sink.tell() == 0:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(str(out))
+        observations = opts.get("observation_dir")
+        if observations is not None and {p.name for p in Path(observations).iterdir()} <= {
+                arms.OBSERVATION_MARKER}:
+            # Nothing was observed, so a retry into the same folder is not refused for it.
+            shutil.rmtree(str(observations), ignore_errors=True)
         _write_spend_sidecar(out, opts, 0.0, 0.0, False)
         raise
     return _run_replay(tasks, opts, launch, sink, out, names)
@@ -2584,11 +2590,8 @@ def replay_tag(tag, args, common, harness):
     # The production series keeps its original seed; the micro tier's adds its name, so the two
     # can never share a series even over identical bytes.
     source = getattr(args, "series_source", None) or Path(args.tasks).read_bytes()
-    series_input = source + args.model.encode() + b"|container" + (b"|micro" if is_micro else b"")
-    if args.task:
-        # A pre-registered subset is its own series, never mixed with the whole set's.
-        series_input += b"|tasks:" + ",".join(sorted(task["id"] for task in tasks)).encode()
-    series = hashlib.sha256(series_input).hexdigest()[:8]
+    series = hashlib.sha256(source + args.model.encode()
+                            + b"|container" + (b"|micro" if is_micro else b"")).hexdigest()[:8]
     home = micro.HISTORY_DIR if is_micro else Path("benchmarks")
     out = (common["out"] or ROOT / home / version) / tag
     streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
@@ -2637,7 +2640,14 @@ def replay_tag(tag, args, common, harness):
                         ablation_selections=common["design_selections"],
                         arms=dict({"bare": common["bare"]}, **common["design_records"]))
         out.mkdir(parents=True, exist_ok=True)
-        opts["observation_dir"] = prepare_observation_dir(out)
+        try:
+            opts["observation_dir"] = prepare_observation_dir(out)
+        except SystemExit:
+            # Refused before any paid call. An earlier cohort's spend record is kept as it is;
+            # otherwise the folder records that this attempt spent nothing.
+            if not (out / SPEND).exists():
+                _write_spend_sidecar(out / RESULTS, opts, 0.0, 0.0, False)
+            raise
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
@@ -2669,10 +2679,11 @@ def replay_tag(tag, args, common, harness):
               % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
-    elif rows and not stopped and (not is_micro or len(tasks) == full_set_size(args)):
-        # A production subset writes its own series (above); the micro tier keeps whole sets only.
+    elif rows and len(tasks) == full_set_size(args) and not stopped:
         home_dir = Path(args.history_dir) if args.history_dir else ROOT / home
         home_dir.mkdir(parents=True, exist_ok=True)
+        # The rows must be exactly the requested task, repetition and arm matrix.
+        reconcile_replay_rows(rows, tasks, args.reps)
         if is_micro:
             with studio_replay.history_lock(home_dir):
                 kept = upsert_history(home_dir / micro.HISTORY_NAME,
@@ -2680,7 +2691,6 @@ def replay_tag(tag, args, common, harness):
                 (home_dir / micro.HISTORY_MD_NAME).write_text(micro.render_history(kept, ARMS),
                                                               encoding="utf-8")
         else:
-            reconcile_replay_rows(rows, tasks, args.reps)
             break_even = getattr(args, "break_even", delegation_verdict.BREAK_EVEN_CALLS)
             kept = write_history_pair(home_dir, history_row(rows, series, detections, break_even))
         print(json.dumps(kept[-1], indent=2))

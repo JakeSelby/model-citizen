@@ -71,5 +71,35 @@ class PreSpendRefusalTests(unittest.TestCase):
         probe.assert_called_once()
 
 
+    def test_an_existing_observation_folder_refusal_records_zero_spend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            native = Path(tmp) / "target-1" / REVISION
+            (native / "observations").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, "refusing existing observation output"):
+                run_tag(tmp)
+            spend = json.loads((native / BENCH.SPEND).read_text())
+            self.assertEqual((spend["charged_spend_usd"], spend["stopped_at_cap"]), (0.0, False))
+
+    def test_an_earlier_cohorts_spend_record_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            native = Path(tmp) / "target-1" / REVISION
+            (native / "observations").mkdir(parents=True)
+            (native / BENCH.SPEND).write_text('{"charged_spend_usd": 3.5}\n')
+            with self.assertRaises(SystemExit):
+                run_tag(tmp)
+            self.assertEqual(json.loads((native / BENCH.SPEND).read_text()), {"charged_spend_usd": 3.5})
+
+    def test_a_refused_attempt_leaves_no_observation_folder_to_refuse_a_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admit = mock.Mock(side_effect=SystemExit("replay-arms: refused"))
+            with mock.patch.object(BENCH.arms, "admit", admit), self.assertRaises(SystemExit):
+                run_tag(tmp)
+            native = Path(tmp) / "target-1" / REVISION
+            self.assertFalse((native / "observations").exists())
+            with mock.patch.object(BENCH.arms, "admit", admit), \
+                    self.assertRaisesRegex(SystemExit, "replay-arms: refused"):
+                run_tag(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()

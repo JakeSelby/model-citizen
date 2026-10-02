@@ -55,13 +55,15 @@ def _pack(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 def _ablation(record: Any) -> Tuple[str, Dict[str, Any], Tuple[str, ...]]:
     if not isinstance(record, dict):
         raise ContractError("replay row carries an ablation record that is not an object")
-    schema = record.get("schema")
+    # A pair row written before the stamp named its schema is a pair, as `replay_pair` reads it
+    # (`ablation.get("schema", SCHEMA)`).
+    schema = record.get("schema", PAIR_SCHEMA)
     if isinstance(schema, bool) or schema not in (PAIR_SCHEMA, ABLATION_SCHEMA):
         raise ContractError("unsupported ablation stamp schema: " + json.dumps(schema))
     if not _text(record.get("name")) or not _text(record.get("sha256")):
         raise ContractError("replay row carries an ablation record with no name or digest")
     if schema == PAIR_SCHEMA:
-        return "pair", dict(record), PAIR_ARMS
+        return "pair", dict(record, schema=schema), PAIR_ARMS
     arms = record.get("arms")
     if not isinstance(arms, list) or not arms or not all(_text(arm) for arm in arms):
         raise ContractError("replay row carries an ablation record with no arms")
@@ -111,18 +113,21 @@ def row_contract(row: Mapping[str, Any]) -> Dict[str, Any]:
 def identity_fields(row: Mapping[str, Any], contract: Mapping[str, Any]) -> Dict[str, Any]:
     """The fields one row's index identity is built from.
 
-    A two-arm row outside a pack keeps the original five fields, so rebuilding an index of rows
-    written before these contracts yields the run ids it had. Each landed stamp adds the digest
-    that tells two cohorts apart: the pack digest, the ablation or design manifest digest, and the
-    schedule seed."""
+    A two-arm row keeps the original five fields, with or without a pack, so rebuilding an index
+    written before these contracts yields the run ids and source identities it had. One results
+    file is one run of one pack, so its rows never differ by pack digest; the digest stays on the
+    record's `evaluation.pack`. Pair, ablation and design rows, which no earlier index admitted,
+    add the manifest digest and schedule seed that tell two cohorts apart."""
     fields = {name: row.get(name) for name in ("task", "arm", "rep", "harness_sha", "tag")}
+    if contract["shape"] == "two-arm":
+        return fields
     if contract.get("pack"):
         fields["pack_digest"] = contract["pack"]["pack_digest"]
     if contract.get("ablation"):
         fields["ablation_sha256"] = contract["ablation"]["sha256"]
     if contract.get("design"):
         fields["design_sha256"] = contract["design"]["manifest_sha256"]
-    if contract["shape"] != "two-arm" and "schedule_seed" in row:
+    if "schedule_seed" in row:
         fields["schedule_seed"] = row.get("schedule_seed")
     return fields
 

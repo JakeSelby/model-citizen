@@ -192,21 +192,18 @@ class TagScheduleTests(unittest.TestCase):
             for tag in ("v1", "v2"):
                 self.assertTrue((Path(tmp) / "out" / tag / BENCH.RESULTS).exists(), tag)
 
-    def test_a_pre_registered_task_subset_writes_its_exact_history_row(self):
+    def test_a_task_subset_never_writes_a_history_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
             args = replay_args(tmp, task=["demo"])
             other = dict(TASK, id="other")
             Path(args.tasks).write_text(json.dumps({"tasks": [TASK, other]}), encoding="utf-8")
-            code, _, _ = self.run_replay(tmp, args)
-            rows = [json.loads(line) for line in
-                    (Path(tmp) / "history" / "history.jsonl").read_text(encoding="utf-8").splitlines()]
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, _, _ = self.run_replay(tmp, args)
             self.assertEqual(code, 0)
-            self.assertEqual(list(rows[0]["per_task"]), ["demo"])
-            full_series = BENCH.hashlib.sha256(
-                Path(args.tasks).read_bytes() + args.model.encode() + b"|container").hexdigest()[:8]
-            self.assertNotEqual(rows[0]["series"], full_series)
-
+            self.assertFalse((Path(tmp) / "history" / "history.jsonl").exists())
+            self.assertIn("a partial set is not a history row", err.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

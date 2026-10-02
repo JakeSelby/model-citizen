@@ -165,19 +165,32 @@ class RunStoreContractTests(unittest.TestCase):
         server.RUN_DETAIL.validate(detail)
         self.assertEqual(detail["evaluation"], contract)
 
-    def test_the_pack_digest_and_manifest_digest_separate_cohorts(self):
-        first = dict(PACK)
-        second = dict(PACK, digest="0" * 64)
-        self.write("packs", [row(**replay_pack.identity(first)), row(**replay_pack.identity(second))])
+    def test_pack_rows_keep_their_ids_across_a_rebuild_and_carry_the_digest(self):
+        first = self.write("pack-a", [row(**replay_pack.identity(PACK))])
+        self.write("pack-b", [row(**replay_pack.identity(dict(PACK, digest="0" * 64)))])
+        report = self.supervisor.reindex(self.repository)
+        self.assertEqual(report["skipped"], [])
+        legacy = run_store._stable_id("benchmark-result", first, run_store._digest(
+            {"task": "alpha", "arm": "harness", "rep": 1, "harness_sha": SHA, "tag": "v1.0.0"}))
+        before = {r["run_id"]: r["evaluation"]["pack"]["pack_digest"] for r in self.records()}
+        self.assertEqual(before[legacy], "f" * 64)
+        self.assertEqual(sorted(before.values()), ["0" * 64, "f" * 64])
+        self.supervisor.reindex(self.repository)
+        self.assertEqual(before, {r["run_id"]: r["evaluation"]["pack"]["pack_digest"]
+                                  for r in self.records()})
+
+    def test_the_manifest_digest_separates_ablation_cohorts(self):
         self.write("ablations", [row(arm="harness", **ablations.row_stamp(ABLATION, "harness", 7)),
                                  row(arm="harness", **ablations.row_stamp(dict(ABLATION, sha256="7" * 64),
                                                                           "harness", 7))])
         report = self.supervisor.reindex(self.repository)
-        self.assertEqual(report["skipped"], [])
-        self.assertEqual(report["imported_runs"], 4)
-        digests = sorted(r["evaluation"]["pack"]["pack_digest"] for r in self.records()
-                         if r["evaluation"]["pack"])
-        self.assertEqual(digests, ["0" * 64, "f" * 64])
+        self.assertEqual((report["skipped"], report["imported_runs"]), ([], 2))
+
+    def test_a_pair_row_without_a_schema_reads_as_the_engine_reads_it(self):
+        stamp = replay_pair.row_stamp(PAIR, "treatment")
+        stamp["ablation"].pop("schema")
+        contract = evaluation.row_contract(row(arm="treatment", **stamp))
+        self.assertEqual((contract["shape"], contract["ablation"]["schema"]), ("pair", replay_pair.SCHEMA))
 
     def test_unsupported_contract_versions_are_reported_and_skipped(self):
         self.write("next", [row(ablation={"name": "x", "sha256": "1" * 64, "schema": 3,
@@ -220,8 +233,9 @@ class ProofBundleTests(unittest.TestCase):
         expected = self.cli()
         self.assertEqual(record["raw"], expected)
         self.assertEqual(record["evaluation"]["proof"], evaluation.proof_status(expected))
-        self.assertEqual(record["evaluation"]["proof"]["status"],
-                         "verified" if expected["ok"] else "failed")
+        self.assertIs(expected["ok"], True)
+        self.assertEqual(record["evaluation"]["proof"]["status"], "verified")
+        self.assertEqual(record["status"], "succeeded")
         self.assertEqual(self.supervisor.run_evaluation(record["run_id"])["shape"], "proof-bundle")
 
     def test_a_contradicted_bundle_is_failed_with_the_verifier_errors(self):
@@ -234,6 +248,18 @@ class ProofBundleTests(unittest.TestCase):
         self.assertEqual(record["status"], "failed")
         self.assertEqual(record["evaluation"]["proof"]["status"], "failed")
         self.assertEqual(record["evaluation"]["proof"]["errors"], expected["errors"])
+
+    def test_a_different_verdict_on_re_verification_is_a_new_record(self):
+        self.supervisor.reindex(self.repository)
+        before = [r for r in self.supervisor.history.list() if r["source"]["kind"] == "evidence-bundle"]
+        self.fixture.root = self.repository / "proof"
+        self.fixture._mutate_rows(lambda value: value.update(model="another-model"))
+        report = self.supervisor.reindex(self.repository)
+        self.assertEqual(report["skipped"], [])
+        after = [r for r in self.supervisor.history.list() if r["source"]["kind"] == "evidence-bundle"]
+        self.assertEqual(len(after), 1)
+        self.assertNotEqual(before[0]["run_id"], after[0]["run_id"])
+        self.assertEqual((before[0]["status"], after[0]["status"]), ("succeeded", "failed"))
 
     def test_a_bundle_path_outside_the_repository_is_never_read(self):
         (self.repository / "product.json").write_text(json.dumps({"evidence_cards": [
