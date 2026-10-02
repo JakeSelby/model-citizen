@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CommandChip, StatusBadge } from "../components/StudioKit";
-import { loadDraft, loadSchema, previewDraft, saveDraft } from "../configure/api";
+import { loadDraft, loadSchema } from "../configure/api";
 import { DraftApply } from "../configure/DraftApply";
 import { DraftSelectionEditor } from "../configure/DraftSelectionEditor";
 import type { FieldDescriptor } from "../configure/model";
@@ -12,9 +12,9 @@ import { loadCatalog, startRun, streamRun } from "../experiments/api";
 import { commandFor, streamComplete, terminal, type FreeSuite, type RunUpdate } from "../experiments/model";
 import { loadOverview } from "../overview/api";
 import { attentionCount, type Overview } from "../overview/model";
-import { loadFirstRun, startFirstRun } from "./api";
+import { afterApply, beginSetup, loadStatus, saveIdentity } from "./flow";
 import {
-  doctorPassed, FIRST_RUN_DRAFT, liveChangeNotice, nextStep, resumeStep, stepReachable,
+  doctorPassed, errorMessage, FIRST_RUN_DRAFT, liveChangeNotice, nextStep, resumeStep, stepReachable,
   type FirstRunStatus, type StepId,
 } from "./model";
 import "./firstrun.css";
@@ -41,6 +41,16 @@ export function GuideProgress({ status, active, onSelect }: {
         })}
       </ol>
     </nav>
+  );
+}
+
+/** Always mounted, so a screen reader announces each new message; errors interrupt as alerts. */
+export function LiveMessages({ message, error }: { message: string; error: string }) {
+  return (
+    <>
+      <Text aria-live="polite" component="div" role="status" size="sm">{message}</Text>
+      <Text c="red" component="div" role="alert" size="sm">{error}</Text>
+    </>
   );
 }
 
@@ -108,6 +118,7 @@ function IdentityStep({ draft, revision, onRevision, onDone }: {
   const [changes, setChanges] = useState<Record<string, unknown>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("Loading your identity…");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -118,7 +129,7 @@ function IdentityStep({ draft, revision, onRevision, onDone }: {
       setValues(read.values);
       setMessage(read.status === "ready" ? "" : read.message);
     }).catch((reason: unknown) => {
-      if (active) setMessage(reason instanceof Error ? reason.message : "The draft could not be read.");
+      if (active) { setMessage(""); setError(errorMessage(reason)); }
     });
     return () => { active = false; };
   }, [draft]);
@@ -131,19 +142,24 @@ function IdentityStep({ draft, revision, onRevision, onDone }: {
   async function save() {
     if (!Object.keys(changes).length) { onDone(); return; }
     setBusy(true);
+    setError("");
     setMessage("Checking and saving a draft checkpoint…");
     try {
-      const planned = await previewDraft(draft, changes);
-      setErrors(Object.fromEntries(planned.errors.map((item) => [item.path, item.message])));
-      if (!planned.valid) { setMessage("Fix the highlighted fields. Nothing was saved."); return; }
-      const saved = await saveDraft(draft, revision, changes);
-      if (!saved.saved) { setMessage("Nothing was saved. Try again when the draft is free."); return; }
-      onRevision(saved.result?.revision ?? revision);
+      const outcome = await saveIdentity(draft, revision, changes);
+      if (outcome.revision !== revision) onRevision(outcome.revision);
+      if (!outcome.saved) {
+        setErrors(outcome.errors);
+        setMessage("");
+        setError(outcome.message);
+        return;
+      }
+      setErrors({});
       setChanges({});
-      setMessage("Saved in the draft. Nothing was applied.");
+      setMessage(outcome.message);
       onDone();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "The save did not complete.");
+      setMessage("");
+      setError(errorMessage(reason));
     } finally {
       setBusy(false);
     }
@@ -160,7 +176,7 @@ function IdentityStep({ draft, revision, onRevision, onDone }: {
           onChange={(event) => change(field.path, event.currentTarget.value)} required={field.required}
           value={String(values[field.path] ?? "")} />
       ))}
-      {message && <Text aria-live="polite" size="sm">{message}</Text>}
+      <LiveMessages error={error} message={message} />
       <Group>
         <Button loading={busy} onClick={save}>Save and continue</Button>
       </Group>
@@ -219,7 +235,7 @@ function CheckStep({ onDone }: { onDone: () => void }) {
         <ul className="message-list">{update.progress.lint_findings.slice(0, 20).map((item) =>
           <li key={`${item.path}:${item.line}:${item.message}`}>{item.path}:{item.line} {item.message}</li>)}</ul>
       )}
-      {message && <Text aria-live="polite" size="sm">{message}</Text>}
+      <LiveMessages error="" message={message} />
     </Stack>
   );
 }
@@ -232,6 +248,9 @@ export function FirstRunPage() {
   const [revision, setRevision] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const heading = useRef<HTMLHeadingElement>(null);
+  const moved = useRef(false);
 
   function adopt(next: FirstRunStatus, moveTo?: StepId) {
     setStatus(next);
@@ -239,10 +258,20 @@ export function FirstRunPage() {
     setStep(moveTo ?? resumeStep(next));
   }
 
+  function go(next: StepId) {
+    moved.current = true;
+    setStep(next);
+  }
+
+  useEffect(() => {
+    // The control that moved the guide on is gone, so focus the new step's heading.
+    if (moved.current) heading.current?.focus();
+  }, [step]);
+
   useEffect(() => {
     let active = true;
-    loadFirstRun(FIRST_RUN_DRAFT).then((next) => { if (active) adopt(next); })
-      .catch((reason: unknown) => { if (active) setMessage(reason instanceof Error ? reason.message : "Setup is unavailable."); });
+    loadStatus(FIRST_RUN_DRAFT).then((next) => { if (active) adopt(next); })
+      .catch((reason: unknown) => { if (active) setError(errorMessage(reason)); });
     loadOverview().then((next) => { if (active) setOverview(next); }).catch(() => undefined);
     return () => { active = false; };
   }, []);
@@ -251,18 +280,22 @@ export function FirstRunPage() {
     // The headless commands follow the draft's choices, so re-read them after each checkpoint.
     if (!revision) return;
     let active = true;
-    loadFirstRun(FIRST_RUN_DRAFT).then((next) => { if (active) setStatus(next); }).catch(() => undefined);
+    loadStatus(FIRST_RUN_DRAFT).then((next) => { if (active) setStatus(next); }).catch(() => undefined);
     return () => { active = false; };
   }, [revision]);
 
   async function start() {
     setBusy(true);
-    setMessage("Creating draft first-run from the installed version…");
+    setError("");
+    setMessage(`Creating draft ${FIRST_RUN_DRAFT} from the installed version…`);
     try {
-      adopt(await startFirstRun(FIRST_RUN_DRAFT), "identity");
-      setMessage("");
+      const next = await beginSetup(FIRST_RUN_DRAFT);
+      moved.current = true;
+      adopt(next, "identity");
+      setMessage(`Draft ${next.draft_name} is ready.`);
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "The draft could not be created.");
+      setMessage("");
+      setError(errorMessage(reason));
     } finally {
       setBusy(false);
     }
@@ -271,18 +304,25 @@ export function FirstRunPage() {
   async function applied() {
     void queryClient.invalidateQueries({ queryKey: ["overview"] });
     try {
-      const next = await loadFirstRun(FIRST_RUN_DRAFT);
+      const next = await afterApply(FIRST_RUN_DRAFT);
       setOverview(await loadOverview());
-      adopt(next, next.state === "complete" ? "done" : "apply");
+      moved.current = true;
+      adopt(next.status, next.step);
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "Setup status is unavailable.");
+      setError(errorMessage(reason));
     }
   }
 
   if (!status) {
-    return <Stack gap="md"><Title order={1}>Set up Model Citizen</Title><Text aria-live="polite" c="dimmed">{message || "Reading where setup stands…"}</Text></Stack>;
+    return (
+      <Stack gap="md">
+        <Title order={1}>Set up Model Citizen</Title>
+        <LiveMessages error={error} message={error ? "" : "Reading where setup stands…"} />
+      </Stack>
+    );
   }
   const draft = status.draft_name;
+  const label = status.steps.find((item) => item.id === step)?.label ?? "";
   return (
     <Stack gap="xl">
       <Group align="flex-end" justify="space-between">
@@ -293,55 +333,58 @@ export function FirstRunPage() {
         </div>
         <Button component={NavLink} to="/" variant="default">Leave setup</Button>
       </Group>
-      <GuideProgress active={step} onSelect={setStep} status={status} />
-      {message && <Text aria-live="polite" c="red" size="sm">{message}</Text>}
+      <GuideProgress active={step} onSelect={go} status={status} />
+      <LiveMessages error={error} message={message} />
 
       <Paper className="settings-section first-run-step" p="xl" withBorder>
+        <Title className="first-run-heading" order={2} ref={heading} tabIndex={-1}>{label}</Title>
         {step === "health" && (
-          <Stack gap="md">
-            <Title order={2}>Check the install</Title>
+          <Stack gap="md" mt="md">
             <Text c="dimmed" size="sm">The runtimes and links the doctor found. Afterwards, Hub shows health, Configure holds drafts, Library lists modules, Experiments runs suites, Reports traces evidence and Activity records decisions.</Text>
             <HealthSummary overview={overview} />
             <CommandChip command="citizen doctor" label="The same check from the CLI" />
-            <Group><Button onClick={() => setStep(nextStep("health"))}>Continue</Button></Group>
+            <Group><Button onClick={() => go(nextStep("health"))}>Continue</Button></Group>
           </Stack>
         )}
         {step === "draft" && (
-          <Stack gap="md">
-            <Title order={2}>Start a draft</Title>
+          <Stack gap="md" mt="md">
             <Text c="dimmed" size="sm">Every choice goes into draft {draft}. Leaving keeps the draft and changes nothing live.</Text>
             <CommandChip command={status.steps.find((item) => item.id === "draft")?.command ?? ""} label="The same step from the CLI" />
             <Group>
               <Button loading={busy} onClick={() => { void start(); }}>
-                {status.state === "not-started" ? "Create the draft" : "Continue with the kept draft"}
+                {status.draft.revision ? "Continue with the kept draft" : "Create the draft"}
               </Button>
             </Group>
           </Stack>
         )}
         {step === "identity" && revision && (
-          <Stack gap="md">
-            <Title order={2}>Say who you are</Title>
-            <IdentityStep draft={draft} onDone={() => setStep("preferences")} onRevision={setRevision} revision={revision} />
+          <Stack gap="md" mt="md">
+            <IdentityStep draft={draft} onDone={() => go("preferences")} onRevision={setRevision} revision={revision} />
           </Stack>
         )}
         {step === "preferences" && revision && (
-          <Stack gap="md">
-            <Title order={2}>Pick a stance for each dimension</Title>
+          <Stack gap="md" mt="md">
             <Text c="dimmed" size="sm">Each pick previews its operative text and saves to the draft.</Text>
             <DraftSelectionEditor draft={draft} onRevision={setRevision} revision={revision} />
-            <Group><Button onClick={() => setStep("check")}>Continue</Button></Group>
+            <Group><Button onClick={() => go("check")}>Continue</Button></Group>
           </Stack>
         )}
         {step === "check" && (
-          <Stack gap="md">
-            <Title order={2}>Run a free check</Title>
-            <CheckStep onDone={() => setStep("apply")} />
+          <Stack gap="md" mt="md">
+            <CheckStep onDone={() => go("apply")} />
           </Stack>
         )}
         {step === "apply" && revision && (
-          <DraftApply draft={draft} onApplied={() => { void applied(); }} revision={revision} />
+          <Stack gap="md" mt="md">
+            {status.blocked_by.draft && (
+              <Alert color="yellow" title="Another apply is open">
+                An apply of draft {status.blocked_by.draft} was interrupted. The review below offers to restore or abandon it first.
+              </Alert>
+            )}
+            <DraftApply draft={draft} onApplied={() => { void applied(); }} revision={revision} />
+          </Stack>
         )}
-        {step === "done" && <DoneSummary overview={overview} status={status} />}
+        {step === "done" && <Stack mt="md"><DoneSummary overview={overview} status={status} /></Stack>}
       </Paper>
 
       {status.state !== "not-started" && <ReproduceCommands status={status} />}

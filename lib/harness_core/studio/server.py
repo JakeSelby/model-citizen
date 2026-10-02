@@ -1420,10 +1420,18 @@ def _first_run_status(handler: Handler, route: Route) -> None:
     try:
         payload = first_run.status(handler.server.repo_root, name)
     except first_run.FirstRunError as exc:
-        handler._error(409, exc.code)
+        _first_run_error(handler, exc)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
+
+
+def _first_run_error(handler: Handler, exc: "first_run.FirstRunError") -> None:
+    # Busy is the draft's writer lock held by a save's checks: the caller retries shortly.
+    if exc.code == "busy":
+        handler._error(429, "first_run_busy")
+    else:
+        handler._error(409, exc.code)
 
 
 def _run_draft_create(repo_root: Path, draft: str) -> str:
@@ -1434,6 +1442,8 @@ def _run_draft_create(repo_root: Path, draft: str) -> str:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=120)
         payload = json.loads(done.stdout.strip().splitlines()[-1])
+    except subprocess.TimeoutExpired:
+        return "create-timeout"
     except (OSError, IndexError, ValueError, subprocess.SubprocessError):
         return "create-unavailable"
     if not isinstance(payload, dict):
@@ -1452,17 +1462,20 @@ def _first_run_start(handler: Handler, route: Route) -> None:
     def start() -> Dict[str, object]:
         # Resuming is starting again: an existing draft of this name is the run to continue.
         current = first_run.status(handler.server.repo_root, name)
-        if current["state"] != "not-started":
+        if current["draft"]:
             return current
+        # A create an earlier timeout killed may have left a branch with no draft state.
+        first_run.clear_partial(handler.server.repo_root, name)
         failure = _run_draft_create(handler.server.repo_root, name)
         if failure:
+            first_run.clear_partial(handler.server.repo_root, name)
             raise first_run.FirstRunError(failure, "the first-run draft could not be created")
         return first_run.status(handler.server.repo_root, name)
 
     try:
         payload = handler.server.mutations.call(start)
     except first_run.FirstRunError as exc:
-        handler._error(409, exc.code)
+        _first_run_error(handler, exc)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -1687,6 +1700,7 @@ FIRST_RUN = ResponseSchema("json-object", (("schema_version", "integer"),
                                             ("draft", "object"),
                                             ("applied", "object"),
                                             ("interrupted", "object"),
+                                            ("blocked_by", "object"),
                                             ("steps", "array"),
                                             ("choices", "array"),
                                             ("commands", "object")))

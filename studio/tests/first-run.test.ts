@@ -6,10 +6,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 
 import { loadFirstRun, startFirstRun } from "../src/firstrun/api.ts";
-import { FirstRunBanner } from "../src/firstrun/FirstRunEntry.tsx";
+import { FirstRunBanner, FirstRunEntryView } from "../src/firstrun/FirstRunEntry.tsx";
+import { afterApply, beginSetup, loadStatus, saveIdentity } from "../src/firstrun/flow.ts";
 import { DoneSummary, GuideProgress, ReproduceCommands } from "../src/firstrun/FirstRunPage.tsx";
 import {
-  doctorPassed, entryCopy, liveChangeNotice, nextStep, opensGuide, resumeStep, stepReachable,
+  claimGuideOpen, doctorPassed, entryCopy, errorMessage, liveChangeNotice, resetGuideClaim, nextStep, opensGuide, resumeStep, stepReachable,
   type FirstRunStatus,
 } from "../src/firstrun/model.ts";
 import { documentTitle, pageTitle } from "../src/navigation.ts";
@@ -33,6 +34,7 @@ const FRESH: FirstRunStatus = {
   draft: {},
   applied: {},
   interrupted: {},
+  blocked_by: {},
   steps: STEPS,
   choices: [],
   commands: {
@@ -93,7 +95,7 @@ test("the Hub says nothing live changed and offers to resume a kept draft", () =
   assert.equal(entryCopy(DONE), null);
   assert.equal(entryCopy(KEPT)?.action, "Resume setup");
   assert.equal(entryCopy(FRESH)?.action, "Start setup");
-  assert.match(liveChangeNotice(KEPT), /Nothing live has changed\. Draft first-run is kept/);
+  assert.match(liveChangeNotice(KEPT), /Setup has changed nothing live\. Draft first-run is kept/);
   const html = render(h(FirstRunBanner, { status: KEPT }));
   assert.match(html, /Setup is waiting for you/);
   assert.match(html, /href="\/setup"/);
@@ -154,4 +156,122 @@ test("status and start post the draft name with the session's CSRF token", async
     { input: "/api/first-run", body: { draft: "first-run" } },
     { input: "/api/first-run/start", body: { draft: "first-run" } },
   ]);
+});
+
+type Call = { input: string; body: Record<string, unknown> };
+
+async function withFetch(
+  answer: (path: string, body: Record<string, unknown>, calls: Call[]) => { status?: number; body: unknown },
+  run: (calls: Call[]) => Promise<void>,
+): Promise<void> {
+  const original = globalThis.fetch;
+  const calls: Call[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const path = String(input);
+    if (path === "/api/session") {
+      return new Response(JSON.stringify({ csrf_token: "c" }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+    calls.push({ input: path, body });
+    const reply = answer(path, body, calls);
+    return new Response(JSON.stringify(reply.body), { status: reply.status ?? 200, headers: { "Content-Type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await run(calls);
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+const VALID = { valid: true, errors: [], warnings: [], changed: ["identity.name"], preview: {}, base_revision: "rev-2" };
+const STALE = { ...VALID, valid: false, saved: false, result: null,
+  errors: [{ path: "draft", message: "draft revision changed; reload before saving" }] };
+
+test("a configured home that never started setup gets no banner and no redirect", () => {
+  const configured = { ...FRESH, fresh: false };
+  assert.equal(entryCopy(configured), null);
+  resetGuideClaim();
+  assert.equal(claimGuideOpen(configured), false);
+  assert.doesNotMatch(render(h(FirstRunEntryView, { status: configured, opened: false })), /setup/i);
+});
+
+test("the guide opens once per page load, then the Hub shows its banner", () => {
+  resetGuideClaim();
+  assert.equal(claimGuideOpen(FRESH), true);
+  assert.equal(claimGuideOpen(FRESH), false);
+  assert.match(render(h(FirstRunEntryView, { status: FRESH, opened: false })), /Start setup/);
+  assert.doesNotMatch(render(h(FirstRunEntryView, { status: FRESH, opened: true })), /Start setup/);
+  resetGuideClaim();
+});
+
+test("identity saves once on a current revision", async () => {
+  await withFetch((path) => path === "/api/configure/preview"
+    ? { body: VALID } : { body: { ...VALID, saved: true, result: { revision: "rev-3" } } }, async (calls) => {
+    const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "Casey" });
+    assert.deepEqual([outcome.saved, outcome.revision], [true, "rev-3"]);
+    assert.deepEqual(calls.map((call) => call.input), ["/api/configure/preview", "/api/configure/save"]);
+  });
+});
+
+test("a stale revision reloads the latest one and retries the save once", async () => {
+  await withFetch((path, body) => {
+    if (path === "/api/configure/preview") return { body: VALID };
+    if (path === "/api/configure/read") return { body: { status: "ready", message: "", draft: { name: "first-run", revision: "rev-9" }, values: {}, warnings: [] } };
+    return body.base_revision === "rev-9"
+      ? { body: { ...VALID, saved: true, result: { revision: "rev-10" } } } : { body: STALE };
+  }, async (calls) => {
+    const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "Casey" });
+    assert.deepEqual([outcome.saved, outcome.revision], [true, "rev-10"]);
+    assert.deepEqual(calls.filter((call) => call.input === "/api/configure/save").map((call) => call.body.base_revision), ["rev-2", "rev-9"]);
+  });
+});
+
+test("a second stale refusal stops and says so plainly, keeping the latest revision", async () => {
+  await withFetch((path) => {
+    if (path === "/api/configure/preview") return { body: VALID };
+    if (path === "/api/configure/read") return { body: { status: "ready", message: "", draft: { revision: "rev-9" }, values: {}, warnings: [] } };
+    return { body: STALE };
+  }, async (calls) => {
+    const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "Casey" });
+    assert.equal(outcome.saved, false);
+    assert.equal(outcome.revision, "rev-9");
+    assert.match(outcome.message, /changed elsewhere/);
+    assert.equal(calls.filter((call) => call.input === "/api/configure/save").length, 2);
+  });
+});
+
+test("invalid identity fields come back per field and nothing is saved", async () => {
+  await withFetch(() => ({ body: { ...VALID, valid: false, errors: [{ path: "identity.name", message: "required" }] } }), async (calls) => {
+    const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "" });
+    assert.equal(outcome.saved, false);
+    assert.deepEqual(outcome.saved ? {} : outcome.errors, { "identity.name": "required" });
+    assert.equal(calls.length, 1);
+  });
+});
+
+test("start turns a route error code into a sentence the user can act on", async () => {
+  await withFetch(() => ({ status: 409, body: { error: "create-timeout" } }), async () => {
+    await assert.rejects(beginSetup("first-run"), /took too long.*start again/);
+  });
+  assert.match(errorMessage(new Error("something-new")), /Setup stopped: something-new/);
+});
+
+test("a busy status is retried, and a run left busy is reported", async () => {
+  let tries = 0;
+  await withFetch(() => (++tries < 3 ? { status: 429, body: { error: "first_run_busy" } } : { body: KEPT }), async () => {
+    assert.equal((await loadStatus("first-run", 0)).state, "in-progress");
+  });
+  await withFetch(() => ({ status: 429, body: { error: "first_run_busy" } }), async (calls) => {
+    await assert.rejects(loadStatus("first-run", 0), /busy saving a checkpoint/);
+    assert.equal(calls.length, 3);
+  });
+});
+
+test("after an apply the guide moves to done, or stays at review when it did not finish", async () => {
+  await withFetch(() => ({ body: DONE }), async () => {
+    assert.equal((await afterApply("first-run", 0)).step, "done");
+  });
+  await withFetch(() => ({ body: { ...KEPT, state: "interrupted" } }), async () => {
+    assert.equal((await afterApply("first-run", 0)).step, "apply");
+  });
 });

@@ -3,6 +3,11 @@
 nothing live, the commands it shows reproduce its choices, and an apply finishes it."""
 from __future__ import annotations
 
+import argparse
+import contextlib
+import importlib.machinery
+import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -21,9 +26,14 @@ from harness_core.studio import apply as draft_apply  # noqa: E402
 from harness_core.studio import drafts, first_run, selection_editing, server, settings  # noqa: E402
 
 import draft_support  # noqa: E402
+from isolation import without_harness_vars  # noqa: E402
+from test_installer_script import source_repo  # noqa: E402
 from test_studio_draft_apply import Home  # noqa: E402
 
 STANCE = "stances.voice"
+DRAFT = {"name": "first-run", "draft_id": "d1"}
+STANDING_ATTENTION = ("constrained roles: use `citizen role run`; `citizen role status` reports "
+                      "workers, not native qualification")
 
 
 def _row(phase, draft, apply_id="a1", **extra):
@@ -40,37 +50,63 @@ class DeriveTests(unittest.TestCase):
         self.assertTrue(derived["nothing_live_changed"])
 
     def test_a_kept_draft_is_in_progress_and_nothing_live_changed(self):
-        derived = first_run.derive("first-run", {"name": "first-run"}, [], [], ["first-run"])
+        derived = first_run.derive("first-run", DRAFT, [], [], ["first-run"])
         self.assertEqual(derived["state"], "in-progress")
         self.assertTrue(derived["fresh"])
         self.assertTrue(derived["nothing_live_changed"])
 
-    def test_another_draft_or_an_earlier_apply_means_the_install_is_not_fresh(self):
+    def test_another_draft_an_earlier_apply_or_a_configured_home_is_not_fresh(self):
         self.assertFalse(first_run.derive("first-run", None, [], [], ["tuning"])["fresh"])
+        configured = first_run.derive("first-run", None, [], [], [], configured=True)
+        self.assertFalse(configured["fresh"])
+        self.assertEqual(configured["state"], "not-started")
         rows = [_row("intent", "tuning"), _row("completed", "tuning", doctor="passed")]
         derived = first_run.derive("first-run", None, rows, [], [])
         self.assertFalse(derived["fresh"])
         self.assertEqual(derived["state"], "not-started")
 
     def test_an_open_apply_of_the_draft_is_interrupted_and_names_its_recovery(self):
-        intent = _row("intent", "first-run")
-        derived = first_run.derive("first-run", {"name": "first-run"}, [intent], [intent], ["first-run"])
+        intent = _row("intent", "first-run", draft_id="d1")
+        derived = first_run.derive("first-run", DRAFT, [intent], [intent], ["first-run"])
         self.assertEqual(derived["state"], "interrupted")
         self.assertFalse(derived["nothing_live_changed"])
         self.assertEqual(derived["interrupted"]["recover_command"], "citizen draft recover --json")
-        other = _row("intent", "tuning", apply_id="a2")
-        self.assertEqual(first_run.derive("first-run", {"name": "first-run"}, [other], [other],
-                                          ["first-run"])["state"], "in-progress")
+        self.assertEqual(derived["blocked_by"], {})
+
+    def test_an_open_apply_of_another_draft_blocks_this_one_without_claiming_it(self):
+        other = _row("intent", "tuning", apply_id="a2", draft_id="d9")
+        derived = first_run.derive("first-run", DRAFT, [other], [other], ["first-run", "tuning"])
+        self.assertEqual(derived["state"], "in-progress")
+        self.assertEqual(derived["interrupted"], {})
+        self.assertEqual(derived["blocked_by"]["draft"], "tuning")
+
+    def test_a_failed_and_restored_apply_leaves_the_run_in_progress_with_nothing_live_changed(self):
+        rows = [_row("intent", "first-run", draft_id="d1"),
+                _row("failed", "first-run", draft_id="d1", restored=True)]
+        derived = first_run.derive("first-run", DRAFT, rows, [], ["first-run"])
+        self.assertEqual(derived["state"], "in-progress")
+        self.assertTrue(derived["nothing_live_changed"])
+        self.assertTrue(derived["fresh"])
+
+    def test_a_recreated_draft_of_the_same_name_is_a_new_run(self):
+        """An apply of a discarded draft does not finish the draft that now has its name."""
+        rows = [_row("intent", "first-run", draft_id="old"),
+                _row("completed", "first-run", draft_id="old", doctor="passed")]
+        derived = first_run.derive("first-run", DRAFT, rows, [], ["first-run"])
+        self.assertEqual(derived["state"], "in-progress")
+        self.assertEqual(derived["applied"], {})
+        # With no draft of the name left, the earlier apply is the run's history.
+        self.assertEqual(first_run.derive("first-run", None, rows, [], [])["state"], "complete")
 
     def test_a_completed_apply_finishes_it_with_the_commands_that_apply_ran(self):
         rows = [
-            _row("intent", "first-run", revision="r2", config=[
+            _row("intent", "first-run", draft_id="d1", revision="r2", config=[
                 {"action": "set", "key": STANCE, "value": "concise"},
                 {"action": "unset", "key": "identity.github", "value": None},
                 {"action": "none", "key": "mode", "value": None}]),
-            _row("completed", "first-run", revision="r2", doctor="passed"),
+            _row("completed", "first-run", draft_id="d1", revision="r2", doctor="passed"),
         ]
-        derived = first_run.derive("first-run", {"name": "first-run"}, rows, [], ["first-run"])
+        derived = first_run.derive("first-run", DRAFT, rows, [], ["first-run"])
         self.assertEqual(derived["state"], "complete")
         self.assertFalse(derived["fresh"])
         self.assertEqual((derived["applied"]["doctor"], derived["applied"]["revision"]), ("passed", "r2"))
@@ -94,11 +130,20 @@ class FirstRunDraftTests(unittest.TestCase):
         self.initial = config
 
     @contextmanager
-    def first_run_draft(self):
+    def first_run_draft(self, config=None, tools=()):
         # A unique name: draft branches live in the shared repository every worktree sees.
         name = "first-run-" + uuid.uuid4().hex[:10]
         with tempfile.TemporaryDirectory() as temporary:
-            home = Home(temporary, "home", self.initial)
+            home = Home(temporary, "home", self.initial if config is None else config)
+            if tools:
+                # Stand-ins for clients this machine may lack, so doctor reads the same everywhere.
+                bin_dir = Path(temporary) / "bin"
+                bin_dir.mkdir()
+                for tool, version in tools:
+                    script = bin_dir / tool
+                    script.write_text("#!/bin/sh\necho %s\n" % version, encoding="utf-8")
+                    script.chmod(0o755)
+                home.env["PATH"] = str(bin_dir) + os.pathsep + home.env.get("PATH", "")
             before = first_run.status(ROOT, name, home.path)
             self.assertEqual(before["state"], "not-started")
             created = home.cli("draft", "create", name, "--json", timeout=60)
@@ -177,6 +222,26 @@ class FirstRunDraftTests(unittest.TestCase):
             self.assertEqual(json.loads(home.config.read_text(encoding="utf-8"))["stances"]["voice"], stance)
             self.assertEqual(sorted(status["commands"]["headless"]), sorted(shown))
 
+    def test_a_complete_twin_home_ends_with_doctor_clear_but_for_the_standing_roles_line(self):
+        """AC1 in a home with every identity field set and every client on PATH.
+
+        Doctor always prints its constrained-roles pointer with a backticked `citizen` command,
+        which the overview's parser counts as a repair, so no home can reach `passed` until that
+        classification changes. Every other check here is clear, and the guide reports that line.
+        """
+        config = dict(self.initial, identity=dict(self.initial["identity"], name="Casey Example",
+                                                  role="Developer", github="casey-example"))
+        with self.first_run_draft(config, tools=(("codex", "codex-cli 0.130.0"),)) as (name, revision, home, _b):
+            revision, _stance = self._choose(name, revision)
+            done = home.cli("draft", "apply", name, "--revision", revision, "--json", timeout=600)
+            result = json.loads(done.stdout)
+            self.assertEqual(result["status"], "applied", result)
+            attention = [check["message"] for check in result["doctor"]["checks"]
+                         if check["status"] == "attention"]
+            self.assertEqual(attention, [STANDING_ATTENTION], result["doctor"]["checks"])
+            self.assertIn("drift: none", [check["message"] for check in result["doctor"]["checks"]])
+            self.assertEqual(self._status(home, name)["applied"]["doctor"], result["doctor"]["status"])
+
     def test_the_cli_reports_an_invalid_name_as_an_error_object(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Home(temporary, "home", self.initial)
@@ -193,18 +258,213 @@ class FirstRunRouteRegistryTests(unittest.TestCase):
         for path in ("/api/first-run", "/api/first-run/start"):
             self.assertIsNone(routes[("POST", path)].parity_exemption)
 
-    def test_init_and_the_installer_point_at_the_studio(self):
-        lines = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8").rstrip().splitlines()
-        self.assertEqual(lines[-1], "EOF")
-        self.assertTrue(lines[-2].endswith("$CHECKOUT/bin/citizen studio"), lines[-2])
+
+
+class ConfiguredHomeTests(unittest.TestCase):
+    """Fresh means nothing projected or nothing chosen; a CLI-configured home is never fresh."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        self.config = draft_apply.config_file(self.home)
+        self.config.parent.mkdir(parents=True)
+        self.manifest = draft_apply.journal_path(self.home).parent / "manifest.json"
+
+    def _write(self, config, synced=True):
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        if synced:
+            self.manifest.parent.mkdir(parents=True, exist_ok=True)
+            self.manifest.write_text("{}", encoding="utf-8")
+
+    def test_an_installer_home_with_only_init_defaults_is_fresh_even_after_install(self):
+        stances = {"voice": "concise", "testing": "required"}
+        self._write({"stances": stances, "init_defaults": {"stances": dict(stances)}})
+        self.assertFalse(first_run.configured(self.home))
+
+    def test_a_home_never_synced_is_not_configured(self):
+        self._write({"stances": {"voice": "concise"}}, synced=False)
+        self.assertFalse(first_run.configured(self.home))
+
+    def test_a_chosen_stance_a_mode_or_a_config_older_than_init_defaults_is_configured(self):
+        stances = {"voice": "concise", "testing": "required"}
+        for config in ({"stances": dict(stances, voice="scannable"),
+                        "init_defaults": {"stances": dict(stances)}},
+                       {"stances": stances, "init_defaults": {"stances": {"voice": "concise"}}},
+                       {"stances": stances, "mode": "superpowers",
+                        "init_defaults": {"stances": dict(stances)}},
+                       {"stances": stances}):
+            with self.subTest(config=config):
+                self._write(config)
+                self.assertTrue(first_run.configured(self.home))
+
+    def test_an_unreadable_configuration_is_never_treated_as_fresh(self):
+        self._write({})
+        self.config.write_text("{not json", encoding="utf-8")
+        self.assertTrue(first_run.configured(self.home))
+
+
+class StatusErrorTests(unittest.TestCase):
+    """Every failure leaves status as a FirstRunError, which the route and CLI report as data."""
+
+    def _status(self):
+        return first_run.status(ROOT, "first-run-" + uuid.uuid4().hex[:8], Path(tempfile.gettempdir()))
+
+    def test_an_unreadable_draft_elsewhere_in_the_repository_is_a_structured_error(self):
+        with mock.patch.object(drafts, "list_drafts", side_effect=drafts.DraftError("invalid-state", "bad")):
+            with self.assertRaises(first_run.FirstRunError) as caught:
+                self._status()
+        self.assertEqual(caught.exception.code, "invalid-state")
+
+    def test_an_unreadable_journal_is_a_structured_error(self):
+        with mock.patch.object(first_run, "_journal_rows", side_effect=PermissionError("denied")):
+            with self.assertRaises(first_run.FirstRunError) as caught:
+                self._status()
+        self.assertEqual(caught.exception.code, "unreadable")
+
+    def test_a_draft_held_by_a_long_save_is_busy_within_the_bounded_wait(self):
+        draft = {"name": "x", "draft_id": "d", "revision": "r", "base_revision": "b",
+                 "behind_installed": False, "created_at": "t"}
+        with mock.patch.object(drafts, "find", return_value=(ROOT, {})), \
+                mock.patch.object(drafts, "describe", return_value=draft), \
+                mock.patch.object(drafts, "read_snapshot",
+                                  side_effect=drafts.DraftError("busy", "held")) as read:
+            with self.assertRaises(first_run.FirstRunError) as caught:
+                self._status()
+        self.assertEqual(caught.exception.code, "busy")
+        self.assertEqual(read.call_args.kwargs["lock_timeout"], first_run.STATUS_LOCK_TIMEOUT)
+        self.assertLessEqual(first_run.STATUS_LOCK_TIMEOUT, 10)
+
+    def test_the_cli_prints_a_structured_error_instead_of_a_traceback(self):
         with tempfile.TemporaryDirectory() as temporary:
-            env = {key: value for key, value in os.environ.items() if not key.startswith("HARNESS_")}
-            env.update(HOME=temporary, HARNESS_HOME=temporary)
-            done = subprocess.run([sys.executable, str(ROOT / "bin" / "harness"), "init", "--yes",
-                                   "--name", "Casey", "--role", "Developer"],
-                                  env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(done.returncode, 0, done.stderr)
-        self.assertTrue(done.stdout.rstrip().splitlines()[-1].endswith("citizen studio"), done.stdout)
+            home = Home(temporary, "home", {"stances": {}})
+            journal = draft_apply.journal_path(home.path)
+            journal.parent.mkdir(parents=True)
+            journal.write_text("", encoding="utf-8")
+            journal.chmod(0)  # present but unreadable
+            try:
+                done = home.cli("draft", "first-run", "first-run-" + uuid.uuid4().hex[:8], "--json",
+                                timeout=60)
+            finally:
+                journal.chmod(0o600)
+        self.assertEqual(done.returncode, 1, done.stderr)
+        self.assertNotIn("Traceback", done.stderr)
+        self.assertEqual(json.loads(done.stdout)["error"]["code"], "unreadable")
+
+
+class FirstRunHandlerTests(unittest.TestCase):
+    """The route handlers' error paths, without a running server."""
+
+    def _handler(self, draft):
+        handler = mock.Mock()
+        handler.request_json = {"draft": draft}
+        handler.server.repo_root = ROOT
+        handler.server.mutations.call.side_effect = lambda operation: operation()
+        return handler
+
+    def _route(self, path):
+        return next(route for route in server.ROUTES.entries if route.path == path)
+
+    def test_busy_status_answers_429_so_the_guide_retries(self):
+        handler = self._handler("first-run")
+        with mock.patch.object(first_run, "status", side_effect=first_run.FirstRunError("busy", "held")):
+            server._first_run_status(handler, self._route("/api/first-run"))
+        handler._error.assert_called_once_with(429, "first_run_busy")
+
+    def test_a_structured_status_failure_answers_409_with_its_code(self):
+        handler = self._handler("first-run")
+        with mock.patch.object(first_run, "status", side_effect=first_run.FirstRunError("unreadable", "x")):
+            server._first_run_status(handler, self._route("/api/first-run"))
+        handler._error.assert_called_once_with(409, "unreadable")
+
+    def test_a_timed_out_create_is_cleaned_up_before_and_after_and_reported(self):
+        handler = self._handler("first-run")
+        not_started = {"draft": {}, "state": "not-started"}
+        with mock.patch.object(first_run, "status", return_value=not_started), \
+                mock.patch.object(first_run, "clear_partial", return_value=True) as clear, \
+                mock.patch.object(server, "_run_draft_create", return_value="create-timeout"):
+            server._first_run_start(handler, self._route("/api/first-run/start"))
+        self.assertEqual(clear.call_count, 2)
+        handler._error.assert_called_once_with(409, "create-timeout")
+
+    def test_a_subprocess_timeout_is_reported_as_create_timeout(self):
+        with mock.patch.object(server.subprocess, "run",
+                               side_effect=subprocess.TimeoutExpired("citizen", 120)):
+            self.assertEqual(server._run_draft_create(ROOT, "first-run"), "create-timeout")
+
+
+class ClearPartialTests(unittest.TestCase):
+    """What a killed `draft create` leaves is removed; a leftover carrying work is kept."""
+
+    def _git(self, *args, **kwargs):
+        return subprocess.run(["git", *args], capture_output=True, text=True, **kwargs)
+
+    def _leftover(self, temporary, commit=False):
+        name = "first-run-" + uuid.uuid4().hex[:10]
+        path = Path(temporary) / ("draft-" + name)
+        self._git("-C", str(ROOT), "worktree", "add", "-q", "-b", "draft/" + name, str(path), "HEAD",
+                  check=True)
+        self.addCleanup(self._git, "-C", str(ROOT), "branch", "-D", "draft/" + name)
+        self.addCleanup(self._git, "-C", str(ROOT), "worktree", "prune")
+        if commit:
+            self._git("-C", str(path), "-c", "user.name=t", "-c", "user.email=t" + "@" + "example.invalid",
+                      "commit", "-q", "--allow-empty", "-m", "work", check=True)
+        return name, path
+
+    def test_a_branch_and_worktree_with_no_draft_state_are_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            name, path = self._leftover(temporary)
+            self.assertTrue(first_run.clear_partial(ROOT, name))
+            self.assertFalse(draft_support.draft_branch_exists(name))
+            self.assertFalse(draft_support.draft_worktree_registered(name))
+            self.assertFalse(path.exists())
+
+    def test_a_leftover_carrying_its_own_commit_is_kept(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            name, _path = self._leftover(temporary, commit=True)
+            self.assertFalse(first_run.clear_partial(ROOT, name))
+            self.assertTrue(draft_support.draft_branch_exists(name))
+
+    def test_nothing_to_clear_is_a_no_op(self):
+        self.assertFalse(first_run.clear_partial(ROOT, "first-run-" + uuid.uuid4().hex[:10]))
+
+
+class PointersTests(unittest.TestCase):
+    def test_interactive_init_points_at_the_studio(self):
+        loader = importlib.machinery.SourceFileLoader("harness_first_run_cli", str(ROOT / "bin" / "harness"))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        harness = importlib.util.module_from_spec(spec)
+        loader.exec_module(harness)
+        answers = iter(["Casey", "", "Developer", "", "Europe/Lisbon", "", ""] + [""] * len(harness.STANCE_NAMES))
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.dict(os.environ, {"HOME": temporary, "HARNESS_HOME": temporary}), \
+                mock.patch("builtins.input", lambda _prompt: next(answers)), \
+                mock.patch.object(harness.sys.stdin, "isatty", return_value=True), \
+                mock.patch.object(harness, "_detect_github", return_value=""), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(harness.cmd_init(argparse.Namespace(force=False)), 0)
+        self.assertTrue(out.getvalue().rstrip().splitlines()[-1].endswith("bin/citizen studio"),
+                        out.getvalue())
+
+    def test_the_installer_ends_on_the_studio_once_as_the_step_after_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = source_repo(Path(temporary) / "source")
+            home = Path(temporary) / "home"
+            home.mkdir()
+            checkout = home / "repos" / "agent-harness"
+            env = without_harness_vars()
+            env.pop("HARNESS_QUIET", None)
+            env.update({"HOME": str(home), "HARNESS_HOME": str(home), "HARNESS_CHECKOUT": str(checkout),
+                        "HARNESS_REPO_URL": str(source), "HARNESS_INSTALL_NO_HOMEBREW": "1",
+                        "HARNESS_INSTALL_NO_APPS": "1"})
+            done = subprocess.run(["/bin/sh", str(ROOT / "scripts" / "install.sh")], capture_output=True,
+                                  text=True, cwd=temporary, env=env, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertEqual(done.stdout.count("citizen studio"), 1, done.stdout)
+        last = done.stdout.rstrip().splitlines()[-1]
+        self.assertTrue(last.startswith("After install,"), last)
+        self.assertTrue(last.endswith("%s/bin/citizen studio" % checkout), last)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -4556,7 +4556,6 @@ def init_defaults(args: argparse.Namespace, path: Path) -> int:
         say("  still at the example value: " + ", ".join(left))
         for field in left:
             say(f"    citizen config set identity.{field} \"…\"")
-    say(f"guided setup: {REPO / 'bin' / 'citizen'} studio")
     return 0
 
 

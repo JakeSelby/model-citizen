@@ -10,15 +10,18 @@ export type FirstRunChoice = {
   command: string;
 };
 
+export type ApplyOffer = { apply_id?: string; draft?: string; recover_command?: string; abandon_command?: string };
+
 export type FirstRunStatus = {
   schema_version: number;
   state: FirstRunState;
   fresh: boolean;
   nothing_live_changed: boolean;
   draft_name: string;
-  draft: { name?: string; revision?: string; base_revision?: string; behind_installed?: boolean; created_at?: string };
+  draft: { name?: string; draft_id?: string; revision?: string; base_revision?: string; behind_installed?: boolean; created_at?: string };
   applied: { apply_id?: string; ts?: string; revision?: string; doctor?: string };
-  interrupted: { apply_id?: string; draft?: string; recover_command?: string; abandon_command?: string };
+  interrupted: ApplyOffer;
+  blocked_by: ApplyOffer;
   steps: Array<{ id: StepId; label: string; command: string }>;
   choices: FirstRunChoice[];
   commands: { headless: string[]; agent: string[]; status: string };
@@ -62,13 +65,15 @@ export function entryCopy(status: FirstRunStatus): { title: string; body: string
   if (status.state === "in-progress") {
     return {
       title: "Setup is waiting for you",
-      body: `Draft ${status.draft_name} keeps your choices so far. Nothing live has changed.`,
+      body: `Draft ${status.draft_name} keeps your choices so far. Setup has changed nothing live.`,
       action: "Resume setup",
     };
   }
+  // A home already set up from the CLI is not offered a first run it does not need.
+  if (!status.fresh) return null;
   return {
     title: "Set up the harness",
-    body: "A guided first run takes a draft from this install to an applied, checked setup. Nothing live changes until you apply.",
+    body: "A guided first run takes a draft from this install to an applied, checked setup. Nothing changes live until you apply.",
     action: "Start setup",
   };
 }
@@ -77,10 +82,39 @@ export function liveChangeNotice(status: FirstRunStatus): string {
   if (status.state === "complete") return "Applied through the governed path.";
   if (status.state === "interrupted") return "An apply was interrupted; recover it before continuing.";
   return status.state === "in-progress"
-    ? `Nothing live has changed. Draft ${status.draft_name} is kept so you can resume.`
-    : "Nothing live has changed.";
+    ? `Setup has changed nothing live. Draft ${status.draft_name} is kept so you can resume.`
+    : "Nothing changes live until you review and apply.";
 }
 
 export function doctorPassed(status: FirstRunStatus): boolean {
   return status.state === "complete" && status.applied.doctor === "passed";
+}
+
+const ERRORS: Record<string, string> = {
+  first_run_busy: "The draft is busy saving a checkpoint. Try again in a moment.",
+  "create-timeout": "Creating the draft took too long and was stopped. Anything it left was removed; start again.",
+  "create-unavailable": "The draft could not be created because the CLI did not answer. Start again, or run the command shown.",
+  "create-failed": "The draft could not be created. Run the command shown in a terminal to see why.",
+  "create-cleanup-failed": "Creating the draft failed and its leftovers could not be removed. Run `citizen draft list` to inspect them.",
+  unreadable: "Setup could not read its state from this machine. Run `citizen draft first-run --json` to see why.",
+  "stale-revision": "The draft changed elsewhere. Reload the page to continue from its latest checkpoint.",
+};
+
+/** A human sentence for an error code a first-run route or save returned. */
+export function errorMessage(reason: unknown): string {
+  const code = reason instanceof Error ? reason.message : String(reason ?? "");
+  return ERRORS[code] ?? (code ? `Setup stopped: ${code}.` : "Setup stopped for an unknown reason.");
+}
+
+let guideOpened = false;
+
+/** True once per page load for a fresh, unstarted install, so leaving the guide does not loop. */
+export function claimGuideOpen(status: FirstRunStatus | null): boolean {
+  if (!opensGuide(status, guideOpened)) return false;
+  guideOpened = true;
+  return true;
+}
+
+export function resetGuideClaim(): void {
+  guideOpened = false;
 }

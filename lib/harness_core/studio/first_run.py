@@ -17,6 +17,7 @@ from . import drafts
 
 SCHEMA_VERSION = 1
 DRAFT = "first-run"
+STATUS_LOCK_TIMEOUT = 5.0
 CLI_COMMANDS = {
     "status": ("citizen", "draft", "first-run", "{draft}", "--json"),
     "start": ("citizen", "draft", "create", "{draft}", "--json"),
@@ -91,13 +92,24 @@ def _applied_choices(intent: Mapping[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
+def _matches(row: Mapping[str, Any], name: str, draft: Optional[Mapping[str, Any]]) -> bool:
+    """A journal row of this run: of this very draft while it exists, else of the name."""
+    if draft is not None:
+        return row.get("draft_id") == draft.get("draft_id")
+    return row.get("draft") == name
+
+
 def derive(name: str, draft: Optional[Mapping[str, Any]], rows: Iterable[Mapping[str, Any]],
-           unfinished: Iterable[Mapping[str, Any]], other_drafts: Iterable[str]) -> Dict[str, Any]:
-    """The first run's state from its draft, the apply journal, and the drafts beside it."""
+           unfinished: Iterable[Mapping[str, Any]], other_drafts: Iterable[str],
+           configured: bool = False) -> Dict[str, Any]:
+    """The first run's state from its draft, the apply journal, the drafts beside it, and whether
+    the home was already set up from the CLI."""
     rows = list(rows)
+    unfinished = list(unfinished)
     completed = [row for row in rows if row.get("phase") == "completed"]
-    mine = [row for row in completed if row.get("draft") == name]
-    interrupted = [row for row in unfinished if row.get("draft") == name]
+    mine = [row for row in completed if _matches(row, name, draft)]
+    interrupted = [row for row in unfinished if _matches(row, name, draft)]
+    blocking = [row for row in unfinished if not _matches(row, name, draft)]
     if interrupted:
         state = "interrupted"
     elif mine:
@@ -117,13 +129,45 @@ def derive(name: str, draft: Optional[Mapping[str, Any]], rows: Iterable[Mapping
                    "choices": _applied_choices(intent)}
     return {
         "state": state,
-        # A fresh install has never applied a draft and holds no draft but this one, so the
-        # Studio opens on the guide; anyone past that reaches it from the Hub instead.
-        "fresh": not completed and not any(item != name for item in other_drafts),
+        # Fresh: nothing was ever applied, no sync has projected the harness into this home, and
+        # no other draft exists. Only then does the Studio open on the guide by itself.
+        "fresh": not completed and not configured and not any(item != name for item in other_drafts),
+        # Whether this run has changed anything live; a configured home may differ from defaults.
         "nothing_live_changed": state in ("not-started", "in-progress"),
         "applied": applied,
         "interrupted": draft_apply._interrupted_offer(interrupted[-1]) if interrupted else {},
+        "blocked_by": draft_apply._interrupted_offer(blocking[-1]) if blocking else {},
     }
+
+
+def _chose(config: Mapping[str, Any]) -> bool:
+    """The live configuration holds a choice the user made rather than what init wrote: a stance
+    init did not record as its default, a mode, or a configuration older than that record."""
+    stances = config.get("stances")
+    if not isinstance(stances, dict):
+        return False
+    marked = config.get("init_defaults")
+    marks = marked.get("stances") if isinstance(marked, dict) else None
+    if not isinstance(marks, dict):
+        return bool(stances)
+    if config.get("mode"):
+        return True
+    return any(name not in marks or marks[name] != value for name, value in stances.items())
+
+
+def configured(home: Path) -> bool:
+    """This home was set up from the CLI: a sync projected the harness into it (the manifest
+    doctor reports as installed) and its live configuration holds the user's own choices."""
+    if not (draft_apply.journal_path(home).parent / "manifest.json").is_file():
+        return False
+    path = draft_apply.config_file(home)
+    if not path.is_file():
+        return False
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return True  # unreadable is never treated as fresh
+    return not isinstance(config, dict) or _chose(config)
 
 
 def _command(template: str, name: str) -> str:
@@ -138,24 +182,28 @@ def status(repo: Path, name: str = DRAFT, home: Optional[Path] = None) -> Dict[s
     repo = Path(repo).resolve()
     home = draft_apply.home_dir() if home is None else Path(home)
     try:
-        worktree, _state = drafts.find(repo, name)
-        draft: Optional[Dict[str, Any]] = drafts.describe(repo, worktree)
-    except drafts.DraftError as exc:
-        if exc.code != "not-found":
-            raise FirstRunError(exc.code, str(exc)) from exc
-        draft = None
-    others = [item["name"] for item in drafts.list_drafts(repo)]
-    derived = derive(name, draft, _journal_rows(home), draft_apply.unfinished_applies(home), others)
-    choices: List[Dict[str, Any]] = []
-    if derived["applied"]:
-        choices = derived["applied"].pop("choices")
-    elif draft is not None:
         try:
-            choices = drafts.read_snapshot(repo, name, _choices)
+            worktree, _state = drafts.find(repo, name)
+            draft: Optional[Dict[str, Any]] = drafts.describe(repo, worktree)
         except drafts.DraftError as exc:
-            raise FirstRunError(exc.code, str(exc)) from exc
+            if exc.code != "not-found":
+                raise
+            draft = None
+        others = [item["name"] for item in drafts.list_drafts(repo)]
+        derived = derive(name, draft, _journal_rows(home), draft_apply.unfinished_applies(home),
+                         others, configured(home))
+        choices: List[Dict[str, Any]] = []
+        if derived["applied"]:
+            choices = derived["applied"].pop("choices")
+        elif draft is not None:
+            # Bounded: a save's checks hold the writer lock for minutes; report busy instead.
+            choices = drafts.read_snapshot(repo, name, _choices, lock_timeout=STATUS_LOCK_TIMEOUT)
+    except drafts.DraftError as exc:
+        raise FirstRunError(exc.code, str(exc)) from exc
+    except OSError as exc:
+        raise FirstRunError("unreadable", "first-run state could not be read: %s" % exc) from exc
     public_draft = {} if draft is None else {
-        key: draft[key] for key in ("name", "revision", "base_revision", "behind_installed", "created_at")}
+        key: draft[key] for key in ("name", "draft_id", "revision", "base_revision", "behind_installed", "created_at")}
     headless = [item["command"] for item in choices] + ["citizen sync", "citizen doctor"]
     agent = [_command(STEPS[1][2], name)] + [
         _command(template, name) for step, _label, template in STEPS[2:4]] + [
@@ -174,3 +222,40 @@ def status(repo: Path, name: str = DRAFT, home: Optional[Path] = None) -> Dict[s
                   "status": "citizen draft first-run --json" if name == DRAFT
                   else _command(" ".join(CLI_COMMANDS["status"]), name)},
     )
+
+
+def clear_partial(repo: Path, name: str) -> bool:
+    """Remove what an interrupted `draft create` left: a branch and worktree with no draft state.
+
+    A create killed partway (a timeout) can leave `draft/NAME` checked out with no state file, so
+    `find` reports not-found and every later create fails on the existing branch. Only a leftover
+    with no draft state and no commit beyond the installed revision is removed; anything else is
+    left for the user and reported by the next create.
+    """
+    repo = Path(repo).resolve()
+    branch = "draft/" + name
+    shown = drafts._git(repo, "show-ref", "--verify", "--quiet", "refs/heads/" + branch, check=False)
+    listed = drafts._git(repo, "worktree", "list", "--porcelain", check=False).stdout
+    worktree = None
+    for block in listed.strip().split("\n\n"):
+        lines = block.splitlines()
+        if "branch refs/heads/" + branch in lines:
+            worktree = Path(lines[0][len("worktree "):])
+    if shown.returncode != 0 and worktree is None:
+        return False
+    if worktree is not None and worktree.is_dir():
+        try:
+            if drafts._paths(worktree)["state"].is_file():
+                return False
+        except drafts.DraftError:
+            pass
+    if shown.returncode == 0:
+        ahead = drafts._git(repo, "rev-list", "--count", "HEAD.." + branch, check=False)
+        if ahead.returncode != 0 or ahead.stdout.strip() != "0":
+            return False
+    if worktree is not None:
+        drafts._git(repo, "worktree", "remove", "--force", str(worktree), check=False)
+    drafts._git(repo, "worktree", "prune", check=False)
+    if shown.returncode == 0:
+        drafts._git(repo, "branch", "-D", branch, check=False)
+    return True
