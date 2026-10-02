@@ -18,6 +18,7 @@ from . import drafts
 SCHEMA_VERSION = 1
 DRAFT = "first-run"
 STATUS_LOCK_TIMEOUT = 5.0
+INIT_RECORD = "init-config.json"
 CLI_COMMANDS = {
     "status": ("citizen", "draft", "first-run", "{draft}", "--json"),
     "start": ("citizen", "draft", "create", "{draft}", "--json"),
@@ -129,8 +130,8 @@ def derive(name: str, draft: Optional[Mapping[str, Any]], rows: Iterable[Mapping
                    "choices": _applied_choices(intent)}
     return {
         "state": state,
-        # Fresh: nothing was ever applied, no sync has projected the harness into this home, and
-        # no other draft exists. Only then does the Studio open on the guide by itself.
+        # Fresh: nothing was ever applied, nothing set beyond what init wrote, and no other
+        # draft exists. Only then does the Studio open on the guide by itself.
         "fresh": not completed and not configured and not any(item != name for item in other_drafts),
         # Whether this run has changed anything live; a configured home may differ from defaults.
         "nothing_live_changed": state in ("not-started", "in-progress"),
@@ -140,34 +141,31 @@ def derive(name: str, draft: Optional[Mapping[str, Any]], rows: Iterable[Mapping
     }
 
 
-def _chose(config: Mapping[str, Any]) -> bool:
-    """The live configuration holds a choice the user made rather than what init wrote: a stance
-    init did not record as its default, a mode, or a configuration older than that record."""
-    stances = config.get("stances")
-    if not isinstance(stances, dict):
-        return False
-    marked = config.get("init_defaults")
-    marks = marked.get("stances") if isinstance(marked, dict) else None
-    if not isinstance(marks, dict):
-        return bool(stances)
-    if config.get("mode"):
-        return True
-    return any(name not in marks or marks[name] != value for name, value in stances.items())
+def _read_object(path: Path) -> Optional[Dict[str, Any]]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("not a JSON object")
+    return value
 
 
 def configured(home: Path) -> bool:
-    """This home was set up from the CLI: a sync projected the harness into it (the manifest
-    doctor reports as installed) and its live configuration holds the user's own choices."""
-    if not (draft_apply.journal_path(home).parent / "manifest.json").is_file():
-        return False
+    """The user has set something beyond what `citizen init` wrote: any key, identity included.
+
+    `init` keeps a copy of the configuration it wrote; a live configuration that differs from it
+    in any key was configured from the CLI. With no record (a configuration older than the record,
+    or one written by `config set` alone) or anything unreadable, the home counts as configured,
+    so the Studio never pushes a first run on someone who may have set up already.
+    """
     path = draft_apply.config_file(home)
     if not path.is_file():
         return False
+    record = draft_apply.journal_path(home).parent / INIT_RECORD
     try:
-        config = json.loads(path.read_text(encoding="utf-8"))
+        written = _read_object(record) if record.is_file() else None
+        live = _read_object(path)
     except (OSError, UnicodeError, ValueError):
-        return True  # unreadable is never treated as fresh
-    return not isinstance(config, dict) or _chose(config)
+        return True
+    return written is None or draft_apply._canonical(live) != draft_apply._canonical(written)
 
 
 def _command(template: str, name: str) -> str:
@@ -224,38 +222,53 @@ def status(repo: Path, name: str = DRAFT, home: Optional[Path] = None) -> Dict[s
     )
 
 
-def clear_partial(repo: Path, name: str) -> bool:
+CLEARED, NOTHING, KEPT, FAILED = "cleared", "nothing", "kept", "failed"
+
+
+def clear_partial(repo: Path, name: str) -> str:
     """Remove what an interrupted `draft create` left: a branch and worktree with no draft state.
 
-    A create killed partway (a timeout) can leave `draft/NAME` checked out with no state file, so
-    `find` reports not-found and every later create fails on the existing branch. Only a leftover
-    with no draft state and no commit beyond the installed revision is removed; anything else is
-    left for the user and reported by the next create.
+    A create killed partway (a timeout) can leave `draft/NAME` checked out, possibly still locked
+    as initializing, with no state file, so `find` reports not-found and every later create fails
+    on the existing branch. Returns `cleared`, `nothing` when there was no leftover, `kept` when
+    the leftover may hold work (draft state present or unknown, or a commit beyond the installed
+    revision) and is left for the user, or `failed` when git did not remove it.
     """
     repo = Path(repo).resolve()
     branch = "draft/" + name
     shown = drafts._git(repo, "show-ref", "--verify", "--quiet", "refs/heads/" + branch, check=False)
-    listed = drafts._git(repo, "worktree", "list", "--porcelain", check=False).stdout
+    listed = drafts._git(repo, "worktree", "list", "--porcelain", check=False)
+    if listed.returncode != 0:
+        return FAILED
     worktree = None
-    for block in listed.strip().split("\n\n"):
+    for block in listed.stdout.strip().split("\n\n"):
         lines = block.splitlines()
         if "branch refs/heads/" + branch in lines:
             worktree = Path(lines[0][len("worktree "):])
     if shown.returncode != 0 and worktree is None:
-        return False
-    if worktree is not None and worktree.is_dir():
-        try:
-            if drafts._paths(worktree)["state"].is_file():
-                return False
-        except drafts.DraftError:
-            pass
+        return NOTHING
+    if worktree is not None and worktree.exists():
+        if (worktree / ".git").exists():
+            try:
+                if drafts._paths(worktree)["state"].exists():
+                    return KEPT
+            except drafts.DraftError:
+                return KEPT  # state unknown: never force-remove what may be a real draft
+        elif any(worktree.iterdir()):
+            return KEPT
     if shown.returncode == 0:
         ahead = drafts._git(repo, "rev-list", "--count", "HEAD.." + branch, check=False)
         if ahead.returncode != 0 or ahead.stdout.strip() != "0":
-            return False
+            return KEPT
     if worktree is not None:
-        drafts._git(repo, "worktree", "remove", "--force", str(worktree), check=False)
-    drafts._git(repo, "worktree", "prune", check=False)
+        # Twice forced: a create killed mid-checkout leaves the worktree locked as initializing.
+        removed = drafts._git(repo, "worktree", "remove", "--force", "--force", str(worktree), check=False)
+        if removed.returncode != 0 and worktree.exists():
+            return FAILED
+    if drafts._git(repo, "worktree", "prune", check=False).returncode != 0:
+        return FAILED
     if shown.returncode == 0:
-        drafts._git(repo, "branch", "-D", branch, check=False)
-    return True
+        if drafts._git(repo, "branch", "-D", branch, check=False).returncode != 0:
+            return FAILED
+    still = drafts._git(repo, "show-ref", "--verify", "--quiet", "refs/heads/" + branch, check=False)
+    return FAILED if still.returncode == 0 else CLEARED

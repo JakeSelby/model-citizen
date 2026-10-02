@@ -293,6 +293,10 @@ def config_path() -> Path:
     return home() / ".config" / "agent-harness" / "config.json"
 
 
+# The clients doctor probes on PATH by name, each with `--version`.
+DOCTOR_TOOLS = ("claude", "code", "codex", "gh")
+
+
 def state_dir() -> Path:
     return home() / ".local" / "state" / "agent-harness"
 
@@ -2303,8 +2307,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     say(f"  repo: {REPO}")
     say(f"  checkout: {_checkout_state()}")
     say(_plugin_install_line())
-    for name, cmd in (("claude", ["claude", "--version"]), ("code", ["code", "--version"]), ("codex", ["codex", "--version"]), ("gh", ["gh", "--version"]), ("python3", [sys.executable, "--version"])):
-        say(f"  {name}: {_version_of(cmd)}")
+    for name in DOCTOR_TOOLS:
+        say(f"  {name}: {_version_of([name, '--version'])}")
+    say(f"  python3: {_version_of([sys.executable, '--version'])}")
     say(f"  gh login: {_version_of(['gh', 'auth', 'status'])}")
     say(f"  claude credentials present (not proof of login): {(claude_dir() / '.credentials.json').exists() or (home() / '.claude.json').exists()}")
     codex_credentials = (codex_dir() / "auth.json").exists()
@@ -4526,6 +4531,12 @@ def unmark_init_default(cfg: Dict[str, Any], name: str) -> None:
         listed["stances"].pop(name, None)
 
 
+def record_init_written(cfg: Dict[str, Any]) -> None:
+    """Keep what init wrote, so the Studio can tell a home nobody has configured yet from one
+    the user set up from the CLI (see `harness_core.studio.first_run.configured`)."""
+    write_json_atomic(state_dir() / studio_first_run.INIT_RECORD, cfg)
+
+
 def init_defaults(args: argparse.Namespace, path: Path) -> int:
     """Write the config with no questions, for a scripted first run.
 
@@ -4550,6 +4561,7 @@ def init_defaults(args: argparse.Namespace, path: Path) -> int:
     cfg["stances"] = dict(example.get("stances", {}), **STANCE_PRESETS[preset])
     mark_init_defaults(cfg, cfg["stances"])
     write_json_atomic(path, cfg)
+    record_init_written(cfg)
     say(f"wrote {path} ({preset} defaults)")
     left = placeholder_identity(cfg)
     if left:
@@ -4607,6 +4619,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     # when it names the offered value.
     mark_init_defaults(cfg, entered)
     write_json_atomic(path, cfg)
+    record_init_written(cfg)
     print(f"\nwrote {path}")
     print(f"next: {REPO / 'bin' / 'citizen'} sync")
     print(f"or set up step by step in the browser: {REPO / 'bin' / 'citizen'} studio")

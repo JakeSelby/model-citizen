@@ -92,10 +92,12 @@ export function doctorPassed(status: FirstRunStatus): boolean {
 
 const ERRORS: Record<string, string> = {
   first_run_busy: "The draft is busy saving a checkpoint. Try again in a moment.",
-  "create-timeout": "Creating the draft took too long and was stopped. Anything it left was removed; start again.",
+  "create-timeout": "Creating the draft took too long and was stopped. What it left was removed; start again.",
+  "partial-draft-kept": "A leftover draft branch from an earlier attempt may hold work, so setup left it alone. Inspect it with `git worktree list`, remove it if it holds nothing you need, then start again.",
+  "stale-again": "The draft changed again while saving. Your entries are kept; select Save again to save them on its latest checkpoint.",
   "create-unavailable": "The draft could not be created because the CLI did not answer. Start again, or run the command shown.",
   "create-failed": "The draft could not be created. Run the command shown in a terminal to see why.",
-  "create-cleanup-failed": "Creating the draft failed and its leftovers could not be removed. Run `citizen draft list` to inspect them.",
+  "create-cleanup-failed": "Creating the draft failed and what it left could not be removed. Find the draft branch with `git worktree list`, remove it, then start again.",
   unreadable: "Setup could not read its state from this machine. Run `citizen draft first-run --json` to see why.",
   "stale-revision": "The draft changed elsewhere. Reload the page to continue from its latest checkpoint.",
 };

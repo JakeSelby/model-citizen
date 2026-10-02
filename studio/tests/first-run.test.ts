@@ -235,7 +235,7 @@ test("a second stale refusal stops and says so plainly, keeping the latest revis
     const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "Casey" });
     assert.equal(outcome.saved, false);
     assert.equal(outcome.revision, "rev-9");
-    assert.match(outcome.message, /changed elsewhere/);
+    assert.match(outcome.message, /Save again/);
     assert.equal(calls.filter((call) => call.input === "/api/configure/save").length, 2);
   });
 });
@@ -274,4 +274,19 @@ test("after an apply the guide moves to done, or stays at review when it did not
   await withFetch(() => ({ body: { ...KEPT, state: "interrupted" } }), async () => {
     assert.equal((await afterApply("first-run", 0)).step, "apply");
   });
+});
+
+test("a non-stale save refusal keeps field errors on their fields", async () => {
+  await withFetch((path) => path === "/api/configure/preview" ? { body: VALID }
+    : { body: { ...VALID, valid: false, saved: false, result: null, errors: [{ path: "identity.name", message: "too long" }] } }, async () => {
+    const outcome = await saveIdentity("first-run", "rev-2", { "identity.name": "x".repeat(500) });
+    assert.equal(outcome.saved, false);
+    assert.deepEqual(outcome.saved ? {} : outcome.errors, { "identity.name": "too long" });
+    assert.match(outcome.message, /highlighted fields/);
+  });
+});
+
+test("a kept leftover and a failed cleanup each get their own sentence", () => {
+  assert.match(errorMessage(new Error("partial-draft-kept")), /left it alone/);
+  assert.match(errorMessage(new Error("create-cleanup-failed")), /could not be removed/);
 });

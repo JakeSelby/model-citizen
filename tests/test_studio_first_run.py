@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from contextlib import contextmanager
@@ -32,6 +33,14 @@ from test_studio_draft_apply import Home  # noqa: E402
 
 STANCE = "stances.voice"
 DRAFT = {"name": "first-run", "draft_id": "d1"}
+
+
+def _load_cli():
+    loader = importlib.machinery.SourceFileLoader("harness_first_run_cli", str(ROOT / "bin" / "harness"))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
 
 
 def _row(phase, draft, apply_id="a1", **extra):
@@ -139,7 +148,7 @@ class FirstRunDraftTests(unittest.TestCase):
                 bin_dir.mkdir()
                 for tool, version in tools:
                     script = bin_dir / tool
-                    script.write_text("#!/bin/sh\necho %s\n" % version, encoding="utf-8")
+                    script.write_text("#!/bin/sh\necho '%s'\n" % version, encoding="utf-8")
                     script.chmod(0o755)
                 home.env["PATH"] = str(bin_dir) + os.pathsep + home.env.get("PATH", "")
             before = first_run.status(ROOT, name, home.path)
@@ -224,7 +233,10 @@ class FirstRunDraftTests(unittest.TestCase):
         """AC1: every identity field set and every client on PATH, so the applied run reads green."""
         config = dict(self.initial, identity=dict(self.initial["identity"], name="Casey Example",
                                                   role="Developer", github="casey-example"))
-        with self.first_run_draft(config, tools=(("codex", "codex-cli 0.130.0"),)) as (name, revision, home, _b):
+        # Every client doctor probes, faked, so the result is the same on a bare CI runner.
+        tools = tuple((tool, "codex-cli 0.130.0" if tool == "codex" else tool + " 1.0.0 (stub)")
+                      for tool in _load_cli().DOCTOR_TOOLS)
+        with self.first_run_draft(config, tools=tools) as (name, revision, home, _b):
             revision, _stance = self._choose(name, revision)
             done = home.cli("draft", "apply", name, "--revision", revision, "--json", timeout=600)
             result = json.loads(done.stdout)
@@ -253,46 +265,46 @@ class FirstRunRouteRegistryTests(unittest.TestCase):
 
 
 class ConfiguredHomeTests(unittest.TestCase):
-    """Fresh means nothing projected or nothing chosen; a CLI-configured home is never fresh."""
+    """Fresh means nothing set beyond what init wrote; a CLI-configured home is never fresh."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.home = Path(self.tmp.name)
-        self.config = draft_apply.config_file(self.home)
-        self.config.parent.mkdir(parents=True)
-        self.manifest = draft_apply.journal_path(self.home).parent / "manifest.json"
+        self.home = Path(os.path.realpath(self.tmp.name))
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith("HARNESS_")}
+        self.env.update(HOME=str(self.home), HARNESS_HOME=str(self.home))
 
-    def _write(self, config, synced=True):
-        self.config.write_text(json.dumps(config), encoding="utf-8")
-        if synced:
-            self.manifest.parent.mkdir(parents=True, exist_ok=True)
-            self.manifest.write_text("{}", encoding="utf-8")
+    def cli(self, *args, timeout=120):
+        done = subprocess.run([sys.executable, str(ROOT / "bin" / "harness"), *args], env=self.env,
+                              capture_output=True, text=True, timeout=timeout)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done
 
-    def test_an_installer_home_with_only_init_defaults_is_fresh_even_after_install(self):
-        stances = {"voice": "concise", "testing": "required"}
-        self._write({"stances": stances, "init_defaults": {"stances": dict(stances)}})
+    def test_a_home_init_wrote_is_fresh_and_stays_fresh_through_a_sync(self):
+        self.assertFalse(first_run.configured(self.home))
+        self.cli("init", "--yes", "--name", "Casey", "--role", "Developer")
+        self.assertFalse(first_run.configured(self.home))
+        self.cli("sync", timeout=600)
         self.assertFalse(first_run.configured(self.home))
 
-    def test_a_home_never_synced_is_not_configured(self):
-        self._write({"stances": {"voice": "concise"}}, synced=False)
-        self.assertFalse(first_run.configured(self.home))
+    def test_setting_only_an_identity_field_from_the_cli_configures_the_home(self):
+        self.cli("init", "--yes", "--name", "Casey", "--role", "Developer")
+        self.cli("config", "set", "identity.pronouns", "she/her")
+        self.assertTrue(first_run.configured(self.home))
 
-    def test_a_chosen_stance_a_mode_or_a_config_older_than_init_defaults_is_configured(self):
-        stances = {"voice": "concise", "testing": "required"}
-        for config in ({"stances": dict(stances, voice="scannable"),
-                        "init_defaults": {"stances": dict(stances)}},
-                       {"stances": stances, "init_defaults": {"stances": {"voice": "concise"}}},
-                       {"stances": stances, "mode": "superpowers",
-                        "init_defaults": {"stances": dict(stances)}},
-                       {"stances": stances}):
-            with self.subTest(config=config):
-                self._write(config)
-                self.assertTrue(first_run.configured(self.home))
+    def test_setting_a_stance_configures_the_home(self):
+        self.cli("init", "--yes", "--name", "Casey", "--role", "Developer")
+        self.cli("config", "set", "stances.voice", "scannable")
+        self.assertTrue(first_run.configured(self.home))
 
-    def test_an_unreadable_configuration_is_never_treated_as_fresh(self):
-        self._write({})
-        self.config.write_text("{not json", encoding="utf-8")
+    def test_a_configuration_with_no_init_record_or_an_unreadable_one_is_configured(self):
+        config = draft_apply.config_file(self.home)
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"stances": {}}), encoding="utf-8")
+        self.assertTrue(first_run.configured(self.home))
+        record = draft_apply.journal_path(self.home).parent / first_run.INIT_RECORD
+        record.parent.mkdir(parents=True)
+        record.write_text("{not json", encoding="utf-8")
         self.assertTrue(first_run.configured(self.home))
 
 
@@ -369,64 +381,129 @@ class FirstRunHandlerTests(unittest.TestCase):
             server._first_run_status(handler, self._route("/api/first-run"))
         handler._error.assert_called_once_with(409, "unreadable")
 
-    def test_a_timed_out_create_is_cleaned_up_before_and_after_and_reported(self):
+    def _start(self, cleared, created="create-timeout"):
         handler = self._handler("first-run")
         not_started = {"draft": {}, "state": "not-started"}
         with mock.patch.object(first_run, "status", return_value=not_started), \
-                mock.patch.object(first_run, "clear_partial", return_value=True) as clear, \
-                mock.patch.object(server, "_run_draft_create", return_value="create-timeout"):
+                mock.patch.object(first_run, "clear_partial", side_effect=cleared) as clear, \
+                mock.patch.object(server, "_run_draft_create", return_value=created):
             server._first_run_start(handler, self._route("/api/first-run/start"))
+        return handler, clear
+
+    def test_a_timed_out_create_is_cleaned_up_before_and_after_and_reported(self):
+        handler, clear = self._start([first_run.NOTHING, first_run.CLEARED])
         self.assertEqual(clear.call_count, 2)
         handler._error.assert_called_once_with(409, "create-timeout")
 
-    def test_a_subprocess_timeout_is_reported_as_create_timeout(self):
-        with mock.patch.object(server.subprocess, "run",
-                               side_effect=subprocess.TimeoutExpired("citizen", 120)):
-            self.assertEqual(server._run_draft_create(ROOT, "first-run"), "create-timeout")
+    def test_a_cleanup_that_fails_is_reported_honestly(self):
+        handler, _clear = self._start([first_run.NOTHING, first_run.FAILED])
+        handler._error.assert_called_once_with(409, "create-cleanup-failed")
+        handler, _clear = self._start([first_run.FAILED])
+        handler._error.assert_called_once_with(409, "create-cleanup-failed")
+
+    def test_a_leftover_that_may_hold_work_stops_start_without_creating(self):
+        with mock.patch.object(server, "_run_draft_create") as create:
+            handler, _clear = self._start([first_run.KEPT])
+        create.assert_not_called()
+        handler._error.assert_called_once_with(409, "partial-draft-kept")
+
+    def test_a_timeout_stops_the_whole_process_group_before_returning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "bin").mkdir()
+            marker = root / "grandchild.pid"
+            # Stands in for `citizen draft create`: it starts a child, as git does, then hangs.
+            (root / "bin" / "harness").write_text(
+                "import subprocess, sys, time\n"
+                "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                "open(%r, 'w').write(str(child.pid))\n"
+                "time.sleep(60)\n" % str(marker), encoding="utf-8")
+            with mock.patch.object(server, "CREATE_TIMEOUT", 3):
+                self.assertEqual(server._run_draft_create(root, "first-run"), "create-timeout")
+            grandchild = int(marker.read_text())
+        for _ in range(50):
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("the create's child outlived the timeout")
 
 
 class ClearPartialTests(unittest.TestCase):
-    """What a killed `draft create` leaves is removed; a leftover carrying work is kept."""
+    """What a killed `draft create` leaves is removed; a leftover that may hold work is kept."""
 
     def _git(self, *args, **kwargs):
         return subprocess.run(["git", *args], capture_output=True, text=True, **kwargs)
 
-    def _leftover(self, temporary, commit=False):
+    def _leftover(self, temporary, commit=False, lock=False):
         name = "first-run-" + uuid.uuid4().hex[:10]
         path = Path(temporary) / ("draft-" + name)
         self._git("-C", str(ROOT), "worktree", "add", "-q", "-b", "draft/" + name, str(path), "HEAD",
                   check=True)
         self.addCleanup(self._git, "-C", str(ROOT), "branch", "-D", "draft/" + name)
         self.addCleanup(self._git, "-C", str(ROOT), "worktree", "prune")
+        self.addCleanup(self._git, "-C", str(ROOT), "worktree", "unlock", str(path))
         if commit:
             self._git("-C", str(path), "-c", "user.name=t", "-c", "user.email=t" + "@" + "example.invalid",
                       "commit", "-q", "--allow-empty", "-m", "work", check=True)
+        if lock:
+            # What a `git worktree add` killed mid-checkout leaves.
+            self._git("-C", str(ROOT), "worktree", "lock", "--reason", "initializing", str(path), check=True)
         return name, path
 
     def test_a_branch_and_worktree_with_no_draft_state_are_removed(self):
         with tempfile.TemporaryDirectory() as temporary:
             name, path = self._leftover(temporary)
-            self.assertTrue(first_run.clear_partial(ROOT, name))
+            self.assertEqual(first_run.clear_partial(ROOT, name), first_run.CLEARED)
             self.assertFalse(draft_support.draft_branch_exists(name))
             self.assertFalse(draft_support.draft_worktree_registered(name))
+            self.assertFalse(path.exists())
+
+    def test_a_worktree_locked_as_initializing_is_removed_too(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            name, path = self._leftover(temporary, lock=True)
+            self.assertEqual(first_run.clear_partial(ROOT, name), first_run.CLEARED)
+            self.assertFalse(draft_support.draft_branch_exists(name))
             self.assertFalse(path.exists())
 
     def test_a_leftover_carrying_its_own_commit_is_kept(self):
         with tempfile.TemporaryDirectory() as temporary:
             name, _path = self._leftover(temporary, commit=True)
-            self.assertFalse(first_run.clear_partial(ROOT, name))
+            self.assertEqual(first_run.clear_partial(ROOT, name), first_run.KEPT)
             self.assertTrue(draft_support.draft_branch_exists(name))
 
+    def test_a_leftover_whose_draft_state_cannot_be_read_is_never_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            name, path = self._leftover(temporary)
+            with mock.patch.object(drafts, "_paths", side_effect=drafts.DraftError("git-failed", "x")):
+                self.assertEqual(first_run.clear_partial(ROOT, name), first_run.KEPT)
+            self.assertTrue(path.exists())
+            self.assertTrue(draft_support.draft_branch_exists(name))
+            self._git("-C", str(ROOT), "worktree", "remove", "--force", str(path))
+
+    def test_a_failed_branch_delete_is_reported_as_failed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            name, _path = self._leftover(temporary)
+            real = drafts._git
+
+            def refuse_branch_delete(repo, *args, check=True):
+                if args[:2] == ("branch", "-D"):
+                    return subprocess.CompletedProcess(args, 1, "", "refused")
+                return real(repo, *args, check=check)
+
+            with mock.patch.object(drafts, "_git", side_effect=refuse_branch_delete):
+                self.assertEqual(first_run.clear_partial(ROOT, name), first_run.FAILED)
+
     def test_nothing_to_clear_is_a_no_op(self):
-        self.assertFalse(first_run.clear_partial(ROOT, "first-run-" + uuid.uuid4().hex[:10]))
+        self.assertEqual(first_run.clear_partial(ROOT, "first-run-" + uuid.uuid4().hex[:10]),
+                         first_run.NOTHING)
 
 
 class PointersTests(unittest.TestCase):
     def test_interactive_init_points_at_the_studio(self):
-        loader = importlib.machinery.SourceFileLoader("harness_first_run_cli", str(ROOT / "bin" / "harness"))
-        spec = importlib.util.spec_from_loader(loader.name, loader)
-        harness = importlib.util.module_from_spec(spec)
-        loader.exec_module(harness)
+        harness = _load_cli()
         answers = iter(["Casey", "", "Developer", "", "Europe/Lisbon", "", ""] + [""] * len(harness.STANCE_NAMES))
         with tempfile.TemporaryDirectory() as temporary, \
                 mock.patch.dict(os.environ, {"HOME": temporary, "HARNESS_HOME": temporary}), \

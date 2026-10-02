@@ -31,10 +31,16 @@ export async function saveIdentity(
     if (saved.saved) {
       return { saved: true, revision: saved.result?.revision ?? current, message: "Saved in the draft. Nothing was applied." };
     }
-    if (!stale(saved.errors) || attempt > 0) {
-      const reason = saved.errors.map((item) => item.message).join("; ");
-      return { saved: false, revision: current, errors: {},
-        message: stale(saved.errors) ? errorMessage("stale-revision") : `Nothing was saved: ${reason || "the draft refused the change"}.` };
+    if (!stale(saved.errors)) {
+      // Field errors stay on their fields; anything about the draft itself becomes the message.
+      const fields = Object.fromEntries(saved.errors.filter((item) => item.path !== "draft")
+        .map((item) => [item.path, item.message]));
+      const reason = saved.errors.filter((item) => item.path === "draft").map((item) => item.message).join("; ");
+      return { saved: false, revision: current, errors: fields,
+        message: reason ? `Nothing was saved: ${reason}.` : "Nothing was saved. Fix the highlighted fields." };
+    }
+    if (attempt > 0) {
+      return { saved: false, revision: current, errors: {}, message: errorMessage("stale-again") };
     }
     const latest = await loadDraft(draft);
     if (!latest.draft.revision || latest.draft.revision === current) {

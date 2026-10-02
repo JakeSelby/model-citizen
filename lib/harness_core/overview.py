@@ -125,7 +125,8 @@ def doctor_checks(lines: Iterable[str]) -> List[Dict[str, Any]]:
         informational = _INFORMATIONAL.match(message) is not None
         fixes = [] if informational else [found.group(1) for found in _REPAIR_COMMAND.finditer(message)]
         command = fixes[0] if fixes else None
-        tone = "attention" if not informational and (fixes or _ATTENTION.search(message)) else "informational"
+        # A pointer line is never a repair, but a warning word in it still needs attention.
+        tone = "attention" if fixes or _ATTENTION.search(message) else "informational"
         checks.append({"id": "doctor-%d" % (len(checks) + 1), "status": tone,
                        "message": message, "fix": command, "fixes": fixes})
     return checks

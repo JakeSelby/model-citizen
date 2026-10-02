@@ -1434,17 +1434,34 @@ def _first_run_error(handler: Handler, exc: "first_run.FirstRunError") -> None:
         handler._error(409, exc.code)
 
 
+CREATE_TIMEOUT = 120
+
+
 def _run_draft_create(repo_root: Path, draft: str) -> str:
-    """Run `citizen draft create` itself, so the draft is the CLI's managed worktree."""
+    """Run `citizen draft create` itself, so the draft is the CLI's managed worktree.
+
+    The CLI runs in its own session, so a timeout stops its git children with it and the
+    cleanup that follows never races a checkout still in progress.
+    """
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
     command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "create", draft, "--json"]
     try:
-        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
-                              text=True, timeout=120)
-        payload = json.loads(done.stdout.strip().splitlines()[-1])
+        child = subprocess.Popen(command, cwd=str(repo_root), env=environment, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except OSError:
+        return "create-unavailable"
+    try:
+        stdout, _stderr = child.communicate(timeout=CREATE_TIMEOUT)
     except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
         return "create-timeout"
-    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+    try:
+        payload = json.loads(stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
         return "create-unavailable"
     if not isinstance(payload, dict):
         return "create-unavailable"
@@ -1452,6 +1469,14 @@ def _run_draft_create(repo_root: Path, draft: str) -> str:
     if isinstance(error, dict):
         return str(error.get("code") or "create-failed")
     return ""
+
+
+def _clear_partial_draft(repo_root: Path, name: str) -> None:
+    outcome = first_run.clear_partial(repo_root, name)
+    if outcome == first_run.FAILED:
+        raise first_run.FirstRunError("create-cleanup-failed", "a half-created draft could not be removed")
+    if outcome == first_run.KEPT:
+        raise first_run.FirstRunError("partial-draft-kept", "a leftover draft branch may hold work")
 
 
 def _first_run_start(handler: Handler, route: Route) -> None:
@@ -1465,10 +1490,10 @@ def _first_run_start(handler: Handler, route: Route) -> None:
         if current["draft"]:
             return current
         # A create an earlier timeout killed may have left a branch with no draft state.
-        first_run.clear_partial(handler.server.repo_root, name)
+        _clear_partial_draft(handler.server.repo_root, name)
         failure = _run_draft_create(handler.server.repo_root, name)
         if failure:
-            first_run.clear_partial(handler.server.repo_root, name)
+            _clear_partial_draft(handler.server.repo_root, name)
             raise first_run.FirstRunError(failure, "the first-run draft could not be created")
         return first_run.status(handler.server.repo_root, name)
 
