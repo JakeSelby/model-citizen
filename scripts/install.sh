@@ -90,4 +90,6 @@ Model Citizen is checked out at $CHECKOUT and configured. Nothing is installed y
 
 Set who you are and what you prefer with \`$CHECKOUT/bin/citizen config set\`; the fields still at their
 example value are listed above.
+
+After install, finish setting up step by step in the browser:  $CHECKOUT/bin/citizen studio
 EOF

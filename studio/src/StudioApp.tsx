@@ -22,6 +22,8 @@ import { OverviewPage } from "./overview/OverviewPage";
 import { ExperimentsPage } from "./experiments/ExperimentsPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
+import { FirstRunEntry } from "./firstrun/FirstRunEntry";
+import { FirstRunPage } from "./firstrun/FirstRunPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
@@ -125,7 +127,8 @@ function StudioFrame() {
       <Container component="main" id="main-content" className="main-content" size="xl" tabIndex={-1}>
         <Text className="visually-hidden" component="span">Current page: {title}</Text>
         <Routes>
-          <Route path="/" element={<OverviewPage />} />
+          <Route path="/" element={<><FirstRunEntry /><OverviewPage /></>} />
+          <Route path="/setup" element={<FirstRunPage />} />
           <Route path="/configure" element={<ConfigurePage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />

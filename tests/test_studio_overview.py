@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.machinery
+import os
 import importlib.util
 import subprocess
 import sys
@@ -57,6 +58,23 @@ class OverviewDomainTests(unittest.TestCase):
         self.assertEqual(checks[0]["fixes"], [
             "bin/harness install", "/plugin install model-citizen@market",
         ])
+
+    def test_the_constrained_roles_pointer_is_informational_not_a_repair(self):
+        """Regression: doctor prints it on every machine, so counting it kept every home amber."""
+        with tempfile.TemporaryDirectory() as home:
+            env = {key: value for key, value in os.environ.items() if not key.startswith("HARNESS_")}
+            env.update(HOME=home, HARNESS_HOME=home)
+            done = subprocess.run([sys.executable, str(ROOT / "bin" / "harness"), "doctor"],
+                                  env=env, capture_output=True, text=True, timeout=300)
+        lines = [line for line in done.stdout.splitlines() if "constrained roles:" in line]
+        self.assertEqual(len(lines), 1, done.stdout)
+        check = overview.doctor_checks(lines)[0]
+        self.assertEqual((check["status"], check["fixes"], check["fix"]), ("informational", [], None))
+        self.assertEqual(overview.doctor_checks(["hooks: none; run `citizen sync`"])[0]["status"],
+                         "attention")
+        # The pointer prefix never hides a real warning.
+        self.assertEqual(overview.doctor_checks(["constrained roles: worker registry unreadable"])[0]["status"],
+                         "attention")
 
     def test_each_source_failure_stays_distinct_from_empty_or_healthy(self):
         sources = self.sources()

@@ -28,6 +28,7 @@ from . import (activity, auth, compare, drafts, free_suites, live_updates, modul
                module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
+from . import first_run
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -1422,6 +1423,109 @@ def _draft_apply(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _first_run_request(handler: Handler) -> Optional[str]:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return None
+    if not first_run.valid_name(request["draft"]):
+        handler._error(400, "invalid_request")
+        return None
+    return str(request["draft"])
+
+
+def _first_run_status(handler: Handler, route: Route) -> None:
+    name = _first_run_request(handler)
+    if name is None:
+        return
+    try:
+        payload = first_run.status(handler.server.repo_root, name)
+    except first_run.FirstRunError as exc:
+        _first_run_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _first_run_error(handler: Handler, exc: "first_run.FirstRunError") -> None:
+    # Busy is the draft's writer lock held by a save's checks: the caller retries shortly.
+    if exc.code == "busy":
+        handler._error(429, "first_run_busy")
+    else:
+        handler._error(409, exc.code)
+
+
+CREATE_TIMEOUT = 120
+
+
+def _run_draft_create(repo_root: Path, draft: str) -> str:
+    """Run `citizen draft create` itself, so the draft is the CLI's managed worktree.
+
+    The CLI runs in its own session, so a timeout stops its git children with it and the
+    cleanup that follows never races a checkout still in progress.
+    """
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "create", draft, "--json"]
+    try:
+        child = subprocess.Popen(command, cwd=str(repo_root), env=environment, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, start_new_session=True)
+    except OSError:
+        return "create-unavailable"
+    try:
+        stdout, _stderr = child.communicate(timeout=CREATE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        child.communicate()
+        return "create-timeout"
+    try:
+        payload = json.loads(stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError):
+        return "create-unavailable"
+    if not isinstance(payload, dict):
+        return "create-unavailable"
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return str(error.get("code") or "create-failed")
+    return ""
+
+
+def _clear_partial_draft(repo_root: Path, name: str) -> None:
+    outcome = first_run.clear_partial(repo_root, name)
+    if outcome == first_run.FAILED:
+        raise first_run.FirstRunError("create-cleanup-failed", "a half-created draft could not be removed")
+    if outcome == first_run.KEPT:
+        raise first_run.FirstRunError("partial-draft-kept", "a leftover draft branch may hold work")
+
+
+def _first_run_start(handler: Handler, route: Route) -> None:
+    name = _first_run_request(handler)
+    if name is None:
+        return
+
+    def start() -> Dict[str, object]:
+        # Resuming is starting again: an existing draft of this name is the run to continue.
+        current = first_run.status(handler.server.repo_root, name)
+        if current["draft"]:
+            return current
+        # A create an earlier timeout killed may have left a branch with no draft state.
+        _clear_partial_draft(handler.server.repo_root, name)
+        failure = _run_draft_create(handler.server.repo_root, name)
+        if failure:
+            _clear_partial_draft(handler.server.repo_root, name)
+            raise first_run.FirstRunError(failure, "the first-run draft could not be created")
+        return first_run.status(handler.server.repo_root, name)
+
+    try:
+        payload = handler.server.mutations.call(start)
+    except first_run.FirstRunError as exc:
+        _first_run_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1633,6 +1737,18 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))
+FIRST_RUN = ResponseSchema("json-object", (("schema_version", "integer"),
+                                            ("state", "string"),
+                                            ("fresh", "boolean"),
+                                            ("nothing_live_changed", "boolean"),
+                                            ("draft_name", "string"),
+                                            ("draft", "object"),
+                                            ("applied", "object"),
+                                            ("interrupted", "object"),
+                                            ("blocked_by", "object"),
+                                            ("steps", "array"),
+                                            ("choices", "array"),
+                                            ("commands", "object")))
 REPLAY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                  ("run", "object"),
                                                  ("progress", "array"),
@@ -1708,6 +1824,10 @@ ROUTES = RouteRegistry((
           _draft_apply, None, "application/json", draft_apply.CLI_COMMANDS["apply"]),
     Route("POST", "/api/configure/apply/recover", "application/json", APPLY_RESULT,
           _draft_recover, None, "application/json", draft_apply.CLI_COMMANDS["recover"]),
+    Route("POST", "/api/first-run", "application/json", FIRST_RUN,
+          _first_run_status, None, "application/json", first_run.CLI_COMMANDS["status"]),
+    Route("POST", "/api/first-run/start", "application/json", FIRST_RUN,
+          _first_run_start, None, "application/json", first_run.CLI_COMMANDS["start"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,
