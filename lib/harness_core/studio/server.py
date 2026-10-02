@@ -24,7 +24,7 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (activity, auth, drafts, free_suites, live_updates, module_authoring,
+from . import (activity, auth, compare, drafts, free_suites, live_updates, module_authoring,
                module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
@@ -792,6 +792,26 @@ def _replay_result(handler: Handler, route: Route) -> None:
         return
     except (ValueError, replay.ReplayError):
         handler._error(409, "replay_result_invalid")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+# A comparison that cannot be read is the client's to fix (400) or not there yet (404, 409).
+_COMPARE_STATUS = {"invalid_request": 400, "compare_not_found": 404}
+
+
+def _runs_compare(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, compare.SIDES)
+    if request is None:
+        return
+    try:
+        sides = compare.parse_request(request)
+        # Read-only and engine-bound, so it stays off the one mutation thread.
+        payload = compare.compare_runs(handler.server.run_supervisor,
+                                       handler.server.repo_root, sides)
+    except compare.CompareError as exc:
+        handler._error(_COMPARE_STATUS.get(exc.code, 409), exc.code)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -1617,6 +1637,18 @@ REPLAY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                  ("run", "object"),
                                                  ("progress", "array"),
                                                  ("result", "object-or-null")))
+RUNS_COMPARE = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                ("engine", "string"), ("control", "string"),
+                                                ("base", "object"), ("candidate", "object"),
+                                                ("key_match", "boolean"),
+                                                ("comparable", "boolean"),
+                                                ("refusals", "array"),
+                                                ("stale", "array"),
+                                                ("notes", "array"),
+                                                ("direction_withheld", "array"),
+                                                ("preferred", "object"),
+                                                ("result", "object-or-null"),
+                                                ("error", "string-or-null")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -1731,6 +1763,9 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/runs/replay/result", "application/json",
           REPLAY_RESULT, _replay_result, None, "application/json",
           ("citizen", "runs", "show")),
+    Route("POST", "/api/runs/compare", "application/json",
+          RUNS_COMPARE, _runs_compare, None, "application/json",
+          ("citizen", "runs", "compare")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

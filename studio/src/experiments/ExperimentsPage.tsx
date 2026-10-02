@@ -14,6 +14,8 @@ import type {
   NativeCatalog, NativeRun, NativeSelection, NativeSnapshot,
 } from "./native-acceptance/model";
 import { stateAfterStart } from "./native-acceptance/model";
+import { ComparePanel } from "./compare/ComparePanel";
+import type { CompareInput } from "./compare/model";
 import { ReplayPanel } from "./replay/ReplayPanel";
 import { RunHistoryPanel } from "./history/RunHistoryPanel";
 import { loadReplayCatalog, loadReplayResult } from "./replay/api";
@@ -33,6 +35,11 @@ export function ExperimentsPage() {
   const [replayCatalog, setReplayCatalog] = useState<ReplayCatalog | null>(null);
   const [replayRunId, setReplayRunId] = useState("");
   const [replayResult, setReplayResult] = useState<ReplayRunResult | null>(null);
+  const firstComparison = replayResult?.result?.comparisons?.[0];
+  const compareInitial: CompareInput | null = replayRunId && firstComparison
+    ? { base: { run_id: replayRunId, target: firstComparison.base_target },
+        candidate: { run_id: replayRunId, target: firstComparison.target } }
+    : null;
   const [error, setError] = useState("");
   const [suiteId, setSuiteId] = useState("unit-tests");
   const [selectedCase, setSelectedCase] = useState("all");
@@ -242,6 +249,8 @@ export function ExperimentsPage() {
         runStatus={replayResult?.run.status}
         onStarted={(runId) => { setReplayRunId(runId); setReplayResult(null); }}
       />}
+
+      <ComparePanel key={compareInitial ? JSON.stringify(compareInitial) : "empty"} initial={compareInitial} />
 
       {update && <Paper className="run-console" p="xl" withBorder>
         <Stack gap="md">

@@ -1170,27 +1170,37 @@ def comparison_key(request: ReplayRequest) -> str:
     }, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def draft_staleness(repository: Path, target: ReplayTarget) -> Tuple[bool, Optional[str]]:
+    """`(stale, reason)` for a measured target: a draft is stale once it has a newer checkpoint,
+    a changed configuration or is gone; any other target never goes stale."""
+    if target.kind != "draft" or not target.draft:
+        return False, None
+    try:
+        current = drafts.read_config(Path(repository), target.draft)
+        revision = str(current["draft"]["revision"])
+        digest = targets._config_digest(dict(current["config"]))
+    except (drafts.DraftError, targets.TargetError, KeyError, TypeError):
+        return True, "the draft is no longer available"
+    if revision != target.revision:
+        return True, "the draft has a newer checkpoint"
+    if target.config_digest is not None and digest != target.config_digest:
+        return True, "the draft's configuration changed"
+    return False, None
+
+
 def draft_comparisons(repository: Path, request: ReplayRequest) -> List[Dict[str, Any]]:
     """One record per draft target: the draft's checkpoint and configuration the replay measured,
-    the other target it was matched against, the shared task/model/trial identity, and whether
-    the draft has changed since (`stale`). The compare view itself is #990's."""
+    the other target it was matched against (each by its 1-based `target` index, as the compare
+    view takes them), the shared task/model/trial identity, and whether the draft has changed
+    since (`stale`)."""
     out = []
     for index, target in enumerate(request.targets):
         if target.kind != "draft" or not target.draft:
             continue
         base = request.targets[1 - index]
-        stale, reason = False, None
-        try:
-            current = drafts.read_config(Path(repository), target.draft)
-            revision = str(current["draft"]["revision"])
-            digest = targets._config_digest(dict(current["config"]))
-            if revision != target.revision:
-                stale, reason = True, "the draft has a newer checkpoint"
-            elif target.config_digest is not None and digest != target.config_digest:
-                stale, reason = True, "the draft's configuration changed"
-        except (drafts.DraftError, targets.TargetError, KeyError, TypeError):
-            stale, reason = True, "the draft is no longer available"
+        stale, reason = draft_staleness(repository, target)
         out.append({"draft": target.draft, "revision": target.revision,
+                    "target": index + 1, "base_target": 2 - index,
                     "config_digest": target.config_digest, "base": base.as_dict(),
                     "tasks": list(request.tasks), "model": request.model,
                     "trials": request.repetitions,

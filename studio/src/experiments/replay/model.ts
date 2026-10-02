@@ -47,7 +47,8 @@ export type ReplaySampling = {
 export type ReplayAnalysis = { target: number; result?: Record<string, unknown>; error?: string };
 
 export type DraftComparison = {
-  draft: string; revision: string; config_digest: string | null; base: ReplayTarget;
+  draft: string; revision: string; target: 1 | 2; base_target: 1 | 2;
+  config_digest: string | null; base: ReplayTarget;
   tasks: string[]; model: string; trials: number; pack_digest: string | null;
   evidence: string; key: string; stale: boolean; stale_reason: string | null;
 };
