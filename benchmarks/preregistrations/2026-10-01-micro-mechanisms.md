@@ -138,3 +138,18 @@ Append a dated entry for every change after the first trial: what changed, why, 
 it touches. Never edit an entry.
 
 - None yet.
+- 2026-10-02: The first launch was refused at preflight, before any scored trial, having reported
+  0.07 USD across both preflights. The harness arm's preflight ended `error_max_budget_usd` at
+  0.0556 USD on its first turn, before its tool result came back, against the 0.05 USD preflight
+  cap; the bare arm's finished both turns at 0.0188 USD. That first turn is the harness arm's
+  cold instruction prefix on `claude-haiku-4-5` at effort high, so the 0.10 USD run cap would
+  have left it about 0.04 USD for a task against the bare arm's 0.08, truncating harness runs
+  before the Stop hook `micro-stop-gate` measures and biasing every verdict against it (#1165).
+  Changed: the run cap from 0.10 to 0.25 USD, the preflight cap from 0.05 to 0.15 USD, the
+  ceiling from 3.10 to 7.80 USD and the stop from 4.55 to 7.80 USD; these replace the figures in
+  the Spend guardrail, the Stopping rule and the command. No scored trial had run,
+  so no outcome was seen before the change. Amended command, the same flags with new caps:
+  `python3 scripts/cost_bench.py replay --tier micro --pack ../model-citizen-evals --pack-ref
+  v1.0.0 --pack-digest 6399bd95f99e76c61e448f1c5f99303a1dc4f3a7fea36f3857c5927daf2199b0 --tag
+  59520dd339b340a0864d6cef6ae657c49c9b5b2e --reps 5 --run-cap 0.25 --spend-cap 7.80 --raw
+  "$MICRO_RAW" --pre-registration benchmarks/preregistrations/2026-10-01-micro-mechanisms.md`
