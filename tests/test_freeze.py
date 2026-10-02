@@ -28,6 +28,29 @@ class FreezeRecordTests(unittest.TestCase):
             self.assertTrue(data["branch"].startswith("release/"))
             self.assertRegex(data["commit"], r"^[0-9a-f]{40,64}$")
 
+    def test_the_repository_record_names_no_released_branch(self):
+        data = json.loads((REPO / "compatibility" / "catalog.json").read_text())
+        tagged = subprocess.run(["git", "-C", str(REPO), "rev-parse", "-q", "--verify",
+                                 "refs/tags/v" + data["harness_version"]],
+                                capture_output=True).returncode == 0
+        self.assertEqual(compatibility.stale_freeze_errors(
+            compatibility.freeze_record(REPO), data, tagged), [])
+
+    def test_a_record_frozen_at_a_released_branch_is_refused(self):
+        released = {"harness_version": "0.14.2", "release_state": "released"}
+        frozen = {"schema_version": 1, "state": "frozen", "branch": "release/v0.14.2",
+                  "commit": "040462636205d8edc766775ebe2cc9571ac6b217"}
+        errors = compatibility.stale_freeze_errors(frozen, released, True)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("release/v0.14.2", errors[0])
+        candidate = dict(released, release_state="candidate")
+        self.assertEqual(compatibility.stale_freeze_errors(frozen, candidate, True), [])
+        self.assertEqual(compatibility.stale_freeze_errors(
+            dict(frozen, branch="release/v0.14.3"), released, True), [])
+        self.assertEqual(compatibility.stale_freeze_errors({"state": "open"}, released, True), [])
+        # The release commit precedes its tag and may still be frozen.
+        self.assertEqual(compatibility.stale_freeze_errors(frozen, released, False), [])
+
     def test_a_missing_record_means_no_branch_is_frozen(self):
         self.assertEqual(compatibility.freeze_record(self.root)["state"], "open")
 

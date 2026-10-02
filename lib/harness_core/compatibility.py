@@ -308,6 +308,21 @@ def freeze_record(root):
     return data
 
 
+def stale_freeze_errors(freeze, data, tagged):
+    """Refuse a freeze record still naming the branch of a release that is already tagged.
+
+    docs/releasing.md returns the record to `open` after the tag, so the release commit itself
+    may still be frozen; `tagged` says whether `v<harness_version>` exists. Reads no network.
+    """
+    if freeze.get("state") != "frozen" or data.get("release_state") != "released" or not tagged:
+        return []
+    branch = "release/v" + str(data.get("harness_version"))
+    if freeze.get("branch") != branch:
+        return []
+    return ["compatibility/freeze.json is still frozen at " + branch + ", which is released;"
+            " and tagged; return its state to open"]
+
+
 def freeze_drift(root, data, ref="origin/main"):
     """Report runtime source drift between the frozen commit and `ref`.
 
