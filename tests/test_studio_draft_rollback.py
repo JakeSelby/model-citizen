@@ -161,7 +161,10 @@ class RollbackTests(unittest.TestCase):
             rolled = by_kind["rollback"]
             self.assertEqual((rolled["title"], rolled["draft"], rolled["outcome"], rolled["actor"]),
                              ("Apply rolled back", name, "completed", "citizen"))
-            self.assertEqual(rolled["evidence_href"], "/activity?entry=studio%3A" + apply_id)
+            self.assertEqual(rolled["evidence_href"], "/activity?apply=" + apply_id)
+            self.assertEqual((by_kind["apply"]["apply_id"], by_kind["apply"]["rollback_target"]),
+                             (apply_id, apply_id))
+            self.assertEqual(rolled["rollback_target"], result["apply_id"])
             self.assertIn(apply_id[:12], rolled["reason"])
 
             # Rolled back once: the apply is refused a second time, and the rollback reverses.
@@ -171,6 +174,11 @@ class RollbackTests(unittest.TestCase):
             code, redo = self.cli(home, rollback_id, "--draft", name)
             self.assertEqual((code, redo["status"]), (0, "rolled-back"), redo["message"])
             self.assertEqual(_snapshot(home), applied)
+            # Twice reversed: the apply and the first rollback both name the one now in effect.
+            for earlier in (apply_id, rollback_id):
+                code, again = self.cli(home, earlier, "--preview")
+                self.assertEqual(again["refusals"][0]["code"], "already-rolled-back")
+                self.assertIn("%s of draft %s" % (redo["apply_id"][:12], name), again["refusals"][0]["message"])
 
     def test_a_later_apply_of_the_same_key_refuses_naming_it(self):
         """AC2, then rolling the later apply back first clears the way."""
@@ -265,7 +273,7 @@ class RollbackTests(unittest.TestCase):
             with mock.patch.object(draft_apply, "_journal",
                                    side_effect=lambda path, row: real(path, row)
                                    if row["phase"] == "intent" else None), \
-                    mock.patch.object(draft_apply, "_restore", return_value=False):
+                    mock.patch.object(draft_rollback, "_undo", return_value=False):
                 draft_rollback.rollback(apply_id, self.operations(home, killed), home=home.path)
             self.assertFalse(home.dest.exists())
             open_intents = draft_apply.unfinished_applies(home.path)
@@ -279,6 +287,101 @@ class RollbackTests(unittest.TestCase):
             self.assertEqual(_snapshot(home), applied)
             code, result = self.cli(home, apply_id)
             self.assertEqual((code, result["status"]), (0, "rolled-back"), result["message"])
+
+    def test_an_interrupted_rollback_recovered_by_apply_is_reported_as_a_rollback(self):
+        with self.home() as home:
+            name, revision = self.draft(home, "rollback-applyrec")
+            revision = self.add_rule(name, revision)
+            apply_id = self.apply(home, name, revision)
+            applied = _snapshot(home)
+
+            def killed(dry):
+                if dry:
+                    return SETTLED
+                raise draft_apply.ApplyError("killed", "killed")
+
+            real = draft_apply._journal
+            with mock.patch.object(draft_apply, "_journal",
+                                   side_effect=lambda path, row: real(path, row)
+                                   if row["phase"] == "intent" else None), \
+                    mock.patch.object(draft_rollback, "_undo", return_value=False):
+                draft_rollback.rollback(apply_id, self.operations(home, killed), home=home.path)
+            done = home.cli("draft", "apply", name, "--revision", revision, "--json")
+            result = json.loads(done.stdout)
+            self.assertEqual((done.returncode, result["status"], result["error_code"]),
+                             (1, "recovered", "interrupted-rollback"), result["message"])
+            self.assertIn("rollback of draft %s's apply %s" % (name, apply_id[:12]), result["message"])
+            self.assertNotIn("apply again", result["message"])
+            self.assertEqual(_snapshot(home), applied)
+            entries = activity.query(home.state, {"limit": 10, "cursor": "", "session": "",
+                                                  "repository": "", "hook": "", "outcome": ""})["entries"]
+            undone = entries[0]
+            self.assertEqual((undone["kind"], undone["title"], undone["outcome"], undone["rollback_target"]),
+                             ("rollback", "Rollback undone", "recovered", ""))
+            self.assertEqual(undone["evidence_href"], "/activity?apply=" + apply_id)
+
+    def test_an_edit_during_the_dry_run_sync_is_kept_or_refused_by_name(self):
+        with self.home() as home:
+            name, revision = self.draft(home, "rollback-race")
+            apply_id = self.apply(home, name, self.switch(name, self.add_rule(name, revision), "off"))
+
+            def edit(key, value):
+                def sync(dry):
+                    if dry:
+                        config = json.loads(home.config.read_text(encoding="utf-8"))
+                        config["rules"][key] = value
+                        home.config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+                    return SETTLED
+                return sync
+
+            # An applied key edited while the dry run ran: refused by name, the edit kept.
+            result = draft_rollback.rollback(apply_id, self.operations(home, edit(SWITCHED, "on")),
+                                             home=home.path)
+            self.assertEqual((result["status"], result["error_code"]), ("refused", "rollback-conflict"))
+            self.assertIn("configuration key rules." + SWITCHED, result["message"])
+            self.assertEqual(json.loads(home.config.read_text(encoding="utf-8"))["rules"][SWITCHED], "on")
+            self.assertEqual(len(self.journal(home)), 2)
+
+            # Put back, then an unrelated key edited during the dry run: kept, and the rollback runs.
+            config = json.loads(home.config.read_text(encoding="utf-8"))
+            config["rules"][SWITCHED] = "off"
+            home.config.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            result = draft_rollback.rollback(
+                apply_id, self.operations(home, edit("research-and-verification", "off")), home=home.path)
+            self.assertEqual(result["status"], "rolled-back", result["message"])
+            config = json.loads(home.config.read_text(encoding="utf-8"))
+            self.assertEqual(config["rules"], {"research-and-verification": "off"})
+            self.assertEqual(config["primitive_roots"], [])
+
+    def test_an_edit_after_planning_is_refused_before_anything_is_written(self):
+        with self.home() as home:
+            name, revision = self.draft(home, "rollback-late")
+            apply_id = self.apply(home, name, self.add_rule(name, revision))
+            real = draft_apply.missing_directories
+
+            def late_edit(dest, paths):
+                home.config.write_text(home.config.read_text(encoding="utf-8") + " ", encoding="utf-8")
+                return real(dest, paths)
+
+            with mock.patch.object(draft_apply, "missing_directories", side_effect=late_edit):
+                result = draft_rollback.rollback(apply_id, self.operations(home, lambda dry: SETTLED),
+                                                 home=home.path)
+            self.assertEqual((result["status"], result["error_code"]), ("refused", "rollback-conflict"))
+            self.assertIn(str(home.config), result["message"])
+            self.assertTrue(home.config.read_text(encoding="utf-8").endswith(" "))
+            self.assertTrue((home.dest / "rules" / "greeting.md").is_file())
+            self.assertEqual(len(self.journal(home)), 2)
+
+    def test_a_directory_that_existed_before_the_apply_survives_the_rollback(self):
+        with self.home() as home:
+            (home.dest / "rules").mkdir(parents=True)
+            name, revision = self.draft(home, "rollback-dirs")
+            apply_id = self.apply(home, name, self.add_rule(name, revision))
+            self.assertEqual(self.journal(home)[0]["created"], [])
+            code, result = self.cli(home, apply_id)
+            self.assertEqual((code, result["status"]), (0, "rolled-back"), result["message"])
+            self.assertTrue((home.dest / "rules").is_dir())
+            self.assertEqual(list((home.dest / "rules").iterdir()), [])
 
     def test_a_held_lock_refuses_naming_its_holder(self):
         with self.home() as home:
@@ -339,6 +442,46 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(self.code(first), "")
         self.assertEqual(self.code(later), "already-rolled-back")
 
+    def test_an_abandoned_later_entry_blocks_only_what_it_still_holds(self):
+        first, later = uuid.uuid4().hex, uuid.uuid4().hex
+        self.intent(first)
+        self.row(first, "completed")
+        self.row(later, "intent", prior_config=draft_apply._encoded(b'{"mode": "b"}\n'),
+                 config=[{"key": "mode", "action": "set", "applied": "c"}], files=[],
+                 destination=str(self.home / "root"))
+        self.row(later, "abandoned")
+        self.assertEqual(self.code(later), "not-applied")
+        self.config.write_bytes(b'{"mode": "c"}\n')
+        refusals = draft_rollback.preview(first, self.home)["refusals"]
+        self.assertEqual(refusals[0]["code"], "later-apply")
+        self.assertIn(later[:12], refusals[0]["message"])
+        self.assertIn("configuration key mode", refusals[0]["message"])
+        # Put back to what the first apply wrote: the abandoned write is gone, so it clears.
+        self.config.write_bytes(b'{"mode": "b"}\n')
+        self.assertEqual(self.code(first), "")
+
+    def test_an_abandoned_rollback_of_the_target_does_not_block_it(self):
+        first, undo = uuid.uuid4().hex, uuid.uuid4().hex
+        self.intent(first)
+        self.row(first, "completed")
+        self.row(undo, "intent", kind="rollback", reverses=first,
+                 prior_config=draft_apply._encoded(b'{"mode": "b"}\n'),
+                 config=[{"key": "mode", "action": "set", "applied": "a"}], files=[],
+                 destination=str(self.home / "root"))
+        self.row(undo, "abandoned")
+        self.assertEqual(self.code(first), "")
+        self.config.write_bytes(b'{"mode": "a"}\n')
+        self.assertEqual(self.code(first), "nothing-to-roll-back")
+
+    def test_malformed_journal_rows_are_refused_not_raised(self):
+        identity = uuid.uuid4().hex
+        self.row(identity, "intent", prior_config=7, config="not-a-list", files=[{"path": 3}],
+                 destination=str(self.home / "root"))
+        self.row(identity, "completed")
+        preview = draft_rollback.preview(identity, self.home)
+        self.assertFalse(preview["can_rollback"])
+        self.assertTrue(preview["refusals"][0]["code"])
+
     def test_a_later_file_in_a_root_the_apply_registered_refuses(self):
         first, later = uuid.uuid4().hex, uuid.uuid4().hex
         self.intent(first, key="primitive_roots")
@@ -364,10 +507,25 @@ class ActivityLinkTests(unittest.TestCase):
         return activity._event_entry({"kind": "event", "event": "studio.rollback", "id": "r" * 32,
                                       "ts": "2026-10-02T12:00:00Z", "detail": detail})
 
+    def test_entries_carry_their_journal_id_and_rollback_target(self):
+        identity = "b" * 32
+        for event, outcome, title, target in (
+                ("studio.apply", "completed", "Draft applied", identity),
+                ("studio.apply", "failed", "Draft applied", ""),
+                ("studio.rollback", "completed", "Apply rolled back", identity),
+                ("studio.rollback", "failed", "Rollback failed", ""),
+                ("studio.rollback", "recovered", "Rollback undone", "")):
+            entry = activity._event_entry({"kind": "event", "event": event, "id": identity,
+                                           "detail": {"outcome": outcome}})
+            self.assertEqual((entry["title"], entry["apply_id"], entry["rollback_target"]),
+                             (title, identity, target), (event, outcome))
+        other = activity._event_entry({"kind": "event", "event": "studio.save", "id": identity})
+        self.assertEqual((other["apply_id"], other["rollback_target"]), ("", ""))
+
     def test_a_rollback_links_only_a_well_formed_apply_id(self):
         linked = self.entry({"draft": "d", "reverses": "a" * 32, "outcome": "completed"})
         self.assertEqual(linked["title"], "Apply rolled back")
-        self.assertEqual(linked["evidence_href"], "/activity?entry=studio%3A" + "a" * 32)
+        self.assertEqual(linked["evidence_href"], "/activity?apply=" + "a" * 32)
         self.assertEqual(linked["evidence_label"], "Open the change this rolled back")
         for reverses in ("../../library", "A" * 32, None, 7):
             unlinked = self.entry({"draft": "d", "reverses": reverses})

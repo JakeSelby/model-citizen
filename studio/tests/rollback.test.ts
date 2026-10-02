@@ -10,7 +10,7 @@ import { previewRollback, rollBack } from "../src/activity/api.ts";
 import type { ActivityEntry, ActivityPage } from "../src/activity/model.ts";
 import { RollbackControls, RollbackDetails, RollbackOutcome, RollbackPanel } from "../src/activity/Rollback.tsx";
 import {
-  focusedEntry, isFocused, rollbackBlocker, rollbackHeadline, rollbackTarget, shownValue,
+  focusedEntry, isFocused, missingFocus, rollbackBlocker, rollbackHeadline, rollbackTarget, shownValue,
   type RollbackPreview, type RollbackResult,
 } from "../src/activity/rollbackModel.ts";
 
@@ -22,12 +22,14 @@ const APPLY: ActivityEntry = {
   actor: "Studio", session: "", repository: "", hook: "", grade: "unknown",
   command: "citizen draft apply tuning --revision r --json", draft: "tuning",
   files: ["personal-primitives/rules/greeting.md"], evidence_href: "", evidence_label: "",
+  apply_id: APPLY_ID, rollback_target: APPLY_ID,
 };
 
 const ROLLBACK: ActivityEntry = {
   ...APPLY, id: `studio:${"f".repeat(32)}@240`, kind: "rollback", title: "Apply rolled back",
   reason: `Rolled back the apply ${APPLY_ID.slice(0, 12)} of draft tuning.`,
-  evidence_href: `/activity?entry=studio%3A${APPLY_ID}`, evidence_label: "Open the change this rolled back",
+  evidence_href: `/activity?apply=${APPLY_ID}`, evidence_label: "Open the change this rolled back",
+  apply_id: "f".repeat(32), rollback_target: "f".repeat(32),
 };
 
 const PREVIEW: RollbackPreview = {
@@ -63,23 +65,24 @@ function render(node: ReturnType<typeof h>, path = "/activity"): string {
   return renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, { initialEntries: [path] }, node)));
 }
 
-test("only completed Studio applies and rollbacks offer a rollback", () => {
+test("the engine's rollback target decides which entries offer a rollback", () => {
   assert.equal(rollbackTarget(APPLY), APPLY_ID);
   assert.equal(rollbackTarget(ROLLBACK), "f".repeat(32));
-  assert.equal(rollbackTarget({ ...APPLY, outcome: "failed" }), "");
-  assert.equal(rollbackTarget({ ...APPLY, source: "decision-log", kind: "decision" }), "");
-  assert.equal(rollbackTarget({ ...APPLY, id: "studio:not-an-apply-id" }), "");
-  assert.equal(rollbackTarget({ ...APPLY, id: `studio:${APPLY_ID}` }), APPLY_ID);
+  assert.equal(rollbackTarget({ ...APPLY, outcome: "failed", rollback_target: "" }), "");
+  assert.equal(rollbackTarget({ ...APPLY, id: "studio:anything", rollback_target: APPLY_ID }), APPLY_ID);
 });
 
 test("a link focuses only a well-formed Studio entry", () => {
-  assert.equal(focusedEntry(`?entry=studio%3A${APPLY_ID}`), `studio:${APPLY_ID}`);
-  assert.equal(focusedEntry("?entry=decision%3Aone"), "");
-  assert.equal(focusedEntry(`?entry=studio%3A${APPLY_ID}%40120`), "");
-  assert.equal(isFocused(APPLY, `studio:${APPLY_ID}`), true);
-  assert.equal(isFocused(ROLLBACK, `studio:${APPLY_ID}`), false);
-  assert.equal(isFocused(APPLY, ""), false);
+  assert.equal(focusedEntry(`?apply=${APPLY_ID}`), APPLY_ID);
+  assert.equal(focusedEntry("?apply=decision%3Aone"), "");
   assert.equal(focusedEntry(""), "");
+  assert.equal(isFocused(APPLY, APPLY_ID), true);
+  assert.equal(isFocused(ROLLBACK, APPLY_ID), false);
+  assert.equal(isFocused({ ...APPLY, apply_id: "" }, ""), false);
+  assert.equal(missingFocus([APPLY], APPLY_ID, true), "");
+  assert.match(missingFocus([ROLLBACK], APPLY_ID, true), /not in the activity loaded so far\. Load older activity/);
+  assert.match(missingFocus([ROLLBACK], APPLY_ID, false), /not in the activity log/);
+  assert.equal(missingFocus([ROLLBACK], "", true), "");
 });
 
 test("rolling back needs a clean preview and the applied draft typed back", () => {
@@ -135,9 +138,13 @@ test("the timeline offers rollback on an apply and links a rollback to the apply
     schema_version: 1, entries: [ROLLBACK, APPLY], next_cursor: "", next_command: "", sources: [],
     filters: { session: "", repository: "", hook: "", outcome: "" }, command: "citizen activity --json",
   };
-  const html = render(h(ActivityTimeline, { payload: page, focus: `studio:${APPLY_ID}` }));
+  const html = render(h(ActivityTimeline, { payload: page, focus: APPLY_ID }));
   assert.match(html, /Apply rolled back/);
-  assert.match(html, /href="\/activity\?entry=studio%3A0123456789abcdef0123456789abcdef"/);
+  assert.match(html, /href="\/activity\?apply=0123456789abcdef0123456789abcdef"/);
+  assert.match(html, /tabindex="-1"/);
+  assert.doesNotMatch(html, /not in the activity/);
+  const elsewhere = render(h(ActivityTimeline, { payload: { ...page, entries: [ROLLBACK], next_cursor: "v1:9" }, focus: APPLY_ID }));
+  assert.match(elsewhere, /role="status"[^>]*>The linked change 0123456789ab is not in the activity loaded so far/);
   assert.match(html, /Open the change this rolled back/);
   assert.equal((html.match(/Preview rollback/g) ?? []).length, 2);
   assert.equal((html.match(/aria-current="true"/g) ?? []).length, 1);

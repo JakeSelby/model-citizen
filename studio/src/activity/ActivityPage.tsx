@@ -28,7 +28,7 @@ import {
   type ActivityPage as ActivityPayload,
 } from "./model";
 import { RollbackPanel } from "./Rollback";
-import { focusedEntry, isFocused, rollbackTarget } from "./rollbackModel";
+import { focusedEntry, isFocused, missingFocus, rollbackTarget } from "./rollbackModel";
 import "./activity.css";
 
 type RowProps = { entry: ActivityEntry; focused?: boolean; onChanged?: () => void };
@@ -37,11 +37,14 @@ function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
   const row = useRef<HTMLElement>(null);
   const target = rollbackTarget(entry);
   useEffect(() => {
-    if (focused) row.current?.scrollIntoView?.({ block: "center" });
+    // A linked entry takes keyboard and screen-reader focus, not only the viewport.
+    if (!focused || !row.current) return;
+    row.current.scrollIntoView?.({ block: "center" });
+    row.current.focus({ preventScroll: true });
   }, [focused]);
   return (
     <Paper aria-current={focused || undefined} className={focused ? "activity-row activity-row-focused" : "activity-row"}
-      component="article" p={{ base: "md", sm: "lg" }} ref={row} withBorder>
+      component="article" p={{ base: "md", sm: "lg" }} ref={row} tabIndex={focused ? -1 : undefined} withBorder>
       <Group align="flex-start" justify="space-between" wrap="wrap">
         <div>
           <Text className="activity-meta" c="dimmed" size="xs">
@@ -77,7 +80,9 @@ function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
 type TimelineProps = { payload: ActivityPayload; focus?: string; onChanged?: () => void };
 
 export function ActivityTimeline({ payload, focus = "", onChanged }: TimelineProps) {
+  const missing = missingFocus(payload.entries, focus, payload.next_cursor !== "");
   return <Stack gap="md">
+    {missing ? <Text c="dimmed" role="status" size="sm">{missing}</Text> : null}
     <Paper className="activity-sources" p="md" withBorder>
       <Text fw={650} size="sm">Evidence sources</Text>
       <Stack gap="xs" mt="xs">

@@ -173,6 +173,8 @@ def _decision_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         "files": [],
         "evidence_href": _library_href(module),
         "evidence_label": "Open %s in Library" % module if module else "",
+        "apply_id": "",
+        "rollback_target": "",
     }
 
 
@@ -196,6 +198,11 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         basis = json.dumps(row, sort_keys=True, separators=(",", ":"))
         identity = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
     titles = {"apply": "Draft applied", "rollback": "Apply rolled back"}
+    if action == "rollback" and outcome != "completed":
+        # An interrupted rollback that recovery undid, or one that failed.
+        titles["rollback"] = "Rollback undone" if outcome == "recovered" else "Rollback failed"
+    # The journal id of an apply or rollback; a completed one is what `citizen draft rollback` takes.
+    apply_id = identity if action in titles and APPLY_ID.fullmatch(identity) else ""
     # A rollback links to the apply (or rollback) it reversed, by that entry's Activity id.
     reverses = detail.get("reverses") if action == "rollback" else None
     linked = isinstance(reverses, str) and APPLY_ID.fullmatch(reverses) is not None
@@ -216,9 +223,11 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         "command": detail.get("command") if isinstance(detail.get("command"), str) else "",
         "draft": draft,
         "files": files,
-        "evidence_href": "/activity?entry=" + urllib.parse.quote("studio:" + str(reverses), safe="")
+        "evidence_href": "/activity?apply=" + urllib.parse.quote(str(reverses), safe="")
         if linked else "",
         "evidence_label": "Open the change this rolled back" if linked else "",
+        "apply_id": apply_id,
+        "rollback_target": apply_id if outcome == "completed" else "",
     }
 
 

@@ -190,6 +190,8 @@ const INTERRUPTED: ApplyReview = {
 test("a recovery is a change: it has its own headline and refreshes the overview", () => {
   const recovered = result({ status: "recovered", applied: false, restored: true, message: "restored" });
   assert.equal(resultHeadline(recovered), "An interrupted apply was rolled back and synced. Review the draft again.");
+  assert.equal(resultHeadline({ ...recovered, error_code: "interrupted-rollback" }),
+    "An interrupted rollback was undone and synced. Nothing of this draft was applied.");
   assert.equal(changedLive(recovered), true);
   assert.equal(changedLive(result({ status: "abandoned", applied: false })), false);
   assert.equal(changedLive(result({ status: "refused", applied: false })), false);

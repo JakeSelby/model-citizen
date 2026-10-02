@@ -25,26 +25,30 @@ export type RollbackResult = Omit<ApplyResult, "status" | "review"> & {
   review: Partial<RollbackPreview>;
 };
 
-// Activity ids are `studio:<journal id>@<ledger offset>`; a link names the journal id alone.
-const STUDIO_ID = /^studio:([0-9a-f]{32})(?:@\d+)?$/;
-const LINK_ID = /^studio:[0-9a-f]{32}$/;
+const APPLY_ID = /^[0-9a-f]{32}$/;
 
-/** The journal id of a completed apply or rollback this Activity entry records, or "". */
+/** The id the engine says this entry can be rolled back by, or "". */
 export function rollbackTarget(entry: ActivityEntry): string {
-  if (entry.source !== "studio-action" || entry.outcome !== "completed") return "";
-  if (entry.kind !== "apply" && entry.kind !== "rollback") return "";
-  return STUDIO_ID.exec(entry.id)?.[1] ?? "";
+  return entry.rollback_target ?? "";
 }
 
-/** The Activity id a `?entry=` link points at, when it is one this page can show. */
+/** The apply id an `?apply=` link names, when it is a well-formed one. */
 export function focusedEntry(search: string): string {
-  const value = new URLSearchParams(search).get("entry") ?? "";
-  return LINK_ID.test(value) ? value : "";
+  const value = new URLSearchParams(search).get("apply") ?? "";
+  return APPLY_ID.test(value) ? value : "";
 }
 
-/** Whether an Activity entry is the one a `?entry=` link names. */
+/** Whether an Activity entry is the apply or rollback an `?apply=` link names. */
 export function isFocused(entry: ActivityEntry, focus: string): boolean {
-  return focus !== "" && entry.id.split("@")[0] === focus;
+  return focus !== "" && entry.apply_id === focus;
+}
+
+/** What to say when the linked entry is not among the loaded ones, or "". */
+export function missingFocus(entries: ActivityEntry[], focus: string, more: boolean): string {
+  if (focus === "" || entries.some((entry) => isFocused(entry, focus))) return "";
+  return more
+    ? `The linked change ${focus.slice(0, 12)} is not in the activity loaded so far. Load older activity to find it.`
+    : `The linked change ${focus.slice(0, 12)} is not in the activity log.`;
 }
 
 /** Rolling back needs a clean preview on screen and the applied draft's name typed back. */

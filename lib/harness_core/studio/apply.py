@@ -303,6 +303,24 @@ def _make_directories(directory: Path, created: List[str]) -> None:
         created.append(str(path))
 
 
+def missing_directories(dest: Path, paths: Iterable[str]) -> List[str]:
+    """The directories writing `paths` under `dest` would make, `dest` included, outermost first.
+
+    Journalled before the first write, so a restore removes only directories that did not exist.
+    """
+    missing: List[str] = []
+    for relative in paths:
+        current = (dest / relative).parent
+        chain = []
+        while not os.path.lexists(str(current)) and str(current) not in missing:
+            chain.append(str(current))
+            if current == dest or current.parent == current:
+                break
+            current = current.parent
+        missing.extend(reversed(chain))
+    return missing
+
+
 def _write_root(dest: Path, operations: List[Dict[str, Any]], created: List[str]) -> None:
     """Write the planned files; `created` collects every directory made, even when a write fails."""
     for item in operations:
@@ -915,7 +933,8 @@ def _execute(home: Path, state: Mapping[str, Any], planned: Dict[str, Any],
             files=[{"path": item["path"], "action": item["action"],
                     "prior": _encoded(item["prior"]), "prior_mode": item["prior_mode"],
                     "applied_sha256": _digest(item["content"])} for item in root_operations],
-            created=[str(dest)] if not os.path.lexists(str(dest)) else []))
+            created=missing_directories(dest, [item["path"] for item in root_operations
+                                               if item["action"] == "write"])))
     except OSError as exc:
         return _result("refused", "journal-unavailable",
                        "the apply journal could not be written (%s); nothing was applied" % exc, planned)
@@ -1061,33 +1080,42 @@ def _recover(home: Path, intent: Dict[str, Any], operations: Operations, log: Li
                 live_path.unlink()
         elif restored_bytes != current_bytes:
             drafts._atomic_bytes(live_path, restored_bytes, int(intent.get("prior_mode") or 0o600))
-        created = list(intent.get("created") or [])
-        for item in operations_list:
-            parent = (dest / item["path"]).parent
-            while parent != dest and str(parent) not in created and dest in parent.parents:
-                created.append(str(parent))
-                parent = parent.parent
-        _restore_root(dest, operations_list, created)
+        # Only the directories the interrupted write journalled as new: an existing one stays.
+        _restore_root(dest, operations_list, list(intent.get("created") or []))
         restored = _sync_settled(operations.sync(False), intent.get("attention") or [])[0]
     except BaseException as exc:  # noqa: B036 - the intent stays open; an interrupt propagates
         restored = False
         if not isinstance(exc, Exception):
             interrupt = exc
+    # An interrupted rollback is undone as a rollback: the apply it reversed is in effect again.
+    rollback = intent.get("kind") == "rollback"
+    what = ("a rollback of draft %s's apply %s" % (identity["draft"], str(intent.get("reverses"))[:12])
+            if rollback else "an apply of draft %s" % identity["draft"])
     note = ""
     if restored:
         note = _journal_outcome(home, dict(identity, ts=_now(), phase="recovered"))
-        _decision(operations, identity, [], "recovered",
-                  "An interrupted apply of draft %s was rolled back." % identity["draft"])
+        if rollback:
+            _decision(operations, identity, [], "recovered",
+                      "An interrupted rollback was undone; draft %s's apply is in effect again."
+                      % identity["draft"], event="studio.rollback",
+                      extra={"reverses": str(intent.get("reverses") or "")})
+        else:
+            _decision(operations, identity, [], "recovered",
+                      "An interrupted apply of draft %s was rolled back." % identity["draft"])
     if interrupt is not None:
         raise interrupt
     if restored:
-        return _result("recovered", "", (
-            "an earlier apply of draft %s was interrupted; its configuration keys and files were "
-            "restored and synced. Review the draft and apply again" % identity["draft"]) + note,
+        return _result("recovered", "interrupted-rollback" if rollback else "", (
+            "an earlier %s was interrupted; it was undone and synced, so that apply is in effect "
+            "again and nothing else changed. Run `citizen draft rollback %s` again if you still "
+            "want it rolled back" % (what, str(intent.get("reverses") or ""))
+            if rollback else
+            "an earlier %s was interrupted; its configuration keys and files were restored and "
+            "synced. Review the draft and apply again" % what) + note,
             restored=True, apply_id=str(identity["apply_id"] or ""), log=log[-MAX_LOG_LINES:])
     return _result("failed", "interrupted-apply-failed", (
-        "an earlier apply of draft %s was interrupted, and restoring it did not complete; it stays "
-        "open, so run `citizen draft recover` again" % identity["draft"]),
+        "an earlier %s was interrupted, and restoring it did not complete; it stays open, so run "
+        "`citizen draft recover` again" % what),
         apply_id=str(identity["apply_id"] or ""), log=log[-MAX_LOG_LINES:])
 
 
@@ -1137,16 +1165,18 @@ def recover(operations: Operations, abandon: bool = False, draft: str = "", acto
 
 
 def _decision(operations: Operations, identity: Mapping[str, Any], files: List[str], outcome: str,
-              reason: str) -> None:
+              reason: str, event: str = "studio.apply", extra: Optional[Mapping[str, Any]] = None) -> None:
     command = " ".join(CLI_COMMANDS["apply"]).format(draft=shlex.quote(str(identity["draft"])),
                                                      revision=identity["revision"])
+    if event == "studio.rollback":
+        command = "citizen draft recover --json"
     try:
         operations.record({
-            "kind": "event", "event": "studio.apply", "id": identity["apply_id"], "ts": _now(),
-            "detail": {"draft": identity["draft"], "files": files, "outcome": outcome,
-                       "reason": reason, "command": command,
-                       "actor": "Studio" if identity["actor"] == "studio" else "citizen",
-                       "revision": identity["revision"]},
+            "kind": "event", "event": event, "id": identity["apply_id"], "ts": _now(),
+            "detail": dict({"draft": identity["draft"], "files": files, "outcome": outcome,
+                            "reason": reason, "command": command,
+                            "actor": "Studio" if identity["actor"] == "studio" else "citizen",
+                            "revision": identity["revision"]}, **(extra or {})),
         })
     except (OSError, ValueError):
         pass

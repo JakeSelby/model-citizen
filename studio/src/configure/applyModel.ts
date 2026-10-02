@@ -89,6 +89,9 @@ export function shown(value: unknown): string {
 
 /** The headline the live region announces after an apply. */
 export function resultHeadline(result: ApplyResult): string {
+  if (result.status === "recovered" && result.error_code === "interrupted-rollback") {
+    return "An interrupted rollback was undone and synced. Nothing of this draft was applied.";
+  }
   if (result.status === "recovered") return "An interrupted apply was rolled back and synced. Review the draft again.";
   if (result.status === "abandoned") return "The interrupted apply was abandoned. Its changes were kept.";
   if (result.applied) return result.doctor.status === "attention"

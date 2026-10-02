@@ -84,6 +84,12 @@ def history(home: Path) -> List[Dict[str, Any]]:
     return list(entries.values())
 
 
+def _items(intent: Mapping[str, Any], field: str) -> List[Dict[str, Any]]:
+    """A journal row's `config` or `files` list, keeping only well-formed items."""
+    value = intent.get(field)
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
 def _touched(entry: Mapping[str, Any], target: bool = False) -> List[str]:
     """What an entry wrote: its keys and files, and the personal root it registered or wrote in.
 
@@ -91,8 +97,8 @@ def _touched(entry: Mapping[str, Any], target: bool = False) -> List[str]:
     entry when it wrote a file there too: un-registering a root would orphan that later file.
     """
     intent = entry["intent"]
-    keys = [str(item.get("key")) for item in intent.get("config", []) if isinstance(item, dict)]
-    files = [str(item.get("path")) for item in intent.get("files", []) if isinstance(item, dict)]
+    keys = [str(item.get("key")) for item in _items(intent, "config")]
+    files = [str(item.get("path")) for item in _items(intent, "files")]
     destination = str(intent.get("destination") or "")
     touched = ["configuration key " + key for key in keys]
     touched += [str(Path(destination) / path) for path in files]
@@ -105,17 +111,68 @@ def _in_effect(entries: List[Dict[str, Any]]) -> List[str]:
     """Applies and rollbacks whose writes are still in effect, oldest first.
 
     A completed rollback cancels the entry it reversed when that entry is in effect, and is then in
-    effect itself only when it re-applied something (a rollback of a rollback). An abandoned apply
-    kept its writes, so it counts too.
+    effect itself only when it re-applied something (a rollback of a rollback). An abandoned entry
+    is not: what it left behind is judged by the live values instead (`_abandoned_holds`).
     """
     effective: List[str] = []
     for entry in entries:
-        if entry["status"] == "completed" and entry["kind"] == "rollback" \
-                and entry["reverses"] in effective:
+        if entry["status"] != "completed":
+            continue
+        if entry["kind"] == "rollback" and entry["reverses"] in effective:
             effective.remove(entry["reverses"])
-        elif entry["status"] in ("completed", "abandoned"):
+        else:
             effective.append(entry["apply_id"])
     return effective
+
+
+def _in_effect_successor(entries: List[Dict[str, Any]], target: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Follow completed rollbacks from `target` to the last one not itself reversed."""
+    current = target
+    while True:
+        position = entries.index(current)
+        following = [entry for entry in entries[position + 1:] if entry["status"] == "completed"
+                     and entry["kind"] == "rollback" and entry["reverses"] == current["apply_id"]]
+        if not following:
+            return current
+        current = following[-1]
+
+
+def _abandoned_holds(home: Path, target: Mapping[str, Any], entry: Mapping[str, Any]) -> List[str]:
+    """The keys and files an abandoned later entry shares with `target` and still holds.
+
+    A key or file it wrote that still has its value, and that is not already the target's prior
+    value, is a write the rollback would overwrite. One since changed back or over is not.
+    """
+    live_path = draft_apply.config_file(home)
+    current = draft_apply._flatten(draft_apply._read_json_bytes(
+        live_path.read_bytes() if live_path.is_file() else None))
+    prior = draft_apply._flatten(draft_apply._read_json_bytes(
+        draft_apply._decoded(target["intent"].get("prior_config"))))
+    target_keys = {str(item.get("key")) for item in _items(target["intent"], "config")}
+    target_files = {str(item.get("path")): item for item in _items(target["intent"], "files")}
+    held: List[str] = []
+    for item in _items(entry["intent"], "config"):
+        key = str(item.get("key"))
+        if key not in target_keys:
+            continue
+        written = (key in current) == (item.get("action") != "unset") and (
+            key not in current
+            or draft_apply._canonical(current[key]) == draft_apply._canonical(item.get("applied")))
+        back = (key in current) == (key in prior) and (
+            key not in current or draft_apply._canonical(current[key]) == draft_apply._canonical(prior[key]))
+        if written and not back:
+            held.append("configuration key " + key)
+    dest = Path(str(entry["intent"].get("destination") or draft_apply.destination(home)))
+    for item in _items(entry["intent"], "files"):
+        path = str(item.get("path"))
+        if path not in target_files:
+            continue
+        live, _mode = draft_apply._live_file(draft_apply._contained(dest, path), path)
+        digest = draft_apply._digest(live)
+        if digest == item.get("applied_sha256") and digest != draft_apply._digest(
+                draft_apply._decoded(target_files[path].get("prior"))):
+            held.append(str(dest / path))
+    return held
 
 
 def _label(entry: Mapping[str, Any]) -> str:
@@ -158,20 +215,25 @@ def _restorable(home: Path, apply_id: str) -> Tuple[Dict[str, Any], Dict[str, An
                   "recovered": "it was interrupted and already restored"}[target["status"]]
         raise _Refused("not-applied", "%s cannot be rolled back: %s" % (_label(target), reason))
     position = entries.index(target)
-    reversed_by = [entry for entry in entries[position + 1:] if entry["status"] == "completed"
-                   and entry["kind"] == "rollback" and entry["reverses"] == apply_id]
-    if reversed_by:
-        raise _Refused("already-rolled-back", "%s was already reversed by %s; roll that back "
-                       "instead" % (_label(target), _label(reversed_by[-1])))
+    successor = _in_effect_successor(entries, target)
+    if successor is not target:
+        raise _Refused("already-rolled-back", "%s was already reversed, and %s is the change in "
+                       "effect now; roll that back instead" % (_label(target), _label(successor)))
     touched = set(_touched(target, target=True))
     effective = set(_in_effect(entries))
     later = [entry for entry in entries[position + 1:]
              if entry["apply_id"] in effective and touched & set(_touched(entry))]
+    shared = [", ".join(sorted(touched & set(_touched(entry)))) for entry in later]
+    for entry in entries[position + 1:]:
+        if entry["status"] == "abandoned":
+            held = _abandoned_holds(home, target, entry)
+            if held:
+                later.append(entry)
+                shared.append(", ".join(held))
     if later:
         raise _Refused("later-apply", (
             "%s changed %s again since %s; roll %s back first. Nothing was changed" % (
-                "; ".join(_label(entry) for entry in later),
-                ", ".join(sorted(touched & set().union(*(_touched(entry) for entry in later)))),
+                "; ".join(_label(entry) for entry in later), "; ".join(shared),
                 _label(target), "them" if len(later) > 1 else "it")))
     return target, _restore_plan(home, target)
 
@@ -188,14 +250,14 @@ def _restore_plan(home: Path, target: Mapping[str, Any]) -> Dict[str, Any]:
         prior_document = draft_apply._read_json_bytes(prior_config)
         current_bytes = live_path.read_bytes() if live_path.is_file() else None
         current_document = draft_apply._read_json_bytes(current_bytes)
-    except (draft_apply.ApplyError, ValueError, TypeError) as exc:
+    except (draft_apply.ApplyError, OSError, ValueError, TypeError, AttributeError) as exc:
         raise _Refused("journal-unreadable", "the apply's journal row could not be read back (%s)"
                        % exc) from exc
     prior = draft_apply._flatten(prior_document)
     current = draft_apply._flatten(current_document)
     conflicts: List[str] = []
     keys: List[Dict[str, Any]] = []
-    for item in intent.get("config", []):
+    for item in _items(intent, "config"):
         key = str(item.get("key"))
         applied_present = item.get("action") != "unset"
         now_present = key in current
@@ -214,12 +276,13 @@ def _restore_plan(home: Path, target: Mapping[str, Any]) -> Dict[str, Any]:
             restored["action"] = "conflict"
         keys.append(restored)
     files: List[Dict[str, Any]] = []
-    for item in intent.get("files", []):
+    for item in _items(intent, "files"):
         try:
             target_path = draft_apply._contained(dest, str(item["path"]))
             live, mode = draft_apply._live_file(target_path, str(item["path"]))
             prior_bytes = draft_apply._decoded(item.get("prior"))
-        except (draft_apply.ApplyError, KeyError, ValueError, TypeError) as exc:
+        except (draft_apply.ApplyError, OSError, KeyError, ValueError, TypeError,
+                AttributeError) as exc:
             conflicts.append("%s (%s)" % (item.get("path"), exc))
             continue
         row = {"path": str(item["path"]), "current": live, "current_mode": mode,
@@ -253,12 +316,9 @@ def _restore_plan(home: Path, target: Mapping[str, Any]) -> Dict[str, Any]:
             draft_apply._set_path(document, "init_defaults", "init_defaults" in prior_document,
                                   prior_document.get("init_defaults"))
         restored_bytes = (json.dumps(document, indent=2) + "\n").encode("utf-8")
-    created = list(intent.get("created") or [])
-    for row in files:
-        parent = (dest / row["path"]).parent
-        while parent != dest and str(parent) not in created and dest in parent.parents:
-            created.append(str(parent))
-            parent = parent.parent
+    # Only the directories the apply journalled as new; one that already existed stays.
+    created = [str(value) for value in intent.get("created") or [] if isinstance(value, str)] \
+        if isinstance(intent.get("created"), list) else []
     return {"dest": dest, "live_path": live_path, "current_bytes": current_bytes,
             "current_mode": stat.S_IMODE(os.stat(str(live_path)).st_mode) if current_bytes is not None
             else 0o600,
@@ -300,11 +360,16 @@ def _assess(home: Path, apply_id: str) -> Tuple[Optional[Dict[str, Any]], Option
                                                   List[Dict[str, str]]]:
     target = None
     try:
-        target, plan = _restorable(home, apply_id)
+        try:
+            target, plan = _restorable(home, apply_id)
+        except (draft_apply.ApplyError, OSError, ValueError, TypeError, AttributeError,
+                KeyError) as exc:
+            raise _Refused(getattr(exc, "code", "rollback-unavailable"),
+                           "the apply journal or the live state could not be read (%s)" % exc) from exc
     except _Refused as exc:
-        if target is None:
-            target = {entry["apply_id"]: entry for entry in history(home)}.get(apply_id) \
-                if isinstance(apply_id, str) else None
+        if target is None and isinstance(apply_id, str):
+            with contextlib.suppress(OSError):
+                target = {entry["apply_id"]: entry for entry in history(home)}.get(apply_id)
         return target, None, [{"code": exc.code, "message": str(exc)}]
     refusals = [] if plan["changes"] else [{
         "code": "nothing-to-roll-back",
@@ -357,7 +422,20 @@ def rollback(apply_id: str, operations: draft_apply.Operations, draft: str = "",
             return _outcome("refused", "confirmation-mismatch", (
                 "%s is of draft %s, not %s; nothing was changed"
                 % (_label(target), target["intent"].get("draft"), draft)), public)
-        return _execute(home, target, plan, public, operations, actor, log)
+        try:
+            # The attention items the user already has, so only an item this rollback raises fails it.
+            baseline = operations.sync(True)
+        except (Exception, SystemExit):
+            baseline = {"code": 1, "attention": [], "refused": True}
+        # Planned again after the dry run: an edit made while it ran is kept or refused by name.
+        target, plan, refusals = _assess(home, apply_id)
+        public = _public(target, plan, refusals, apply_id)
+        if refusals:
+            first = refusals[0]
+            return _outcome("refused", first["code"], first["message"], public)
+        assert target is not None and plan is not None
+        return _execute(home, target, plan, public, operations, actor, log,
+                        sorted(baseline.get("attention") or []))
 
 
 def _outcome(status: str, code: str, message: str, public: Mapping[str, Any], **extra: Any) -> Dict[str, Any]:
@@ -367,8 +445,56 @@ def _outcome(status: str, code: str, message: str, public: Mapping[str, Any], **
     return result
 
 
+def _drifted(plan: Mapping[str, Any], files: List[Dict[str, Any]]) -> List[str]:
+    """What changed since `plan` read it: the configuration bytes, or a file it will write."""
+    live_path: Path = plan["live_path"]
+    drifted = []
+    if (live_path.read_bytes() if live_path.is_file() else None) != plan["current_bytes"]:
+        drifted.append(str(live_path))
+    for row in files:
+        live, _mode = draft_apply._live_file(draft_apply._contained(plan["dest"], row["path"]), row["path"])
+        if live != row["current"]:
+            drifted.append(str(plan["dest"] / row["path"]))
+    return drifted
+
+
+def _undo(plan: Mapping[str, Any], files: List[Dict[str, Any]], wrote_config: bool,
+          created: List[str], operations: draft_apply.Operations, synced: bool,
+          attention: List[str]) -> bool:
+    """Put back what the rollback wrote, only where it still holds what the rollback wrote.
+
+    Anything edited since is left alone and the intent stays open, so `citizen draft recover`
+    names it rather than overwriting it.
+    """
+    live_path: Path = plan["live_path"]
+    try:
+        written = plan["restored_bytes"] if wrote_config else plan["current_bytes"]
+        if (live_path.read_bytes() if live_path.is_file() else None) != written:
+            return False
+        undo = []
+        for row in files:
+            live, _mode = draft_apply._live_file(draft_apply._contained(plan["dest"], row["path"]),
+                                                 row["path"])
+            if draft_apply._digest(live) not in (row["restored_sha256"], draft_apply._digest(row["current"])):
+                return False
+            undo.append({"path": row["path"], "prior": row["current"], "prior_mode": row["current_mode"]})
+        if wrote_config:
+            if plan["current_bytes"] is None:
+                if live_path.exists():
+                    live_path.unlink()
+            else:
+                draft_apply.drafts._atomic_bytes(live_path, plan["current_bytes"], plan["current_mode"])
+        draft_apply._restore_root(plan["dest"], undo, created)
+        if synced:
+            return draft_apply._sync_settled(operations.sync(False), attention)[0]
+        return True
+    except BaseException:  # noqa: B036 - an undo that cannot finish is reported, not raised
+        return False
+
+
 def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public: Dict[str, Any],
-             operations: draft_apply.Operations, actor: str, log: List[str]) -> Dict[str, Any]:
+             operations: draft_apply.Operations, actor: str, log: List[str],
+             attention: List[str]) -> Dict[str, Any]:
     intent = target["intent"]
     rollback_id = uuid.uuid4().hex
     dest: Path = plan["dest"]
@@ -379,11 +505,16 @@ def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public
                 "actor": actor, "draft": intent.get("draft"), "draft_id": intent.get("draft_id"),
                 "revision": intent.get("revision"), "base_revision": intent.get("base_revision"),
                 "destination": str(dest)}
+    created = draft_apply.missing_directories(
+        dest, [row["path"] for row in files if row["action"] == "write"])
     try:
-        baseline = operations.sync(True)
-    except (Exception, SystemExit):
-        baseline = {"code": 1, "attention": [], "refused": True}
-    attention = sorted(baseline.get("attention") or [])
+        drifted = _drifted(plan, files)
+    except (draft_apply.ApplyError, OSError) as exc:
+        drifted = [str(exc)]
+    if drifted:
+        return _outcome("refused", "rollback-conflict", (
+            "%s changed while the rollback was starting; rollback never overwrites a later edit. "
+            "Nothing was changed" % ", ".join(drifted)), public)
     try:
         # Recorded in the apply's own shape: `citizen draft recover` restores an interrupted
         # rollback, and a completed one can be rolled back in turn.
@@ -396,19 +527,18 @@ def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public
             files=[{"path": row["path"], "action": row["action"],
                     "prior": draft_apply._encoded(row["current"]), "prior_mode": row["current_mode"],
                     "applied_sha256": row["restored_sha256"]} for row in files],
-            created=[str(dest)] if not os.path.lexists(str(dest)) else []))
+            created=created))
     except OSError as exc:
         return _outcome("refused", "journal-unavailable",
                         "the apply journal could not be written (%s); nothing was changed" % exc, public)
     names = [row["path"] for row in files]
-    undo = [{"path": row["path"], "prior": row["current"], "prior_mode": row["current_mode"]}
-            for row in files]
-    synced = False
+    synced = wrote_config = False
     try:
+        wrote_config = plan["restored_bytes"] != plan["current_bytes"]
         if plan["restored_bytes"] is None:
             if live_path.exists():
                 live_path.unlink()
-        elif plan["restored_bytes"] != plan["current_bytes"]:
+        elif wrote_config:
             draft_apply.drafts._atomic_bytes(live_path, plan["restored_bytes"], plan["restored_mode"])
         draft_apply._restore_root(dest, [{"path": row["path"], "prior": row["prior"],
                                           "prior_mode": row["prior_mode"]} for row in files],
@@ -419,8 +549,7 @@ def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public
             raise draft_apply.ApplyError("sync-refused", "citizen sync did not complete the restored "
                                          "configuration" + (": " + "; ".join(new) if new else ""))
     except BaseException as exc:  # noqa: B036 - an interrupt must restore too, then propagate
-        restored = draft_apply._restore(live_path, plan["current_bytes"], plan["current_mode"], dest,
-                                        undo, [], operations, synced, attention)
+        restored = _undo(plan, files, wrote_config, created, operations, synced, attention)
         message = str(exc) or exc.__class__.__name__
         note = draft_apply._journal_outcome(home, dict(identity, ts=draft_apply._now(), phase="failed",
                                                        reason=message, restored=restored))

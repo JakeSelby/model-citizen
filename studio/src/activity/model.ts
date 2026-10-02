@@ -16,6 +16,10 @@ export type ActivityEntry = {
   files: string[];
   evidence_href: string;
   evidence_label: string;
+  /** The journal id of a Studio apply or rollback, or "". */
+  apply_id: string;
+  /** The id `citizen draft rollback` takes when this entry can be rolled back, or "". */
+  rollback_target: string;
 };
 
 export type ActivitySource = {
