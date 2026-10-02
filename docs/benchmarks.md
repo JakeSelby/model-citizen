@@ -595,10 +595,14 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
     --pre-registration <plan>
 ```
 
-- **Its protocol is five reps, 0.10 USD per run, 0.05 USD per preflight and a 4.55 USD stop.**
-  Thirty scored runs and two preflights report 3.10 USD if every one reaches its cap; the per-run
-  cap is soft, so the stop is the binding limit. `--reps`, `--run-cap` and `--spend-cap` may change
-  them; `--model` may not, and `--pair` is refused. The dry run prints the set's ceiling.
+- **Its protocol is five reps, 0.25 USD per run, 0.15 USD per preflight and a 7.80 USD stop.**
+  Thirty scored runs and two preflights report 7.80 USD if every one reaches its cap; the per-run
+  cap is soft, so the stop is the binding limit. The caps are sized from the harness arm's measured
+  cold first turn, 0.0556 USD, so a truncated run does not bias a verdict against it; the arithmetic
+  sits beside the constants in `scripts/replay_micro.py`. `--reps`, `--run-cap` and `--spend-cap`
+  may change them; `--model` may not, and `--pair` is refused. The dry run prints the set's ceiling.
+- **A preflight its own budget stops is reported as a budget stop,** naming the arm, the
+  reported cost and the cap, and refuses the replay like any red preflight.
 - **Each run reports pass or fail, whether its mechanism fired, and its cost.** The oracle scores
   pass or fail as for any synthetic task. `mechanism_fired` on each row is `true`, `false` or
   `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, and the

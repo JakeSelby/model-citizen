@@ -29,14 +29,16 @@ HISTORY_DIR = Path("benchmarks") / "micro"
 HISTORY_NAME = "micro-history.jsonl"
 HISTORY_MD_NAME = "micro-history.md"
 # The tier's protocol: five reps, the evidence standard's floor, in both arms. A full set is
-# 3 tasks x 5 reps x 2 arms = 30 runs, at most 30 x 0.10 + 2 x 0.05 preflights = 3.10 USD if every
+# 3 tasks x 5 reps x 2 arms = 30 runs, at most 30 x 0.25 + 2 x 0.15 preflights = 7.80 USD if every
 # run reached its cap. The run cap is the CLI's `--max-budget-usd`, which is soft, so a run can
 # overshoot it by its last turn; the spend cap is the campaign's pre-registered stop, and the
 # replay refuses a launch that could take reported spend past it.
+# Measured first turn, haiku-4-5 at effort high: harness 0.0556 USD cold, bare 0.0152 (0.0409 cold), a
+# warm turn after it about 0.003; a preflight is 2.7x and a run 4.5x that harness turn (0.19 USD left).
 REPS = 5
-RUN_CAP_USD = 0.10
-PREFLIGHT_CAP_USD = 0.05
-SPEND_CAP_USD = 4.55
+RUN_CAP_USD = 0.25
+PREFLIGHT_CAP_USD = 0.15
+SPEND_CAP_USD = 7.80
 FIELDS = ("spawns", "stop_hooks", "hook_blocks")
 FIRED = ("above-zero", "any-hit", "none-hit")
 
