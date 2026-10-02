@@ -115,6 +115,36 @@ class PackCatalogTests(unittest.TestCase):
             replay.validate_task_selection(self.source, replay.ReplayRequest.parse(
                 dict(request.as_dict(), tasks=["nope"])))
 
+    def admission(self):
+        admission = replay.ReplayAdmission(self.source, self.root / "state", None, None)
+        admission._resolve = target
+        return admission
+
+    def resolved(self, admission):
+        chosen = packs.discover(self.source)["packs"][0]
+        return admission.resolve({
+            "targets": [{"kind": "draft", "ref": "a"}, {"kind": "draft", "ref": "b"}],
+            "model": "m", "repetitions": 1, "tasks": ["short-one"], "max_budget_usd": "1",
+            "spend_cap_usd": "2", "pre_registration": None,
+            "pack": {"name": chosen["name"], "digest": chosen["digest"]}})
+
+    def test_a_pack_whose_content_moved_after_preview_is_refused_at_launch(self):
+        admission = self.admission()
+        request = self.resolved(admission)
+        (self.pack / "README.md").write_text("changed\n", encoding="utf-8")
+        git(self.pack, "-c", "user.name=t", "-c", "user.email=t@invalid", "add", "-A")
+        git(self.pack, "-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-qm", "docs")
+        with self.assertRaisesRegex(replay.ReplayError, "not available at that digest"):
+            admission.confirm(request.as_dict())
+
+    def test_a_pack_whose_commit_moved_with_the_same_content_is_refused_at_launch(self):
+        admission = self.admission()
+        request = self.resolved(admission)
+        git(self.pack, "-c", "user.name=t", "-c", "user.email=t@invalid", "commit", "-q",
+            "--allow-empty", "-m", "chore: empty")
+        with self.assertRaisesRegex(replay.ReplayError, "pack identity changed after spend preview"):
+            admission.confirm(request.as_dict())
+
     def test_a_pack_is_chosen_by_name_and_digest_never_by_path(self):
         base = {"targets": [{"kind": "draft", "ref": "a"}, {"kind": "draft", "ref": "b"}],
                 "model": "m", "repetitions": 1, "tasks": ["short-one"], "max_budget_usd": "1",
@@ -137,11 +167,14 @@ class PackRowIdentityTests(unittest.TestCase):
                 "tag": "v1.0.0", "model": "m", "passed": True, "error": False, "cost_usd": 0.5,
                 **replay_pack.identity(dict(self.PACK, digest=digest))}
 
-    def test_the_pack_digest_reaches_the_row_identity(self):
-        first = run_store._benchmark_result("benchmarks/x/results.jsonl", 1, self.row("f" * 64))
-        second = run_store._benchmark_result("benchmarks/x/results.jsonl", 1, self.row("0" * 64))
-        self.assertNotEqual(first["run_id"], second["run_id"])
+    def test_the_pack_digest_reaches_the_indexed_row_under_its_stable_id(self):
+        relative = "benchmarks/x/results.jsonl"
+        first = run_store._benchmark_result(relative, 1, self.row("f" * 64))
+        legacy = run_store._stable_id("benchmark-result", relative, run_store._digest(
+            {"task": "short-one", "arm": "harness", "rep": 1, "harness_sha": REVISION, "tag": "v1.0.0"}))
+        self.assertEqual(first["run_id"], legacy)
         self.assertEqual(first["evaluation"]["pack"]["pack_digest"], "f" * 64)
+        self.assertEqual(first["raw"]["pack_digest"], "f" * 64)
 
     def test_a_row_without_the_pinned_pack_is_refused(self):
         released = replay.ReplayTarget.parse(target("release", "v1.0.0"))

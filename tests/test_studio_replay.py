@@ -28,7 +28,10 @@ def fixture_tasks(*identities):
         tasks = replay._repository_tasks
         with mock.patch.object(replay, "_repository_tasks", lambda _repository: tasks(root)), \
                 mock.patch.object(replay.packs, "discover", lambda _repository: {
-                    "packs": [], "default_digest": None, "skipped": []}):
+                    "packs": [], "default_digest": None, "skipped": []}), \
+                mock.patch.object(replay, "registered_sample", lambda _repository, _plan: {
+                    "tasks": len(identities), "long": None, "trials": 1,
+                    "power_calculation": None, "min_trials": 1}):
             yield Path(root)
 
 

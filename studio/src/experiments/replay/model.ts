@@ -31,6 +31,24 @@ export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registratio
   targets: [ReplayTarget, ReplayTarget];
   pre_registration: string | null;
   pack: ResolvedPack | null;
+  evidence: "pre-registered" | "exploratory";
+};
+
+/** The registered sample as the pre-registration states it, read by the server. */
+export type ReplaySampling = {
+  evidence: "pre-registered" | "exploratory";
+  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null };
+  requested: { tasks: number; trials: number };
+  note: string;
+};
+
+/** One target's `cost_bench.py summarise --json` output, or the engine's refusal. */
+export type ReplayAnalysis = { target: number; result?: Record<string, unknown>; error?: string };
+
+export type DraftComparison = {
+  draft: string; revision: string; config_digest: string | null; base: ReplayTarget;
+  tasks: string[]; model: string; trials: number; pack_digest: string | null;
+  evidence: string; key: string; stale: boolean; stale_reason: string | null;
 };
 
 export type ReplayPack = {
@@ -84,6 +102,8 @@ export type ReplayRunResult = {
     spend_cap_usd: string;
     stopped_at_cap: boolean;
     measures?: "source";
+    analysis?: ReplayAnalysis[] | null;
+    comparisons?: DraftComparison[];
   };
 };
 
@@ -95,6 +115,7 @@ export type ReplayPreview = {
   confirmation_token?: string;
   command: string;
   request: ReplayRequest;
+  sampling?: ReplaySampling;
 };
 
 export class ReplayRequestGate {
@@ -213,4 +234,45 @@ export function initialPack(packs: ReplayPack[], defaultDigest: string | null): 
 export function tasksFor(packs: ReplayPack[], digest: string | null, repositoryTasks: string[]): string[] {
   const pack = packs.find((item) => item.digest === digest);
   return pack ? pack.tasks.map((task) => task.id) : repositoryTasks;
+}
+
+/** An engine value exactly as the engine reported it: JSON text, so null stays null. */
+export function engineValue(value: unknown): string {
+  return value === undefined ? "absent" : JSON.stringify(value);
+}
+
+/** Label and value lines for one target's engine analysis, in the engine's own terms. */
+export function analysisLines(entry: ReplayAnalysis): Array<[string, string]> {
+  if (entry.error !== undefined) return [["Engine refused", entry.error]];
+  const result = entry.result ?? {};
+  const lines: Array<[string, string]> = [];
+  const arms = (result.arms ?? {}) as Record<string, Record<string, unknown>>;
+  for (const arm of Object.keys(arms).sort()) {
+    for (const field of ["attempts", "passes", "errors", "pass_rate", "cost_of_pass", "cost_usd"]) {
+      lines.push([`${arm} ${field}`, engineValue(arms[arm][field])]);
+    }
+  }
+  for (const field of ["ratio", "ratio_undefined", "ratio_interval", "difference", "difference_interval",
+    "sm2_eligible", "limitation", "verdict", "reason", "claim"]) {
+    if (field in result) lines.push([field, engineValue(result[field])]);
+  }
+  return lines;
+}
+
+/** What the form says about the sample before a run. */
+export function samplingLines(sampling: ReplaySampling | undefined): string[] {
+  if (!sampling) return [];
+  const lines = [sampling.note, `This replay: ${sampling.requested.tasks} task(s), ${sampling.requested.trials} trial(s) per task and arm.`];
+  if (sampling.registered) {
+    lines.push(`Registered: ${sampling.registered.tasks} task(s), ${sampling.registered.trials} trial(s) per task and arm (floor ${sampling.registered.min_trials}).`);
+    if (sampling.registered.power_calculation) lines.push(`Power calculation: ${sampling.registered.power_calculation}`);
+  }
+  return lines;
+}
+
+/** One line per draft comparison, naming its identity and whether it is stale. */
+export function comparisonLine(item: DraftComparison): string {
+  const state = item.stale ? `Stale: ${item.stale_reason ?? "the draft changed"}` : "Current";
+  return `${item.draft} at ${item.revision.slice(0, 12)} against ${item.base.kind} ${item.base.ref}; ` +
+    `${item.tasks.length} task(s), ${item.model}, ${item.trials} trial(s). ${state}.`;
 }

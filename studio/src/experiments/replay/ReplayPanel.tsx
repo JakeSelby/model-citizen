@@ -6,10 +6,10 @@ import { useRef, useState } from "react";
 
 import { previewReplay, startReplay } from "./api";
 import {
-  formatCost, formatPercent, initialPack, packOptions, progressResult, readinessSummary,
+  analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packOptions, samplingLines, progressResult, readinessSummary,
   replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
   SOURCE_ONLY_NOTE,
-  ReplayRequestGate, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
+  ReplayRequestGate, type DraftComparison, type ReplayAnalysis, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
   type ReplayTargetKind,
 } from "./model";
@@ -22,6 +22,8 @@ type Props = {
   defaultPack?: string | null;
   defaultModel?: string;
   rows?: ReplayMetricRow[];
+  analysis?: ReplayAnalysis[] | null;
+  comparisons?: DraftComparison[];
   progress?: ReplayProgressRow[];
   runStatus?: string;
   onStarted?: (runId: string) => void;
@@ -38,7 +40,7 @@ export function ReplayReadiness({ errors }: { errors: string[] }) {
   );
 }
 
-export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], progress = [], runStatus, onStarted }: Props) {
+export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], analysis = null, comparisons = [], progress = [], runStatus, onStarted }: Props) {
   const startingPack = initialPack(packs, defaultPack);
   const [draft, setDraft] = useState<ReplayLaunchInput>({
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
@@ -170,6 +172,9 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           <Alert color="blue" title="Spend guard">
             Estimate: {preview.estimate.amount_usd === null ? "No matching history" : `$${preview.estimate.amount_usd.toFixed(2)}`}. Cap: ${preview.caps.spend_cap_usd}.
           </Alert>
+          {samplingLines(preview.sampling).length > 0 && <Alert color={preview.sampling?.evidence === "pre-registered" ? "teal" : "yellow"} title={preview.sampling?.evidence === "pre-registered" ? "Pre-registered sample" : "Exploratory run"}>
+            {samplingLines(preview.sampling).map((line) => <Text key={line} size="sm">{line}</Text>)}
+          </Alert>}
           <Paper p="md" withBorder>
             <Text fw={600}>Resolved target revisions</Text>
             {preview.request.targets.map((target) => (
@@ -206,6 +211,15 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           </Table>
         </Table.ScrollContainer>
       )}
+      {analysis && analysis.map((entry) => <Paper key={entry.target} p="md" withBorder>
+        <Text fw={600}>Engine analysis, target {entry.target} (cost_bench.py summarise)</Text>
+        <Table><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
+          <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
+      </Paper>)}
+      {comparisons.length > 0 && <Paper p="md" withBorder>
+        <Text fw={600}>Matched draft comparisons</Text>
+        {comparisons.map((item) => <Text key={item.key + item.draft} size="sm">{comparisonLine(item)}</Text>)}
+      </Paper>}
     </Stack>
   );
 }

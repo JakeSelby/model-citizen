@@ -785,6 +785,10 @@ def _replay_result(handler: Handler, route: Route) -> None:
                         "targets", "table", "spend_usd", "reported_spend_usd",
                         "spend_cap_usd", "stopped_at_cap")}
                     result["measures"] = summary.get("measures", replay.MEASURES)
+                    # The engine's own analysis, verbatim, and each draft's matched comparison.
+                    result["analysis"] = replay.read_analysis(run_root / "replay")
+                    result["comparisons"] = replay.draft_comparisons(
+                        handler.server.repo_root, selected)
             return {"schema_version": 1,
                     "run": {"run_id": run["run_id"], "status": run["status"]},
                     "progress": progress, "result": result}
@@ -1610,7 +1614,8 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
                                                   ("valid", "boolean"),
                                                   ("errors", "array"),
                                                   ("request", "object"),
-                                                  ("command", "string")))
+                                                  ("command", "string"),
+                                                  ("sampling", "object")))
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))
