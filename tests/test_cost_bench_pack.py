@@ -203,6 +203,7 @@ class PackCliTests(unittest.TestCase):
         self.assertIn("refused by the contamination control", err)
 
     def test_the_tasks_file_a_pair_and_pack_flags_without_a_pack_are_refused(self):
+        # --ablations takes a pack since #1152: test_cost_bench_ablations_pack.
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
             args = self.args(tmp)
@@ -211,8 +212,6 @@ class PackCliTests(unittest.TestCase):
                 self.replay_cli(tmp, args)
             with self.assertRaisesRegex(SystemExit, "--pair is refused with --pack"):
                 self.replay_cli(tmp, self.args(tmp, pair="benchmarks/ablations/x.json"))
-            with self.assertRaisesRegex(SystemExit, "--ablations is refused with --pack"):
-                self.replay_cli(tmp, self.args(tmp, ablations="benchmarks/ablations.json"))
             with self.assertRaisesRegex(SystemExit, "need --pack"):
                 self.replay_cli(tmp, self.args(tmp, pack=None, pack_digest="0" * 64))
 
