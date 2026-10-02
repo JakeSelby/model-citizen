@@ -111,6 +111,8 @@ PERMISSION_MODE = "bypassPermissions"
 # tests' isolation), so demanding it here measures the profile, not the harness.
 PREFLIGHT_PROMPT = "Run exactly this and reply with its output: `python3 bin/harness lint`"
 PREFLIGHT_TURNS = 3
+# The `result` subtype the CLI ends a session with when `--max-budget-usd` stops it.
+BUDGET_STOP = "error_max_budget_usd"
 PREFLIGHT_RED = re.compile(r"PermissionError|Operation not permitted", re.M)
 INHERITED = "inherited"
 # What a profile directory loads, for `backfill` of rows from before arms were containers.
@@ -1551,22 +1553,26 @@ def preflight(tasks, opts, launch=subprocess.run):
             try:
                 parsed = parse_result(done.stdout)
                 cost, observed_effort = parsed["cost_usd"], parsed["observed_effort"]
+                budget_stop = parsed["subtype"] == BUDGET_STOP
             except ValueError:
-                cost, observed_effort = None, None
+                cost, observed_effort, budget_stop = None, None, False
             effort = opts["arms"][arm]["declaration"]["effort"]
             effort_matches = observed_effort is None or observed_effort == effort
             fields, observation_problem = observation_result(collector)
             spent += cap if cost is None else cost
             # Every reason a preflight is red is named: an effort mismatch never hides a
             # collector failure behind it.
-            problems = ([] if effort_matches else
-                        ["observed effort %s, pinned %s" % (observed_effort, effort)])
+            problems = ["a budget stop at %.4f USD reported, against its %g USD cap" % (cost, cap)] \
+                if budget_stop else []
+            problems += ([] if effort_matches else
+                         ["observed effort %s, pinned %s" % (observed_effort, effort)])
             problems += [observation_problem] if observation_problem else []
             checks.append({"arm": arm, "passed": gate_passed(done.stdout, opts.get("preflight_green"))
                            and effort_matches
                            and not observation_problem,
                            "reply": "; ".join(problems) if problems else reply,
-                           "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
+                           "cost_usd": cost, "budget_stop": budget_stop, "cap_usd": cap, "effort": effort,
+                           "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
             discard_observation(collector)
@@ -1678,6 +1684,10 @@ def _replay(tasks, opts, launch, sink):
         checks, spent = preflight(tasks, opts, launch)
         red = [c for c in checks if not c["passed"]]
         for check in red:
+            if check.get("budget_stop"):
+                print("cost-bench: the %s arm's preflight stopped at its budget: %.4f USD reported, cap %g USD"
+                      % (check["arm"], check["cost_usd"], check["cap_usd"]), file=sys.stderr)
+                continue
             print("cost-bench: the %s arm's gate is red in its own container: %s"
                   % (check["arm"], check["reply"] or "no reply"), file=sys.stderr)
         if red:
