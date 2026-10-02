@@ -181,7 +181,9 @@
       "b": 2,
       "c": 2
     },
+    "freshness": "not checked",
     "key": "f5cbf13332ce6fe7eb8cdc31ac120bbdef1b1e14ba5eb2a4866128aa86a02b06",
+    "max_budget_usd": "2",
     "model": "claude-test",
     "pack_digest": null,
     "ref": {
@@ -193,8 +195,10 @@
       "version": null
     },
     "run_id": "00000000-0000-4000-8000-000000000001",
+    "run_status": "succeeded",
     "stale": false,
     "stale_reason": null,
+    "stopped_at_cap": false,
     "target": 1,
     "tasks": [
       "a",
@@ -385,7 +389,9 @@
       "b": 2,
       "c": 2
     },
+    "freshness": "not checked",
     "key": "f5cbf13332ce6fe7eb8cdc31ac120bbdef1b1e14ba5eb2a4866128aa86a02b06",
+    "max_budget_usd": "2",
     "model": "claude-test",
     "pack_digest": null,
     "ref": {
@@ -397,8 +403,10 @@
       "version": null
     },
     "run_id": "00000000-0000-4000-8000-000000000001",
+    "run_status": "succeeded",
     "stale": false,
     "stale_reason": null,
+    "stopped_at_cap": false,
     "target": 2,
     "tasks": [
       "a",
@@ -412,6 +420,11 @@
   "engine": "replay_stats.compare",
   "error": null,
   "key_match": true,
+  "preferred": {
+    "cost_per_passed": "lower",
+    "cost_usd": "lower",
+    "pass_rate": "higher"
+  },
   "refusals": [],
   "result": {
     "arms": [
@@ -556,5 +569,6 @@
     "resamples": 10000,
     "seed": 795
   },
-  "schema_version": 1
+  "schema_version": 1,
+  "stale": []
 }

@@ -67,7 +67,9 @@ class Runs:
         self.root = Path(root)
         self.records = {}
 
-    def add(self, run_id, selected, rows_by_revision, status="succeeded"):
+    def add(self, run_id, selected, rows_by_revision, status="succeeded", stop_after=None):
+        """`stop_after` keeps only that many tasks of the first target and stops at the cap, as
+        the native runner does, so the second target never launches."""
         run_root = self.root / run_id
         run_root.mkdir()
 
@@ -75,6 +77,11 @@ class Runs:
             ref = command[command.index("--tag") + 1]
             rows = [dict(row, tag=ref, harness_sha=ref, model=selected.model, schema_version=1)
                     for row in rows_for(rows_by_revision[ref])]
+            if stop_after is not None:
+                kept = sorted({row["task"] for row in rows})[:stop_after]
+                write_native_result(command, [row for row in rows if row["task"] in kept],
+                                    stopped=True)
+                return SimpleNamespace(returncode=1)
             write_native_result(command, rows)
             return SimpleNamespace(returncode=0)
 
@@ -170,11 +177,20 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(payload["refusals"], [])
         expected = compare._engine().compare(engine_rows(self.runs, base, candidate), control="base")
         self.assertEqual(payload["result"], expected)
+        # The same figures from the fixture specification alone, independent of how compare.py
+        # reads and relabels the stored rows.
+        from_spec = rows_for({task: {"base": BASE[task]["harness"], "candidate": CHEAPER[task]["harness"]}
+                              for task in BASE})
+        self.assertEqual(payload["result"], compare._engine().compare(from_spec, control="base"))
         code, printed = cli(self.runs, base, candidate)
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(printed), json.loads(json.dumps(payload)))
         measure = payload["result"]["arms"][0]["measures"]["cost_per_passed"]
         self.assertEqual(measure["reading"], "lower")
+        self.assertEqual(payload["preferred"],
+                         {"cost_usd": "lower", "cost_per_passed": "lower", "pass_rate": "higher"})
+        self.assertEqual(set(payload["preferred"]) - {key for key, _, _ in compare._engine().MEASURES},
+                         set())
         self.assertEqual(json.loads(FIXTURE.read_text(encoding="utf-8")), json.loads(json.dumps(payload)))
 
     def test_each_side_carries_its_identity_and_its_own_recorded_analysis(self):
@@ -220,15 +236,44 @@ class CompareTests(unittest.TestCase):
     def test_model_trial_pack_and_finished_trial_differences_are_each_named(self):
         base = compare.load_side(self.runs, REPO, FIRST_RUN, 1)
         other = dict(base, run_id=SECOND_RUN, model="claude-other", trials=3,
-                     pack_digest="f" * 64)
+                     pack_digest="f" * 64, max_budget_usd="5",
+                     finished={"a": 3, "b": 1, "c": 3})
         self.assertEqual(compare.refusals(base, other), [
+            "the candidate did not finish the trials it requested: b (1 of 3)",
             "different models: the base ran claude-test, the candidate claude-other",
             "different trials per task: the base ran 2, the candidate 3",
-            "different evaluator packs: the base ran no pack, the candidate " + "f" * 64])
-        short = dict(base, run_id=SECOND_RUN, finished={"a": 2, "b": 1, "c": 2})
-        self.assertEqual(compare.refusals(base, short),
-                         ["different finished trials: b (base 2, candidate 1)"])
+            "different evaluator packs: the base ran no pack, the candidate " + "f" * 64,
+            "different per-trial budget caps: the base ran $2, the candidate $5"])
         self.assertEqual(compare.refusals(base, base), ["both sides are target 1 of the same run"])
+
+    def test_runs_with_different_per_trial_budget_caps_are_refused(self):
+        run_id = "00000000-0000-4000-8000-000000000005"
+        self.runs.add(run_id, request([target("branch", "main", BASE_REV),
+                                       target("branch", "faster", CANDIDATE_REV)],
+                                      max_budget_usd="0.5"),
+                      {BASE_REV: BASE, CANDIDATE_REV: CHEAPER})
+        _status, payload = route_call(self.runs, sides((FIRST_RUN, 1), (run_id, 2)))
+        self.assertFalse(payload["comparable"])
+        self.assertEqual(payload["refusals"], [
+            "different per-trial budget caps: the base ran $2, the candidate $0.5"])
+
+    def test_a_run_stopped_at_its_cap_is_refused_and_every_shortfall_named(self):
+        run_id = "00000000-0000-4000-8000-000000000006"
+        self.runs.add(run_id, request([target("branch", "faster", CANDIDATE_REV),
+                                       target("branch", "main", BASE_REV)]),
+                      {BASE_REV: BASE, CANDIDATE_REV: CHEAPER}, status="capped", stop_after=1)
+        self.assertTrue(json.loads((self.runs.root / run_id / "replay" / replay.SUMMARY_NAME)
+                                   .read_text())["stopped_at_cap"])
+        status, payload = route_call(self.runs, sides((FIRST_RUN, 1), (run_id, 1)))
+        self.assertEqual(status, 200)
+        self.assertFalse(payload["comparable"])
+        self.assertIsNone(payload["result"])
+        self.assertEqual(payload["refusals"], [
+            "the candidate run ended capped, not succeeded",
+            "the candidate run stopped at its spend cap",
+            "the candidate did not finish the trials it requested: b (0 of 2); c (0 of 2)"])
+        self.assertEqual(route_call(self.runs, sides((FIRST_RUN, 1), (run_id, 2))),
+                         (409, {"error": "compare_unavailable"}))
 
     def test_a_draft_side_goes_stale_when_the_draft_changes(self):
         run_id = "00000000-0000-4000-8000-000000000004"
@@ -238,14 +283,25 @@ class CompareTests(unittest.TestCase):
         fresh = {"draft": {"revision": CANDIDATE_REV}, "config": {}}
         with mock.patch.object(drafts, "read_config", return_value=fresh):
             _status, payload = route_call(self.runs, sides((run_id, 1), (run_id, 2)))
-        self.assertEqual((payload["candidate"]["stale"], payload["candidate"]["stale_reason"]),
-                         (False, None))
+        self.assertEqual((payload["candidate"]["stale"], payload["candidate"]["stale_reason"],
+                          payload["candidate"]["freshness"]), (False, None, "current"))
         newer = {"draft": {"revision": "e" * 40}, "config": {}}
         with mock.patch.object(drafts, "read_config", return_value=newer):
             _status, payload = route_call(self.runs, sides((run_id, 1), (run_id, 2)))
         self.assertEqual((payload["candidate"]["stale"], payload["candidate"]["stale_reason"]),
                          (True, "the draft has a newer checkpoint"))
-        self.assertFalse(payload["base"]["stale"])
+        self.assertEqual(payload["candidate"]["freshness"], "stale")
+        self.assertEqual(payload["stale"], ["candidate: the draft has a newer checkpoint"])
+        self.assertEqual((payload["base"]["stale"], payload["base"]["freshness"]),
+                         (False, "not checked"))
+        with mock.patch.object(drafts, "read_config", return_value=newer):
+            code, printed = cli(self.runs, (run_id, 1), (run_id, 2), json_mode=False)
+        self.assertEqual(code, 0)
+        self.assertIn("candidate is run %s target 2, draft tuned; freshness stale: the draft has "
+                      "a newer checkpoint" % run_id, printed)
+        self.assertIn("base is run %s target 1, branch main; freshness not checked" % run_id, printed)
+        self.assertIn("runs: stale, the comparison describes an older revision of the candidate",
+                      printed)
         self.assertTrue(payload["comparable"])
         comparison = replay.draft_comparisons(REPO, self.runs.records[run_id][0])
         self.assertEqual((comparison[0]["target"], comparison[0]["base_target"]), (2, 1))

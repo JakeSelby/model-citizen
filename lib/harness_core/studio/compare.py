@@ -22,6 +22,12 @@ SIDES = (BASE, CANDIDATE)
 HARNESS_ARM = "harness"
 ENGINE = "replay_stats.compare"
 REPLAY_SUITE = "live-replay"
+COMPLETE_STATUS = "succeeded"
+# Which way each measure is preferable. The engine states no direction in its output, so this is
+# the one table: lower cost and higher pass rate are preferable, as the engine's own Pareto chart
+# says. A measure without an entry (tokens, turns, tool calls) gets the engine's reading alone,
+# since fewer of them is not better in itself.
+PREFERRED = {"cost_usd": "lower", "cost_per_passed": "lower", "pass_rate": "higher"}
 _ENGINE_MODULE = None
 
 
@@ -106,9 +112,13 @@ def load_side(supervisor: runs.RunSupervisor, repository: Path, run_id: str,
     if recorded is not None:
         recorded["target"] = index
     stale, reason = replay.draft_staleness(repository, target)
+    checked = target.kind == "draft" and bool(target.draft)
+    freshness = ("stale" if stale else "current") if checked else "not checked"
     return {"run_id": run_id, "target": index, "ref": target.as_dict(),
             "tasks": sorted(request.tasks), "model": request.model,
-            "trials": request.repetitions,
+            "trials": request.repetitions, "max_budget_usd": request.max_budget_usd,
+            "run_status": run.get("status"), "stopped_at_cap": summary["stopped_at_cap"],
+            "freshness": freshness,
             "pack_digest": request.pack["digest"] if request.pack else None,
             "key": replay.comparison_key(request),
             "evidence": replay.target_evidence(request, target),
@@ -120,9 +130,25 @@ def _listed(values: List[str]) -> str:
     return ", ".join(values) if values else "none"
 
 
-def refusals(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> List[str]:
-    """Every reason the two sides cannot be paired; empty when they can."""
+def _incomplete(name: str, side: Mapping[str, Any]) -> List[str]:
+    """Why one side is not a whole run of what it requested; empty when it is."""
     out = []
+    if side["run_status"] != COMPLETE_STATUS:
+        out.append("the %s run ended %s, not %s" % (name, side["run_status"], COMPLETE_STATUS))
+    if side["stopped_at_cap"]:
+        out.append("the %s run stopped at its spend cap" % name)
+    short = ["%s (%d of %d)" % (task, side["finished"].get(task, 0), side["trials"])
+             for task in side["tasks"] if side["finished"].get(task, 0) != side["trials"]]
+    extra = sorted(set(side["finished"]) - set(side["tasks"]))
+    if short or extra:
+        out.append("the %s did not finish the trials it requested: %s"
+                   % (name, "; ".join(short + ["%s (not requested)" % task for task in extra])))
+    return out
+
+
+def refusals(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> List[str]:
+    """Every reason the two sides cannot be paired, all of them; empty when they can."""
+    out = _incomplete(BASE, base) + _incomplete(CANDIDATE, candidate)
     if (base["run_id"], base["target"]) == (candidate["run_id"], candidate["target"]):
         out.append("both sides are target %d of the same run" % base["target"])
     if base["tasks"] != candidate["tasks"]:
@@ -139,13 +165,9 @@ def refusals(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> List[str]
     if base["pack_digest"] != candidate["pack_digest"]:
         out.append("different evaluator packs: the base ran %s, the candidate %s"
                    % (base["pack_digest"] or "no pack", candidate["pack_digest"] or "no pack"))
-    if not out and base["finished"] != candidate["finished"]:
-        tasks = sorted(set(base["finished"]) | set(candidate["finished"]))
-        uneven = ["%s (base %d, candidate %d)" % (task, base["finished"].get(task, 0),
-                                                 candidate["finished"].get(task, 0))
-                  for task in tasks
-                  if base["finished"].get(task, 0) != candidate["finished"].get(task, 0)]
-        out.append("different finished trials: " + "; ".join(uneven))
+    if base["max_budget_usd"] != candidate["max_budget_usd"]:
+        out.append("different per-trial budget caps: the base ran $%s, the candidate $%s"
+                   % (base["max_budget_usd"], candidate["max_budget_usd"]))
     return out
 
 
@@ -166,7 +188,9 @@ def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, 
             "base": public[BASE], "candidate": public[CANDIDATE],
             "key_match": base["key"] == candidate["key"],
             "comparable": not reasons, "refusals": reasons,
-            "result": result, "error": error}
+            "stale": ["%s: %s" % (name, side["stale_reason"] or "stale")
+                      for name, side in ((BASE, base), (CANDIDATE, candidate)) if side["stale"]],
+            "preferred": dict(PREFERRED), "result": result, "error": error}
 
 
 def compare_runs(supervisor: runs.RunSupervisor, repository: Path,

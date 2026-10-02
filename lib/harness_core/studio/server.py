@@ -1643,6 +1643,8 @@ RUNS_COMPARE = ResponseSchema("json-object", (("schema_version", "integer"),
                                                 ("key_match", "boolean"),
                                                 ("comparable", "boolean"),
                                                 ("refusals", "array"),
+                                                ("stale", "array"),
+                                                ("preferred", "object"),
                                                 ("result", "object-or-null"),
                                                 ("error", "string-or-null")))
 ROUTES = RouteRegistry((

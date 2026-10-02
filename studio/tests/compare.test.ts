@@ -8,7 +8,7 @@ import { MantineProvider } from "@mantine/core";
 import { compareRuns } from "../src/experiments/compare/api.ts";
 import { CompareReport } from "../src/experiments/compare/ComparePanel.tsx";
 import {
-  compareErrorMessage, measureHeadlines, sideLine, validateCompare, type CompareResult, type EngineCompare,
+  compareErrorMessage, measureHeadlines, sideLine, validateCompare, verdictOf, type CompareResult, type EngineCompare,
 } from "../src/experiments/compare/model.ts";
 import { engineLeaves } from "../src/experiments/replay/model.ts";
 
@@ -36,7 +36,7 @@ test("every field of the engine's output is displayed unchanged", () => {
 
 test("each headline carries the engine's reading, interval and trial counts verbatim", () => {
   const arm = fixture.result!.arms![0];
-  const headlines = measureHeadlines(fixture.result);
+  const headlines = measureHeadlines(fixture.result, fixture.preferred);
   assert.equal(headlines.length, Object.keys(arm.measures).length);
   for (const item of headlines) {
     const measure = arm.measures[item.key];
@@ -47,7 +47,12 @@ test("each headline carries the engine's reading, interval and trial counts verb
     if (measure.estimate !== null) assert.ok(item.line.includes(`estimate ${JSON.stringify(measure.estimate)}`), item.line);
   }
   const costOfPass = headlines.find((item) => item.key === "cost_per_passed")!;
-  assert.match(costOfPass.line, /^cost per passed attempt: lower; /);
+  assert.match(costOfPass.line, /^cost per passed attempt: lower \(better\); estimand "measured"; /);
+  assert.equal(costOfPass.direction, "better");
+  assert.ok(arm.exploratory);
+  for (const item of headlines) assert.ok(item.line.includes(`exploratory: ${arm.exploratory_reasons.join("; ")}`), item.line);
+  const html = render(fixture);
+  assert.match(html, /The engine marks candidate exploratory: fewer than 5 paired trials per task \(2\)/);
 });
 
 test("a ratio whose interval spans one shows the engine's inconclusive, whatever its estimate", () => {
@@ -55,15 +60,35 @@ test("a ratio whose interval spans one shows the engine's inconclusive, whatever
   const measure = result.arms![0].measures.cost_per_passed;
   Object.assign(measure, { estimate: 0.85, effect: -0.15, interval: [-0.55, 0.45], reading: "inconclusive",
     reason: "the interval spans no effect" });
-  const line = measureHeadlines(result).find((item) => item.key === "cost_per_passed")!.line;
-  assert.match(line, /^cost per passed attempt: inconclusive; estimate 0\.85, effect -0\.15; interval \[-0\.55,0\.45\]/);
+  const item = measureHeadlines(result, fixture.preferred).find((entry) => entry.key === "cost_per_passed")!;
+  const line = item.line;
+  assert.equal(item.direction, null);
+  assert.match(line, /^cost per passed attempt: inconclusive; estimand "measured"; estimate 0\.85, effect -0\.15; interval \[-0\.55,0\.45\]/);
   assert.match(line, /the interval spans no effect$/);
 });
 
 test("an interval the engine could not give stays visible as null with its reason", () => {
   const line = measureHeadlines(fixture.result).find((item) => item.key === "turns")!.line;
-  assert.match(line, /^turns: unavailable; estimate null, effect absent; interval null at confidence 0\.95/);
+  assert.match(line, /^turns: unavailable; estimand "measured"; estimate null, effect absent; interval null at confidence 0\.95/);
   assert.match(line, /lack turns$/);
+});
+
+test("the preferred direction labels a reading better or worse, never flat", () => {
+  assert.deepEqual(verdictOf("lower", "lower"), { label: "lower (better)", direction: "better" });
+  assert.deepEqual(verdictOf("lower", "higher"), { label: "lower (worse)", direction: "worse" });
+  assert.deepEqual(verdictOf("higher", "higher"), { label: "higher (better)", direction: "better" });
+  assert.deepEqual(verdictOf("inconclusive", "lower"), { label: "inconclusive", direction: null });
+  assert.deepEqual(verdictOf("lower", undefined), { label: "lower", direction: null });
+  const worse = clone(fixture);
+  Object.assign(worse.result!.arms![0].measures.pass_rate, { reading: "lower" });
+  const html = render(worse);
+  assert.match(html, /lower \(worse\)/);
+  assert.match(html, /lower \(better\)/);
+  assert.doesNotMatch(html, /flat/);
+  const soft = clone(fixture);
+  Object.assign(soft.result!.arms![0].measures.first_call_context, { estimand: "soft estimate" });
+  assert.match(measureHeadlines(soft.result, soft.preferred).find((entry) => entry.key === "first_call_context")!.line,
+    /estimand "soft estimate"/);
 });
 
 test("a refused comparison names every difference and shows no figures", () => {
@@ -78,11 +103,14 @@ test("a refused comparison names every difference and shows no figures", () => {
 
 test("both sides show their identity, their own analysis and a stale draft", () => {
   const stale = clone(fixture);
-  stale.candidate = { ...stale.candidate, stale: true, stale_reason: "the draft has a newer checkpoint" };
+  stale.candidate = { ...stale.candidate, stale: true, freshness: "stale", stale_reason: "the draft has a newer checkpoint" };
+  stale.stale = ["candidate: the draft has a newer checkpoint"];
   const html = render(stale);
-  assert.match(html, /Stale: the draft has a newer checkpoint/);
+  assert.match(html, /Stale: candidate: the draft has a newer checkpoint/);
+  assert.match(sideLine(stale.candidate), /Stale: the draft has a newer checkpoint\.$/);
   assert.match(html, /This target against its own bare arm/);
-  assert.match(sideLine(fixture.base), /^Run 0{8}-0{4}-4000-8000-0{11}1, target 1: branch main at a{12}; 3 task\(s\), claude-test, 2 trial\(s\), exploratory\. Current\.$/);
+  assert.match(sideLine(fixture.base), /^Run 0{8}-0{4}-4000-8000-0{11}1, target 1: branch main at a{12}; 3 task\(s\), claude-test, 2 trial\(s\), exploratory\. Freshness not checked\.$/);
+  assert.match(sideLine({ ...fixture.base, freshness: "current" }), / Current\.$/);
 });
 
 test("the form asks only with two run ids, and names each refusal code", () => {
