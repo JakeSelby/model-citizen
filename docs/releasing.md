@@ -159,7 +159,8 @@ change under one runtime's adapter directory invalidates only that runtime's tar
 touches a file shared code reads for every runtime, and a change to shared source invalidates them
 all. The carve-out and its limits are in [compatibility](compatibility.md).
 Return `state` to `open`, with `branch` and `commit` set to `null`, in the first change after
-the tag; `tests/test_freeze.py` fails while the record still names a tagged release's branch. The evidence commit must stay an ancestor of the
+the tag; `tests/test_freeze.py` fails on any later commit while the record still names the branch of a
+release whose tag it contains. The evidence commit must stay an ancestor of the
 qualification source commit, which `evidence_errors` enforces, so a diverged release branch fails
 closed rather than publishing an unqualified source.
 
