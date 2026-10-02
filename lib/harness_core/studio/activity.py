@@ -22,6 +22,7 @@ MAX_OWNERSHIP_BYTES = 8 * 1024 * 1024
 FILTERS = ("session", "repository", "hook", "outcome")
 POLICY_HOOKS = Path(__file__).resolve().parents[3] / "policy" / "hooks"
 HOOK_MODULE = re.compile(r"hooks/[a-z0-9][a-z0-9-]*\Z")
+APPLY_ID = re.compile(r"[0-9a-f]{32}\Z")
 
 
 class ActivityError(ValueError):
@@ -194,12 +195,16 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
     if not identity:
         basis = json.dumps(row, sort_keys=True, separators=(",", ":"))
         identity = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+    titles = {"apply": "Draft applied", "rollback": "Apply rolled back"}
+    # A rollback links to the apply (or rollback) it reversed, by that entry's Activity id.
+    reverses = detail.get("reverses") if action == "rollback" else None
+    linked = isinstance(reverses, str) and APPLY_ID.fullmatch(reverses) is not None
     return {
         "id": "studio:" + identity,
         "timestamp": row.get("ts") if isinstance(row.get("ts"), str) else "",
         "source": "studio-action",
         "kind": action,
-        "title": "Draft applied" if action == "apply" else "Studio " + action.replace("-", " "),
+        "title": titles.get(action) or "Studio " + action.replace("-", " "),
         "outcome": outcome,
         "reason": detail.get("reason") if isinstance(detail.get("reason"), str)
             else "Studio recorded the governed %s action." % action,
@@ -211,8 +216,9 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         "command": detail.get("command") if isinstance(detail.get("command"), str) else "",
         "draft": draft,
         "files": files,
-        "evidence_href": "",
-        "evidence_label": "",
+        "evidence_href": "/activity?entry=" + urllib.parse.quote("studio:" + str(reverses), safe="")
+        if linked else "",
+        "evidence_label": "Open the change this rolled back" if linked else "",
     }
 
 

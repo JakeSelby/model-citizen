@@ -356,7 +356,7 @@ development_status:
   ah-s293-hand-edit-a-rule-skill-or-stance-in-a-draft-with: backlog
   ah-s294-add-your-own-module-from-a-template-or-fork-a: ready-for-dev
   ah-s295-review-and-apply-a-draft-through-the-governed: ready-for-dev
-  ah-s296-roll-back-an-applied-draft: backlog
+  ah-s296-roll-back-an-applied-draft: ready-for-dev
   ah-s325-configure-composition-slots-and-superpowers-in: ready-for-dev
 
   ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress

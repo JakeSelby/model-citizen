@@ -791,9 +791,10 @@ def unfinished_applies(home: Path) -> List[Dict[str, Any]]:
 
 
 def running_apply(home: Path) -> str:
-    """The apply holding the sync lock right now, by its live holder record, or ""."""
+    """The apply or rollback holding the sync lock right now, by its live holder record, or ""."""
     record = reconcile.lock_holder_record(journal_path(home).parent)
-    if not record or not str(record.get("holder", "")).startswith("citizen draft apply"):
+    if not record or not str(record.get("holder", "")).startswith(("citizen draft apply",
+                                                                    "citizen draft rollback")):
         return ""
     try:
         os.kill(int(record.get("pid")), 0)

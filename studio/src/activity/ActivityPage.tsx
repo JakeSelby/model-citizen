@@ -12,7 +12,7 @@ import {
   Title,
 } from "@mantine/core";
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 import { CodeView, CommandChip, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { loadActivity } from "./api";
@@ -27,11 +27,21 @@ import {
   type ActivityFilters,
   type ActivityPage as ActivityPayload,
 } from "./model";
+import { RollbackPanel } from "./Rollback";
+import { focusedEntry, isFocused, rollbackTarget } from "./rollbackModel";
 import "./activity.css";
 
-function ActivityRow({ entry }: { entry: ActivityEntry }) {
+type RowProps = { entry: ActivityEntry; focused?: boolean; onChanged?: () => void };
+
+function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
+  const row = useRef<HTMLElement>(null);
+  const target = rollbackTarget(entry);
+  useEffect(() => {
+    if (focused) row.current?.scrollIntoView?.({ block: "center" });
+  }, [focused]);
   return (
-    <Paper className="activity-row" component="article" p={{ base: "md", sm: "lg" }} withBorder>
+    <Paper aria-current={focused || undefined} className={focused ? "activity-row activity-row-focused" : "activity-row"}
+      component="article" p={{ base: "md", sm: "lg" }} ref={row} withBorder>
       <Group align="flex-start" justify="space-between" wrap="wrap">
         <div>
           <Text className="activity-meta" c="dimmed" size="xs">
@@ -59,11 +69,14 @@ function ActivityRow({ entry }: { entry: ActivityEntry }) {
       {entry.evidence_href ? <Anchor component={Link} mt="md" to={entry.evidence_href}>
         {entry.evidence_label || "Open source evidence"}
       </Anchor> : null}
+      {target ? <RollbackPanel applyId={target} onChanged={onChanged} /> : null}
     </Paper>
   );
 }
 
-export function ActivityTimeline({ payload }: { payload: ActivityPayload }) {
+type TimelineProps = { payload: ActivityPayload; focus?: string; onChanged?: () => void };
+
+export function ActivityTimeline({ payload, focus = "", onChanged }: TimelineProps) {
   return <Stack gap="md">
     <Paper className="activity-sources" p="md" withBorder>
       <Text fw={650} size="sm">Evidence sources</Text>
@@ -74,7 +87,7 @@ export function ActivityTimeline({ payload }: { payload: ActivityPayload }) {
         </Group>)}
       </Stack>
     </Paper>
-    {payload.entries.length ? payload.entries.map((entry) => <ActivityRow entry={entry} key={entry.id} />)
+    {payload.entries.length ? payload.entries.map((entry) => <ActivityRow entry={entry} focused={isFocused(entry, focus)} key={entry.id} onChanged={onChanged} />)
       : payload.next_cursor
         ? <EvidenceState kind="empty" title="No matches in this page">More rows remain. Search older activity to continue.</EvidenceState>
         : <EvidenceState kind="empty" title="No activity matches">Change a filter or create the first local decision.</EvidenceState>}
@@ -89,6 +102,7 @@ export function ActivityPage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const requestGate = useRef(new ActivityRequestGate());
+  const focus = focusedEntry(useLocation().search);
 
   useEffect(() => {
     const request = requestGate.current.next();
@@ -188,7 +202,7 @@ export function ActivityPage() {
       {error ? <EvidenceState kind="error" title="Activity unavailable">{error}</EvidenceState> : null}
       {loading && !payload ? <EvidenceState kind="loading" title="Loading local activity">Reading bounded pages from local evidence.</EvidenceState> : null}
       {payload ? <>
-        <ActivityTimeline payload={payload} />
+        <ActivityTimeline focus={focus} onChanged={() => setFilters((current) => ({ ...current }))} payload={payload} />
         {payload.next_cursor ? <Button loading={loadingMore} onClick={() => void loadOlder()} variant="default">
           {continuationLabel(payload.entries)}
         </Button> : null}
