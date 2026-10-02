@@ -94,7 +94,7 @@ and lint fails the commit otherwise. `bin/citizen usage --rules` then reports ho
 grouped by repository and by the preference variant you had selected at the time.
 
 - [Detector or reason](primitives/rules): Every rule names a deterministic detector over the transcript, or says in one line why nothing in a transcript can decide it. Lint fails the commit otherwise.
-- [Hit rate per rule](docs/usage.md): bin/citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.
+- [Hit rate per rule](docs/usage.md): bin/citizen usage --rules lists each loaded rule as measured, dark or unmeasured and how often it fired, by repo or stance; --by profile splits spend by profile.
 - [Cache prefix held](docs/usage.md): bin/citizen usage --by prefix reports each session's cache-miss ratio and names the turn where it jumped. It measures the prefix; nothing denies a change.
 - [What is detected](claude/hooks/rule-detectors.py): Nineteen deterministic detectors read the transcript: whole-file reads, unverified pushes, secrets in a write, banned openers, non-conventional commits.
 - [Caught in the act](docs/field-scan.md): The instrument has already caught two of this repository's own shipped features doing nothing. Both are filed as issues, not hidden.
@@ -110,6 +110,15 @@ Reasonable developers disagree about testing, autonomy and how much to delegate.
 - [See one switch end to end](docs/stance-demo.md): The demo flips delegation and shows what changes in both runtimes.
 - [Autonomy stances](primitives/stances/autonomy): Execute, confirm-writes or ask. The choice sets which shell-command grade stops and asks; it is enforced, not advised.
 - [Judgment stays local by default](docs/runtime-controls.md): An external judgment provider is off at every decision point until you turn it on, sends only the fields you list, and one file switches every call off.
+
+### A Studio for editing and measuring the harness
+
+A local browser view over the same commands the CLI runs. Edits stay in a draft until you apply them, and every run keeps the native result files as its record.
+
+- [Hand-edit in a draft](lib/harness_core/studio/module_editing.py): Edit a rule, skill or stance in a draft with live lint, context budget and runtime projection, then save an explicit checkpoint.
+- [Templates and forks](lib/harness_core/studio/module_authoring.py): Add your own module from a template, or fork a core one into your root; the draft switches the original off and shows its upstream diff.
+- [Live replay against two targets](lib/harness_core/studio/replay.py): Run the replay benchmark against two explicit targets, each built into its own profile, under one spend cap, with a per-task table per arm.
+- [Plugin eval import](lib/harness_core/studio/plugin_evals.py): Imports `claude plugin eval` results into the run history, with a link to the HTML report.
 
 ### On the way
 

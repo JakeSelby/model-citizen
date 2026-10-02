@@ -73,8 +73,9 @@ manifests.
 - The pre-registration (item 1) was committed before the first trial, and the history shows it.
 - Every published figure can be re-derived from the proof set's own rows without calling a model.
 
-A verifier that checks these mechanically is planned for proof set 1 (#799). Until it ships, the
-check is done by a reviewer against this page.
+`citizen evidence verify BUNDLE` checks these mechanically and offline; the bundle contract and what
+it cannot prove are in [Evidence bundles](evidence-bundles.md). A reviewer still checks what the
+verifier cannot re-derive.
 
 ## The twelve items
 
@@ -211,21 +212,25 @@ check, as the replay's hidden checks are, the item is marked not applicable with
 ### 9. A contamination check
 
 **What it is:** evidence that neither arm could see the answer, and that the two arms had the same
-access.
+access. When absence cannot be established, the task is excluded rather than counted.
 
 **Satisfied by:** a record that the reference solutions were unreachable from inside a trial (no
-later history in the checkout, no network path to the solution), that both arms had identical web
-and network access, and the task dates beside the model's stated training cutoff. SM-2 records why
-this item exists:
+later history in the task checkout, no known-good commit or readable held-back oracle implementation
+in the harness arm's installed checkout, no network path to the solution), that scored transcripts
+contain no observed tool-input path to the installed checkout, that both arms had identical web and
+network access, and the task
+dates beside the model's stated training cutoff. The installed-checkout check runs before any model
+call; a detected canonical or lexically equivalent installed-root path fails that attempt. This
+transcript check observes tool inputs only and is not a complete filesystem-read audit because
+unknown symlinks, relative traversal and copies can hide the source path, so it supports rather
+than replaces prelaunch exclusion. SM-2 records why this item exists:
 
 > The 23 Sep eight-task runs were unscored and ran with unequal web access between the arms, so they
 > are not a result.
 
-**Open risk:** the harness arm's image holds this repository's checkout at the harness ref under
-test, and that ref can postdate a task's fix. For a task taken from this repository's own history,
-the reference solution may then be readable inside the harness arm, so a run on such tasks does not
-satisfy this item until the checkout the arm holds is shown to exclude every task's fix, or the
-proof set names the exposure per task.
+Tasks exposed through the installed checkout are excluded with their full task and reason retained
+in `benchmarks/tasks.json`. The runner repeats the control at the exact harness commit, so an older
+tag or a later task-manifest change fails closed instead of relying on the retirement record.
 
 ### 10. Estimand labels
 
@@ -242,6 +247,9 @@ proof set names the exposure per task.
   assignment rather than by selecting those trials after the fact.
 - **Hypothetical:** any figure that is computed rather than measured, such as a what-if price or a
   projected subset, is marked hypothetical where it appears.
+
+A figure a usage report labels soft estimate, such as `citizen usage --by adherence`'s if-followed
+saving, is hypothetical in this sense and never enters a proof set.
 
 ### 11. Field checks
 

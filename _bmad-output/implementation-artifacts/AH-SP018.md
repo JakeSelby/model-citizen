@@ -23,6 +23,11 @@ The issue carries the summary, discussion and acceptance evidence; this file car
 This work item was authored as part of the repository's committed BMad planning system.
 <!-- bmad-sync:end -->
 
+## Delivery amendment — 2026-09-28 (#1061)
+
+Current delivery: **v0.16.0**. Earlier milestone references below are historical and superseded by [the roadmap amendment](../planning-artifacts/roadmap-2026-09-28.md). Capability status is unchanged.
+
+
 ## Question
 
 Can a developer open the Studio on their phone, the way they already drive sessions through Remote Control, without the server leaving loopback or losing its token and host checks? Candidates: an SSH port forward from the phone, Tailscale Serve in front of the loopback port, and a Remote Control extension if one exists.

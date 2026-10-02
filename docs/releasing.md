@@ -86,8 +86,7 @@ untouched; do not move or replace either tag.
 4. Set `VERSION`, `compatibility/catalog.json` and `compatibility/migration.json` to the same
    release. Record exact migration actions and recovery even when the only action is reviewing a
    dry run. Regenerate projections and release notes. Fold the changelog into the version section:
-   for 0.13.0, by hand from `## [Unreleased]` as before, and that release pull request is the
-   cut-over that ends the lint's Unreleased exemption; from the next release on, with
+   with
    `python3 scripts/release_notes.py --changelog <version>`, which assembles the `changelog.d/`
    fragments in a stable order and deletes them (see
    [`changelog.d/README.md`](../changelog.d/README.md)). That assembly satisfies the lint's

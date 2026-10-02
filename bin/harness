@@ -15,10 +15,11 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen upgrade [--dry-run]
     citizen uninstall
     citizen lint    [PATH]
-    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix] [--stance NAME] [--rescan]
+    citizen usage   [--days N] [--by day|repo|model|role|stance|decision|provider|prefix|rebuild] [--stance NAME] [--rescan] [--json]
     citizen usage   --rules [--by rule|repo|stance] [--days N] [--rescan]
     citizen usage   --conflicts [--days N]
     citizen runs    catalog|start|list|show|cancel [OPTIONS] [--json]
+    citizen evidence verify BUNDLE [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
     citizen draft create NAME [--base installed|TAG] [--json]
@@ -72,8 +73,9 @@ from harness_core import reconcile, lifecycle, tasks, compatibility, workers, in
 from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
-from harness_core import codex_client, keychain, collisions, importer, cache_prefix
-from harness_core import intents
+from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
+from harness_core import intents, observation
+from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
 from harness_core import overview as overview_core
@@ -83,6 +85,8 @@ from harness_core.studio import settings as studio_settings
 from harness_core.studio import selection_editing as studio_selection_editing
 from harness_core.studio import module_editing as studio_module_editing
 from harness_core.studio import module_authoring as studio_module_authoring
+from harness_core import rule_coverage
+from harness_core import instruction_surface, scorecard
 from harness_core.studio import apply as studio_apply
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
@@ -415,14 +419,20 @@ def load_config(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
             cfg.setdefault("vscode", {})["manage"] = value not in ("0", "false", "no")
         elif key == "HARNESS_MANAGE_CODEX":
             cfg.setdefault("codex", {})["manage"] = value not in ("0", "false", "no")
+    try:
+        observation.enabled(cfg)
+    except ValueError as exc:
+        raise SystemExit(str(exc))
     return cfg
 
 
-def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str, Any]] = None,
+                   strict: bool = True) -> Dict[str, Any]:
     """Every unit of every kind with its value and source, from `posture.selection`.
 
     `user` is the user configuration when the caller has read it; the resolver reads it
-    otherwise. Strict, because a command that acts on a selection must not act on part of one.
+    otherwise. Commands that act on a selection use strict resolution; callers inspecting the
+    available units may opt out while constructing a repair to an invalid selection.
     """
     env = os.environ if env is None else env
     module = load_posture()
@@ -430,7 +440,7 @@ def load_selection(env: Optional[Dict[str, str]] = None, user: Optional[Dict[str
         raise SystemExit("this checkout has no selection resolver (policy/hooks/posture.py)")
     try:
         user = (read_json(config_path()) or {}) if user is None else user
-        return module.selection(env, strict=True, config=user, root=REPO)
+        return module.selection(env, strict=strict, config=user, root=REPO)
     except (OSError, ValueError) as exc:
         raise SystemExit(str(exc))
 
@@ -1419,6 +1429,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         say(UNSUPPORTED)
         return 1
     try:
+        load_config(user_defaults_env())  # Reject invalid configuration before creating the lock.
         # A dry run reports the same refusal as the real one; it differs in what it writes.
         if args.dry_run:
             return _cmd_sync_unlocked(args)
@@ -1659,7 +1670,7 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
                 personal.write_text(rendered, encoding="utf-8")
 
         # Claude settings.
-        template = runtime_template()
+        template = runtime_template(cfg)
         settings_file = cd / "settings.json"
         live = read_json(settings_file) or {}
         mtime = settings_file.stat().st_mtime if settings_file.exists() else None
@@ -1751,7 +1762,8 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
                                              else UNMANAGED))
         hook_file = codex_dir() / "hooks.json"
         hook_live = read_json(hook_file) or {}
-        hook_template = lifecycle.registration(REPO, "codex")
+        hook_template = observation.with_observation(
+            lifecycle.registration(REPO, "codex"), REPO, "codex", cfg)
         hook_merged = deepcopy(hook_live)
         hook_merged.setdefault("hooks", {})
         for event, entries in hook_template["hooks"].items():
@@ -1813,10 +1825,10 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
     return 0
 
 
-def runtime_template():
+def runtime_template(cfg=None):
     template = read_json(REPO / "claude" / "settings.template.json") or {}
     template["hooks"] = lifecycle.registration(REPO, "claude-code")["hooks"]
-    return template
+    return observation.with_observation(template, REPO, "claude-code", cfg or {})
 
 
 def _diff_lines() -> List[str]:
@@ -1836,7 +1848,7 @@ def _diff_lines() -> List[str]:
             lines.append(f"broken link {p}{origin}")
     defaults = user_defaults_env()
     cfg = load_config(defaults)
-    template = runtime_template()
+    template = runtime_template(cfg)
     applied = read_json(applied_path()) or {}
     live = read_json(claude_dir() / "settings.json") or {}
     live_p = claude_projection(live, template, installed=installed_output_style())
@@ -4168,7 +4180,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 BOOL_KEYS = ["vscode.manage", "claude.manage", "codex.manage", "permissions_bypass_acknowledged",
-             "core_switches_acknowledged"]
+             "core_switches_acknowledged", "observation.enabled"]
 
 
 def coerce_config_value(key: str, value: str) -> Any:
@@ -4322,7 +4334,7 @@ def config_set_locked(key: str, value: str) -> Any:
         # resolver already refuses goes in.
         unset = deepcopy(cfg)
         unset[parts[0]].pop(parts[1])
-        if parts[1] not in load_selection(env={}, user=unset)[parts[0]]:
+        if parts[1] not in load_selection(env={}, user=unset, strict=False)[parts[0]]:
             raise SystemExit(f"{parts[0]} has no unit '{parts[1]}'; `citizen selection` lists every unit")
         load_selection(env={}, user=cfg)
     elif key == "core_switches_acknowledged":
@@ -5227,26 +5239,179 @@ def folded_rules(row: Dict[str, Any], renamed: Dict[str, str]) -> Dict[str, int]
             continue
         try:
             count = int(n or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             count = 0
         key = renamed.get(did, did)
         out[key] = out.get(key, 0) + count
     return out
 
 
-def rule_ids(rows: List[Dict[str, Any]]) -> List[str]:
-    """Every detector id to report on: the registry's, so a rule with no hit is still a line,
-    plus any id a record carries that the registry no longer defines — under its current name
-    when the registry says it was renamed."""
+def rule_ids(rows: List[Dict[str, Any]], extra: Iterable[str] = ()) -> List[str]:
+    """Every detector id to report on: the registry's and `extra`'s, the declarative ones, so
+    a detector with no hit is still a line, plus any id a record carries that the registry no
+    longer defines — under its current name when the registry says it was renamed."""
     module = load_detectors()
     renamed = renamed_ids()
     ids = set(getattr(module, "DETECTORS", {}) or {})
+    ids.update(extra)
     for row in rows:
         ids.update(renamed.get(k, k) for k in (row.get("rules") or {}) if isinstance(k, str))
     return sorted(ids)
 
 
-def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
+def rule_surface(cfg: Dict[str, Any], selection: Dict[str, Any]) -> List[Tuple[str, Path]]:
+    """Every rule file in the loaded instruction surface, as `(name, path)`: this repository's
+    rules less those the selection switches off, each registered primitive root's rules, and
+    each stance at its selected variant, named by its dimension."""
+    off = switched_off(selection)["rules"]
+    surface = [(p.stem, p) for p in sorted((REPO / "primitives" / "rules").glob("*.md"))
+               if p.stem not in off]
+    externals, _warnings = external_primitive_roots(cfg)
+    for entry in externals:
+        surface += [(p.stem, p) for p in entry["rules"] if p.stem not in off]
+    try:
+        stances = primitive_catalog.resolve_stances(REPO, cfg, strict=False)
+    except ValueError:
+        stances = {}  # a selection that does not resolve loads no stance to list
+    surface += [(name, stances[name]) for name in sorted(stances)]
+    return surface
+
+
+def rule_coverage_lines(cwd: Optional[Path] = None, surface: Optional[List[Tuple[str, Path]]] = None,
+                        stances: Optional[Dict[str, str]] = None) -> List[str]:
+    """`usage --rules`'s coverage block: every loaded rule as measured, dark or unmeasured,
+    the share measured, and the findings of the declarative detector file. `rule_coverage`
+    says what each state means."""
+    classified = classified_rules(cwd, surface, stances)
+    if classified is None:
+        return ["rules: not classified; claude/hooks/rule-detectors.py is missing or does not import"]
+    rules, findings = classified
+    return rule_coverage.summary(rules, findings, relative_to=str(cwd or Path.cwd()))
+
+
+def classified_rules(cwd: Optional[Path] = None, surface: Optional[List[Tuple[str, Path]]] = None,
+                     stances: Optional[Dict[str, str]] = None) -> Optional[Tuple[List[Any], List[Any]]]:
+    """`(rules, findings)` from `rule_coverage.classify` over the loaded rule surface, as
+    `usage --rules` classifies it; None when the detector registry does not import."""
+    module = load_detectors()
+    if module is None:
+        return None
+    if surface is None or stances is None:
+        cfg = load_config()
+        if surface is None:
+            surface = rule_surface(cfg, load_selection())
+        if stances is None:
+            stances = dict(cfg.get("stances") or {})
+    loaded, problems = module.declarative(str(cwd or Path.cwd()))
+    # The session hook's registry replaces a shipped detector whose id a loaded one reuses, so
+    # the rule it named is no longer measured by it; the list classified here does the same.
+    by_id = dict(module.DETECTORS)
+    for detector in loaded:
+        by_id[detector.id] = detector
+    detectors = list(by_id.values())
+    rules, findings = rule_coverage.classify(surface, detectors, dict(module.OPT_OUT), stances,
+                                             module.read_rule_file)
+    findings = [rule_coverage.Finding(f.path, f.line, f.reason) for f in problems] + findings
+    return rules, findings
+
+
+def coverage_states() -> Dict[str, str]:
+    """`{"rules/<name>" or "stances/<dimension>": state}` from the `usage --rules` classification.
+    A stance's file sits under a `stances` directory; a rule of the same name stays a rule."""
+    out: Dict[str, str] = {}
+    classified = classified_rules()
+    for rule in (classified[0] if classified is not None else []):
+        kind = "stances" if "stances" in Path(str(rule.path)).parts[:-1] else "rules"
+        out.setdefault("%s/%s" % (kind, rule.rule), rule.state)
+    return out
+
+
+def scorecard_effects(results: str) -> Dict[str, Any]:
+    """`{module: effect}` from an ablation run's saved rows (`cost_bench.py replay --ablations`),
+    compared against control by `scripts/replay_stats.py`. SystemExit when the rows are unreadable
+    or are not an ablation run."""
+    path = Path(results).expanduser()
+    path = path / "results.jsonl" if path.is_dir() else path
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except (OSError, ValueError) as exc:
+        raise SystemExit("scorecard: cannot read %s: %s" % (path, exc))
+    removed = {}
+    for row in rows:
+        entry = row.get("ablation_removes") or next(iter(row.get("ablation_sets") or {}), None)
+        if entry:
+            removed[row.get("arm")] = entry
+    if not removed:
+        raise SystemExit("scorecard: %s holds no ablation arm, so no module's effect is in it" % path)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("scorecard_replay_stats", str(REPO / "scripts" / "replay_stats.py"))
+    stats = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stats)
+    try:
+        return scorecard.effects_from(stats.compare(rows, removed=removed))
+    except ValueError as exc:
+        raise SystemExit("scorecard: cannot compare the arms in %s: %s" % (path, exc))
+
+
+def cmd_scorecard(args: argparse.Namespace) -> int:
+    """One row per module in the selection in force: its instruments or `unmeasured`, its
+    resident tokens, and its measured effect from `--results` or `unmeasured`. `scorecard` says
+    what each column means; no row ever reads "no effect"."""
+    module = load_posture()
+    if module is None:
+        raise SystemExit("this checkout has no selection resolver (policy/hooks/posture.py)")
+    user = read_json(config_path()) or {}
+    try:
+        selection = module.selection(os.environ, strict=False, config=user, root=REPO)
+        kinds = module.selection_kinds(REPO)
+        switches = [kind for kind, entry in kinds.items() if entry.get("value") == "switch"]
+        declared = module.manifests(user, REPO, switches)[0]
+        attribution = module.context_attribution(os.environ, config=user, root=REPO)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(str(exc))
+    coverage = coverage_states()
+    effects = scorecard_effects(args.results) if getattr(args, "results", None) else {}
+    found = scorecard.rows(selection, kinds, declared, attribution, coverage, effects)
+    if getattr(args, "json", False):
+        measured, total, percent = scorecard.instrumented_share(found)
+        print(json.dumps({"instrumented": measured, "modules": total, "share": percent, "rows": found},
+                         indent=2, sort_keys=True))
+        return 0
+    for line in scorecard.render(found):
+        say(line)
+    return 0
+
+
+def surface_report(args: argparse.Namespace) -> int:
+    """`usage --surface`: every loaded instruction source by owner, from `instruction_surface`,
+    with each harness rule and stance joined to its `usage --rules` coverage state. Local only."""
+    module = load_posture()
+    try:
+        attribution = module.context_attribution(os.environ, root=REPO) if module else None
+    except (OSError, ValueError):
+        attribution = None
+    coverage = coverage_states()
+    found = instruction_surface.sources(str(home()), str(Path.cwd()), str(REPO), attribution,
+                                        config_dir=str(claude_dir()),
+                                        sync_manifest=read_json(state_dir() / "manifest.json"))
+    if getattr(args, "json", False):
+        print(json.dumps(instruction_surface.as_json(found, coverage), indent=2, sort_keys=True))
+        return 0
+    for line in instruction_surface.render(found, coverage, home=str(home())):
+        say(line)
+    return 0
+
+
+def declarative_ids(cwd: Optional[Path] = None) -> List[str]:
+    """The ids the working directory's `.ruleprobe/detectors.yaml` defines, for the table."""
+    module = load_detectors()
+    loader = getattr(module, "declarative", None)
+    return [d.id for d in loader(str(cwd or Path.cwd()))[0]] if loader else []
+
+
+def rule_report(rows: List[Dict[str, Any]], by: str, days: int, extra_ids: Iterable[str] = (),
+                json_output: bool = False, coverage: Optional[List[str]] = None,
+                rescan: Optional[str] = None) -> int:
     """`usage --rules`: hits per detector, or per repo or stance variant.
 
     Only a record that carries a `rules` map is evidence. One written before the detectors
@@ -5256,13 +5421,22 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
     Every grouping counts `folded_rules`, not the raw map, so a detector that was renamed is one
     line and one series in all three: by rule, by repo and by stance.
     """
-    measured = [r for r in rows if isinstance(r.get("rules"), dict) and not r.get("rules_errors")]
+    def malformed(row):
+        values = row.get("rules")
+        return isinstance(values, dict) and any(usage_count(value) is None for value in values.values())
+
+    measured = [r for r in rows if isinstance(r.get("rules"), dict)
+                and not r.get("rules_error") and not r.get("rules_errors") and not malformed(r)]
     legacy = sum(1 for r in rows if not isinstance(r.get("rules"), dict) and not r.get("rules_error"))
-    errored = sum(1 for r in rows if r.get("rules_error") or r.get("rules_errors"))
-    if legacy or errored:
+    errored = sum(1 for r in rows if r.get("rules_error") or r.get("rules_errors") or malformed(r))
+    metadata = {"legacy_sessions": legacy, "errored_sessions": errored,
+                "rescanned_excluded": 0, "coverage": list(coverage or []), "rescan": rescan}
+    if (legacy or errored) and not json_output:
         say(f"{legacy + errored} session(s) in the window carry no rule data "
             f"({legacy} recorded before detectors, {errored} rules_error); run --rescan to backfill")
     if not measured:
+        if json_output:
+            return usage_json("rules", by, days, [], measured_sessions=0, **metadata)
         say(f"no measured sessions in the last {days} day(s)")
         return 0
     renamed = renamed_ids()
@@ -5270,31 +5444,41 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
 
     if by == "rule":
         total = len(counted)
-        head = f"{'detector':<38}{'hits':>7}{'sessions':>10}{'of':>6}{'share':>8}  note"
-        say(head)
-        say("-" * len(head))
-        for did in rule_ids(measured):
+        groups = []
+        for did in rule_ids(measured, extra_ids):
             hits = sum(hits_of.get(did, 0) for _, hits_of in counted)
             seen = sum(1 for _, hits_of in counted if hits_of.get(did, 0) > 0)
             share = seen / total if total else 0.0
             note = ""
             if total >= RULE_MIN_SESSIONS:
                 note = "promote?" if share > RULE_PROMOTE_SHARE else ("unobserved" if not hits else "")
-            say(f"{did[:38]:<38}{hits:>7}{seen:>10}{total:>6}{share:>8.0%}  {note}".rstrip())
+            groups.append({"id": did, "hits": hits, "sessions": seen, "of": total,
+                           "share": share, "note": note})
+        if json_output:
+            return usage_json("rules", by, days, groups, measured_sessions=total, **metadata)
+        head = f"{'detector':<38}{'hits':>7}{'sessions':>10}{'of':>6}{'share':>8}  note"
+        say(head)
+        say("-" * len(head))
+        for item in groups:
+            say(f"{item['id'][:38]:<38}{item['hits']:>7}{item['sessions']:>10}{item['of']:>6}"
+                f"{item['share']:>8.0%}  {item['note']}".rstrip())
         return 0
 
     if by == "stance":
         # A rescan stamps the stances of the minute it ran, not of the session it read, so a
         # session grouped by them would be filed under a variant it may never have run under.
         guessed = [r for r in measured if r.get("stances_source") == "rescan"]
-        if guessed:
+        metadata["rescanned_excluded"] = len(guessed)
+        if guessed and not json_output:
             say(f"{len(guessed)} rescanned session(s) excluded: stance not known at the time")
         counted = [(r, h) for r, h in counted if r.get("stances_source") != "rescan"]
         if not counted:
+            if json_output:
+                return usage_json("rules", by, days, [], measured_sessions=0, **metadata)
             say(f"no sessions with a known stance in the last {days} day(s)")
             return 0
 
-    groups: Dict[str, List[Any]] = {}
+    grouped: Dict[str, List[Any]] = {}
     for row, hits_of in counted:
         if by == "stance":
             stances = row.get("stances") if isinstance(row.get("stances"), dict) else {}
@@ -5302,18 +5486,25 @@ def rule_report(rows: List[Dict[str, Any]], by: str, days: int) -> int:
         else:
             keys = [row.get("repo") or "(no repo)"]
         for key in keys:
-            acc = groups.setdefault(key, [0, {}])
+            acc = grouped.setdefault(key, [0, {}])
             acc[0] += 1
             for did, n in hits_of.items():
                 acc[1][did] = acc[1].get(did, 0) + n
+    groups = []
+    for key in sorted(grouped):
+        sessions, counts = grouped[key]
+        top = sorted(((d, n) for d, n in counts.items() if n), key=lambda kv: (-kv[1], kv[0]))[:3]
+        groups.append({"name": key, "sessions": sessions, "hits": sum(counts.values()),
+                       "top_detectors": [{"id": detector, "hits": hits}
+                                         for detector, hits in top]})
+    if json_output:
+        return usage_json("rules", by, days, groups, measured_sessions=len(counted), **metadata)
     head = f"{by:<42}{'sessions':>9}{'hits':>7}  top detectors"
     say(head)
     say("-" * len(head))
-    for key in sorted(groups):
-        sessions, counts = groups[key]
-        top = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:3]
-        say(f"{key[:42]:<42}{sessions:>9}{sum(counts.values()):>7}  "
-            + (", ".join(f"{d} {n}" for d, n in top) or "-"))
+    for item in groups:
+        top = ", ".join(f"{entry['id']} {entry['hits']}" for entry in item["top_detectors"]) or "-"
+        say(f"{item['name'][:42]:<42}{item['sessions']:>9}{item['hits']:>7}  {top}")
     return 0
 
 
@@ -5469,6 +5660,31 @@ def percentile(values: List[Any], share: float) -> Any:
 
 # The `--by profile` group of a row that carries no profile fingerprint (AD-23).
 UNATTRIBUTED = "(unattributed)"
+USAGE_JSON_VERSION = 1
+
+
+def json_safe(value: Any) -> Any:
+    """JSON-compatible report values, with non-finite measurements left unknown."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return None
+    if isinstance(value, dict):
+        return {key: json_safe(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(child) for child in value]
+    return value
+
+
+def usage_json(report: str, by: str, days: int, groups: List[Dict[str, Any]],
+               totals: Optional[Dict[str, Any]] = None, **metadata: Any) -> int:
+    """Write one versioned usage report document and reject non-standard JSON numbers."""
+    document = {"schema_version": USAGE_JSON_VERSION, "report": report, "by": by,
+                "days": days, "groups": groups}
+    if totals is not None:
+        document["totals"] = totals
+    document.update(metadata)
+    sys.stdout.write(json.dumps(json_safe(document), indent=2, sort_keys=True,
+                                allow_nan=False) + "\n")
+    return 0
 
 
 def stance_key(row: Dict[str, Any], dimension: str) -> str:
@@ -5486,7 +5702,7 @@ def stance_key(row: Dict[str, Any], dimension: str) -> str:
     return f"{dimension}={value}" if isinstance(value, str) and value else "(unknown)"
 
 
-def decision_report(days: int) -> int:
+def decision_report(days: int, json_output: bool = False, rescan: Optional[str] = None) -> int:
     """`usage --by decision`: what each hook decided, and how often the session said.
 
     The log is append-only, so an outcome is its own record and the join happens here rather
@@ -5501,30 +5717,38 @@ def decision_report(days: int) -> int:
     path = state_dir() / "decisions.jsonl"
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(days, 0) * 86400))
     rows = [r for r in module.joined(module.read_rows(path)) if (r.get("ts") or "") >= cutoff]
-    if not rows:
-        say(f"no hook decisions recorded in the last {days} day(s); looked in {path}")
-        return 0
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
         # A sampled allow is a negative nobody graded, so it groups apart from the judgments at
-        # the same point: folded in, it would read as one more unlabelled decision and drag the
-        # point's unlabelled share towards the sampling rate.
+        # the same point: folded in, it would drag the point's unlabelled share towards sampling.
         point = str(row.get("point") or "(unnamed)") + (" (sampled)" if row.get("sampled") else "")
-        groups.setdefault(point, []).append(row)
-    head = f"{'decision':<24}{'rows':>7}{'labelled':>10}{'unlabelled':>12}  outcomes"
-    say(head)
-    say("-" * len(head))
-    for point in sorted(groups):
-        group = groups[point]
+        grouped.setdefault(point, []).append(row)
+    groups = []
+    for point in sorted(grouped):
+        group = grouped[point]
         labelled = [r for r in group if r.get("outcome") is not None]
         counts: Dict[str, int] = {}
         for row in labelled:
             key = str(row["outcome"])
             counts[key] = counts.get(key, 0) + 1
-        share = (len(group) - len(labelled)) / len(group)
-        detail = ", ".join(f"{name} {n} ({n / len(labelled):.0%})"
-                           for name, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
-        say(f"{point[:24]:<24}{len(group):>7}{len(labelled):>10}{share:>11.0%}   {detail or '-'}")
+        groups.append({"name": point, "rows": len(group), "labelled": len(labelled),
+                       "unlabelled_share": (len(group) - len(labelled)) / len(group),
+                       "outcomes": dict(sorted(counts.items()))})
+    if json_output:
+        return usage_json("decisions", "decision", days, groups, source=str(path), rescan=rescan)
+    if not groups:
+        say(f"no hook decisions recorded in the last {days} day(s); looked in {path}")
+        return 0
+    head = f"{'decision':<24}{'rows':>7}{'labelled':>10}{'unlabelled':>12}  outcomes"
+    say(head)
+    say("-" * len(head))
+    for item in groups:
+        labelled = item["labelled"]
+        detail = ", ".join(f"{name} {n} ({n / labelled:.0%})"
+                           for name, n in sorted(item["outcomes"].items(),
+                                                key=lambda kv: (-kv[1], kv[0])))
+        say(f"{item['name'][:24]:<24}{item['rows']:>7}{labelled:>10}"
+            f"{item['unlabelled_share']:>11.0%}   {detail or '-'}")
     return 0
 
 
@@ -5532,7 +5756,8 @@ PROVIDER_STATUSES = ("ok", "unknown", "unavailable", "error")
 
 
 def provider_report(rows: List[Dict[str, Any]], days: int,
-                    table: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+                    table: Optional[Dict[str, Dict[str, Any]]] = None,
+                    json_output: bool = False, rescan: Optional[str] = None) -> int:
     """`usage --by provider`: what each decision point spent asking a provider, per mode.
 
     A judgment that costs dollars and is never priced reads as free, and one that adds a second
@@ -5546,31 +5771,58 @@ def provider_report(rows: List[Dict[str, Any]], days: int,
     that mixed them would say the provider was working when it was unreachable.
     """
     table = {} if table is None else table
-    if not rows:
+    grouped: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault((str(row.get("point") or "(unset)"), str(row.get("mode") or "?")),
+                           []).append(row)
+    unpriced = 0
+    groups = []
+    for key in sorted(grouped):
+        group = grouped[key]
+        costs = [row_cost(r, table) for r in group]
+        inputs = [usage_count(row.get("input")) for row in group]
+        known_inputs = [value for value in inputs if value is not None]
+        unpriced += sum(1 for cost in costs if cost is None)
+        # A NaN or infinite duration is no measurement, and a bool is no duration at all.
+        latency = sorted(float(r["ms"]) for r in group
+                         if isinstance(r.get("ms"), (int, float))
+                         and not isinstance(r.get("ms"), bool) and math.isfinite(r["ms"]))
+        groups.append({
+            "point": key[0], "mode": key[1], "calls": len(group),
+            "statuses": {name: sum(1 for row in group if row.get("status") == name)
+                         for name in PROVIDER_STATUSES},
+            "input": sum(known_inputs) if len(known_inputs) == len(group) else None,
+            "_input": sum(known_inputs),
+            "unknown_input_calls": len(group) - len(known_inputs),
+            "usd": None if any(cost is None for cost in costs)
+            else sum(cost for cost in costs if cost is not None),
+            "_usd": sum(cost for cost in costs if cost is not None),
+            "unpriced_calls": sum(1 for cost in costs if cost is None),
+            "latency_calls": len(latency),
+            "unknown_latency_calls": len(group) - len(latency),
+            "latency_ms": {"p50": percentile(latency, 0.5) if latency else None,
+                           "p90": percentile(latency, 0.9) if latency else None},
+        })
+    if json_output:
+        public = [{name: value for name, value in item.items() if not name.startswith("_")}
+                  for item in groups]
+        return usage_json("provider", "provider", days, public, unpriced=unpriced,
+                          price_table=bool(table), rescan=rescan)
+    if not groups:
         say(f"no decision-provider calls recorded in the last {days} day(s); "
             "`citizen doctor` says whether any point is configured to make one")
         return 0
-    groups: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
-    for row in rows:
-        groups.setdefault((str(row.get("point") or "(unset)"), str(row.get("mode") or "?")),
-                          []).append(row)
     head = (f"{'point':<20}{'mode':<8}{'calls':>7}" + "".join(f"{name:>12}" for name in PROVIDER_STATUSES)
             + f"{'input':>10}{'usd':>9}{'ms p50':>9}{'ms p90':>9}")
     say(head)
     say("-" * len(head))
-    unpriced = 0
-    for key in sorted(groups):
-        group = groups[key]
-        costs = [row_cost(r, table) for r in group]
-        unpriced += sum(1 for c in costs if c is None)
-        usd = sum(c for c in costs if c is not None)
-        latency = sorted(float(r["ms"]) for r in group if isinstance(r.get("ms"), (int, float)))
-        tokens = sum(int(r["input"]) for r in group if isinstance(r.get("input"), int))
-        counts = [sum(1 for r in group if r.get("status") == name) for name in PROVIDER_STATUSES]
-        cells = "".join(f"{n:>12,}" for n in counts)
-        tail = "".join(f"{percentile(latency, share):>9.0f}" if latency else f"{'-':>9}"
-                       for share in (0.5, 0.9))
-        say(f"{key[0][:20]:<20}{key[1][:8]:<8}{len(group):>7}{cells}{tokens:>10,}{usd:>9.4f}{tail}")
+    for item in groups:
+        cells = "".join(f"{item['statuses'][name]:>12,}" for name in PROVIDER_STATUSES)
+        latency = item["latency_ms"]
+        tail = "".join(f"{latency[name]:>9.0f}" if latency[name] is not None else f"{'-':>9}"
+                       for name in ("p50", "p90"))
+        say(f"{item['point'][:20]:<20}{item['mode'][:8]:<8}{item['calls']:>7}{cells}"
+            f"{item['_input']:>10,}{item['_usd']:>9.4f}{tail}")
     say(f"unpriced: {unpriced} call(s), unknown model or no reported usage" if unpriced
         else "unpriced: none")
     if not table:
@@ -5604,7 +5856,8 @@ def measured_share(rows: List[Dict[str, Any]], field: str, value: Any,
 
 
 def role_report(rows: List[Dict[str, Any]], days: int,
-                table: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+                table: Optional[Dict[str, Dict[str, Any]]] = None,
+                json_output: bool = False, rescan: Optional[str] = None) -> int:
     """Output tokens, dollars and tool calls per agent type, over the subagent and worker rows.
 
     Spend per delegated task is a distribution, not a mean: a budget set at the mean is wrong
@@ -5627,10 +5880,49 @@ def role_report(rows: List[Dict[str, Any]], days: int,
     written before the ledger marked such rows `unconfined`, since the directory is the evidence.
     """
     table = {} if table is None else table
-    groups: Dict[str, List[Dict[str, Any]]] = {}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
         key = WORKFLOW_BUCKET if row.get("workflow") else (row.get("agent_type") or "(unnamed)")
-        groups.setdefault(key, []).append(row)
+        grouped.setdefault(key, []).append(row)
+    unpriced = 0
+    groups = []
+    for key in sorted(grouped, key=lambda name: (name == WORKFLOW_BUCKET, name)):
+        group = grouped[key]
+        output = sorted(value for value in (usage_count(r.get("output")) for r in group)
+                        if value is not None)
+        tools = sorted(int(r["tool_calls"]) for r in group if isinstance(r.get("tool_calls"), int))
+        costs = [row_cost(r, table) for r in group]
+        unpriced += sum(1 for cost in costs if cost is None)
+        usd = sorted(cost for cost in costs if cost is not None)
+        groups.append({
+            "name": key,
+            "runs": len(group),
+            "output": {name: percentile(output, share)
+                       if output and len(output) == len(group) else None
+                       for name, share in (("p50", 0.5), ("p75", 0.75), ("p90", 0.9))},
+            "_output": {name: percentile(output, share) if output else None
+                        for name, share in (("p50", 0.5), ("p75", 0.75), ("p90", 0.9))},
+            "unknown_output_runs": len(group) - len(output),
+            "usd": {name: percentile(usd, share) if usd and len(usd) == len(group) else None
+                    for name, share in (("p50", 0.5), ("p75", 0.75))},
+            "_usd": {name: percentile(usd, share) if usd else None
+                     for name, share in (("p50", 0.5), ("p75", 0.75))},
+            "unpriced_runs": sum(1 for cost in costs if cost is None),
+            "tools": {name: percentile(tools, share) if tools else None
+                      for name, share in (("p50", 0.5), ("p75", 0.75), ("p90", 0.9))},
+            "return_path_share": measured_share(group, "return_path", "resolvable",
+                                                  among=("resolvable", "unresolvable")),
+            "return_over_budget_share": measured_share(group, "return_over_budget", True),
+            "unmeasured_tool_calls": sum(1 for row in group
+                                           if not isinstance(row.get("tool_calls"), int)),
+            "sample_sufficient": len(group) >= ROLE_MIN_RUNS,
+        })
+    if json_output:
+        public = [{name: value for name, value in item.items() if not name.startswith("_")}
+                  for item in groups]
+        return usage_json("roles", "role", days, public, unpriced=unpriced,
+                          workflow_runs=len(grouped.get(WORKFLOW_BUCKET, [])),
+                          price_table=bool(table), rescan=rescan)
     if not groups:
         say(f"no subagent or worker runs recorded in the last {days} day(s); "
             "run `citizen usage --rescan` to backfill them from transcripts")
@@ -5641,34 +5933,69 @@ def role_report(rows: List[Dict[str, Any]], days: int,
             f"{'path':>5}{'over':>5}{'unmeasured':>12}{'sample':>8}")
     say(head)
     say("-" * len(head))
-    unpriced = 0
-    for key in sorted(groups, key=lambda name: (name == WORKFLOW_BUCKET, name)):
-        group = groups[key]
-        output = sorted(int(r["output"]) for r in group if isinstance(r.get("output"), int))
-        tools = sorted(int(r["tool_calls"]) for r in group if isinstance(r.get("tool_calls"), int))
-        # A delegated run is priced at the model it ran on, alone: a subagent has no children
-        # of its own in the ledger, so nothing is subtracted and nothing is added.
-        costs = [row_cost(r, table) for r in group]
-        unpriced += sum(1 for c in costs if c is None)
-        usd = sorted(c for c in costs if c is not None)
-        # A run whose runtime reported no tool-call count is named, never averaged in as a
-        # zero; the percentiles are taken over the runs that do report one.
-        gaps = sum(1 for r in group if not isinstance(r.get("tool_calls"), int))
-        cells = [f"{percentile(output, s):>10,}" if output else f"{'-':>10}" for s in (0.5, 0.75, 0.9)]
-        cells += [f"{percentile(usd, s):>9.4f}" if usd else f"{'-':>9}" for s in (0.5, 0.75)]
-        cells += [f"{percentile(tools, s):>11,}" if tools else f"{'-':>11}" for s in (0.5, 0.75, 0.9)]
+    for item in groups:
+        cells = [f"{item['_output'][name]:>10,}"
+                 if item["_output"][name] is not None else f"{'-':>10}"
+                 for name in ("p50", "p75", "p90")]
+        cells += [f"{item['_usd'][name]:>9.4f}"
+                  if item["_usd"][name] is not None else f"{'-':>9}"
+                  for name in ("p50", "p75")]
+        cells += [f"{item['tools'][name]:>11,}" if item["tools"][name] is not None else f"{'-':>11}"
+                  for name in ("p50", "p75", "p90")]
         cells += [f"{share:>5.0%}" if share is not None else f"{'-':>5}"
-                  for share in (measured_share(group, "return_path", "resolvable",
-                                               among=("resolvable", "unresolvable")),
-                                measured_share(group, "return_over_budget", True))]
-        mark = f"n<{ROLE_MIN_RUNS}" if len(group) < ROLE_MIN_RUNS else ""
-        say(f"{key[:30]:<30}{len(group):>6}" + "".join(cells) + f"{gaps or '-':>12}{mark:>8}")
+                  for share in (item["return_path_share"], item["return_over_budget_share"])]
+        mark = "" if item["sample_sufficient"] else f"n<{ROLE_MIN_RUNS}"
+        say(f"{item['name'][:30]:<30}{item['runs']:>6}" + "".join(cells)
+            + f"{item['unmeasured_tool_calls'] or '-':>12}{mark:>8}")
     say(f"unpriced: {unpriced} run(s), unknown model or partial tokens" if unpriced
         else "unpriced: none")
-    if WORKFLOW_BUCKET in groups:
-        say(f"{WORKFLOW_BUCKET}: {len(groups[WORKFLOW_BUCKET])} Workflow-tool run(s), unconfined; "
+    if WORKFLOW_BUCKET in grouped:
+        say(f"{WORKFLOW_BUCKET}: {len(grouped[WORKFLOW_BUCKET])} Workflow-tool run(s), unconfined; "
             "not counted as spawns of any role and priced against no role budget")
     return 0
+
+
+def usage_count(value: Any) -> Optional[int]:
+    """Return a finite integer usage measurement, or None when it is unavailable."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def usage_accumulator() -> List[Any]:
+    """Create the shared numeric and unknown-count state for one token group."""
+    return [0, 0, 0, 0, 0, 0.0, {name: 0 for name in RATE_FIELDS}, 0]
+
+
+def adherence_report(days: int, json_output: bool = False) -> int:
+    """`usage --by adherence`: each recommendation's adherence rate and its if-followed saving.
+
+    Read-only over the adherence ledger and the sessions' own transcripts; the estimator, its
+    labels and the refusal to pool them are `harness_core.soft_estimates`'. A session's calls are
+    read once however many of its emissions are priced.
+    """
+    adherence = load_hook_module("adherence", required=True)
+    feed = load_hook_module("usage-feed", required=True)
+    rows = adherence.read_rows(adherence.path())
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(days, 0) * 86400))
+    projects = claude_projects_root()
+    sessions: Dict[Any, Any] = {}
+
+    def calls_for(session_id: Any) -> Any:
+        if session_id not in sessions:
+            sessions[session_id] = rebuilds.session_calls(projects, session_id)
+        return sessions[session_id]
+
+    result = soft_estimates.report(rows, adherence, intervals, calls_for,
+                                   load_prices(load_config()), pricing, feed._context, cutoff)
+    if json_output:
+        data = soft_estimates.summary(result)
+        return usage_json("adherence", "adherence", days, data["groups"], labels=data["labels"],
+                          footer=data["footer"])
+    return soft_estimates.render(result, say)
 
 
 def cmd_usage(args: argparse.Namespace) -> int:
@@ -5700,32 +6027,44 @@ def cmd_usage(args: argparse.Namespace) -> int:
     partial tokens is counted as unpriced in the footer and contributes nothing to the column:
     it is not free, and a zero would say it was.
     """
+    json_output = bool(getattr(args, "json", False))
     if getattr(args, "action", None) == "export":
+        if json_output:
+            print("usage export does not support --json", file=sys.stderr)
+            return 2
         return cmd_usage_export(args)
+    if getattr(args, "surface", False):
+        # What the session loads, not what it spent: a different question, so nothing else applies.
+        if getattr(args, "rules", False) or getattr(args, "stance", None) or getattr(args, "by", "day") != "day" \
+                or getattr(args, "conflicts", False) or getattr(args, "rescan", False):
+            print("usage --surface lists the loaded instruction surface; --by, --rules, --stance, "
+                  "--conflicts and --rescan do not apply", file=sys.stderr)
+            return 2
+        return surface_report(args)
     path = state_dir() / "usage.jsonl"
     by = getattr(args, "by", "day")
+    stance = getattr(args, "stance", None)
+    rules_mode = getattr(args, "rules", False) or by == "rule"
     if getattr(args, "conflicts", False):
         # Landing merges and intent overlaps per week, from the decision log: lib/harness_core/intents.py.
         if by != "day" or getattr(args, "rules", False) or getattr(args, "stance", None):
             print("usage --conflicts reports landing merges per week; --by, --rules and --stance "
                   "do not apply", file=sys.stderr)
             return 2
-        for line in intents.conflict_report(args.days):
-            say(line)
-        return 0
-    if by == "decision":
+    elif by == "decision":
         # A different file and a different question: what the hooks decided, not what the
         # session spent. Neither `--rules` nor `--stance` says anything about it.
         if getattr(args, "rules", False) or getattr(args, "stance", None):
             print("usage --by decision reports hook decisions; --rules and --stance do not apply",
                   file=sys.stderr)
             return 2
-        return decision_report(args.days)
-    stance = getattr(args, "stance", None)
+    elif rules_mode and stance:
+        print("usage --rules and --stance select different reports and cannot be combined",
+              file=sys.stderr)
+        return 2
     # `--by stance` means one of two reports, and which one is said rather than inferred:
     # `--rules` asks for detector hits per variant, `--stance <name>` for tokens grouped by that
     # dimension's value. Neither is a report this cannot guess at, so it refuses.
-    rules_mode = getattr(args, "rules", False) or by == "rule"
     if by == "stance" and not rules_mode and not stance:
         print("usage --by stance needs --stance <dimension> for tokens, or --rules for hits",
               file=sys.stderr)
@@ -5749,12 +6088,58 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by prefix reports cache-prefix stability; --rules and --stance do not apply",
               file=sys.stderr)
         return 2
+    if by == "rebuild" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # The report reads transcripts on every run, so a ledger rescan would be accepted and
+        # ignored; it is refused like the other options that do not apply.
+        print("usage --by rebuild reports transcript-observed cache rebuilds; --rules, --stance "
+              "and --rescan do not apply", file=sys.stderr)
+        return 2
+    if by == "adherence" and (rules_mode or stance or getattr(args, "rescan", False)):
+        # Advice and what following it would have saved are neither a session's detector hits
+        # nor its stance's tokens, and the transcripts are read on every run.
+        print("usage --by adherence reports advice adherence and its soft estimate; --rules, "
+              "--stance and --rescan do not apply", file=sys.stderr)
+        return 2
+    if stance and by != "stance":
+        print("usage --stance applies only to --by stance", file=sys.stderr)
+        return 2
     if rules_mode and by == "day":
         by = "rule"
+    rescan_result = None
+    if by == "rebuild":
+        # This view reads the request stream itself, so each invocation is already a rescan.
+        # It does not need or mutate the coarser session ledger.
+        result = rebuilds.analyse(claude_projects_root(),
+                                  time.time() - max(args.days, 0) * 86400,
+                                  args.days, load_prices(load_config()), pricing)
+        if json_output:
+            groups = [dict({"scope": name}, **result["scopes"][name])
+                      for name in ("long", "all")]
+            return usage_json("rebuild", "rebuild", args.days, groups,
+                              files=result["files"], shortfall_tokens=result["shortfall_tokens"],
+                              long_session_calls=result["long_session_calls"],
+                              rescan="direct transcript scan")
+        for line in rebuilds.render(result):
+            say(line)
+        return 0
+    if by == "adherence":
+        return adherence_report(args.days, json_output)
     if getattr(args, "rescan", False):
         hook = REPO / "claude" / "hooks" / "usage-log.py"
         out = subprocess.run([sys.executable, str(hook), "--rescan", str(args.days)], capture_output=True, text=True)
-        say((out.stdout or out.stderr).strip() or "rescan found no transcripts")
+        rescan_result = (out.stdout or out.stderr).strip() or "rescan found no transcripts"
+        if not json_output:
+            say(rescan_result)
+    if getattr(args, "conflicts", False):
+        if json_output:
+            data = intents.conflict_summary(args.days)
+            return usage_json("conflicts", "week", args.days, data["groups"], source=data["path"],
+                              rescan=rescan_result)
+        for line in intents.conflict_report(args.days):
+            say(line)
+        return 0
+    if by == "decision":
+        return decision_report(args.days, json_output, rescan_result)
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(args.days, 0) * 86400))
     cutoff_day = cutoff[:10]
     sliced = by == "day" and not rules_mode
@@ -5763,6 +6148,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
     delegated: List[Dict[str, Any]] = []
     unknown_metrics = set()
     unpriced = 0
+    # TOTAL's run-level counters, kept apart from the groups': a multi-day session is in one
+    # day group per slice, so summing the groups would count it once per day it spent on.
+    total_unpriced = 0
+    total_unknown = {name: 0 for name in RATE_FIELDS}
     # The measured inflation of the counted totals, weighted by the deduplicated tokens each
     # run contributed to them, so the footer figure is the window's raw sum over its counted
     # sum and a long session moves it more than a short one. A run whose row carries no
@@ -5773,13 +6162,17 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if by == "prefix":
         # Read-only and retrospective: `cache_prefix` derives the miss ratio from the cache
         # fields these rows already carry and names where it stepped. Nothing is priced.
+        if json_output:
+            data = cache_prefix.summary(ledger, cutoff)
+            return usage_json("prefix", "prefix", args.days, data["groups"], data["totals"],
+                              rescan=rescan_result)
         return cache_prefix.report(ledger, cutoff, args.days, say)
     table = load_prices(load_config())
     if by == "provider":
         return provider_report([row for row in ledger
                                 if row.get("kind") == decision_ledger.KIND
                                 and (row.get("ended") or "") >= cutoff],
-                               args.days, table)
+                               args.days, table, json_output, rescan_result)
     # A session is priced with its subagent rows in hand, so the whole ledger is indexed before
     # anything is summed; a child outside the window still belongs to its parent's bill.
     children = session_children(ledger)
@@ -5821,14 +6214,19 @@ def cmd_usage(args: argparse.Namespace) -> int:
         # The ratio is reported over exactly what TOTAL counts: a run where the runs column
         # counts one, and tokens where the token columns add them, which under `--by day` is
         # the in-window slices and not the whole row.
+        # A ledger line can hold NaN or Infinity, which `json.loads` accepts; neither is a
+        # measured figure, so either counts as unknown rather than poisoning the weighted ratio.
         ratio = row.get("raw_vs_deduped")
-        measured = isinstance(ratio, float)
+        measured = isinstance(ratio, float) and math.isfinite(ratio)
         if sliced and days_map:
             # The run is counted on the day the session ended, once; its tokens are counted on
             # the days they were spent. So the run column still counts sessions rather than
-            # session-days, and TOTAL runs stays the number of sessions in the window.
-            if ended >= cutoff:
-                groups.setdefault(ended[:10], [0, 0, 0, 0, 0, 0.0])[0] += 1
+            # session-days, and TOTAL runs stays the number of sessions in the window. The
+            # window is read by day, as the slices are: a session that ended on the cutoff's
+            # day but before its hour has tokens in that day's slice, so it is a run of that
+            # day too, and `unpriced` agrees with the totals' `unpriced_runs`.
+            if ended[:10] >= cutoff_day:
+                groups.setdefault(ended[:10], usage_accumulator())[0] += 1
                 if cost is None:
                     unpriced += 1
                 if measured:
@@ -5840,16 +6238,23 @@ def cmd_usage(args: argparse.Namespace) -> int:
             # which is nearly all of them, the share is one and the allocation is exact; for a
             # long one it is an allocation and not a measurement, and a day whose tokens were
             # spent on a dearer model carries less than it cost.
-            spent = sum(max(int(row.get(name) or 0), 0) for name in RATE_FIELDS)
+            spent = sum(max(usage_count(row.get(name)) or 0, 0) for name in RATE_FIELDS)
+            in_window = False
+            missing = set()
             for date, slice_ in days_map.items():
                 if date < cutoff_day or not isinstance(slice_, dict):
                     continue
-                acc = groups.setdefault(date, [0, 0, 0, 0, 0, 0.0])
+                in_window = True
+                acc = groups.setdefault(date, usage_accumulator())
+                if cost is None:
+                    acc[7] += 1
                 share = 0
                 for i, name in enumerate(RATE_FIELDS):
-                    try:
-                        value = int(slice_.get(name) or 0)
-                    except (TypeError, ValueError):
+                    value = usage_count(slice_.get(name))
+                    if value is None:
+                        acc[6][name] += 1
+                        missing.add(name)
+                        unknown_metrics.add(name)
                         value = 0
                     acc[i + 1] += value
                     share += value
@@ -5858,6 +6263,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
                     dedup_counted += share
                 if cost is not None and spent:
                     acc[5] += cost * share / spent
+            if in_window and cost is None:
+                total_unpriced += 1
+            for name in missing:
+                total_unknown[name] += 1
             continue
         if by == "repo":
             key = row.get("repo") or "(no repo)"
@@ -5875,12 +6284,14 @@ def cmd_usage(args: argparse.Namespace) -> int:
             key = value if isinstance(value, str) and value else UNATTRIBUTED
         else:
             key = ended[:10]
-        acc = groups.setdefault(key, [0, 0, 0, 0, 0, 0.0])
+        acc = groups.setdefault(key, usage_accumulator())
         acc[0] += 1
         if cost is None:
             unpriced += 1
-        counted = sum(v for v in (row.get(name) for name in RATE_FIELDS)
-                      if isinstance(v, int) and not isinstance(v, bool) and v > 0)
+            acc[7] += 1
+            total_unpriced += 1
+        counted = sum(v for v in (usage_count(row.get(name)) for name in RATE_FIELDS)
+                      if v is not None)
         if measured:
             dedup_raw += ratio * counted
             dedup_counted += counted
@@ -5892,16 +6303,54 @@ def cmd_usage(args: argparse.Namespace) -> int:
         for i, name in enumerate(RATE_FIELDS):
             if kind == "studio_run":
                 continue
-            if row.get(name) is None:
+            value = usage_count(row.get(name))
+            if value is None:
                 unknown_metrics.add(name)
-            try:
-                acc[i + 1] += int(row.get(name) or 0)
-            except (TypeError, ValueError):
-                pass
+                acc[6][name] += 1
+                total_unknown[name] += 1
+            else:
+                acc[i + 1] += value
     if by == "role":
-        return role_report(delegated, args.days, table)
+        return role_report(delegated, args.days, table, json_output, rescan_result)
     if rules_mode:
-        return rule_report(kept, by, args.days)
+        if by != "rule":
+            return rule_report(kept, by, args.days, json_output=json_output,
+                               rescan=rescan_result)
+        coverage = rule_coverage_lines()
+        status = rule_report(kept, by, args.days, declarative_ids(), json_output, coverage,
+                             rescan_result)
+        if json_output:
+            return status
+        say("")
+        for line in coverage:
+            say(line)
+        return status
+    def record_for(label: str, acc: List[Any]) -> Dict[str, Any]:
+        served = acc[1] + acc[3] + acc[4]
+        cache_unknown = any(acc[6][name] for name in ("input", "cache_read", "cache_write"))
+        return {"name": label, "runs": acc[0],
+                "tokens": {name: None if acc[6][name] else acc[index + 1]
+                           for index, name in enumerate(RATE_FIELDS)},
+                "unknown_token_runs": dict(acc[6]),
+                "cache_hit_rate": acc[3] / served if served and not cache_unknown else None,
+                "cache_hit_denominator": None if cache_unknown else served,
+                "usd": None if acc[7] else acc[5], "unpriced_runs": acc[7]}
+
+    total = usage_accumulator()
+    group_records = []
+    for key in sorted(groups):
+        acc = groups[key]
+        for index in range(6):
+            total[index] += acc[index]
+        group_records.append(record_for(key, acc))
+    total[6], total[7] = total_unknown, total_unpriced
+    total_record = record_for("TOTAL", total)
+    dedup = {"ratio": dedup_raw / dedup_counted if dedup_counted else None,
+             "runs": dedup_runs, "unknown_runs": dedup_unknown}
+    if json_output:
+        return usage_json("usage", by, args.days, group_records, total_record,
+                          unpriced=unpriced, unknown_metrics=sorted(unknown_metrics),
+                          raw_vs_deduped=dedup, price_table=bool(table), rescan=rescan_result)
     if not groups:
         say(f"no sessions recorded in the last {args.days} day(s); looked in {path}")
         return 0
@@ -5913,30 +6362,21 @@ def cmd_usage(args: argparse.Namespace) -> int:
                 f"{acc[3]:>14,}{acc[4]:>14,}{hit:>7.0%}{acc[5]:>11.2f}")
 
     # Said once, or not at all: when a run's missing counts left it unpriced, the footer below
-    # already reports it, and the two lines read as two different problems — one that figures
-    # were dropped from the totals, one that they were counted as unpriced. A report with no
-    # unpriced run still needs the warning, because nothing else says a column is short.
+    # already reports it, and the two lines read as two different problems.
     if unknown_metrics and not unpriced:
         say("Partial totals: unavailable metrics are excluded: " + ", ".join(sorted(unknown_metrics)))
     head = (f"{by:<34}{'runs':>9}{'input':>12}{'output':>12}"
             f"{'cache_read':>14}{'cache_write':>14}{'hit':>7}{'usd':>11}")
     say(head)
     say("-" * len(head))
-    total = [0, 0, 0, 0, 0, 0.0]
     for key in sorted(groups):
-        total = [t + a for t, a in zip(total, groups[key])]
         say(line_for(key, groups[key]))
     say("-" * len(head))
     say(line_for("TOTAL", total))
-    # Named on every report, priced or not: a dollar column with nothing under it reads as a
-    # cheap window unless the runs it could not price are counted somewhere.
     say(f"unpriced: {unpriced} run(s), unknown model or partial tokens" if unpriced
         else "unpriced: none")
-    # The size of the deduplication, said rather than silently applied: the columns above are
-    # the corrected figures, and this is how much larger counting every transcript line would
-    # have made them. See docs/usage.md.
     if dedup_counted:
-        say(f"raw_vs_deduped: raw totals were {dedup_raw / dedup_counted:.2f}x the counted "
+        say(f"raw_vs_deduped: raw totals were {dedup['ratio']:.2f}x the counted "
             f"totals over {dedup_runs} run(s), weighted by counted tokens"
             + (f"; {dedup_unknown} run(s) unknown" if dedup_unknown else ""))
     else:
@@ -6415,6 +6855,35 @@ def cmd_runs(args: argparse.Namespace) -> int:
     return 3 if confirmation_pending else 0
 
 
+def cmd_evidence(args: argparse.Namespace) -> int:
+    """Re-derive a local evidence bundle; saved commands and cached success are never trusted."""
+    if args.action != "verify":
+        raise SystemExit("evidence needs the verify action")
+    import importlib.util
+
+    path = REPO / "scripts" / "evidence_bundle.py"
+    spec = importlib.util.spec_from_file_location("harness_evidence_bundle", str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    result = module.verify(Path(args.bundle))
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+    elif result["ok"]:
+        print("evidence bundle {}: verified; 12/12 evidence-standard items pass".format(
+            result["bundle_id"]))
+        # An unrecorded observation is reported as unknown, never as verified parity.
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation)
+    else:
+        print("evidence bundle {}: verification failed".format(result.get("bundle_id") or args.bundle),
+              file=sys.stderr)
+        for error in result["errors"]:
+            print("  " + error, file=sys.stderr)
+        for observation in result.get("unknown", []):
+            print("  unknown, not verified: " + observation, file=sys.stderr)
+    return 0 if result["ok"] else 1
+
+
 def program_name(argv0: Optional[str] = None) -> str:
     """The name usage text shows: `citizen` or its alias `harness` as invoked, else `citizen`."""
     name = os.path.basename(sys.argv[0] if argv0 is None else argv0)
@@ -6495,15 +6964,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "profile"],
+                                    "provider", "prefix", "rebuild", "adherence", "profile"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")
     p.add_argument("--rules", action="store_true",
                    help="report rule-detector hits instead of tokens (--by rule, repo or stance)")
+    p.add_argument("--surface", action="store_true",
+                   help="list every loaded instruction source by owner, with soft token estimates or unmeasured")
     p.add_argument("--rescan", action="store_true", help="re-read transcripts from the window first, then report")
     p.add_argument("--conflicts", action="store_true",
                    help="landing merge conflicts and intent overlaps per week, from the decision log")
+    p.add_argument("--json", action="store_true",
+                   help="write the selected local report as one machine-readable JSON document")
     p.set_defaults(func=cmd_usage)
 
     p = sub.add_parser("runs", help="launch and inspect suites from the allowlisted Studio catalog")
@@ -6575,6 +7048,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     reindex = runs_sub.add_parser("reindex", help="rebuild run history from durable result files")
     reindex.add_argument("--json", action="store_true")
     reindex.set_defaults(func=cmd_runs)
+
+    p = sub.add_parser("scorecard", help="one row per module: its instruments, tokens and measured effect")
+    p.add_argument("--results", help="an ablation run's results.jsonl, or its directory, to fill each "
+                   "module's measured effect; without it every effect reads unmeasured")
+    p.add_argument("--json", action="store_true", help="write the scorecard as one JSON document")
+    p.set_defaults(func=cmd_scorecard)
 
     p = sub.add_parser("intent", help="claim the paths this session will write, so a sibling's overlap is caught")
     intent_sub = p.add_subparsers(dest="intent_action", required=True)
@@ -6876,6 +7355,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--release-check", action="store_true", help="fail unless every release target has native evidence")
     p.set_defaults(func=cmd_compatibility)
+
+    p = sub.add_parser("evidence", help="verify a local published evidence bundle offline")
+    evidence_sub = p.add_subparsers(dest="action", required=True)
+    verify = evidence_sub.add_parser("verify", help="re-derive every declared figure and card")
+    verify.add_argument("bundle", help="bundle directory; no saved command is executed")
+    verify.add_argument("--json", action="store_true", help="emit the machine-readable result")
+    verify.set_defaults(func=cmd_evidence)
 
     p = sub.add_parser("freeze", help="show runtime source drift from the frozen release commit")
     p.add_argument("--json", action="store_true")

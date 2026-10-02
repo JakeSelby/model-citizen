@@ -1,7 +1,7 @@
 {
   "headline": "The control plane for your coding agents, however you run them.",
   "description": "An open-source control plane for coding agents. One checkout of rules, skills, roles and stances, projected into Claude Code and Codex with your own primitives, enforced with hooks, and measured with usage telemetry and cost controls. It layers under the rules libraries and orchestration you already use.",
-  "stances": "Preferences you can switch: autonomy, delegation, cost, testing, voice, commits, planning, licensing and build versus buy. Three of those bind to enforcement today: autonomy sets which shell-command grade stops and asks, delegation changes spawn routing, and cost resolves a model and budget table per role. The rest are prose that swaps cleanly. The usage report groups rule hits by the variant that was selected, so a switch can be checked rather than assumed.",
+  "stances": "Preferences you can switch: autonomy, delegation, cost, testing, voice, commits, planning, licensing and build versus buy. Three of those bind to enforcement today: autonomy sets which shell-command grade stops and asks, delegation routes spawns and gives tiered sessions one nudge after three distinct file reads, and cost resolves a model and budget table per role. The rest are prose that swaps cleanly. The usage report groups rule hits by the variant that was selected, so a switch can be checked rather than assumed.",
   "github_description": "The control plane for your coding agents, however you run them. One checkout of rules, skills, subagents, hooks and stances, projected into Claude Code and Codex with your own primitives: hook-enforced guardrails, usage telemetry, cost postures and model tiering, under any rules library or orchestration layer.",
   "homepage": "https://model-citizen.dev",
   "hero": {
@@ -165,7 +165,7 @@
         },
         {
           "name": "Hit rate per rule",
-          "line": "citizen usage --rules reports how often each rule fired, by repository and by the variant you had selected; --by profile splits spend by the profile behind each row.",
+          "line": "citizen usage --rules lists each loaded rule as measured, dark or unmeasured and how often it fired, by repo or stance; --by profile splits spend by profile.",
           "doc": "docs/usage.md"
         },
         {
@@ -224,6 +224,33 @@
           "name": "Judgment stays local by default",
           "line": "An external judgment provider is off at every decision point until you turn it on, sends only the fields you list, and one file switches every call off.",
           "doc": "docs/runtime-controls.md"
+        }
+      ]
+    },
+    {
+      "id": "studio",
+      "title": "A Studio for editing and measuring the harness",
+      "pitch": "A local browser view over the same commands the CLI runs. Edits stay in a draft until you apply them, and every run keeps the native result files as its record.",
+      "features": [
+        {
+          "name": "Hand-edit in a draft",
+          "line": "Edit a rule, skill or stance in a draft with live lint, context budget and runtime projection, then save an explicit checkpoint.",
+          "doc": "lib/harness_core/studio/module_editing.py"
+        },
+        {
+          "name": "Templates and forks",
+          "line": "Add your own module from a template, or fork a core one into your root; the draft switches the original off and shows its upstream diff.",
+          "doc": "lib/harness_core/studio/module_authoring.py"
+        },
+        {
+          "name": "Live replay against two targets",
+          "line": "Run the replay benchmark against two explicit targets, each built into its own profile, under one spend cap, with a per-task table per arm.",
+          "doc": "lib/harness_core/studio/replay.py"
+        },
+        {
+          "name": "Plugin eval import",
+          "line": "Imports `claude plugin eval` results into the run history, with a link to the HTML report.",
+          "doc": "lib/harness_core/studio/plugin_evals.py"
         }
       ]
     }

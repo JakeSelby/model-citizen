@@ -12,6 +12,8 @@ sources:
   - ../../research/competitive-studio-field-check-edit-eval-compare-uis-2026-09-26/research.md
 ---
 
+> Current delivery assignments: [Flow availability — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Model Citizen developer experience contract
 
 ## Foundation
@@ -573,3 +575,9 @@ inspection path an agent receives from the CLI.
 - **Separate-phone reach:** AH-SP018 (#1003) decides whether a phone can reach the loopback-only Studio.
   FR-77 still requires responsive phone-width behavior; this UX contract does not decide the network
   reach model, and the spike does not block the validated browser experience.
+
+## Flow availability — 2026-09-28
+
+Independent Studio flows arrive in 0.16 after the Measured engines land; Superpowers/composition and judge journeys formerly marked 0.16 move to 0.17; field/Codex and stance-proposal flows formerly marked 0.17 move to 0.18. Four-arm/layer-swap Studio launch is #989 in 0.17; factorial launch is #1065 and proposals #996 in 0.18. No visual or interaction redesign occurs here. #1062 records the future reconciliation of sampling, evidence labels, comparisons and stale states with landed Measured behavior.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.

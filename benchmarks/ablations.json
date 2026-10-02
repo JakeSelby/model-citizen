@@ -1,0 +1,26 @@
+{
+  "schema": 2,
+  "name": "surface-sweep",
+  "planning": {
+    "cv": 0.25,
+    "source": "assumed, not measured: chosen against the 1.86x per-task max/min cost spread #514 quotes; replace with the pilot variance of #796 before any registered sweep"
+  },
+  "arms": [
+    {"id": "no-cache-hygiene", "removes": "rules/cache-hygiene"},
+    {"id": "no-conciseness", "removes": "rules/conciseness"},
+    {"id": "no-decisions-and-plans", "removes": "rules/decisions-and-plans"},
+    {"id": "no-delegation-rule", "removes": "rules/delegation"},
+    {"id": "no-research-and-verification", "removes": "rules/research-and-verification"},
+    {"id": "no-secrets", "removes": "rules/secrets"},
+    {"id": "no-transcript-hygiene", "removes": "rules/transcript-hygiene"},
+    {"id": "no-verification", "removes": "rules/verification"},
+    {"id": "no-voice-and-format", "removes": "rules/voice-and-format"},
+    {"id": "no-working-style", "removes": "rules/working-style"},
+    {"id": "build-vs-buy-off", "sets": {"stances/build-vs-buy": "off"}},
+    {"id": "commits-off", "sets": {"stances/commits": "off"}},
+    {"id": "delegation-off", "sets": {"stances/delegation": "off"}},
+    {"id": "licensing-off", "sets": {"stances/licensing": "off"}},
+    {"id": "testing-off", "sets": {"stances/testing": "off"}},
+    {"id": "voice-off", "sets": {"stances/voice": "off"}}
+  ]
+}

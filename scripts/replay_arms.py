@@ -1,9 +1,10 @@
 """Replay arms as fresh containers: declare an arm, build its image, list what it holds, run it.
 
 An arm is a Docker image built from pinned inputs and nothing else. `bare` is the Linux
-qualification image's base and Claude Code; `harness` is that plus this repository at one
+qualification image's base, Claude Code and the shared observer; `harness` is that plus this repository at one
 commit, synced for the image's agent user. Nothing from the machine running the replay reaches
-either: no home directory, profile, environment, hook or setting.
+either: no home directory, profile, environment, hook or setting. A run may also mount the fresh
+benchmark-owned observation directory prepared and marked by `cost_bench.py`.
 
 Each build writes two JSON files beside the image: the arm's **declaration**, the inputs it was
 built from, and its **manifest**, every file and link the image holds under the agent user's
@@ -20,6 +21,7 @@ import contextlib
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -35,6 +37,16 @@ ROOT = Path(__file__).resolve().parents[1]
 QUALIFICATION_DOCKERFILE = ROOT / "scripts" / "linux-target.Dockerfile"
 ARM_DOCKERFILE = ROOT / "scripts" / "replay-arm.Dockerfile"
 MANIFEST_SCRIPT = ROOT / "scripts" / "arm_manifest.py"
+OBSERVER_SOURCE = ROOT / "lib" / "harness_core" / "observer.py"
+sys.path.insert(0, str(ROOT / "lib"))
+from harness_core import observation  # noqa: E402
+
+OBSERVER_COMMAND = "python3 /opt/model-citizen-observer/observe.py --runtime claude-code"
+
+def observer_settings():
+    return {"permissions": {"deny": ["WebFetch", "WebSearch"]},
+            "hooks": observation.hooks_for(OBSERVER_COMMAND, "claude-code")}
+
 PROXY_SCRIPT = ROOT / "scripts" / "egress_proxy.py"
 IMAGE_PREFIX = "model-citizen-arm-"
 ARMS = ("bare", "harness")
@@ -61,6 +73,21 @@ CLIENT_ENV = ("HOME", "USER", "PATH", "TERM", "DOCKER_HOST", "DOCKER_CONTEXT", "
 HARDENING = ["--security-opt", "no-new-privileges", "--cap-drop", "ALL"]
 BUILD_TIMEOUT = 3600
 MANIFEST_TIMEOUT = 300
+# The reasoning effort a run is launched at, pinned with `--effort` on every arm's command line.
+# Claude Code's levels; `ultracode` is left out, since it also turns on workflow orchestration.
+# The variable overrides `--effort` (Claude Code's environment variable reference), so no arm is
+# ever given it: `_pins_its_effort` refuses one that is.
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+DEFAULT_EFFORT = "high"
+EFFORT_ENV = "CLAUDE_CODE_EFFORT_LEVEL"
+# Declaration keys that change how an arm is launched and not what its image holds; the image
+# name and build label are the digest of the rest, so changing one never rebuilds an image.
+LAUNCH_INPUTS = ("effort",)
+# A declared selection: its component name, the build-context file the Dockerfile installs as the
+# image user's configuration, and the stage that does so.
+SELECTION = "selection"
+SELECTION_FILE = "selection.json"
+SELECTED_TARGET = "harness-selected"
 
 
 def digest(value):
@@ -93,28 +120,75 @@ def qualification_inputs(path=QUALIFICATION_DOCKERFILE):
     return {"base_image": base.group(1), "claude_code_version": version.group(1)}
 
 
-def declaration(arm, inputs, harness=None, claude_code_version=None):
+def selection_bytes(selection):
+    """The user configuration a declared selection is installed as, byte for byte: canonical JSON
+    with a trailing newline. The `selection` component's version is the sha256 of these bytes."""
+    return (json.dumps(selection, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def _selection_problem(selection):
+    """Why `selection` is not a selection in the user-config shape, or None."""
+    if not isinstance(selection, dict):
+        return "a selection is an object of kind to {unit: value}"
+    for kind, units in selection.items():
+        if not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z-]*", kind) or not isinstance(units, dict) \
+                or not units or any(not isinstance(unit, str) or not isinstance(value, str) or not value
+                                    for unit, value in units.items()):
+            return "selection kind %r is not an object of unit to a non-empty value" % (kind,)
+    return None
+
+
+def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None, selection=None):
     """What one arm is built from, as a dict: every input that could change what it holds.
 
     `harness` is `{ref, commit}` for the harness arm and None for the bare one; the commit is the
     full sha the ref resolved to, so a moved tag is a different declaration. The Dockerfile and
-    the manifest lister are inputs too, by content."""
+    the manifest lister are inputs too, by content. `effort` is the pinned launch input: the
+    reasoning effort every run of the arm is started at, None for an arm that is only built.
+
+    `selection` is a declared selection in the user-config shape `bin/harness sync` reads, such as
+    `{"rules": {"secrets": "off"}}`, for the harness arm only. It is installed as the image user's
+    configuration before the sync, so the sync withholds what it switches off, and it is declared
+    as a `selection` component whose version is the digest of the installed bytes; admission
+    accepts that file only when it matches (`_user_config_problem`). An arm with no selection
+    has no `selection` key at all, so its declaration and image name are what they always were."""
+    if effort is not None and effort not in EFFORT_LEVELS:
+        raise SystemExit("replay-arms: effort %r is not one of %s" % (effort, ", ".join(EFFORT_LEVELS)))
     if arm not in ARMS:
         raise SystemExit("replay-arms: unknown arm %r; the arms are %s" % (arm, ", ".join(ARMS)))
     if (arm == "harness") != bool(harness):
         raise SystemExit("replay-arms: the harness arm needs a ref and commit, and only it")
     if harness and not re.fullmatch(r"[0-9a-f]{40}", harness.get("commit") or ""):
         raise SystemExit("replay-arms: harness commit %r is not a full sha" % harness.get("commit"))
+    if selection is not None:
+        if not harness:
+            raise SystemExit("replay-arms: only the harness arm takes a declared selection")
+        problem = _selection_problem(selection)
+        if problem:
+            raise SystemExit("replay-arms: %s" % problem)
     version = claude_code_version or inputs["claude_code_version"]
     components = [{"name": "base-image", "version": inputs["base_image"]},
-                  {"name": "@anthropic-ai/claude-code", "version": version}]
+                  {"name": "@anthropic-ai/claude-code", "version": version},
+                  {"name": "model-citizen-observer", "version": "sha256:" + file_sha(OBSERVER_SOURCE)}]
     if harness:
         components.append({"name": "model-citizen", "version": harness["ref"], "commit": harness["commit"]})
-    return {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
-            "claude_code_version": version,
-            "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
-            "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
-            "manifest_script_sha256": file_sha(MANIFEST_SCRIPT)}
+    if selection is not None:
+        components.append({"name": SELECTION,
+                           "version": "sha256:" + hashlib.sha256(selection_bytes(selection)).hexdigest()})
+    out = {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
+           "claude_code_version": version,
+           "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
+           "components": components, "dockerfile_sha256": file_sha(ARM_DOCKERFILE),
+           "manifest_script_sha256": file_sha(MANIFEST_SCRIPT), "effort": effort,
+           "observer_settings_sha256": digest(observer_settings())}
+    if selection is not None:
+        out[SELECTION] = json.loads(json.dumps(selection))
+    return out
+
+
+def build_inputs(decl):
+    """The declaration less its launch inputs: what the image itself is built from."""
+    return {key: value for key, value in decl.items() if key not in LAUNCH_INPUTS}
 
 
 def label(decl):
@@ -123,26 +197,36 @@ def label(decl):
 
 
 def image_name(decl, tag=None):
-    """`model-citizen-arm-<arm>:<tag>`, the tag defaulting to the declaration's digest, so one set
-    of inputs always names one image and a changed input a new one."""
-    return "%s%s:%s" % (IMAGE_PREFIX, decl["arm"], tag or digest(decl)[:12])
+    """`model-citizen-arm-<arm>:<tag>`, the tag defaulting to the digest of the declaration's build
+    inputs, so one set of inputs always names one image and a changed input a new one."""
+    return "%s%s:%s" % (IMAGE_PREFIX, decl["arm"], tag or digest(build_inputs(decl))[:12])
 
 
 def build_context(decl, parent, snapshot, repo=ROOT):
-    """The directory one build sends to the daemon: empty for the bare arm, and a `harness/` clone
-    of the declared commit for the harness arm, made by `snapshot(repo, commit, dest)`."""
+    """The build context with the declared observer, plus the harness commit for that arm."""
     context = Path(parent) / "context"
     context.mkdir(parents=True)
+    observer = context / "observer"
+    observer.mkdir()
+    shutil.copyfile(str(OBSERVER_SOURCE), str(observer / "observe.py"))
     if decl["harness"]:
         snapshot(repo, decl["harness"]["commit"], context / "harness")
+    if decl.get(SELECTION) is not None:
+        (context / SELECTION_FILE).write_bytes(selection_bytes(decl[SELECTION]))
     return context
 
 
+def target(decl):
+    """The Dockerfile stage an arm builds: its own name, or `SELECTED_TARGET` for a harness arm
+    with a declared selection, which installs the selection before the sync."""
+    return SELECTED_TARGET if decl.get(SELECTION) is not None else decl["arm"]
+
+
 def build_command(decl, context, image, no_cache=False):
-    command = ["docker", "build", "--quiet", "-f", str(ARM_DOCKERFILE), "--target", decl["arm"],
+    command = ["docker", "build", "--quiet", "-f", str(ARM_DOCKERFILE), "--target", target(decl),
                "--build-arg", "BASE_IMAGE=" + decl["base_image"],
                "--build-arg", "CLAUDE_CODE_VERSION=" + decl["claude_code_version"],
-               "--label", "org.model-citizen.arm.declaration=" + digest(decl)]
+               "--label", "org.model-citizen.arm.declaration=" + digest(build_inputs(decl))]
     if decl["harness"]:
         command += ["--build-arg", "HARNESS_COMMIT=" + decl["harness"]["commit"]]
     if no_cache:
@@ -275,67 +359,243 @@ def two_build_check(decl, out_dir, snapshot, launch=subprocess.run, repo=ROOT, d
 # stops the replay before anything is spent. The protocol's refusals (docs/evidence-standard.md)
 # are the checks below.
 ADMISSION_CHECKS = []
+MANIFEST_ENTRY_KINDS = ("dir", "file", "link", "other")
 
 
-def _has_its_records(record):
-    for key in ("image", "image_id", "declaration_sha256", "manifest_sha256"):
+def _manifest_entries(manifest):
+    """Manifest entries whose path and kind are safe for every downstream comparison."""
+    entries = manifest.get("entries") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)
+            and isinstance(entry.get("path"), str) and entry.get("path")
+            and entry.get("kind") in MANIFEST_ENTRY_KINDS]
+
+
+def _has_intact_records(record):
+    """The stored declaration and manifest are schema-known and match their recorded digests."""
+    problems = []
+    for key in ("image", "image_id"):
         if not record.get(key):
-            return "no %s recorded" % key
-    return None
+            problems.append("no %s recorded" % key)
+    for key, schema in (("declaration", SCHEMA), ("manifest", arm_manifest.SCHEMA)):
+        value = record.get(key)
+        if not isinstance(value, dict):
+            problems.append("%s is not an object" % key)
+            continue
+        if value.get("schema") != schema:
+            problems.append("%s schema is %r, expected %d" % (key, value.get("schema"), schema))
+        recorded = record.get(key + "_sha256")
+        if not isinstance(recorded, str) or not re.fullmatch(r"[0-9a-f]{64}", recorded):
+            problems.append("%s_sha256 is not a sha256" % key)
+        elif recorded != digest(value):
+            problems.append("%s_sha256 does not match the recorded %s" % (key, key))
+    manifest = record.get("manifest")
+    if isinstance(manifest, dict):
+        entries = manifest.get("entries")
+        if not isinstance(entries, list):
+            problems.append("manifest entries is not a list")
+        else:
+            paths = []
+            for number, entry in enumerate(entries):
+                if not isinstance(entry, dict) or not isinstance(entry.get("path"), str) \
+                        or not entry.get("path"):
+                    problems.append("manifest entries contain a malformed path at entry %d" % number)
+                    continue
+                paths.append(entry["path"])
+                if entry.get("kind") not in MANIFEST_ENTRY_KINDS:
+                    problems.append("manifest entry %d has unsupported kind %r" %
+                                    (number, entry.get("kind")))
+            if len(paths) != len(set(paths)):
+                problems.append("manifest entries contain duplicate paths")
+        summary = manifest.get("summary")
+        if not isinstance(summary, dict) or any(not isinstance(kind, str)
+                or not isinstance(paths, list)
+                or any(not isinstance(path, str) for path in paths)
+                for kind, paths in summary.items()):
+            problems.append("manifest summary is malformed")
+        environment = manifest.get("environment")
+        if not isinstance(environment, dict) or EFFORT_ENV not in environment:
+            problems.append("manifest does not record the image's %s override" % EFFORT_ENV)
+    return "; ".join(problems) or None
 
 
-# Where the harness arm's declared component is installed, and the two files its sync writes
-# into the profile rather than linking; every other configuration entry is a link into it.
+# Where the harness arm's declared component is installed, and the exact regular files its sync
+# and trust commands write into a fresh profile. Other entries are links into the checkout.
 HARNESS_ROOT = "/opt/model-citizen"
-HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md")
+HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md",
+                  "home:.codex/AGENTS.md", "home:.codex/config.toml", "home:.codex/hooks.json",
+                  "home:.config/agent-harness/config.json",
+                  "home:.config/agent-harness/trusted.txt",
+                  "home:.local/state/agent-harness/manifest.json",
+                  "home:.local/state/agent-harness/applied.json")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
-NOT_PACKAGES = ("base-image", "model-citizen")
+NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION)
+# The image user's configuration, and the file a sync copies there when it finds none.
+USER_CONFIG = "home:.config/agent-harness/config.json"
+EXAMPLE_CONFIG = "harness:config.example.json"
 
 
 def _matches_its_declaration(record):
     """The manifest holds exactly the declared Claude Code, agent clients and harness commit."""
-    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
+    problems = []
+    components = decl.get("components")
+    if not isinstance(components, list):
+        return "declaration components is not a list"
+    valid = []
+    for number, component in enumerate(components):
+        if not isinstance(component, dict) or not isinstance(component.get("name"), str) \
+                or not component.get("name") or not isinstance(component.get("version"), str) \
+                or not component.get("version"):
+            problems.append("declaration component %d is malformed" % number)
+        else:
+            valid.append(component)
+    names = [component["name"] for component in valid]
+    duplicates = sorted(name for name in set(names) if names.count(name) > 1)
+    if duplicates:
+        problems.append("declaration has duplicate components: %s" % ", ".join(duplicates))
+    model_citizen = [component for component in valid if component["name"] == "model-citizen"]
+    observers = [component for component in valid if component["name"] == "model-citizen-observer"]
+    harness = decl.get("harness")
+    if bool(harness) != (len(model_citizen) == 1):
+        problems.append("declaration must have exactly one model-citizen component iff it names a harness")
+    elif model_citizen and (model_citizen[0].get("version") != harness.get("ref")
+                            or model_citizen[0].get("commit") != harness.get("commit")):
+        problems.append("the model-citizen component does not match the declared harness")
+    observer_entries = [entry for entry in manifest.get("entries") or []
+                        if isinstance(entry, dict)
+                        and str(entry.get("path") or "").startswith("observer:")]
+    observer_entry = next((entry for entry in observer_entries
+                           if entry.get("path") == "observer:observe.py"), None)
+    observer_version = observers[0].get("version") if len(observers) == 1 else None
+    if decl.get("observer_settings_sha256") != digest(observer_settings()):
+        problems.append("observer hook settings differ from their declaration")
+    if len(observers) != 1:
+        problems.append("declaration must have exactly one model-citizen-observer component")
+    elif not re.fullmatch(r"sha256:[0-9a-f]{64}", observer_version or ""):
+        problems.append("the observer component version is not a sha256")
+    elif not observer_entry or observer_entry.get("kind") != "file" \
+            or "sha256:" + str(observer_entry.get("sha256")) != observer_version:
+        problems.append("the installed observer does not match its declared sha256")
+    if [entry.get("path") for entry in observer_entries] != ["observer:observe.py"]:
+        problems.append("the observer root must hold only its declared entry point")
+    if (manifest.get("roots") or {}).get("observer") != "/opt/model-citizen-observer":
+        problems.append("the manifest lacks the declared observer root")
     if manifest.get("claude_code_version") != decl.get("claude_code_version"):
-        return "the manifest holds Claude Code %r, the declaration %r" % (
-            manifest.get("claude_code_version"), decl.get("claude_code_version"))
-    declared = sorted("%s@%s" % (c["name"], c["version"]) for c in decl.get("components") or []
+        problems.append("the manifest holds Claude Code %r, the declaration %r" % (
+            manifest.get("claude_code_version"), decl.get("claude_code_version")))
+    declared = sorted("%s@%s" % (c["name"], c["version"]) for c in valid
                       if c["name"] not in NOT_PACKAGES)
     held = sorted(manifest.get("cli_packages") or [])
     if held != declared:
-        return "the manifest's agent clients %s differ from the declared %s" % (held, declared)
-    commit = (decl.get("harness") or {}).get("commit")
+        problems.append("the manifest's agent clients %s differ from the declared %s" % (held, declared))
+    commit = (harness or {}).get("commit") if isinstance(harness, dict) else None
     if manifest.get("harness_commit") != commit:
-        return "the manifest's harness commit %r differs from the declared %r" % (manifest.get("harness_commit"), commit)
+        problems.append("the manifest's harness commit %r differs from the declared %r"
+                        % (manifest.get("harness_commit"), commit))
     if ("harness" in (manifest.get("roots") or {})) != bool(commit):
-        return "the manifest %s a harness checkout the declaration %s" % (
-            ("holds", "does not name") if not commit else ("lacks", "names"))
-    return None
+        problems.append("the manifest %s a harness checkout the declaration %s" %
+                        (("holds", "does not name") if not commit else ("lacks", "names")))
+    return "; ".join(problems) or None
 
 
 def _inside(path, root):
+    if not isinstance(path, str) or not isinstance(root, str):
+        return False
+    path, root = posixpath.normpath(path), posixpath.normpath(root)
     return path == root or path.startswith(root.rstrip("/") + "/")
+
+
+def _generated_writes(entries):
+    """Exact generated home paths justified by source files in the declared checkout."""
+    found = set(HARNESS_WRITES)
+    for entry in entries:
+        if entry.get("kind") != "file":
+            continue
+        path = entry["path"]
+        role = re.fullmatch(r"harness:primitives/roles/([^/]+)\.md", path)
+        workflow = re.fullmatch(r"harness:primitives/workflows/([^/]+)\.md", path)
+        if role:
+            found.add("home:.codex/agents/%s.toml" % role.group(1))
+        if workflow:
+            found.add("home:.agents/skills/harness-%s/SKILL.md" % workflow.group(1))
+    return found
+
+
+def _is_harness_write(entry, generated=None):
+    """A regular file a fresh sync renders, excluding personal input files it only reads."""
+    if not isinstance(entry, dict) or entry.get("kind") != "file":
+        return False
+    return entry.get("path") in (set(HARNESS_WRITES) if generated is None else generated)
 
 
 def _configuration_is_declared(record):
     """Every setting, hook, rule, skill, agent, plugin and instruction file in the manifest comes
     from a declared component: the bare arm has none, and the harness arm's are links into its
     declared checkout or the files its sync writes. Anything else was inherited."""
-    decl, manifest = record.get("declaration") or {}, record.get("manifest") or {}
+    decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     harness = bool(decl.get("harness"))
-    listed = manifest.get("entries") or []
+    listed = _manifest_entries(manifest)
     entries = {e.get("path"): e for e in listed}
     expected = arm_manifest.summary(listed)
-    actual = manifest.get("summary") or {}
-    normalised = dict((kind, sorted(actual.get(kind) or [])) for kind in expected)
+    actual = manifest.get("summary") if isinstance(manifest.get("summary"), dict) else {}
+    if any(not isinstance(kind, str) or not isinstance(paths, list)
+           or any(not isinstance(path, str) for path in paths)
+           for kind, paths in actual.items()):
+        return "the manifest summary does not match its entries"
+    normalised = dict((kind, sorted(actual.get(kind) or [])
+                       if isinstance(actual.get(kind) or [], list) else [])
+                      for kind in expected)
     if normalised != expected or set(actual) - set(expected):
         return "the manifest summary does not match its entries"
+    problems = []
+    config = _user_config_problem(decl, entries)
+    if config:
+        problems.append(config)
+    generated = _generated_writes(listed)
     for kind, paths in sorted((manifest.get("summary") or {}).items()):
-        for path in paths:
+        for path in sorted(paths):
             entry = entries.get(path) or {}
-            if harness and (entry.get("kind") == "dir" or path in HARNESS_WRITES
+            if harness and (entry.get("kind") == "dir" or _is_harness_write(entry, generated)
                             or (entry.get("kind") == "link" and _inside(entry.get("target", ""), HARNESS_ROOT))):
                 continue
-            return "%s entry %s is not in the declaration" % (kind, path)
+            problems.append("%s entry %s is not in the declaration" % (kind, path))
+    return "; ".join(problems) or None
+
+
+def _user_config_problem(decl, entries):
+    """Why the image user's configuration is not the declared one, or None.
+
+    With a declared selection the file must be exactly `selection_bytes` of it, matching the
+    `selection` component. Without one, a harness arm's file may only be the copy of the commit's
+    `config.example.json` the sync writes when it finds none, and a bare arm holds none at all: a
+    selection nobody declared is refused rather than measured as the harness's default."""
+    entry = entries.get(USER_CONFIG)
+    selection = decl.get(SELECTION)
+    declared = [c.get("version") for c in decl.get("components") or []
+                if isinstance(c, dict) and c.get("name") == SELECTION]
+    if selection is not None:
+        expected = None if _selection_problem(selection) else \
+            "sha256:" + hashlib.sha256(selection_bytes(selection)).hexdigest()
+        if expected is None or declared != [expected]:
+            return "the selection component does not match the declared selection"
+        if not isinstance(entry, dict) or entry.get("kind") != "file":
+            return "the declared selection is not installed as %s" % USER_CONFIG
+        if "sha256:%s" % entry.get("sha256") != expected:
+            return "%s differs from the declared selection" % USER_CONFIG
+        return None
+    if declared:
+        return "a selection component is declared with no selection"
+    if entry is None:
+        return None
+    example = entries.get(EXAMPLE_CONFIG)
+    if not decl.get("harness") or not isinstance(example, dict) or entry.get("kind") != "file" \
+            or entry.get("sha256") != example.get("sha256"):
+        return "%s is not in the declaration: no selection is declared and it is not the sync's " \
+               "copy of config.example.json" % USER_CONFIG
     return None
 
 
@@ -383,9 +643,10 @@ def _no_host_path(record):
 
     Manifest roots are paths inside the isolated image, not inputs from the host. Mounts and
     environment are refused at launch by `run_command`."""
-    manifest = record.get("manifest") or {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
     strings = _strings(record.get("declaration") or {})
-    strings += [e["target"] for e in manifest.get("entries") or [] if e.get("kind") == "link" and e.get("target")]
+    strings += [e["target"] for e in _manifest_entries(manifest)
+                if e.get("kind") == "link" and isinstance(e.get("target"), str) and e.get("target")]
     return host_path_reason(strings=strings)
 
 
@@ -401,16 +662,101 @@ def _is_preregistered_or_exploratory(record):
     return "no committed pre-registration and not labelled exploratory"
 
 
-ADMISSION_CHECKS.extend([_has_its_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
-                         _is_preregistered_or_exploratory])
+def _pins_its_effort(record):
+    """The arm declares the reasoning effort it launches at, and nothing it is given by value can
+    override that: the effort variable outranks `--effort`."""
+    declaration = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    effort = declaration.get("effort")
+    if effort not in EFFORT_LEVELS:
+        return "no reasoning effort pinned in its declaration (got %r)" % (effort,)
+    if EFFORT_ENV in ARM_ENV:
+        return "%s is set for every arm and would override --effort" % EFFORT_ENV
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
+    environment = manifest.get("environment") if isinstance(manifest.get("environment"), dict) else {}
+    baked = environment.get(EFFORT_ENV)
+    if baked:
+        return "the image bakes %s=%r, which would override --effort" % (EFFORT_ENV, baked)
+    return None
+
+
+ADMISSION_CHECKS.extend([_has_intact_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
+                         _is_preregistered_or_exploratory, _pins_its_effort])
 
 
 def admit(record, checks=None):
-    """SystemExit naming the first reason the arm may not run; None when every check admits it."""
-    for check in ADMISSION_CHECKS if checks is None else checks:
-        reason = check(record)
-        if reason:
-            raise SystemExit("replay-arms: refusing the %s arm: %s" % (record.get("label") or "?", reason))
+    """SystemExit naming every reason the arm may not run; None when every check admits it."""
+    reasons = [reason for reason in
+               (check(record) for check in (ADMISSION_CHECKS if checks is None else checks)) if reason]
+    if reasons:
+        raise SystemExit("replay-arms: refusing the %s arm:\n  %s"
+                         % (record.get("label") or "?", "\n  ".join(reasons)))
+
+
+# --- Pair parity: the two arms differ by the declared treatment and nothing else ----------------
+
+# Declaration keys that name the treatment itself; every other one must be equal across the pair.
+TREATMENT_KEYS = ("arm", "harness", "components", SELECTION)
+# Manifest keys that describe the treatment or are derived from the entries compared below.
+MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
+
+
+def _treatment_paths(manifest):
+    """Exact manifest paths attributable to the harness, plus only their directory parents."""
+    entries = _manifest_entries(manifest)
+    generated = _generated_writes(entries)
+    paths = {entry.get("path") for entry in entries
+             if (entry.get("path") or "").startswith("harness:")
+             or _is_harness_write(entry, generated)
+             or (entry.get("kind") == "link" and _inside(entry.get("target") or "", HARNESS_ROOT))}
+    leaves = set(paths)
+    for entry in entries:
+        path = entry.get("path") or ""
+        if entry.get("kind") == "dir" and any(_inside(leaf, path) for leaf in leaves):
+            paths.add(path)
+    return paths
+
+
+def pair_differences(bare, harness):
+    """Every way the two arms' declarations and manifests differ beyond the harness component, one
+    line each; empty when the harness is the only difference. The per-arm checks above say each
+    arm holds its own declaration; this says the pair holds the same everything else."""
+    out = []
+    left, right = bare.get("declaration") or {}, harness.get("declaration") or {}
+    for key in sorted((set(left) | set(right)) - set(TREATMENT_KEYS)):
+        if left.get(key) != right.get(key):
+            out.append("declaration %s: bare %r, harness %r" % (key, left.get(key), right.get(key)))
+    shared = [c for c in right.get("components") or [] if c.get("name") not in ("model-citizen", SELECTION)]
+    if (left.get("components") or []) != shared:
+        out.append("declaration components: bare %r, harness less its own %r" % (left.get("components"), shared))
+    left, right = bare.get("manifest") or {}, harness.get("manifest") or {}
+    for key in sorted((set(left) | set(right)) - set(MANIFEST_TREATMENT_KEYS)):
+        if left.get(key) != right.get(key):
+            out.append("manifest %s: bare %r, harness %r" % (key, left.get(key), right.get(key)))
+    roots = {k: v for k, v in (right.get("roots") or {}).items() if k != "harness"}
+    if (left.get("roots") or {}) != roots:
+        out.append("manifest roots: bare %r, harness %r" % (left.get("roots"), right.get("roots")))
+    ours = {e["path"]: e for e in _manifest_entries(left)}
+    theirs = {e["path"]: e for e in _manifest_entries(right)}
+    treatment = _treatment_paths(right)
+    for path in sorted(set(ours) | set(theirs)):
+        if path in treatment:
+            continue
+        if path not in theirs:
+            out.append("only in the bare arm: %s" % path)
+        elif path not in ours:
+            out.append("only in the harness arm, outside the harness component: %s" % path)
+        elif ours[path] != theirs[path]:
+            fields = sorted(k for k in set(ours[path]) | set(theirs[path]) if ours[path].get(k) != theirs[path].get(k))
+            out.append("differs outside the harness component: %s (%s)" % (path, ", ".join(fields)))
+    return out
+
+
+def admit_pair(bare, harness):
+    """SystemExit listing every difference `pair_differences` finds; None when there is none."""
+    lines = pair_differences(bare, harness)
+    if lines:
+        raise SystemExit("replay-arms: refusing the pair bare and %s: they differ by more than the harness:\n  %s"
+                         % (harness.get("label") or "harness", "\n  ".join(lines)))
 
 
 # --- Egress: an internal network whose one way out is the allowlist proxy ----------------------
@@ -476,9 +822,10 @@ def egress(image, launch=subprocess.run, token=None, hosts=MODEL_API_HOSTS):
                    universal_newlines=True)
 
 
-def arm_env(proxy=None, stance_cost=None):
+def arm_env(proxy=None, stance_cost=None, selection=None):
     """The variables an arm container is given by value: `ARM_ENV`, the proxy in both spellings,
-    and the harness arm's stance override. The credential is not among them; see `CREDENTIAL`."""
+    the harness arm's stance override, and a pair arm's session-scoped `selection` (variable to
+    value; `replay_pair`). The credential is not among them; see `CREDENTIAL`."""
     env = dict(ARM_ENV)
     if proxy:
         for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
@@ -486,23 +833,59 @@ def arm_env(proxy=None, stance_cost=None):
         env["NO_PROXY"] = env["no_proxy"] = NO_PROXY
     if stance_cost:
         env["HARNESS_STANCE_COST"] = stance_cost
+    for key, value in sorted((selection or {}).items()):
+        if value is not None:
+            env[key] = value
     return env
 
 
-def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False):
-    """`docker run --rm` of an arm: the snapshot at WORKDIR is the only mount, `env` goes by value,
+OBSERVATION_MOUNT = "/observations"
+OBSERVATION_MARKER = ".model-citizen-benchmark-output"
+
+
+def observation_mount(path):
+    """A prepared benchmark-owned observation directory, or a refusal reason."""
+    if path is None:
+        return None, None
+    raw = Path(path)
+    if raw.is_symlink() or not raw.is_absolute() or not raw.is_dir():
+        return None, "observation output is not a real absolute directory"
+    resolved = raw.resolve()
+    reason = host_path_reason([str(raw), str(resolved)])
+    if reason:
+        return None, reason
+    marker = resolved / OBSERVATION_MARKER
+    if not marker.is_file() or marker.read_text(encoding="utf-8") != "cost-bench\n":
+        return None, "observation output was not prepared by cost-bench"
+    return resolved, None
+
+
+def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
+                observation_dir=None, keep=False):
+    """`docker run --rm` of an arm with the snapshot and optional marked observation output.
+
+    `env` goes by value,
     the credential by name alone, and the network is the one given (the egress network for a run,
     `none` for a check). With no `workdir` nothing at all is mounted; `stdin` keeps standard input
     attached, which Docker otherwise drops, for a program sent on it. A mount or a value that
-    names a host path in `host_paths` is refused, so no launch can reach the host's home, profile
-    or live checkout."""
+    names a host path in `host_paths` is refused. The extra output is accepted only with the marker
+    `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
+    leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
+    it is removed by name; it needs a `name`."""
     reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
-    command = ["docker", "run", "--rm"] + (["-i"] if stdin else []) + (["--name", name] if name else []) + [
+    if keep and not name:
+        raise SystemExit("replay-arms: a kept container needs a name to be removed by")
+    command = ["docker", "run"] + ([] if keep else ["--rm"]) + (["-i"] if stdin else []) + (["--name", name] if name else []) + [
         "--network", network] + HARDENING
     if workdir is not None:
         command += ["-v", "%s:%s" % (workdir, WORKDIR), "-w", WORKDIR]
+    observation, error = observation_mount(observation_dir)
+    if error:
+        raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, error))
+    if observation:
+        command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):
@@ -517,6 +900,16 @@ def check_command(image, workdir, argv, env=None, name=None, stdin=False):
 
 def kill_command(name):
     return ["docker", "rm", "--force", name]
+
+
+def stop_command(name):
+    """Stop a kept container that timed out without removing it, so its files can still be copied."""
+    return ["docker", "kill", name]
+
+
+def copy_command(name, path, dest):
+    """Copy one file out of a stopped, kept container: no mount, and nothing is written into it."""
+    return ["docker", "cp", "%s:%s" % (name, path), str(dest)]
 
 
 # --- The snapshot as the image's user sees it ---------------------------------------------------

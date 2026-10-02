@@ -23,6 +23,11 @@ The issue carries the summary, discussion and acceptance evidence; this file car
 This work item was authored as part of the repository's committed BMad planning system.
 <!-- bmad-sync:end -->
 
+## Delivery amendment — 2026-09-28 (#1061)
+
+Current delivery: **v0.16.0**. Earlier milestone references below are historical and superseded by [the roadmap amendment](../planning-artifacts/roadmap-2026-09-28.md). Capability status is unchanged.
+
+
 ## Question
 
 Does `npm ci && npm run build` for a React, TypeScript and Vite app produce a byte-identical bundle on a developer's macOS machine and on the Linux CI runner, from the same lockfile and Node version? The committed-bundle decision depends on CI proving that the bundle matches its source.

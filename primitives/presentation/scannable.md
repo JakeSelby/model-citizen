@@ -44,8 +44,8 @@ Length is earned by what the user has to decide, never by how much you found out
 
 8. Use at most one table per response, for three or more items compared across the same fields; a
 second table was a list all along. Every action item appears exactly once, in the decision block or
-under What you need to do, not both. A decision block closes its message, per
-`decisions-and-plans.md`.
+under What you need to do, not both. A decision block closes its message. The full harness
+records that convention in `decisions-and-plans.md`; this style needs no external rule file.
 
 9. Cut self-assessment of your own process; a process lesson that matters is one line under Still
 open. Do not restate the request or close with a summary that repeats the sections above. Do not

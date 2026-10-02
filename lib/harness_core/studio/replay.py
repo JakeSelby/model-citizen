@@ -14,18 +14,25 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _replace
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import drafts, run_store, runs, spend_guard, targets
+from . import drafts, packs, run_store, runs, spend_guard, targets
 
 TARGET_KINDS = frozenset(("installed", "release", "branch", "worktree", "draft"))
 ARM_NAMES = ("bare", "harness")
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+PACK_KEYS = frozenset(("name", "version", "commit", "digest", "source"))
+PREREGISTERED, EXPLORATORY = "pre-registered", "exploratory"
+ANALYSIS_NAME = "analysis.json"
+MAX_ANALYSIS_BYTES = 4 * 1024 * 1024
+_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
 RELEASE_REF = re.compile(r"^v[0-9]+(?:\.[0-9]+){2}(?:[-+][A-Za-z0-9._-]+)?$")
 SUMMARY_NAME = "replay-summary.json"
 RESULTS_NAME = "results.jsonl"
@@ -142,13 +149,16 @@ class ReplayRequest:
     max_budget_usd: str
     spend_cap_usd: str
     pre_registration: Optional[str]
+    pack: Optional[Dict[str, str]] = None
+    evidence: str = PREREGISTERED
 
     @classmethod
     def parse(cls, value: Any) -> "ReplayRequest":
         if not isinstance(value, dict):
             raise ReplayError("replay request must be an object")
         _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                             "spend_cap_usd", "pre_registration"}, "replay request")
+                             "spend_cap_usd", "pre_registration", "pack", "evidence"},
+                     "replay request")
         raw_targets = value.get("targets")
         if not isinstance(raw_targets, list) or len(raw_targets) != 2:
             raise ReplayError("replay requires exactly two explicit targets")
@@ -179,22 +189,41 @@ class ReplayRequest:
             raise ReplayError("pre-registration must name a file")
         if any(target.kind == "release" for target in targets) and not registration:
             raise ReplayError("a release replay needs a pre-registration before it can write history")
-        return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration)
+        pack = value.get("pack")
+        if pack is not None and (
+                not isinstance(pack, dict) or set(pack) != PACK_KEYS
+                or any(not isinstance(pack[key], str) or not pack[key] or "\0" in pack[key]
+                       for key in PACK_KEYS)
+                or not HEX40.fullmatch(pack["commit"]) or not HEX64.fullmatch(pack["digest"])
+                or not Path(pack["source"]).is_absolute()):
+            raise ReplayError("replay pack must be a resolved evaluator pack")
+        # A saved request from before the label existed reads exploratory, never pre-registered.
+        evidence = value.get("evidence", EXPLORATORY)
+        if evidence not in (PREREGISTERED, EXPLORATORY) or (evidence == PREREGISTERED
+                                                            and not registration):
+            raise ReplayError("a pre-registered replay names its pre-registration")
+        return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration,
+                   dict(pack) if pack is not None else None, evidence)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"targets": [target.as_dict() for target in self.targets], "model": self.model,
                 "repetitions": self.repetitions, "tasks": list(self.tasks),
                 "max_budget_usd": self.max_budget_usd, "spend_cap_usd": self.spend_cap_usd,
-                "pre_registration": self.pre_registration}
+                "pre_registration": self.pre_registration, "pack": self.pack,
+                "evidence": self.evidence}
 
 
 def resolve_request(value: Any,
-                    resolver: Callable[[str, str], Mapping[str, Any]]) -> ReplayRequest:
-    """Resolve the two UI references through AH-S301 before spend preview or launch."""
+                    resolver: Callable[[str, str], Mapping[str, Any]],
+                    pack_resolver: Optional[Callable[[Any, Any], Mapping[str, Any]]] = None
+                    ) -> ReplayRequest:
+    """Resolve the two UI references through AH-S301, and the chosen pack by name and digest,
+    before spend preview or launch."""
     if not isinstance(value, dict):
         raise ReplayError("replay request must be an object")
     _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                         "spend_cap_usd", "pre_registration"}, "replay request")
+                         "spend_cap_usd", "pre_registration", "pack"}, "replay request")
+    # The evidence label is the server's to decide (`ReplayAdmission.resolve`), never the form's.
     supplied = value.get("targets")
     if not isinstance(supplied, list) or len(supplied) != 2:
         raise ReplayError("replay requires exactly two explicit targets")
@@ -209,6 +238,13 @@ def resolve_request(value: Any,
             raise ReplayError("target resolver returned an invalid result")
         resolved.append(dict(result))
     normalized = dict(value, targets=resolved)
+    chosen = value.get("pack")
+    if chosen is not None:
+        if (not isinstance(chosen, dict) or set(chosen) != {"name", "digest"}
+                or pack_resolver is None):
+            raise ReplayError("pack selection must contain only name and digest")
+        found = pack_resolver(chosen["name"], chosen["digest"])
+        normalized["pack"] = {key: found[key] for key in PACK_KEYS}
     if normalized.get("pre_registration") == "":
         normalized["pre_registration"] = None
     return ReplayRequest.parse(normalized)
@@ -345,12 +381,22 @@ class ReplayAdmission:
                 "from the commit's defaults and cannot apply it; checkpoint the change as "
                 "source or restore the inherited configuration" % name)
 
+    def _resolve_pack(self, name: Any, digest: Any) -> Mapping[str, Any]:
+        try:
+            return packs.select(self.repository, name, digest)
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+
     def resolve(self, value: Any) -> ReplayRequest:
-        request = resolve_request(value, self._resolve)
+        request = resolve_request(value, self._resolve, self._resolve_pack)
         validate_task_selection(self.repository, request)
-        return request
+        return label_evidence(self.repository, request)
 
     def _confirm_resolved(self, request: ReplayRequest) -> None:
+        if request.pack is not None:
+            found = self._resolve_pack(request.pack["name"], request.pack["digest"])
+            if {key: found[key] for key in PACK_KEYS} != request.pack:
+                raise ReplayError("replay pack identity changed after spend preview")
         for expected in request.targets:
             actual = ReplayTarget.parse(self._resolve(expected.kind, expected.ref))
             if actual.identity != expected.identity or actual.version != expected.version:
@@ -370,12 +416,16 @@ class ReplayAdmission:
         except runs.RunError as exc:
             raise ReplayError(str(exc)) from exc
         return dict(value, valid=True, errors=[], request=request.as_dict(),
-                    command=native_commands(request))
+                    command=native_commands(request),
+                    sampling=sampling_payload(self.repository, request))
 
     def confirm(self, value: Any) -> ReplayRequest:
         """Re-resolve a previewed request; this builds both targets, so it runs unserialized."""
         request = ReplayRequest.parse(value)
         self._confirm_resolved(request)
+        if label_evidence(self.repository, _replace(request, evidence=(
+                PREREGISTERED if request.pre_registration else EXPLORATORY))).evidence != request.evidence:
+            raise ReplayError("replay evidence label changed after spend preview")
         return request
 
     def start(self, value: Any, confirmation_token: Any) -> Dict[str, Any]:
@@ -414,9 +464,30 @@ def _native_arguments(request: ReplayRequest, target: ReplayTarget, cap: str) ->
     arguments = ["--tag", target.execution_ref, "--model", request.model,
                  "--reps", str(request.repetitions), "--run-cap", request.max_budget_usd,
                  "--spend-cap", cap]
+    if request.pack is not None:
+        # Pinned: the run reads this commit and refuses any other content.
+        arguments.extend(("--pack", request.pack["source"], "--pack-ref", request.pack["commit"],
+                          "--pack-digest", request.pack["digest"]))
     for task in request.tasks:
         arguments.extend(("--task", task))
     return arguments
+
+
+def _registered(request: ReplayRequest, target: ReplayTarget) -> bool:
+    """A release target of a pre-registered, whole-set replay runs registered; all else runs
+    `--exploratory`, which writes no history row."""
+    return request.evidence == PREREGISTERED and target.kind == "release"
+
+
+def target_evidence(request: ReplayRequest, target: ReplayTarget) -> str:
+    """The label of the command one target actually runs."""
+    return PREREGISTERED if _registered(request, target) else EXPLORATORY
+
+
+def replay_evidence(request: ReplayRequest) -> str:
+    """Pre-registered only when every command the replay runs is registered."""
+    return (PREREGISTERED if all(_registered(request, target) for target in request.targets)
+            else EXPLORATORY)
 
 
 def command_for_target(request: ReplayRequest, target: ReplayTarget, repository: Path,
@@ -426,7 +497,7 @@ def command_for_target(request: ReplayRequest, target: ReplayTarget, repository:
     cap = remaining_cap or request.spend_cap_usd
     command = ([sys.executable, str(repository / "scripts" / "cost_bench.py"), "replay"]
                + _native_arguments(request, target, cap) + ["--out", str(output)])
-    if target.kind == "release":
+    if _registered(request, target):
         registration = _safe_file(repository, request.pre_registration or "")
         command.extend(("--pre-registration", str(registration),
                         "--history-dir", str(history_dir or repository / "benchmarks")))
@@ -443,7 +514,7 @@ def native_commands(request: ReplayRequest) -> str:
     lines = []
     for target in request.targets:
         command = list(NATIVE_COMMAND) + _native_arguments(request, target, request.spend_cap_usd)
-        if target.kind == "release":
+        if _registered(request, target):
             command.extend(("--pre-registration", request.pre_registration or ""))
         else:
             command.append("--exploratory")
@@ -694,7 +765,7 @@ def _verify_target_output(request: ReplayRequest, target: ReplayTarget, native_o
         raise _NothingSpent("replay target was refused before any spend (exit %s)" % returncode)
     result_path, spend_path = native_out / RESULTS_NAME, native_out / SPEND_NAME
     rows = _read_rows(result_path) if result_path.is_file() else []
-    _verify_target_rows(target, rows)
+    _verify_target_rows(target, rows, request.pack)
     _reconcile_target_rows(request, rows, complete=returncode == 0)
     spend = _read_spend(spend_path, target, request.max_budget_usd, remaining, rows)
     if (returncode != 0 and not rows and spend["charged_spend_usd"] == 0
@@ -723,8 +794,12 @@ def preflight_case_id(target_index: int) -> str:
     return "target-%d-preflight" % target_index
 
 
-def _verify_target_rows(target: ReplayTarget, rows: Sequence[Mapping[str, Any]]) -> None:
+def _verify_target_rows(target: ReplayTarget, rows: Sequence[Mapping[str, Any]],
+                        pack: Optional[Mapping[str, str]] = None) -> None:
     for row in rows:
+        if pack is not None and (row.get("pack_digest") != pack["digest"]
+                                 or row.get("pack_commit") != pack["commit"]):
+            raise ReplayError("replay result does not carry the pinned evaluator pack")
         if row.get("harness_sha") != target.revision:
             raise ReplayError("replay result does not match its resolved target revision")
         if row.get("tag") != target.execution_ref:
@@ -841,8 +916,10 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
         if "error" in settled:
             exc = settled["error"]
             if isinstance(exc, _NothingSpent):
-                # cost_bench creates the target folder only after every pre-spend refusal
-                # (credential, pre-registration, tag, arm build), so nothing was charged.
+                # No target folder: cost_bench refused before creating it (credential,
+                # pre-registration, tag, arm build), so nothing was charged. A refusal after it
+                # creates the folder (observation folder, admission, contamination, probe)
+                # writes a $0 spend.json there instead, which `_read_spend` reads.
                 charge = Decimal("0")
             else:
                 charge = remaining
@@ -901,6 +978,10 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
     with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
         json.dump(summary, stream, indent=2, sort_keys=True)
         stream.write("\n")
+    try:
+        write_analysis(repository, output, summary)
+    except (OSError, ReplayError):
+        pass  # the run stands; `result_payload` reports the missing analysis as `analysis_error`
     if failure is not None:
         message, cause = failure
         if cause is not None:
@@ -965,8 +1046,232 @@ def read_summary(path: Path) -> Dict[str, Any]:
     return value
 
 
-def task_catalog(repository: Path) -> Dict[str, Any]:
-    """Expose only stable benchmark task identities needed by the replay form."""
+def _engine_module(name: str):
+    """A landed engine module from this checkout's `scripts/`, loaded as the CLI loads it."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("studio_" + name, str(_SCRIPTS / (name + ".py")))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_LEADING_INT = re.compile(r"^\s*(\d+)\b")
+# `replay_power.py --have K N M`, as the pre-registration template asks the field to quote it.
+_HAVE = re.compile(r"--have\s+(\d+)\s+(\d+)\s+(\d+)")
+_LONG_COUNT = re.compile(r"of which\s+(\d+)\s+(?:are|is)\s+long", re.IGNORECASE)
+
+
+def registered_sample(repository: Path, registration: str) -> Dict[str, Any]:
+    """The sample a pre-registration commits to, read through `experiment_protocol`'s own
+    section and field readers: Tasks (k, and n long), Trials per task and arm (m), and the
+    Power calculation text `replay_power.py` produced. Nothing is recomputed here."""
+    path = _safe_file(repository, registration)
+    protocol = _engine_module("experiment_protocol")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ReplayError("pre-registration is unreadable") from exc
+    sample = protocol.fields(protocol.sections(text).get("Sample size", ""))
+    tasks = _LEADING_INT.match(sample.get("Tasks", ""))
+    trials = _LEADING_INT.match(sample.get("Trials per task and arm", ""))
+    if tasks is None or trials is None:
+        raise ReplayRefusal("replay_registration_unreadable",
+                            "the pre-registration states no task count or trials per task and arm")
+    long = _LONG_COUNT.search(sample.get("Tasks", ""))
+    power = sample.get("Power calculation")
+    have = _HAVE.search(power or "")
+    return {"tasks": int(tasks.group(1)), "long": int(long.group(1)) if long else None,
+            "trials": int(trials.group(1)), "power_calculation": power,
+            "have": tuple(int(have.group(i)) for i in (1, 2, 3)) if have else None,
+            "min_trials": _engine_module("replay_power").MIN_REPS}
+
+
+def _long_count(repository: Path, request: ReplayRequest) -> int:
+    """How many of the chosen tasks the pack or task list marks long."""
+    if request.pack is not None:
+        try:
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+        flags = {item["id"]: item.get("long") is True for item in chosen["tasks"]}
+    else:
+        flags = {item["id"]: item.get("long") is True for item in _repository_tasks(repository)}
+    return sum(1 for task in request.tasks if flags.get(task))
+
+
+def whole_set(repository: Path, request: ReplayRequest) -> bool:
+    """True when the replay runs every task of its set: the pack's production set, or the
+    repository's own tasks. `cost_bench` writes history only for a whole set."""
+    if request.pack is not None:
+        try:
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+        every = {item["id"] for item in chosen["tasks"]}
+    else:
+        every = {item["id"] for item in _repository_tasks(repository)}
+    return set(request.tasks) == every
+
+
+def label_evidence(repository: Path, request: ReplayRequest) -> ReplayRequest:
+    """Decide the evidence label: a whole set with a pre-registration whose registered sample it
+    matches is pre-registered; a task subset, or no pre-registration, is exploratory and writes no
+    history. A whole registered set that departs from its registered sample is refused."""
+    if (not request.pre_registration or not whole_set(repository, request)
+            or not any(target.kind == "release" for target in request.targets)):
+        return _replace(request, evidence=EXPLORATORY)
+    registered = registered_sample(repository, request.pre_registration)
+    long_tasks = _long_count(repository, request)
+    if (registered["tasks"] != len(request.tasks) or registered["trials"] != request.repetitions
+            or registered["trials"] < registered["min_trials"]
+            or registered["long"] is not None and registered["long"] != long_tasks
+            or registered["have"] is not None
+            and registered["have"] != (len(request.tasks), long_tasks, request.repetitions)):
+        raise ReplayRefusal(
+            "replay_sample_unregistered",
+            "the pre-registration registers %d task(s) (%s long) and %d trial(s) per task and arm "
+            "(at least %d)%s; this replay runs %d task(s) (%d long) and %d"
+            % (registered["tasks"], "unstated" if registered["long"] is None else registered["long"],
+               registered["trials"], registered["min_trials"],
+               "" if registered["have"] is None else
+               ", and its power calculation sized k, n, m = %d, %d, %d" % registered["have"],
+               len(request.tasks), long_tasks, request.repetitions))
+    return _replace(request, evidence=PREREGISTERED)
+
+
+def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]:
+    """What the form shows about the sample: the label, the registered requirement as written,
+    and what this replay asks for."""
+    registered = None
+    if request.evidence == PREREGISTERED and request.pre_registration:
+        registered = dict(registered_sample(repository, request.pre_registration))
+        registered["have"] = list(registered["have"]) if registered["have"] else None
+    labels = [{"target": target.as_dict(), "evidence": target_evidence(request, target)}
+              for target in request.targets]
+    evidence = replay_evidence(request)
+    if evidence == PREREGISTERED:
+        note = "Pre-registered: every target is a release that runs the registered sample."
+    elif registered is not None:
+        note = ("Mixed: each release target runs the registered sample and may write history; "
+                "every other target runs exploratory, so the replay as a whole is exploratory.")
+    else:
+        note = ("Exploratory: a task subset, a draft or a replay with no pre-registration writes "
+                "no history row and is never cited as evidence.")
+    return {"evidence": evidence, "targets": labels, "registered": registered,
+            "requested": {"tasks": len(request.tasks), "trials": request.repetitions},
+            "note": note}
+
+
+def comparison_key(request: ReplayRequest) -> str:
+    """The identity two draft comparisons must share to be compared: tasks, model, trials, pack."""
+    return hashlib.sha256(json.dumps({
+        "tasks": sorted(request.tasks), "model": request.model, "trials": request.repetitions,
+        "pack_digest": request.pack["digest"] if request.pack else None,
+    }, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def draft_comparisons(repository: Path, request: ReplayRequest) -> List[Dict[str, Any]]:
+    """One record per draft target: the draft's checkpoint and configuration the replay measured,
+    the other target it was matched against, the shared task/model/trial identity, and whether
+    the draft has changed since (`stale`). The compare view itself is #990's."""
+    out = []
+    for index, target in enumerate(request.targets):
+        if target.kind != "draft" or not target.draft:
+            continue
+        base = request.targets[1 - index]
+        stale, reason = False, None
+        try:
+            current = drafts.read_config(Path(repository), target.draft)
+            revision = str(current["draft"]["revision"])
+            digest = targets._config_digest(dict(current["config"]))
+            if revision != target.revision:
+                stale, reason = True, "the draft has a newer checkpoint"
+            elif target.config_digest is not None and digest != target.config_digest:
+                stale, reason = True, "the draft's configuration changed"
+        except (drafts.DraftError, targets.TargetError, KeyError, TypeError):
+            stale, reason = True, "the draft is no longer available"
+        out.append({"draft": target.draft, "revision": target.revision,
+                    "config_digest": target.config_digest, "base": base.as_dict(),
+                    "tasks": list(request.tasks), "model": request.model,
+                    "trials": request.repetitions,
+                    "pack_digest": request.pack["digest"] if request.pack else None,
+                    "evidence": target_evidence(request, target), "key": comparison_key(request),
+                    "stale": stale, "stale_reason": reason})
+    return out
+
+
+def engine_analysis(repository: Path, results: Path) -> Dict[str, Any]:
+    """`cost_bench.py summarise --json` over one target's native rows, as the CLI prints it:
+    the parsed engine output under `result`, or the engine's refusal under `error`."""
+    command = [sys.executable, str(Path(repository) / "scripts" / "cost_bench.py"), "summarise",
+               "--results", str(results), "--json"]
+    try:
+        done = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              text=True, timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"error": "the engine analysis did not run: " + type(exc).__name__}
+    try:
+        return {"result": json.loads(done.stdout)}
+    except ValueError:
+        lines = (done.stderr or "").strip().splitlines()
+        return {"error": lines[-1] if lines else "the engine printed no analysis"}
+
+
+def result_payload(repository: Path, run_root: Path, request: ReplayRequest,
+                   summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """The result route's `result`: the summary's figures, the engine's analysis as recorded, an
+    `analysis_error` when none could be read, and each draft's matched comparison."""
+    result = {name: summary[name] for name in (
+        "targets", "table", "spend_usd", "reported_spend_usd", "spend_cap_usd", "stopped_at_cap")}
+    result["measures"] = summary.get("measures", MEASURES)
+    result["evidence"] = replay_evidence(request)
+    try:
+        result["analysis"] = read_analysis(Path(run_root) / "replay")
+        result["analysis_error"] = (None if result["analysis"] is not None else
+                                    "no engine analysis was recorded for this run")
+    except ReplayError as exc:
+        result["analysis"], result["analysis_error"] = None, str(exc)
+    result["comparisons"] = draft_comparisons(repository, request)
+    return result
+
+
+def write_analysis(repository: Path, output: Path, summary: Mapping[str, Any]) -> None:
+    """Record each target's engine analysis once, beside the summary, for the result route."""
+    entries = []
+    for index, path in enumerate(summary.get("result_files") or [], 1):
+        entries.append(dict(engine_analysis(repository, Path(path)), target=index))
+    target = Path(output) / ANALYSIS_NAME
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(entries, stream, sort_keys=True)
+
+
+def read_analysis(output: Path) -> Optional[List[Dict[str, Any]]]:
+    """The recorded engine analysis, or None when the run recorded none."""
+    path = Path(output) / ANALYSIS_NAME
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ReplayError("replay analysis is unavailable") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_ANALYSIS_BYTES:
+            raise ReplayError("replay analysis is unsafe")
+        value = json.loads(os.read(descriptor, MAX_ANALYSIS_BYTES + 1).decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+        if isinstance(exc, ReplayError):
+            raise
+        raise ReplayError("replay analysis is unavailable") from exc
+    finally:
+        os.close(descriptor)
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise ReplayError("replay analysis has an invalid shape")
+    return value
+
+
+def _repository_tasks(repository: Path) -> List[Dict[str, str]]:
     try:
         value = json.loads((Path(repository) / "benchmarks" / "tasks.json").read_text(
             encoding="utf-8"))
@@ -978,15 +1283,33 @@ def task_catalog(repository: Path) -> Dict[str, Any]:
             or any(not isinstance(item, dict) or not IDENTIFIER.fullmatch(str(item.get("id", "")))
                    for item in raw)):
         raise ReplayError("replay task catalog is invalid")
-    tasks = [{"id": item["id"], "label": item["id"].replace("-", " ").title()}
-             for item in raw]
-    return {"schema_version": 1, "tasks": tasks, "target_kinds": sorted(TARGET_KINDS),
+    return [{"id": item["id"], "label": item["id"].replace("-", " ").title(),
+             "long": item.get("long") is True} for item in raw]
+
+
+def task_catalog(repository: Path) -> Dict[str, Any]:
+    """Expose only stable task identities the replay form needs: the repository's own tasks, and
+    each evaluator pack found beside the checkout with its production tasks (`packs.discover`).
+    The path of a pack stays on the server; the form chooses one by name and digest."""
+    tasks = _repository_tasks(repository)
+    found = packs.discover(Path(repository))
+    public = [{key: item[key] for key in ("name", "version", "commit", "digest", "short_digest",
+                                           "tasks")} for item in found["packs"]]
+    return {"schema_version": 1, "tasks": tasks, "packs": public,
+            "default_pack": found["default_digest"], "target_kinds": sorted(TARGET_KINDS),
             "default_model": "claude-haiku-4-5",
             "commands": {"run": " ".join(NATIVE_COMMAND)}}
 
 
 def validate_task_selection(repository: Path, request: ReplayRequest) -> None:
-    available = {item["id"] for item in task_catalog(repository)["tasks"]}
+    if request.pack is not None:
+        try:
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+        available = {item["id"] for item in chosen["tasks"]}
+    else:
+        available = {item["id"] for item in _repository_tasks(repository)}
     unknown = sorted(set(request.tasks) - available)
     if unknown:
         raise ReplayError("replay requested unknown benchmark tasks: " + ", ".join(unknown))
@@ -1021,7 +1344,7 @@ def read_progress_rows(path: Path, target: ReplayTarget,
         except (ValueError, RecursionError) as exc:
             raise ReplayError("replay progress line %d is not JSON" % number) from exc
         rows.append(_validate_native_row(row, number))
-    _verify_target_rows(target, rows)
+    _verify_target_rows(target, rows, request.pack)
     _reconcile_target_rows(request, rows, complete=False)
     return rows
 

@@ -1,12 +1,9 @@
 # Changelog fragments
 
 One file per change, so branches in flight never edit the same section of `CHANGELOG.md`.
-Fragments begin after 0.13.0. Until `main`'s `CHANGELOG.md` has a `## [0.13.0]` section, a
-branch whose diff lands in `## [Unreleased]` satisfies the lint without a fragment; the 0.13.0
-release pull request, which folds Unreleased into that section, passes by the same exemption, and
-merging it is the cut-over that ends it for every later branch. The version is
-`LAST_HAND_WRITTEN` in `lib/harness_core/changelog.py`, and the exemption is read from the base
-branch rather than the checkout's `VERSION`.
+Changes under the governed source and documentation paths require a new fragment or a waiver.
+Editing `## [Unreleased]` does not satisfy the rule. Release assembly consumes fragments as
+described in [the release procedure](../docs/releasing.md).
 
 - **Name:** `<issue-or-pr>.<kind>.md`, where the number is the delivery issue (or the pull
   request when there is no issue) and the kind is `added`, `changed`, `removed` or `fixed`. Any

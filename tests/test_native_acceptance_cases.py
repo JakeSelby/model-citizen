@@ -20,7 +20,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from test_harness import REPO
 from test_native_acceptance import MODULE
@@ -154,6 +154,40 @@ class CodexRolloutTests(unittest.TestCase):
         self.assertIn("SPAWNED", self.home.orchestrator_text(PARENT_THREAD))
 
 
+class InstallationRolesTests(unittest.TestCase):
+    def home(self, runtime, roles):
+        home = Mock(runtime=runtime)
+        home.harness.side_effect = [MODULE.SYNC_DONE, MODULE.NO_DRIFT]
+        home.session.side_effect = [MODULE.FIXTURE_NAME, "YES", "\n".join(roles)]
+        home.answer.side_effect = lambda value: value
+        return home
+
+    def test_both_clients_are_asked_for_and_judged_on_their_projected_roles(self):
+        roles = sorted(path.stem for path in (MODULE.ROOT / "primitives" / "roles").glob("*.md"))
+        self.assertTrue(roles)
+        for runtime, prompt in (("claude-code", MODULE.ROLES_PROMPT),
+                                ("codex", MODULE.CODEX_ROLES_PROMPT)):
+            with self.subTest(runtime=runtime):
+                home = self.home(runtime, roles + ["default", "explorer"])
+                result = MODULE.case_installation(home)
+                home.session.assert_called_with(prompt, tools=())
+                self.assertIn("all %s harness roles" % len(roles), result)
+
+    def test_codex_cannot_pass_with_a_missing_projected_role(self):
+        roles = sorted(path.stem for path in (MODULE.ROOT / "primitives" / "roles").glob("*.md"))
+        home = self.home("codex", roles[1:])
+        with self.assertRaisesRegex(AssertionError, "starting with " + roles[0]):
+            MODULE.case_installation(home)
+        self.assertEqual(home.session.call_count, 3)
+    def test_a_similarly_named_role_does_not_satisfy_a_missing_role(self):
+        roles = sorted(path.stem for path in (MODULE.ROOT / "primitives" / "roles").glob("*.md"))
+        self.assertIn("spec-reviewer", roles)
+        home = self.home("codex", ["`" + name + "`" for name in roles if name != "reviewer"])
+        with self.assertRaisesRegex(AssertionError, "starting with reviewer"):
+            MODULE.case_installation(home)
+
+
+
 class RuntimeGapTests(unittest.TestCase):
     """A record one runtime never writes is a named gap, never an assertion that holds vacuously."""
 
@@ -284,7 +318,7 @@ class GradeDenyTests(unittest.TestCase):
     """The hook-composition case must read a hook's decision, not the stance name in prose."""
 
     def test_the_marker_is_text_only_the_grade_bash_hook_writes(self):
-        hook = (REPO / "policy" / "hooks" / "grade-bash.py").read_text()
+        hook = (REPO / "policy" / "hooks" / "bash-grader.py").read_text()
         self.assertIn('HOOK = "grade-bash hook"', hook)
         self.assertIn("autonomy=%s", hook)
         self.assertIn("grade-bash hook, autonomy=", MODULE.GRADE_DENY)

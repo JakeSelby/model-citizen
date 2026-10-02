@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "tier": "micro",
+  "model": "claude-haiku-4-5-20251001",
+  "note": "The micro tier: small oracle-scored tasks, each built to give one harness mechanism the chance to fire, run on a small model. Its rows form their own series and history and never enter the production set's. docs/benchmarks.md says what the tier can and cannot claim.",
+  "tasks": [
+    {
+      "id": "micro-delegation",
+      "kind": "synthetic",
+      "source": "written for the micro tier: a many-file read, where the harness says to gather with subagents",
+      "parent_sha": "d1f373c775e5fcfc9b95fc12432a57b76855392a",
+      "good_sha": null,
+      "max_turns": 16,
+      "leak_class": "clean",
+      "mechanism": {"id": "delegation", "fired": "above-zero", "field": "spawns"},
+      "prompt": [
+        "Read every Markdown file in `claude/rules/` and write `rule-headings.json` at the repository root.",
+        "",
+        "It is one JSON object keyed by file name, for example `delegation.md`, with one entry per file and no other keys. Each value is the text of that file's first level-one heading, without the leading `# `.",
+        "",
+        "Change nothing else and do not commit."
+      ],
+      "tests": {"oracle": "micro_rule_headings"}
+    },
+    {
+      "id": "micro-stop-gate",
+      "kind": "synthetic",
+      "source": "written for the micro tier: an edit that leaves the tree red, where the harness's stop gate refuses to finish",
+      "parent_sha": "d1f373c775e5fcfc9b95fc12432a57b76855392a",
+      "good_sha": null,
+      "max_turns": 16,
+      "leak_class": "clean",
+      "mechanism": {"id": "stop-gate", "fired": "above-zero", "field": "hook_blocks"},
+      "prompt": [
+        "In `bin/harness`, rename the function `strip_claude_settings` to `unmerge_claude_settings`, and update every call to it inside `bin/harness`.",
+        "",
+        "Edit only `bin/harness`, run nothing, and do not commit."
+      ],
+      "tests": {"oracle": "micro_rename"}
+    },
+    {
+      "id": "micro-output-style",
+      "kind": "synthetic",
+      "source": "written for the micro tier: a short answer, where the harness's voice sets the reply's shape",
+      "parent_sha": "d1f373c775e5fcfc9b95fc12432a57b76855392a",
+      "good_sha": null,
+      "max_turns": 8,
+      "leak_class": "clean",
+      "mechanism": {"id": "output-style", "fired": "none-hit",
+                    "detectors": ["voice/banned-opener", "voice/heading-first", "voice/scaffold-leak", "voice/second-table"]},
+      "prompt": [
+        "Count the Python hook scripts in `claude/hooks/` and write the number, and nothing else, to `hook-count.txt` at the repository root.",
+        "",
+        "Then reply explaining what those hooks do. Change nothing else and do not commit."
+      ],
+      "tests": {"oracle": "micro_hook_count"}
+    }
+  ]
+}

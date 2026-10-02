@@ -13,6 +13,69 @@ the branch, model ids and token counts. Sending those rows to an observability b
 opt-in, off by default and described in [telemetry.md](telemetry.md); the ledger stays the
 record and the backend is a copy that `bin/citizen usage export --since` can rebuild.
 
+## Machine-readable reports
+
+Add `--json` to any local usage report to receive the report's own aggregates as one JSON
+document. The document has `schema_version: 1`, names its `report`, `by` grouping and `days`
+window, and carries one object per displayed group in `groups`. Numeric fields are JSON numbers;
+an unavailable percentile, ratio or price is `null`, never zero or a non-standard `NaN` value.
+
+```sh
+bin/citizen usage --json
+bin/citizen usage --by role --json
+bin/citizen usage --rules --by repo --json
+bin/citizen usage --conflicts --json
+```
+
+The JSON and text renderers share the aggregation that assigns Workflow-tool runs to
+`(workflow)`, rows without a profile fingerprint to `(unattributed)` and rescanned stance rows to
+`(unknown)`. An empty window succeeds with `groups: []`. Invalid option combinations fail on
+stderr without printing a success document. `usage export` is a separate OTLP action and rejects
+`--json` rather than silently ignoring it.
+
+## The loaded instruction surface
+
+`bin/citizen usage --surface` lists every instruction source a Claude Code session in this
+directory would load, whoever owns it, with a token figure or `unmeasured`. It reads files only;
+no ledger, no model, and nothing leaves the machine.
+
+```sh
+bin/citizen usage --surface          # grouped by owner, a total per owner
+bin/citizen usage --surface --json   # the same as one document, every source with its reason
+```
+
+- **Owners:** `harness` (its modules, taken from the same attribution a replay row carries, and
+  the harness's own linked `CLAUDE.md`), `own` (your files under `~/.claude`: instructions, their
+  `@` imports, rules, skill, agent and command listings, the output style, auto memory's
+  `MEMORY.md`), `project` (`CLAUDE.md`, `.claude/CLAUDE.md` and `CLAUDE.local.md` from here up,
+  or `AGENTS.md` when none exists, their imports to four hops, the project's rules and listings),
+  then `plugin`, `mcp`, `hooks` and `runtime`.
+- **Figures are soft estimates**, characters over four of the text as read; a listing counts its
+  name and description, which is what a session lists. A file the harness linked is counted once,
+  as its module. A harness rule or stance row shows its `usage --rules` coverage state.
+- **Plugins, MCP servers, hook events and the CLI's own system prompt read `unmeasured`, never 0**,
+  each with its reason: their text is served at run time or arrives per event. An unreadable file
+  is `unmeasured` with why. `--surface` refuses `--by`, `--rules`, `--stance`, `--conflicts` and
+  `--rescan`, which ask about the ledger.
+
+## The module scorecard
+
+`bin/citizen scorecard` gives one row per module in the selection in force: its state, the
+surface its manifest declares, how it is measured (its instruments, or `unmeasured`), its
+`usage --rules` coverage state for a rule or stance, its resident tokens as a soft estimate (a
+switched-off module is `not loaded`, a hook `unmeasured`), and its effect. The first line is the
+share of modules with an instrument, floored.
+
+```sh
+bin/citizen scorecard
+bin/citizen scorecard --results <ablation results dir> --json
+```
+
+The effect is `unmeasured` unless `--results` names an ablation run ([benchmarks](benchmarks.md#ablation-runs))
+with an arm that removed or set the module; then it is that arm's cost effect against control,
+with its interval, n and reading, labelled measured. No row ever says a module has no effect: a
+module nobody toggled is unmeasured, and a null result reads `inconclusive` with its interval.
+
 ## Which rules fired
 
 The same report that sums the tokens scores the rules. `bin/citizen usage --rules` counts
@@ -37,6 +100,38 @@ that hit in none of them. Neither is printed below 20 measured sessions
 (`RULE_MIN_SESSIONS = 20`), because a share over three sessions says little. Only a record
 carrying a `rules` map counts toward either, so the denominator is measured sessions and not
 rows.
+
+Under the table, `--rules` lists every rule in your loaded instruction surface: this
+repository's rules less any you switched off, the rules of each registered primitive root, and
+each stance at its selected variant, named by its dimension. Each is one of three states, with
+the share measured on the first line:
+
+```text
+rules: 10 measured, 2 dark, 7 unmeasured (52% measured)
+  measured   cache-hygiene               primitives/rules/cache-hygiene.md
+  dark       conciseness                 primitives/rules/conciseness.md: a comment's redundancy is ...
+  unmeasured cost                        primitives/stances/cost/balanced.md: no detector names it and it has no opt-out
+```
+
+- **measured**: a detector that runs under your stances names the rule;
+- **dark**: nothing measures it on purpose, and the reason is printed: an `OPT_OUT` entry in
+  the registry, or `opt_out: <reason>` in the rule file's front matter;
+- **unmeasured**: neither, with the reason, such as a detector gated off by your stances.
+
+The share counts dark rules in its denominator and is floored, so one gap never reads 100
+percent. A detector names a rule, not a file, so when two files share a name, as the
+`delegation` rule and stance do, the first holds its detectors and the second is listed
+unmeasured, saying why.
+
+**Your own detectors** go in `.ruleprobe/detectors.yaml` at your repository's root, in the
+format standalone [ruleprobe](https://github.com/JakeSelby/ruleprobe) reads, through the same
+vendored engine, so one file serves both. The session hook runs them over every session in that
+repository, the report counts their rules as measured and lists a detector with no hit as a
+zero line, all without a code change. A bad entry is skipped and printed with its file and line
+under `findings:`, and the rest of the file still loads. Two differences from `ruleprobe`: the
+per-user `~/.config/ruleprobe/detectors.yaml` is not read, and a `detector:` block in a rule
+file's front matter is not run, so that rule is reported unmeasured rather than measured by a
+detector that never fires.
 
 What each detector looks for, how a rename folds and why a rescanned session is excluded from
 the stance grouping are under [rule telemetry](#rule-telemetry) below. Running the measurement
@@ -428,6 +523,28 @@ observation entry point is registered in live sessions, that ledger holds no row
 emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
 
+`bin/citizen usage --by adherence` reports two figures per recommendation kind, in two sections
+that are never added together. **Adherence (Measured)** gives, per kind and profile fingerprint,
+the emitted, followed, not followed, unknown and pending counts and the rate, followed over
+followed plus not followed, with a 95% Wilson interval; with nothing judged it prints "no judged
+emissions", not 0%, and a row with no fingerprint is also marked unattributed. **If followed
+(Soft estimate)** prices what following the advice might have saved, with its estimator named.
+Every number carries its label, and `--json` gives each figure as an object with its `label`, `n`,
+`interval` and `estimator`, with unknown values `null`. `--rules`, `--stance` and `--rescan` are
+refused with it.
+
+The estimator for `fresh-session` is **carried-context reprice** (PRD FR-85). It prices only
+emissions the ledger answers `not_followed`, from that session's own transcript, found as
+`<session_id>.jsonl` under the Claude Code projects folder and read through the rebuild report's
+parser. The context carried past a fresh start is the context at the nudge less the session's
+first-call context. The calls after the nudge, up to the first compaction, are priced as recorded
+and again as if the session had restarted there: the first as a cold start, later reads and
+rebuild writes smaller by the carried context. The saving is the difference, signed, and reads "at
+most", since nothing measures a handoff. An unpriced model is counted apart and a transcript that
+is gone is counted as transcript missing; neither is priced at $0. Host sessions are exploratory,
+so the figure is never evidence under `docs/evidence-standard.md`, and while the observation entry
+point is unregistered every emission is `unknown` and the estimate is empty.
+
 ## The decision log
 
 `~/.local/state/agent-harness/decisions.jsonl`, beside the ledger and written by the same
@@ -450,8 +567,8 @@ a context token.
 ```
 
 `module` names the hook that owns the decision, as `hooks/<id>`: `grade-bash`, `stop-gate` and
-`brief-guard` their own, and the band routing row and the integration notice
-`hooks/tier-agent-spawns`. Role confinement, framework and evasion refusals and the Workflow
+`brief-guard` their own, and the band routing row, the `delegation-nudge` row and the
+`integration-descriptor` notice `hooks/tier-agent-spawns`. Role confinement, `framework-spawn` and evasion refusals and the Workflow
 launch guard name `null`, because no hook id switches them off, and so does any other point no
 hook owns, such as `decision-provider`.
 `POINT_MODULES` in `decisions.py` is the map.
@@ -467,10 +584,14 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
 | `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
+| `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |
 | `evasion-deny` | `deny`, on a re-spawn of already-refused work | not labelled yet |
 | `role-confinement` | `deny`, on a native spawn naming a constrained role, by `subagent_type` or a `harness-role:` line; `input` leads with the role and which of the two named it | not labelled yet |
-| `workflow-launch` | `allow` or `deny`, on every `Workflow` tool launch | not labelled yet |
+| `framework-spawn` | `deny`, when a framework descriptor maps a spawn to a constrained role | not labelled yet |
+| `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
+| `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
+| `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a
@@ -637,6 +758,7 @@ bin/citizen usage --by stance --stance cost   # tokens per variant of one stance
 bin/citizen usage --by profile         # tokens per profile fingerprint; older rows unattributed
 bin/citizen usage --by decision        # hook decisions and their outcomes, above
 bin/citizen usage --by provider        # decision-provider calls, priced, above
+bin/citizen usage --by adherence       # advice followed, and a soft if-followed estimate, above
 bin/citizen usage --rescan             # re-read transcripts in the window first, then report
 ```
 
@@ -824,6 +946,35 @@ Codex session: that runtime reports a cached-read figure and no cache-write figu
 as a perfectly held prefix, which is the opposite of what the row knows. On a runtime that does
 report writes, cached reads against zero writes are not unknown but the best case there is: a day
 that served its whole prefix. The footer counts the unknown sessions separately.
+
+### Which calls rebuilt the prefix
+
+`bin/citizen usage --by rebuild --days 30` reads local Claude Code main-session transcripts and
+attributes each prompt-cache rebuild to its first matching observed cause: model switches,
+compaction, idle expiry, client-version changes, transcript events, slash commands or an
+unexplained remainder. A call is a rebuild when its cache read is at least 20,000 tokens short of
+the preceding call's input, cache read and cache write total. The report shows both all sessions
+and long sessions with at least 200 calls, with breaks, rewritten tokens, known spend share and
+cost per break.
+
+This report reads transcripts directly; it does not add a hook or write per-call data to the usage
+ledger, so `--rescan`, `--rules` and `--stance` are refused with it. Main-session files reached
+through more than one path are read once. Subagent, role-worker and Codex sessions are excluded,
+and so are client-generated `<synthetic>` turns, which made no request: the next real call is
+compared with the last real one. Unpriced models, malformed lines, unreadable files, duplicate
+requests, synthetic turns, valid untimed records and calls outside the window are counted
+explicitly instead of being treated as zero. A cause with any break on an unpriced model has no
+dollar figure: its excess, share and cost per break are `null` in `--json` and read `unpriced` in
+the table, with the count of its unpriced breaks beside them. A call whose usage reports no
+one-hour/five-minute split is priced whole at the base write rate, as ledger rows are, and is
+never attributed to the five-minute TTL; an idle gap of 5 to 60 minutes then reads as an event
+cause or `idle 5-60 min, no event`.
+
+Attribution depends on undocumented Claude Code transcript markers. The fixtures that pin them are
+synthetic transcripts stamped with client version 2.0.20 (2.0.21 on the far side of the version
+change); no other client version is covered. If a client changes or removes a marker, the break
+remains in the report as `unexplained`; the report does not infer a cause that the transcript did
+not record.
 
 ## Rule telemetry
 

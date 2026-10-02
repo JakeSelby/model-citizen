@@ -15,6 +15,7 @@ import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from . import evaluation
 from .state import StateError, Store, open_shared
 
 SIDECAR_SCHEMA_VERSION = 2
@@ -954,7 +955,8 @@ def _optional_string(value: Any) -> bool:
 
 
 def _validate_benchmark_result(row: Mapping[str, Any]) -> None:
-    if row.get("arm") not in ("bare", "harness") or not _nonnegative_int(row.get("rep")):
+    # The arm is checked against the row's own evaluation contract (`evaluation.row_contract`).
+    if not _nonnegative_int(row.get("rep")):
         raise RunStoreError("benchmark result row does not match schema 1")
     error = row.get("error")
     if not (error is None or isinstance(error, (bool, str))):
@@ -996,8 +998,12 @@ def _benchmark_result(relative: str, number: int, row: Any) -> Dict[str, Any]:
                                    for name in ("task", "harness_sha", "model"))
             or (row.get("tag") is not None and not isinstance(row.get("tag"), str))):
         raise RunStoreError("benchmark result row does not match schema 1")
+    try:
+        contract = evaluation.row_contract(row)
+    except evaluation.ContractError as exc:
+        raise RunStoreError(str(exc)) from exc
     _validate_benchmark_result(row)
-    identity = _digest({name: row.get(name) for name in ("task", "arm", "rep", "harness_sha", "tag")})
+    identity = _digest(evaluation.identity_fields(row, contract))
     run_id = _stable_id("benchmark-result", relative, identity)
     status = "failed" if row.get("error") else "succeeded" if row.get("passed") is True else "failed"
     tokens = {name: row[name] for name in (
@@ -1017,7 +1023,7 @@ def _benchmark_result(relative: str, number: int, row: Any) -> Dict[str, Any]:
         "cases": {str(row.get("task")): {"passed": row.get("passed"),
                                             "error": row.get("error"),
                                             "error_kind": row.get("error_kind")}},
-        "artifacts": [relative], "raw": row,
+        "artifacts": [relative], "evaluation": contract, "raw": row,
     }
 
 
@@ -1166,6 +1172,27 @@ def _benchmark_static(relative: str, value: Any) -> Dict[str, Any]:
         "tokens": {"estimated": (value.get("total") or {}).get("est_tokens")},
         "cost": {"by_model": value.get("usd"), "basis": COST_BASIS},
         "cases": {}, "artifacts": [relative], "raw": value,
+    }
+
+
+def _evidence_bundle(relative: str, result: Mapping[str, Any]) -> Dict[str, Any]:
+    """One proof bundle as `evidence_bundle.verify` judged it; the status is the verifier's own."""
+    proof = evaluation.proof_status(result)
+    # The verdict is part of the identity: a re-verification that judges differently is a new
+    # record, never a collision with the one indexed before it.
+    identity = _digest({"bundle": relative, "bundle_id": proof["bundle_id"],
+                        "result": _digest(dict(result))})
+    return {
+        "schema_version": 1, "run_id": _stable_id("evidence-bundle", relative, identity),
+        "source": {"kind": "evidence-bundle", "path": relative, "record_identity": identity},
+        "suite": {"id": "evidence-bundle", "version": 1},
+        "target": {"kind": "commit", "ref": None, "commit": None, "draft": None,
+                   "config_digest": None},
+        "runtime": None, "model": None, "arms": [], "trials": None,
+        "parameters": {"bundle_id": proof["bundle_id"]}, "argv": [],
+        "status": "succeeded" if proof["status"] == "verified" else "failed",
+        "times": {}, "tokens": {}, "cost": None, "cases": {}, "artifacts": [relative],
+        "evaluation": {"shape": "proof-bundle", "proof": proof}, "raw": dict(result),
     }
 
 
@@ -1645,6 +1672,10 @@ class RunStore:
         if len(candidates) + len(evidence) > MAX_RESULTS_FILES:
             raise RunStoreError("too many run source files")
         candidates.extend((path, "native") for path in evidence)
+        bundles = evaluation.bound_bundles(root)
+        if len(candidates) + len(bundles) > MAX_RESULTS_FILES:
+            raise RunStoreError("too many run source files")
+        candidates.extend((root / bundle, "bundle") for bundle in bundles)
         for path, kind in candidates:
             relative = path.relative_to(root).as_posix()
             try:
@@ -1656,6 +1687,13 @@ class RunStore:
                                for number, row in _read_jsonl(path)]
                 elif kind == "static":
                     records = [_benchmark_static(relative, _read_json(path))]
+                elif kind == "bundle":
+                    try:
+                        result = evaluation.verify_bundle(path)
+                    except Exception as exc:  # the verifier's refusal is a skip, never a pass
+                        raise RunStoreError("evidence bundle could not be verified: "
+                                            + str(exc)) from exc
+                    records = [_evidence_bundle(relative, result)]
                 else:
                     value = _read_json(path)
                     if isinstance(value, dict) and value.get("kind") != "native":

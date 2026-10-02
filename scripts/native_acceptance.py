@@ -1350,6 +1350,8 @@ SKILL_PROMPT = ("Do your instructions give you a skill named spike-contract? Rep
                 "word YES or NO and nothing else.")
 ROLES_PROMPT = ("List every subagent_type you can pass to your Agent tool, one per line, and "
                 "nothing else.")
+CODEX_ROLES_PROMPT = ("List every agent_type you can pass to your spawn_agent tool, one per line, and "
+                      "nothing else.")
 SYNC_DONE = "sync complete"
 NO_DRIFT = "drift: none"
 
@@ -1357,7 +1359,7 @@ NO_DRIFT = "drift: none"
 def native_only(home, what):
     """Why a runtime other than Claude Code cannot be read for `what`, or ``""``.
 
-    The subagent-shaped observations — a typed spawn, a meta record, a role list — are written by
+    The subagent-shaped observations — a typed spawn and a meta record — are written by
     the Claude Code client alone; `adapters/codex/capabilities.json` says so in its own
     limitations. A case reports the gap rather than asserting against a record that runtime
     never writes.
@@ -1388,18 +1390,20 @@ def case_installation(home):
     notes = ["harness sync reported %s and harness doctor reported %s" % (SYNC_DONE, NO_DRIFT),
              "two separate fresh headless turns answered from the synced files: the rendered "
              "personal identity, and YES for the spike-contract skill"]
-    gap = native_only(home, "the projected role list")
-    if gap:
-        notes.append(gap)
-        raise Unverified(observed(notes, "the installed roles were therefore not observed"))
     expected = sorted(path.stem for path in (ROOT / "primitives" / "roles").glob("*.md"))
-    listed = home.answer(home.session(ROLES_PROMPT))
-    missing = [name for name in expected if name not in listed]
+    prompt = CODEX_ROLES_PROMPT if home.runtime == "codex" else ROLES_PROMPT
+    listed = home.answer(home.session(prompt, tools=()))
+    names = set()
+    for line in listed.splitlines():
+        match = re.fullmatch(r"(?:[-*]\s+)?`?([a-z][a-z0-9-]*)`?", line.strip())
+        if match:
+            names.add(match.group(1))
+    missing = [name for name in expected if name not in names]
     if missing:
-        raise AssertionError(observed(notes, "the client listed no subagent_type for %s of %s "
+        raise AssertionError(observed(notes, "the client listed no agent type for %s of %s "
                                       "harness roles, starting with %s"
                                       % (len(missing), len(expected), missing[0])))
-    notes.append("and a subagent-type list carrying all %s harness roles beside the client's "
+    notes.append("and an agent-type list carrying all %s harness roles beside the client's "
                  "native ones" % len(expected))
     return "; ".join(notes) + "."
 

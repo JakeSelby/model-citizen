@@ -98,7 +98,8 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 `bin/citizen config set hooks.<id> off` switches one off, and it applies from the next event with no
 sync: the dispatcher resolves the selection at each event and neither loads nor runs a module
 whose id is `off`. The libraries those modules load (`decisions`, `posture`, `pricing`,
-`telemetry`, `rule-detectors`, `otel-headers`, `filter-lines`) have no id and no switch. Denying
+`telemetry`, `rule-detectors`, `otel-headers`, `filter-lines`, and `bash-grader`, the Bash grader
+`grade-bash` re-exports and the read-only allow reads alone) have no id and no switch. Denying
 every spawn under `delegation: off` is the stance's own answer and stays with any id off.
 Role confinement has no id either: the constrained-role, `harness-role:` marker, framework and
 evasion denials and the Workflow launch guard run with every hook off, so switching
@@ -186,7 +187,8 @@ three separate questions per decision, and all three must agree before anything 
 
 **How far this point may be judged.** `governance.jev.mode` sets the default and
 `governance.jev.modes.<point>` overrides it for one of the decision points the ledger already
-names — `grade-bash`, `stop-gate`, `tier-agent-spawns`, `brief-guard`, `evasion-deny`. `off`
+names — `grade-bash`, `stop-gate`, `tier-agent-spawns`, `delegation-nudge`, `brief-guard`,
+`evasion-deny`. `off`
 calls nothing. `shadow` calls, writes the ledger row and returns the deterministic decision
 untouched, so an answer can be measured before it is trusted: nothing reaches the model or the
 user. `advise` puts the judgment in `rule_matches`, says what `act` would have done, and changes

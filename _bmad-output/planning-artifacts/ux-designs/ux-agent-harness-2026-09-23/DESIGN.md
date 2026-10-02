@@ -209,6 +209,8 @@ components:
     radius: '{rounded.lg}'
 ---
 
+> Current delivery assignments: [Delivery annotations — 2026-09-28](../../roadmap-2026-09-28.md). Earlier dates below remain historical.
+
 # Model Citizen design contract
 
 ## Brand & Style
@@ -394,3 +396,9 @@ it does not add an unapproved chart package.
 | Use quiet teal for focus and restrained semantic colors for state | Fill the dashboard with saturated charts, gradients or decorative gauges |
 | Credit the projects the harness learns from | Frame the field as competition or claim universal compatibility |
 | Use no em dashes in published copy | Let incidental mock copy override this contract |
+
+## Delivery annotations — 2026-09-28
+
+Visual identity and component design remain unchanged. Current delivery assignments and later-engine Studio additions follow the roadmap amendment; planned stance-drift/proposal surfaces belong to 0.18. The existing Studio design effort under #961 is preserved.
+
+See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.

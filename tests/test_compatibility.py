@@ -42,9 +42,20 @@ class CompatibilityTests(unittest.TestCase):
             shutil.copy(REPO / "VERSION", root / "VERSION")
             path = root / "compatibility" / "catalog.json"
             data = json.loads(path.read_text())
+            # Exercise the inherited-release case even when the live catalog has no reuse block.
+            data["qualification_source_commit"] = "a" * 40
+            data["qualification_reuse"] = {
+                "schema_version": 1, "kind": "carry-forward", "prior_version": "0.14.1",
+                "prior_tag": "v0.14.1", "evidence_version": "0.14.1",
+                "qualification_source_commit": "a" * 40,
+                "includes_bootstrap_exception": False, "limitation": "fixture reuse",
+            }
             data["release_state"] = "candidate"
             data.pop("qualification_source_commit", None)
-            data["clients"][0]["status"] = "qualified"
+            data.pop("qualification_reuse", None)
+            client = next(row for row in data["clients"] if row["id"] == "claude-code-cli-macos")
+            client["status"] = "qualified"
+            client["evidence"] = []
             path.write_text(json.dumps(data))
             with self.assertRaisesRegex(ValueError, "missing acceptance"):
                 compatibility.catalog(root)

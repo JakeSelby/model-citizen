@@ -71,6 +71,27 @@ def detectors():
     return sibling("rule-detectors")
 
 
+def rule_hits(module, events, stances, cwd, errors):
+    """`{detector_id: hit count}` for one session: the registry's detectors plus the
+    declarative ones in the `.ruleprobe/detectors.yaml` of the session's repository.
+
+    A detector file's bad entries are skipped, never fatal, and are not `rules_errors`: that
+    field drops the whole session from the report, and a typo in one entry must not unmeasure
+    every other detector. `usage --rules` names them with their line instead. Every loaded
+    declarative id is recorded, zero included, so a report read from another repository still
+    shows its line. With no detector file the call is the registry's alone, unchanged.
+    """
+    extra = []
+    loader = getattr(module, "declarative", None)
+    if cwd and loader is not None and os.path.isdir(cwd):
+        extra = loader(cwd)[0]
+    hits = (module.run(events, stances, errors=errors, extra=extra) if extra
+            else module.run(events, stances, errors=errors))
+    counts = dict((detector.id, 0) for detector in extra)
+    counts.update((did, len(found)) for did, found in hits.items())
+    return counts
+
+
 def stances(env=None):
     """The resolved `{dimension: variant}` map, from `posture.py` and nowhere else.
 
@@ -596,6 +617,17 @@ def note_model(counts, name, order):
     counts[name] = (hits + 1, order)
 
 
+def workflow_of(path):
+    """The Workflow run a subagent transcript belongs to, `wf_<id>`, or None for a spawned agent.
+
+    The Workflow tool writes its agents one directory deeper, under `subagents/workflows/wf_<id>/`;
+    the parent directory's name is the whole test. The usage feed classifies its live lines with
+    this same function, so the ledger and the feed cannot disagree about which agent is which.
+    """
+    name = Path(str(path)).parent.name if path else ""
+    return name if name.startswith("wf_") else None
+
+
 def _agent_row(path, shared=None, budget=None, max_bytes=None, version=None, links=None,
                raw=None):
     """One `kind: "subagent"` row from one `agent-<id>.jsonl`, or None when it holds no turn.
@@ -707,7 +739,7 @@ def _agent_row(path, shared=None, budget=None, max_bytes=None, version=None, lin
         # Nothing readable, whether the file held no turn or the budget stopped before one:
         # the caller records that as spend unknown rather than as zero.
         return None
-    workflow = path.parent.name if path.parent.name.startswith("wf_") else None
+    workflow = workflow_of(path)
     row = {"kind": "subagent", "runtime": "claude-code", "harness_version": version,
            "session_id": "", "repo": "",
            "agent_id": path.stem[len("agent-"):],
@@ -1233,8 +1265,7 @@ def scan(transcript, session_id="", cwd="", prior=None, rescan=False, agents=Non
         module = detectors()
         record["counts"] = module.counts(events)
         errors = []
-        record["rules"] = dict((did, len(hits))
-                               for did, hits in module.run(events, record["stances"], errors=errors).items())
+        record["rules"] = rule_hits(module, events, record["stances"], cwd, errors)
         if errors:
             record["rules_errors"] = errors
     except Exception as exc:
@@ -1520,7 +1551,7 @@ def scan_codex(transcript, session_id="", cwd="", prior=None, rescan=False):
     try:
         module = detectors()
         record["counts"] = module.counts(events)
-        record["rules"] = {did: len(hits) for did, hits in module.run(events, record["stances"], errors=errors).items()}
+        record["rules"] = rule_hits(module, events, record["stances"], cwd, errors)
         if errors:
             record["rules_errors"] = errors
     except Exception as exc:

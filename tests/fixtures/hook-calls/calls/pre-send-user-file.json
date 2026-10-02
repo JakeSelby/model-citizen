@@ -1,0 +1,19 @@
+{
+ "about": "A file outside the working directory sent to the user, which is staged into it.",
+ "files": {
+  "{home}/scratch/report.md": "# Report\n\nThree findings.\n"
+ },
+ "payload": {
+  "session_id": "s-matrix",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "{repo}",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "SendUserFile",
+  "tool_input": {
+   "files": [
+    "{home}/scratch/report.md"
+   ]
+  }
+ }
+}

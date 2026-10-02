@@ -781,10 +781,8 @@ def _replay_result(handler: Handler, route: Route) -> None:
                 if summary_path.is_file():
                     summary = replay.read_summary(summary_path)
                     replay.index_native_rows(supervisor.history, run_root, summary)
-                    result = {name: summary[name] for name in (
-                        "targets", "table", "spend_usd", "reported_spend_usd",
-                        "spend_cap_usd", "stopped_at_cap")}
-                    result["measures"] = summary.get("measures", replay.MEASURES)
+                    result = replay.result_payload(handler.server.repo_root, run_root,
+                                                   selected, summary)
             return {"schema_version": 1,
                     "run": {"run_id": run["run_id"], "status": run["status"]},
                     "progress": progress, "result": result}
@@ -1554,7 +1552,7 @@ RUN_DETAIL = ResponseSchema("json-object", (
     ("duration_ms", "integer-or-null"), ("rerun_of", "string-or-null"),
     ("case_count", "integer"), ("flaky_count", "integer"), ("cases", "array"),
     ("reruns", "object"), ("exact_command", "string-or-null"), ("rerun", "object"),
-    ("artifacts", "array")))
+    ("artifacts", "array"), ("evaluation", "object-or-null")))
 CASE_HISTORY = ResponseSchema("json-object", (("case_id", "string"),
                                                  ("items", "array"),
                                                  ("next_cursor", "string-or-null")))
@@ -1595,6 +1593,8 @@ NATIVE_SELECTION = ResponseSchema("json-object", (("client", "string"), ("cases"
                                                     ("retry_case", "string")))
 REPLAY_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                                   ("tasks", "array"),
+                                                  ("packs", "array"),
+                                                  ("default_pack", "string-or-null"),
                                                   ("target_kinds", "array"),
                                                   ("default_model", "string"),
                                                   ("commands", "object")))
@@ -1608,7 +1608,8 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
                                                   ("valid", "boolean"),
                                                   ("errors", "array"),
                                                   ("request", "object"),
-                                                  ("command", "string")))
+                                                  ("command", "string"),
+                                                  ("sampling", "object")))
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))

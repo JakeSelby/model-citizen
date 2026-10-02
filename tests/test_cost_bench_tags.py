@@ -50,7 +50,7 @@ def replay_args(work, **over):
               "history_dir": str(Path(work) / "history"), "change_note": "",
               "out": str(Path(work) / "out"), "arms_dir": str(Path(work) / "arms"), "raw": None,
               "tmp": None, "skip_preflight": True, "dry_run": False, "exploratory": False,
-              "pre_registration": None}
+              "pre_registration": None, "effort": "high", "allow_surface_drift": False}
     values.update(over)
     repo = Path(work) / "repo"
     if not values["exploratory"] and values["pre_registration"] is None and (repo / ".git").is_dir():
@@ -132,8 +132,12 @@ class TagScheduleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
             args = replay_args(tmp, tag=["v1", "v2"], dry_run=True)
-            code, out, fake = self.run_replay(tmp, args)
-            self.assertEqual((code, fake.built, fake.egress_up), (0, [], []))
+            with contextlib.redirect_stderr(io.StringIO()):
+                code, out, fake = self.run_replay(tmp, args)
+            # A same-repository task is refused by the contamination control, which the dry run
+            # now runs at each tag's commit, so the run it previews would stop: exit 2.
+            self.assertEqual((code, fake.built, fake.egress_up), (2, [], []))
+            self.assertEqual(out.count("contamination demo: demo: answer absence cannot be established"), 2)
             self.assertIn("arm bare: model-citizen-arm-bare:", out)
             self.assertIn("tag v1: arm harness@v1 at ", out)
             self.assertIn("model-citizen-arm-harness:", out)
@@ -188,21 +192,18 @@ class TagScheduleTests(unittest.TestCase):
             for tag in ("v1", "v2"):
                 self.assertTrue((Path(tmp) / "out" / tag / BENCH.RESULTS).exists(), tag)
 
-    def test_a_pre_registered_task_subset_writes_its_exact_history_row(self):
+    def test_a_task_subset_never_writes_a_history_row(self):
         with tempfile.TemporaryDirectory() as tmp:
             harness_repo(Path(tmp) / "repo")
             args = replay_args(tmp, task=["demo"])
             other = dict(TASK, id="other")
             Path(args.tasks).write_text(json.dumps({"tasks": [TASK, other]}), encoding="utf-8")
-            code, _, _ = self.run_replay(tmp, args)
-            rows = [json.loads(line) for line in
-                    (Path(tmp) / "history" / "history.jsonl").read_text(encoding="utf-8").splitlines()]
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code, _, _ = self.run_replay(tmp, args)
             self.assertEqual(code, 0)
-            self.assertEqual(list(rows[0]["per_task"]), ["demo"])
-            full_series = BENCH.hashlib.sha256(
-                Path(args.tasks).read_bytes() + args.model.encode() + b"|container").hexdigest()[:8]
-            self.assertNotEqual(rows[0]["series"], full_series)
-
+            self.assertFalse((Path(tmp) / "history" / "history.jsonl").exists())
+            self.assertIn("a partial set is not a history row", err.getvalue())
 
 if __name__ == "__main__":
     unittest.main()

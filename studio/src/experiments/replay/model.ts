@@ -20,11 +20,45 @@ export type ReplayLaunchInput = {
   max_budget_usd: string;
   spend_cap_usd: string;
   pre_registration: string;
+  /** The evaluator pack, chosen by name and digest; null runs the repository's own tasks. */
+  pack?: { name: string; digest: string } | null;
 };
 
-export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration"> & {
+/** A pack as the server resolved and pinned it. */
+export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string };
+
+export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration" | "pack"> & {
   targets: [ReplayTarget, ReplayTarget];
   pre_registration: string | null;
+  pack: ResolvedPack | null;
+  evidence: "pre-registered" | "exploratory";
+};
+
+/** The registered sample as the pre-registration states it, read by the server. */
+export type ReplaySampling = {
+  evidence: "pre-registered" | "exploratory";
+  targets?: Array<{ target: ReplayTarget; evidence: "pre-registered" | "exploratory" }>;
+  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null };
+  requested: { tasks: number; trials: number };
+  note: string;
+};
+
+/** One target's `cost_bench.py summarise --json` output, or the engine's refusal. */
+export type ReplayAnalysis = { target: number; result?: Record<string, unknown>; error?: string };
+
+export type DraftComparison = {
+  draft: string; revision: string; config_digest: string | null; base: ReplayTarget;
+  tasks: string[]; model: string; trials: number; pack_digest: string | null;
+  evidence: string; key: string; stale: boolean; stale_reason: string | null;
+};
+
+export type ReplayPack = {
+  name: string;
+  version: string;
+  commit: string;
+  digest: string;
+  short_digest: string;
+  tasks: Array<{ id: string; label: string }>;
 };
 
 export type ReplayMetricRow = {
@@ -50,6 +84,8 @@ export type ReplayProgressRow = {
 export type ReplayCatalog = {
   schema_version: number;
   tasks: Array<{ id: string; label: string }>;
+  packs: ReplayPack[];
+  default_pack: string | null;
   target_kinds: ReplayTargetKind[];
   default_model: string;
   commands: { run: string };
@@ -67,6 +103,10 @@ export type ReplayRunResult = {
     spend_cap_usd: string;
     stopped_at_cap: boolean;
     measures?: "source";
+    analysis?: ReplayAnalysis[] | null;
+    analysis_error?: string | null;
+    evidence?: "pre-registered" | "exploratory";
+    comparisons?: DraftComparison[];
   };
 };
 
@@ -78,6 +118,7 @@ export type ReplayPreview = {
   confirmation_token?: string;
   command: string;
   request: ReplayRequest;
+  sampling?: ReplaySampling;
 };
 
 export class ReplayRequestGate {
@@ -180,4 +221,66 @@ export function formatPercent(value: number | null): string {
 
 export function formatCost(value: number | null): string {
   return value === null ? "Unavailable" : `$${value.toFixed(4)}`;
+}
+
+/** One picker option per pack: its name, version and short digest, keyed by the full digest. */
+export function packOptions(packs: ReplayPack[]): Array<{ value: string; label: string }> {
+  return packs.map((pack) => ({ value: pack.digest, label: `${pack.name} ${pack.version} (${pack.short_digest})` }));
+}
+
+/** The pack a new replay starts on: the catalog's default, else the first, else none. */
+export function initialPack(packs: ReplayPack[], defaultDigest: string | null): ReplayPack | null {
+  return packs.find((pack) => pack.digest === defaultDigest) ?? packs[0] ?? null;
+}
+
+/** The task ids a replay may choose: the chosen pack's, or the repository's own without one. */
+export function tasksFor(packs: ReplayPack[], digest: string | null, repositoryTasks: string[]): string[] {
+  const pack = packs.find((item) => item.digest === digest);
+  return pack ? pack.tasks.map((task) => task.id) : repositoryTasks;
+}
+
+/** An engine value exactly as the engine reported it: JSON text, so null stays null. */
+export function engineValue(value: unknown): string {
+  return value === undefined ? "absent" : JSON.stringify(value);
+}
+
+/**
+ * Every leaf of an engine value as a path and its JSON text, in the engine's own order. A list of
+ * plain values (an interval) is one leaf; nothing is dropped, so a new engine field still shows.
+ */
+export function engineLeaves(value: unknown, path = ""): Array<[string, string]> {
+  const plain = (item: unknown) => item === null || typeof item !== "object" ||
+    (Array.isArray(item) && item.every((inner) => inner === null || typeof inner !== "object"));
+  if (plain(value)) return [[path || "value", engineValue(value)]];
+  if (Array.isArray(value)) {
+    return value.length ? value.flatMap((item, index) => engineLeaves(item, `${path}[${index}]`)) : [[path, "[]"]];
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return [[path || "value", "{}"]];
+  return entries.flatMap(([key, item]) => engineLeaves(item, path ? `${path}.${key}` : key));
+}
+
+/** Label and value lines for one target's engine analysis: every field the engine reported. */
+export function analysisLines(entry: ReplayAnalysis): Array<[string, string]> {
+  if (entry.error !== undefined) return [["Engine refused", entry.error]];
+  return engineLeaves(entry.result ?? {});
+}
+
+/** What the form says about the sample before a run. */
+export function samplingLines(sampling: ReplaySampling | undefined): string[] {
+  if (!sampling) return [];
+  const lines = [sampling.note, `This replay: ${sampling.requested.tasks} task(s), ${sampling.requested.trials} trial(s) per task and arm.`];
+  for (const item of sampling.targets ?? []) lines.push(`${item.target.kind} ${item.target.ref}: ${item.evidence}.`);
+  if (sampling.registered) {
+    lines.push(`Registered: ${sampling.registered.tasks} task(s), ${sampling.registered.trials} trial(s) per task and arm (floor ${sampling.registered.min_trials}).`);
+    if (sampling.registered.power_calculation) lines.push(`Power calculation: ${sampling.registered.power_calculation}`);
+  }
+  return lines;
+}
+
+/** One line per draft comparison, naming its identity and whether it is stale. */
+export function comparisonLine(item: DraftComparison): string {
+  const state = item.stale ? `Stale: ${item.stale_reason ?? "the draft changed"}` : "Current";
+  return `${item.draft} at ${item.revision.slice(0, 12)} against ${item.base.kind} ${item.base.ref}; ` +
+    `${item.tasks.length} task(s), ${item.model}, ${item.trials} trial(s). ${state}.`;
 }

@@ -231,8 +231,13 @@ export function ExperimentsPage() {
 
       {replayCatalog && <ReplayPanel
         tasks={replayCatalog.tasks.map((task) => task.id)}
+        packs={replayCatalog.packs}
+        defaultPack={replayCatalog.default_pack}
         defaultModel={replayCatalog.default_model}
         rows={replayResult?.result?.table ?? []}
+        analysis={replayResult?.result?.analysis ?? null}
+        analysisError={replayResult?.result?.analysis_error ?? null}
+        comparisons={replayResult?.result?.comparisons ?? []}
         progress={replayResult?.progress ?? []}
         runStatus={replayResult?.run.status}
         onStarted={(runId) => { setReplayRunId(runId); setReplayResult(null); }}

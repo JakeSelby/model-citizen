@@ -22,7 +22,7 @@ def run_tag(tmp, **patches):
     args = types.SimpleNamespace(
         tasks=str(tasks_file), model="claude-test", task=None, tmp=None, stance_cost=None,
         raw=None, change_note=None, skip_preflight=False, bucket=None, predicted_ratio=None,
-        reps=1, run_cap=2.0, spend_cap=20.0, history_dir=None)
+        reps=1, run_cap=2.0, spend_cap=20.0, history_dir=None, allow_surface_drift=False)
     common = {"tasks": [TASK], "plan": [], "out": tmp / "target-1", "prices": {},
               "bare": {"image": "bare"}, "network": "net", "proxy": "http://proxy",
               "client_env": {}, "cli_version": "1", "protocol": {}}
@@ -63,9 +63,49 @@ class PreSpendRefusalTests(unittest.TestCase):
 
     def test_a_workdir_probe_refusal_records_zero_spend(self):
         probe = mock.Mock(side_effect=SystemExit("replay-arms: workdir not writable"))
-        with mock.patch.object(BENCH.arms, "admit", mock.Mock()):
-            self.assert_refused_at_zero(probe_workdirs=probe)
+        # Admission, the pair check and the contamination check all pass, so the probe refuses.
+        with mock.patch.object(BENCH.arms, "admit", mock.Mock()), \
+                mock.patch.object(BENCH.arms, "admit_pair", mock.Mock()):
+            self.assert_refused_at_zero(probe_workdirs=probe,
+                                        contamination_errors=mock.Mock(return_value=[]))
         probe.assert_called_once()
+
+
+    def test_an_existing_observation_folder_refusal_records_zero_spend(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            native = Path(tmp) / "target-1" / REVISION
+            (native / "observations").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, "refusing existing observation output"):
+                run_tag(tmp)
+            spend = json.loads((native / BENCH.SPEND).read_text())
+            self.assertEqual((spend["charged_spend_usd"], spend["stopped_at_cap"]), (0.0, False))
+
+    def test_an_earlier_cohorts_spend_record_is_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            native = Path(tmp) / "target-1" / REVISION
+            (native / "observations").mkdir(parents=True)
+            (native / BENCH.SPEND).write_text('{"charged_spend_usd": 3.5}\n')
+            with self.assertRaises(SystemExit):
+                run_tag(tmp)
+            self.assertEqual(json.loads((native / BENCH.SPEND).read_text()), {"charged_spend_usd": 3.5})
+
+    def test_a_refused_attempt_leaves_no_observation_folder_to_refuse_a_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            admit = mock.Mock(side_effect=SystemExit("replay-arms: refused"))
+            with mock.patch.object(BENCH.arms, "admit", admit), self.assertRaises(SystemExit):
+                run_tag(tmp)
+            native = Path(tmp) / "target-1" / REVISION
+            self.assertFalse((native / "observations").exists())
+            with mock.patch.object(BENCH.arms, "admit", admit), \
+                    self.assertRaisesRegex(SystemExit, "replay-arms: refused"):
+                run_tag(tmp)
+
+
+    def test_a_missing_observation_folder_still_records_zero_spend(self):
+        admit = mock.Mock(side_effect=SystemExit("replay-arms: refused"))
+        gone = mock.Mock(side_effect=lambda out: Path(out) / "observations-gone")
+        with mock.patch.object(BENCH.arms, "admit", admit):
+            self.assert_refused_at_zero(prepare_observation_dir=gone)
 
 
 if __name__ == "__main__":

@@ -199,12 +199,19 @@ SECRET = "sk-ant-oat01-never-on-a-command-line"
 def arm_manifest(decl):
     """The manifest a build of `decl` lists when it holds exactly what it declares."""
     commit = (decl["harness"] or {}).get("commit")
-    entries = [{"path": "home:.claude/rules/harness", "kind": "link",
-                "target": "/opt/model-citizen/claude/rules"}] if commit else []
-    roots = dict({"home": "/home/agent"}, **({"harness": "/opt/model-citizen"} if commit else {}))
-    return {"claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
+    observer_sha = BENCH.arms.file_sha(BENCH.arms.OBSERVER_SOURCE)
+    entries = [{"path": "observer:observe.py", "kind": "file", "mode": "0644", "size": 1,
+                "sha256": observer_sha}]
+    if commit:
+        entries.append({"path": "home:.claude/rules/harness", "kind": "link",
+                        "target": "/opt/model-citizen/claude/rules"})
+    roots = dict({"home": "/home/agent", "observer": "/opt/model-citizen-observer"},
+                 **({"harness": "/opt/model-citizen"} if commit else {}))
+    return {"schema": BENCH.arms.arm_manifest.SCHEMA,
+            "claude_code_version": decl["claude_code_version"], "harness_commit": commit, "roots": roots,
             "cli_packages": ["@anthropic-ai/claude-code@" + decl["claude_code_version"]],
-            "summary": {"rules": [e["path"] for e in entries]}, "entries": entries}
+            "environment": {BENCH.arms.EFFORT_ENV: None},
+            "summary": BENCH.arms.arm_manifest.summary(entries), "entries": entries}
 
 
 def arm_record(arm, ref="v9.9.9"):
@@ -212,12 +219,18 @@ def arm_record(arm, ref="v9.9.9"):
     harness = {"ref": ref, "commit": "c" * 40} if arm == "harness" else None
     decl = {"schema": 1, "arm": arm, "base_image": "base@sha256:" + "0" * 64, "claude_code_version": "1.0",
             "harness": harness, "components": [{"name": "base-image", "version": "base@sha256:" + "0" * 64},
-                                               {"name": "@anthropic-ai/claude-code", "version": "1.0"}]
-            + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else [])}
+                                               {"name": "@anthropic-ai/claude-code", "version": "1.0"},
+                                               {"name": "model-citizen-observer",
+                                                "version": "sha256:" + BENCH.arms.file_sha(
+                                                    BENCH.arms.OBSERVER_SOURCE)}]
+            + ([{"name": "model-citizen", "version": ref, "commit": "c" * 40}] if harness else []),
+            "effort": "high",
+            "observer_settings_sha256": BENCH.arms.digest(BENCH.arms.observer_settings())}
+    manifest = arm_manifest(decl)
     return {"arm": arm, "label": "harness@" + ref if harness else "bare",
             "image": "model-citizen-arm-%s:test" % arm, "image_id": "sha256:" + ("1" if harness else "2") * 64,
-            "declaration": decl, "declaration_sha256": ("d" if harness else "e") * 64, "manifest": arm_manifest(decl),
-            "manifest_sha256": ("a" if harness else "b") * 64,
+            "declaration": decl, "declaration_sha256": BENCH.arms.digest(decl), "manifest": manifest,
+            "manifest_sha256": BENCH.arms.digest(manifest),
             "harness_ref": ref if harness else None, "harness_commit": "c" * 40 if harness else None}
 
 
@@ -231,6 +244,7 @@ def options(tmp, **over):
             "arms": {"bare": arm_record("bare"), "harness": arm_record("harness")},
             "network": "model-citizen-arm-egress-test", "proxy": "http://model-citizen-arm-proxy-test:3128",
             "client_env": {"PATH": "/bin", "CLAUDE_CODE_OAUTH_TOKEN": SECRET},
+            "contamination_checker": lambda tasks, repo, commit, tmp: [],
             "skip_preflight": True}  # the pre-flight has its own tests; these count scored launches
     (Path(tmp) / "runs").mkdir()
     opts["repo"].parent.joinpath("home").mkdir()
@@ -265,8 +279,9 @@ class ReplayArmTests(unittest.TestCase):
         for flag, value in (("--model", "claude-test"), ("--output-format", "stream-json"),
                             ("--max-budget-usd", "2"), ("--permission-mode", "bypassPermissions")):
             self.assertEqual(command[command.index(flag) + 1], value)
-        self.assertEqual(json.loads(command[command.index("--settings") + 1]),
-                         {"permissions": {"deny": ["WebFetch", "WebSearch"]}})
+        settings = json.loads(command[command.index("--settings") + 1])
+        self.assertEqual(settings["permissions"], {"deny": ["WebFetch", "WebSearch"]})
+        self.assertEqual(sorted(settings["hooks"]), sorted(BENCH.observation.events("claude-code")))
 
     def test_a_run_is_a_fresh_container_with_the_snapshot_its_only_mount(self):
         """#428: no arm reads the host's home. The run is `docker run --rm` of the arm's image on
@@ -360,6 +375,27 @@ class ReplayCaptureTests(unittest.TestCase):
         self.assertEqual(parsed["spawns"], 3)
         self.assertEqual(BENCH.parse_result(json.dumps(result()))["tool_counts"], {})
 
+    def test_an_installed_checkout_reference_is_recorded_without_command_text(self):
+        message = call(None, ["Read"])
+        message["message"]["content"][0]["input"] = {
+            "file_path": "/opt/model-citizen/policy/hooks/stop-gate.py"}
+        parsed = BENCH.parse_result(json.dumps([message, result()]))
+        self.assertEqual(parsed["installed_checkout_reads"],
+                         ["Read:/opt/model-citizen"])
+
+    def test_a_scored_run_that_reads_the_installed_checkout_fails(self):
+        message = call(None, ["Read"])
+        message["message"]["content"][0]["input"] = {
+            "file_path": "/opt/./model-citizen/policy/hooks/stop-gate.py"}
+        with tempfile.TemporaryDirectory() as tmp:
+            opts = options(tmp, reps=1)
+            rows, _ = BENCH.replay([TASK], opts, Launch([json.dumps([message, result()])] * 2))
+        self.assertEqual([row["error_kind"] for row in rows],
+                         ["installed-checkout-read", "installed-checkout-read"])
+        self.assertTrue(all(row["passed"] is None for row in rows))
+        self.assertTrue(all(row["contamination_control"] == BENCH.CONTAMINATION_CONTROL
+                            for row in rows))
+
     def test_hook_blocks_is_none_for_output_kept_as_one_json_document(self):
         """Hook lifecycle events are the only structured place a Stop hook's `block` appears, and
         the CLI emits them only under `--include-hook-events`, which its help limits to
@@ -387,6 +423,50 @@ class ReplayRunTests(unittest.TestCase):
             launch = Launch([])
             rows, stopped = BENCH.replay([TASK], options(tmp, spend_cap=1.5), launch)
             self.assertEqual((rows, stopped, launch.calls), ([], True, []))
+
+    def test_contamination_refuses_before_a_probe_or_model_call(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            launch = Launch([])
+            opts = options(tmp, contamination_checker=lambda *args: ["demo: exposed"])
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], opts, launch)
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual((launch.probes, launch.calls), ([], []))
+
+    def test_an_issue_task_is_refused_even_when_the_same_fix_is_not_an_ancestor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            parent = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            base_branch = subprocess.check_output(
+                ["git", "-C", str(repo), "branch", "--show-current"]).decode().strip()
+            subprocess.run(["git", "-C", str(repo), "branch", "known-good"], check=True)
+            subprocess.run(["git", "-C", str(repo), "checkout", "-q", "known-good"], check=True)
+            (repo / "file.txt").write_text("the fix\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t",
+                            "commit", "-qam", "fix: known good"], check=True)
+            good = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            subprocess.run(["git", "-C", str(repo), "checkout", "-q", base_branch], check=True)
+            (repo / "file.txt").write_text("the fix\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t",
+                            "commit", "-qam", "fix: squashed equivalent"], check=True)
+            harness = subprocess.check_output(
+                ["git", "-C", str(repo), "rev-parse", "HEAD"]).decode().strip()
+            issue = dict(TASK, kind="issue", parent_sha=parent, good_sha=good,
+                         tests={"copy": [], "pattern": "test_*.py"})
+            ancestor = subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor",
+                                       good, harness])
+            self.assertEqual(ancestor.returncode, 1)
+            self.assertEqual(BENCH.contamination_errors([issue], repo, harness), [
+                "demo: same-repository issue task cannot prove its fixed files are absent from "
+                "the installed checkout"])
+
+    def test_a_git_error_in_a_synthetic_checkout_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = git_repo(Path(tmp) / "source")
+            with self.assertRaises(RuntimeError):
+                BENCH.contamination_errors([TASK], repo, "f" * 40)
 
     def test_the_cumulative_stop_counts_reported_cost_and_a_costless_error_at_the_run_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -438,8 +518,9 @@ class ReplayRunTests(unittest.TestCase):
             harness = [r for r in rows if r["arm"] == "harness"][0]
             self.assertNotIn("arm_label", harness)  # `harness@<dotted ref>` reads as an email to the lint
             self.assertEqual(bare["arm_image_id"], opts["arms"]["bare"]["image_id"])
-            self.assertEqual(harness["arm_manifest_sha256"], "a" * 64)
-            self.assertEqual(harness["arm_declaration_sha256"], "d" * 64)
+            self.assertEqual(harness["arm_manifest_sha256"], opts["arms"]["harness"]["manifest_sha256"])
+            self.assertEqual(harness["arm_declaration_sha256"],
+                             opts["arms"]["harness"]["declaration_sha256"])
             self.assertEqual((harness["harness_ref"], harness["harness_commit"]), ("v9.9.9", "c" * 40))
             self.assertEqual((bare["harness_ref"], bare["harness_commit"]), (None, None))
             self.assertEqual(bare["arm_base_image"], "base@sha256:" + "0" * 64)
@@ -454,11 +535,12 @@ class ReplayRunTests(unittest.TestCase):
 
     def test_an_errored_row_carries_the_arm_fields_and_no_stream_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
-            rows, _ = BENCH.replay([TASK], options(tmp, reps=1), Launch(["garbage"] * 2))
+            opts = options(tmp, reps=1)
+            rows, _ = BENCH.replay([TASK], opts, Launch(["garbage"] * 2))
             self.assertEqual([r["error"] for r in rows], [True, True])
             self.assertEqual(rows[0]["tool_counts"], {})
             self.assertIsNone(rows[0]["spawns"])
-            self.assertEqual(rows[0]["arm_manifest_sha256"], "b" * 64)
+            self.assertEqual(rows[0]["arm_manifest_sha256"], opts["arms"]["bare"]["manifest_sha256"])
 
     def test_a_run_that_times_out_has_its_container_removed_by_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1034,28 +1116,27 @@ class ManifestTests(unittest.TestCase):
     def setUp(self):
         self.tasks = BENCH.load_tasks(REPO / BENCH.TASKS)
 
-    def test_every_solved_issue_and_synthetic_task_is_pinned_by_full_sha(self):
-        kinds = [t["kind"] for t in self.tasks]
-        self.assertEqual((kinds.count("issue"), kinds.count("synthetic")), (5, 2))
-        self.assertEqual(len(kinds), len(set(t["id"] for t in self.tasks)))
-        for task in self.tasks:
-            self.assertRegex(task["parent_sha"], r"^[0-9a-f]{40}$")
-            if task["kind"] == "issue":
-                self.assertRegex(task["good_sha"], r"^[0-9a-f]{40}$")
-            else:
-                self.assertTrue((REPO / BENCH.ORACLES / (task["tests"]["oracle"] + ".py")).is_file())
+    def test_no_task_remains_live_without_proven_answer_absence(self):
+        self.assertEqual(self.tasks, [])
 
     def test_a_prompt_never_names_its_held_back_check(self):
-        for task in self.tasks:
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        tasks = self.tasks + [entry["task"] for entry in manifest["retired"]]
+        self.assertTrue(tasks, "prompt isolation must inspect at least one task")
+        for task in tasks:
             prompt = BENCH.prompt_of(task)
             for held in task["tests"].get("copy", []) + task["tests"].get("select", []) + ["oracle"]:
                 self.assertNotIn(held, prompt, msg=task["id"])
 
-    def test_every_task_declares_a_known_leak_class_the_loader_ignores(self):
-        for task in self.tasks:
-            self.assertIn(task["leak_class"], ("clean", "leaks", "control"), msg=task["id"])
-        self.assertEqual([t["id"] for t in self.tasks if t["leak_class"] != "clean"],
-                         ["link-alias", "cost-variants"])
+    def test_every_retired_issue_fix_is_reachable_from_the_installed_checkout(self):
+        manifest = json.loads((REPO / BENCH.TASKS).read_text(encoding="utf-8"))
+        issues = [entry for entry in manifest["retired"] if entry["task"]["kind"] == "issue"]
+        self.assertEqual(len(issues), 6)
+        for entry in issues:
+            good = entry["task"]["good_sha"]
+            done = subprocess.run(["git", "-C", str(REPO), "merge-base", "--is-ancestor",
+                                   good, "HEAD"])
+            self.assertEqual(done.returncode, 0, msg=entry["id"])
 
     def test_a_malformed_task_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

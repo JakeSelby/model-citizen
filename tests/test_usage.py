@@ -413,7 +413,8 @@ class RuleReportTests(TempHome):
         rows.append(dict(self.row(99), rules=None, rules_error="ImportError: no module"))
         rows[-1].pop("rules")
         self.write(rows)
-        lines = self.report(rules=True).splitlines()
+        # The detector table ends at the blank line; the rule coverage block follows it.
+        lines = self.report(rules=True).split("\n\n", 1)[0].splitlines()
         self.assertEqual(lines[0], "21 session(s) in the window carry no rule data "
                                    "(20 recorded before detectors, 1 rules_error); "
                                    "run --rescan to backfill")
@@ -429,7 +430,8 @@ class RuleReportTests(TempHome):
 
     def test_every_registry_id_gets_a_line_even_with_no_records_to_show_it(self):
         self.write([self.row(0)])
-        printed = {ln.split()[0] for ln in self.report(rules=True).splitlines()[2:]}
+        table = self.report(rules=True).split("\n\n", 1)[0]
+        printed = {ln.split()[0] for ln in table.splitlines()[2:]}
         detectors = usage_log.detectors()
         self.assertTrue(set(detectors.DETECTORS) <= printed)
 

@@ -164,9 +164,10 @@ class RobustnessTests(unittest.TestCase):
 
     def test_a_large_response_is_capped_and_fast(self):
         big = ("filler line that says nothing at all\n" * 30000)[:1_000_000]
-        start = time.monotonic()
+        # CPU time, so a loaded machine's wait for a core is not charged to the hook.
+        start = time.process_time()
         self.assertIsNone(run({"tool_name": "Bash", "tool_response": big}))
-        self.assertLess(time.monotonic() - start, 1.0)
+        self.assertLess(time.process_time() - start, 1.0)
         self.assertLessEqual(len(hook.flatten("x" * (hook.SCAN_CAP + 5000))), hook.SCAN_CAP)
 
 
