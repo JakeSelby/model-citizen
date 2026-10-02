@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 155,
+    "bug": 156,
     "chore": 103,
     "decision": 14,
     "epic": 27,
@@ -8549,6 +8549,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B154.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B155",
+      "github_number": 1160,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1160",
+      "title": "The 'Measured against bare' upcoming entry names a closed issue",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B155.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
