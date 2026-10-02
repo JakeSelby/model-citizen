@@ -28,6 +28,26 @@ class FreezeRecordTests(unittest.TestCase):
             self.assertTrue(data["branch"].startswith("release/"))
             self.assertRegex(data["commit"], r"^[0-9a-f]{40,64}$")
 
+    def test_the_repository_record_names_no_released_branch(self):
+        self.assertEqual(compatibility.stale_freeze_errors(
+            compatibility.freeze_record(REPO),
+            lambda tag: compatibility.tag_behind_head(REPO, tag)), [])
+
+    def test_a_record_frozen_at_a_branch_whose_tag_is_behind_head_is_refused(self):
+        frozen = {"schema_version": 1, "state": "frozen", "branch": "release/v0.14.2",
+                  "commit": "040462636205d8edc766775ebe2cc9571ac6b217"}
+        asked = []
+        errors = compatibility.stale_freeze_errors(frozen, lambda tag: asked.append(tag) or True)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("release/v0.14.2", errors[0])
+        # The tag comes from the record, so a catalog already at the next version cannot hide it.
+        self.assertEqual(asked, ["v0.14.2"])
+        self.assertEqual(compatibility.stale_freeze_errors({"state": "open"}, lambda tag: True), [])
+        self.assertEqual(compatibility.stale_freeze_errors(
+            dict(frozen, branch="hotfix/v0.14.2"), lambda tag: True), [])
+        # The tagged release commit itself, and any commit before the tag, may still be frozen.
+        self.assertEqual(compatibility.stale_freeze_errors(frozen, lambda tag: False), [])
+
     def test_a_missing_record_means_no_branch_is_frozen(self):
         self.assertEqual(compatibility.freeze_record(self.root)["state"], "open")
 
@@ -74,7 +94,8 @@ class FreezeDriftTests(unittest.TestCase):
 
     def git(self, *args):
         return subprocess.check_output(["git", "-C", str(self.work), "-c", "user.name=t",
-                                        "-c", "user.email=t", *args], text=True,
+                                        "-c", "user.email=t", "-c", "gc.auto=0",
+                                        "-c", "maintenance.auto=false", *args], text=True,
                                        stderr=subprocess.DEVNULL).strip()
 
     def write(self, name, text):
@@ -84,6 +105,19 @@ class FreezeDriftTests(unittest.TestCase):
         self.git("add", "-A")
         self.git("commit", "--quiet", "-m", message)
         return self.git("rev-parse", "HEAD")
+
+    def test_a_tag_counts_as_behind_head_only_once_a_later_commit_contains_it(self):
+        self.assertFalse(compatibility.tag_behind_head(self.work, "v1.0.0"), "no tag yet")
+        self.git("tag", "v1.0.0")
+        self.assertFalse(compatibility.tag_behind_head(self.work, "v1.0.0"), "HEAD is the tag")
+        self.write("docs/releasing.md", "after the tag\n")
+        self.commit("after the tag")
+        self.assertTrue(compatibility.tag_behind_head(self.work, "v1.0.0"))
+        self.git("checkout", "--quiet", "-b", "before-the-tag", self.frozen)
+        self.git("tag", "-d", "v1.0.0")
+        self.git("tag", "v1.0.0", "main")
+        self.assertFalse(compatibility.tag_behind_head(self.work, "v1.0.0"),
+                         "a branch that does not contain the tag is not past it")
 
     def test_an_unchanged_tip_reports_no_drift_and_no_merge_refusal(self):
         self.write("docs/releasing.md", "second\n")
