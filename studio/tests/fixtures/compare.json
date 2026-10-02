@@ -1,0 +1,560 @@
+{
+  "base": {
+    "analysis": {
+      "result": {
+        "arms": {
+          "bare": {
+            "attempts": 6,
+            "cost_of_pass": 1.0,
+            "cost_usd": 6.0,
+            "errors": 0,
+            "mean_cost_per_attempt": 1.0,
+            "pass_rate": 1.0,
+            "pass_rate_interval_descriptive": [
+              0.6097,
+              1.0
+            ],
+            "passes": 6
+          },
+          "harness": {
+            "attempts": 6,
+            "cost_of_pass": 1.0,
+            "cost_usd": 6.0,
+            "errors": 0,
+            "mean_cost_per_attempt": 1.0,
+            "pass_rate": 1.0,
+            "pass_rate_interval_descriptive": [
+              0.6097,
+              1.0
+            ],
+            "passes": 6
+          }
+        },
+        "claim": null,
+        "confidence": 0.95,
+        "delegation": {
+          "absorbable": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "break_even": 7.6,
+          "break_even_source": "FR-34, hypothetical",
+          "fired_share": 0.75,
+          "label": "adherence, descriptive, not causal",
+          "min_runs": 4,
+          "registered": false,
+          "tasks": {
+            "a": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            },
+            "b": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            },
+            "c": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            }
+          },
+          "verdicts": {
+            "declined-below-break-even": 0,
+            "fired": 0,
+            "missed-above-break-even": 0,
+            "not-offered": 0,
+            "unknown": 3
+          }
+        },
+        "delta": 0.125,
+        "difference": 0.0,
+        "difference_interval": [
+          0.0,
+          0.0
+        ],
+        "limitation": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "long": null,
+        "method": "task-clustered paired percentile bootstrap",
+        "ratio": 1.0,
+        "ratio_interval": [
+          1.0,
+          1.0
+        ],
+        "ratio_undefined": null,
+        "reason": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "resamples": 10000,
+        "seed": 795,
+        "sm2_eligible": false,
+        "tasks": 3,
+        "undefined_resamples": 0,
+        "verdict": "inconclusive"
+      },
+      "target": 1
+    },
+    "evidence": "exploratory",
+    "finished": {
+      "a": 2,
+      "b": 2,
+      "c": 2
+    },
+    "key": "f5cbf13332ce6fe7eb8cdc31ac120bbdef1b1e14ba5eb2a4866128aa86a02b06",
+    "model": "claude-test",
+    "pack_digest": null,
+    "ref": {
+      "config_digest": null,
+      "draft": null,
+      "kind": "branch",
+      "ref": "main",
+      "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "version": null
+    },
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "stale": false,
+    "stale_reason": null,
+    "target": 1,
+    "tasks": [
+      "a",
+      "b",
+      "c"
+    ],
+    "trials": 2
+  },
+  "candidate": {
+    "analysis": {
+      "result": {
+        "arms": {
+          "bare": {
+            "attempts": 6,
+            "cost_of_pass": 1.0,
+            "cost_usd": 6.0,
+            "errors": 0,
+            "mean_cost_per_attempt": 1.0,
+            "pass_rate": 1.0,
+            "pass_rate_interval_descriptive": [
+              0.6097,
+              1.0
+            ],
+            "passes": 6
+          },
+          "harness": {
+            "attempts": 6,
+            "cost_of_pass": 0.541667,
+            "cost_usd": 3.25,
+            "errors": 0,
+            "mean_cost_per_attempt": 0.541667,
+            "pass_rate": 1.0,
+            "pass_rate_interval_descriptive": [
+              0.6097,
+              1.0
+            ],
+            "passes": 6
+          }
+        },
+        "claim": null,
+        "confidence": 0.95,
+        "delegation": {
+          "absorbable": [
+            "Read",
+            "Grep",
+            "Glob"
+          ],
+          "break_even": 7.6,
+          "break_even_source": "FR-34, hypothetical",
+          "fired_share": 0.75,
+          "label": "adherence, descriptive, not causal",
+          "min_runs": 4,
+          "registered": false,
+          "tasks": {
+            "a": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            },
+            "b": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            },
+            "c": {
+              "above_break_even": null,
+              "bare": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "not_offered": 0,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "harness": {
+                "absorbed_calls": null,
+                "errored": 0,
+                "gather_median": null,
+                "label": "adherence, descriptive, not causal",
+                "not_offered": 0,
+                "not_spawning_usd": null,
+                "offered": 0,
+                "runs": 2,
+                "spawning_runs": 0,
+                "spawning_usd": null,
+                "spawns": null,
+                "spawns_unknown": 2,
+                "workflow_launches": null
+              },
+              "size": null,
+              "verdict": "unknown"
+            }
+          },
+          "verdicts": {
+            "declined-below-break-even": 0,
+            "fired": 0,
+            "missed-above-break-even": 0,
+            "not-offered": 0,
+            "unknown": 3
+          }
+        },
+        "delta": 0.125,
+        "difference": 0.0,
+        "difference_interval": [
+          0.0,
+          0.0
+        ],
+        "limitation": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "long": null,
+        "method": "task-clustered paired percentile bootstrap",
+        "ratio": 0.5417,
+        "ratio_interval": [
+          0.51,
+          0.59
+        ],
+        "ratio_undefined": null,
+        "reason": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "resamples": 10000,
+        "seed": 795,
+        "sm2_eligible": false,
+        "tasks": 3,
+        "undefined_resamples": 0,
+        "verdict": "inconclusive"
+      },
+      "target": 2
+    },
+    "evidence": "exploratory",
+    "finished": {
+      "a": 2,
+      "b": 2,
+      "c": 2
+    },
+    "key": "f5cbf13332ce6fe7eb8cdc31ac120bbdef1b1e14ba5eb2a4866128aa86a02b06",
+    "model": "claude-test",
+    "pack_digest": null,
+    "ref": {
+      "config_digest": null,
+      "draft": null,
+      "kind": "branch",
+      "ref": "faster",
+      "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "version": null
+    },
+    "run_id": "00000000-0000-4000-8000-000000000001",
+    "stale": false,
+    "stale_reason": null,
+    "target": 2,
+    "tasks": [
+      "a",
+      "b",
+      "c"
+    ],
+    "trials": 2
+  },
+  "comparable": true,
+  "control": "base",
+  "engine": "replay_stats.compare",
+  "error": null,
+  "key_match": true,
+  "refusals": [],
+  "result": {
+    "arms": [
+      {
+        "arm": "candidate",
+        "exploratory": true,
+        "exploratory_reasons": [
+          "fewer than 5 paired trials per task (2)"
+        ],
+        "measures": {
+          "cost_per_passed": {
+            "control_n": 6,
+            "effect": -0.4583,
+            "estimand": "measured",
+            "estimate": 0.5417,
+            "interval": [
+              -0.49,
+              -0.41
+            ],
+            "kind": "pooled",
+            "label": "cost per passed attempt",
+            "n": 6,
+            "reading": "lower",
+            "reason": null,
+            "resolvable": 0.04,
+            "spread": {
+              "max_over_min": 1.1,
+              "sd": 0.042151
+            }
+          },
+          "cost_usd": {
+            "control_n": 6,
+            "effect": -0.4583,
+            "estimand": "measured",
+            "estimate": 0.5417,
+            "interval": [
+              -0.49,
+              -0.41
+            ],
+            "kind": "ratio",
+            "label": "cost",
+            "n": 6,
+            "reading": "lower",
+            "reason": null,
+            "resolvable": 0.04,
+            "spread": {
+              "max_over_min": 1.1,
+              "sd": 0.042151
+            }
+          },
+          "first_call_context": {
+            "control_n": 6,
+            "estimand": "soft estimate",
+            "estimate": null,
+            "interval": null,
+            "kind": "ratio",
+            "label": "standing prefix tokens",
+            "n": 6,
+            "reading": "unavailable",
+            "reason": "12 attempt(s) lack soft_prefix",
+            "spread": null
+          },
+          "output_tokens": {
+            "control_n": 6,
+            "estimand": "measured",
+            "estimate": null,
+            "interval": null,
+            "kind": "ratio",
+            "label": "output tokens",
+            "n": 6,
+            "reading": "unavailable",
+            "reason": "12 attempt(s) lack output_tokens",
+            "spread": null
+          },
+          "pass_rate": {
+            "control_n": 6,
+            "effect": 0.0,
+            "estimand": "measured",
+            "estimate": 0.0,
+            "interval": [
+              0.0,
+              0.0
+            ],
+            "kind": "difference",
+            "label": "pass rate",
+            "n": 6,
+            "reading": "inconclusive",
+            "reason": "the interval spans no effect",
+            "resolvable": 0.0,
+            "spread": {
+              "max_over_min": 1.0,
+              "sd": 0.0
+            }
+          },
+          "tool_calls": {
+            "control_n": 6,
+            "estimand": "measured",
+            "estimate": null,
+            "interval": null,
+            "kind": "ratio",
+            "label": "tool calls",
+            "n": 6,
+            "reading": "unavailable",
+            "reason": "12 attempt(s) lack tool_calls",
+            "spread": null
+          },
+          "turns": {
+            "control_n": 6,
+            "estimand": "measured",
+            "estimate": null,
+            "interval": null,
+            "kind": "ratio",
+            "label": "turns",
+            "n": 6,
+            "reading": "unavailable",
+            "reason": "12 attempt(s) lack turns",
+            "spread": null
+          }
+        },
+        "removed": null,
+        "tasks": 3,
+        "trials": 2
+      }
+    ],
+    "comparisons": 1,
+    "confidence": 0.95,
+    "control": "base",
+    "correction": null,
+    "method": "task-clustered paired percentile bootstrap",
+    "prefix": {
+      "base": {
+        "reason": "6 run(s) lack a first-call prompt figure",
+        "usable": false,
+        "worst_spread": 0.0
+      },
+      "candidate": {
+        "reason": "6 run(s) lack a first-call prompt figure",
+        "usable": false,
+        "worst_spread": 0.0
+      }
+    },
+    "resamples": 10000,
+    "seed": 795
+  },
+  "schema_version": 1
+}
