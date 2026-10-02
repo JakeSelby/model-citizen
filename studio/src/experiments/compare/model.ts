@@ -8,7 +8,7 @@ export type CompareSide = {
   run_id: string; target: number; ref: ReplayTarget; tasks: string[]; model: string;
   trials: number; max_budget_usd: string; run_status: string; stopped_at_cap: boolean;
   pack_digest: string | null; key: string; evidence: string;
-  finished: Record<string, number>; freshness: "current" | "stale" | "not checked";
+  finished: Record<string, number>; stamps: Record<string, unknown[]>; freshness: "current" | "stale" | "not checked";
   stale: boolean; stale_reason: string | null;
   analysis: ReplayAnalysis | null;
 };
@@ -30,7 +30,8 @@ export type EngineCompare = { confidence?: number; arms?: EngineArm[]; [field: s
 export type CompareResult = {
   schema_version: number; engine: string; control: string;
   base: CompareSide; candidate: CompareSide; key_match: boolean;
-  comparable: boolean; refusals: string[]; stale: string[];
+  comparable: boolean; refusals: string[]; stale: string[]; notes: string[];
+  direction_withheld: string[];
   preferred: Record<string, "lower" | "higher">; result: EngineCompare | null; error: string | null;
 };
 
@@ -82,6 +83,11 @@ export function verdictOf(reading: string, preferred: "lower" | "higher" | undef
   if (!preferred || (reading !== "lower" && reading !== "higher")) return { label: reading, direction: null };
   const direction: Direction = reading === preferred ? "better" : "worse";
   return { label: `${reading} (${direction})`, direction };
+}
+
+/** The direction table the headlines may use: none while the route withholds a direction. */
+export function directionsFor(result: CompareResult): Record<string, "lower" | "higher"> {
+  return result.direction_withheld.length ? {} : result.preferred;
 }
 
 export function measureHeadlines(result: EngineCompare | null, preferred: Record<string, "lower" | "higher"> = {}): Array<{

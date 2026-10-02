@@ -6,7 +6,7 @@ import { useState } from "react";
 import { analysisLines, engineLeaves } from "../replay/model";
 import { compareRuns } from "./api";
 import {
-  compareErrorMessage, measureHeadlines, sideLine, validateCompare,
+  compareErrorMessage, directionsFor, measureHeadlines, sideLine, validateCompare,
   type CompareInput, type Direction, type CompareResult, type CompareSide,
 } from "./model";
 
@@ -38,7 +38,7 @@ function SideColumn({ title, side }: { title: string; side: CompareSide }) {
 /** The comparison as the engine reported it: refusals, readings with their intervals and trial
  * counts, both sides' identities and recorded analyses, and every field of the engine's output. */
 export function CompareReport({ result }: { result: CompareResult }) {
-  const headlines = measureHeadlines(result.result, result.preferred);
+  const headlines = measureHeadlines(result.result, directionsFor(result));
   const exploratory = (result.result?.arms ?? []).filter((arm) => arm.exploratory);
   return (
     <Stack gap="md">
@@ -51,6 +51,12 @@ export function CompareReport({ result }: { result: CompareResult }) {
       {exploratory.map((arm) => <Alert color="yellow" key={arm.arm} title="Exploratory">
         The engine marks {arm.arm} exploratory: {arm.exploratory_reasons.join("; ")}.
       </Alert>)}
+      {result.notes.length > 0 && <Alert color="yellow" title="Note">
+        <ul>{result.notes.map((item) => <li key={item}>{item}</li>)}</ul>
+      </Alert>}
+      {result.comparable && result.direction_withheld.length > 0 && <Text c="dimmed" size="sm">
+        {`No reading is labelled better or worse: ${result.direction_withheld.join("; ")}.`}
+      </Text>}
       {result.error !== null && <Alert color="yellow" title="Engine refused">{result.error}</Alert>}
       {headlines.length > 0 && <Table.ScrollContainer minWidth={720} type="native">
         <Table striped>

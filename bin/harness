@@ -6863,6 +6863,8 @@ def cmd_runs(args: argparse.Namespace) -> int:
                    side["freshness"], ": " + side["stale_reason"] if side["stale"] else ""))
         for item in result["stale"]:
             say("runs: stale, the comparison describes an older revision of the " + item)
+        for item in result["notes"]:
+            say("runs: note, " + item)
         for reason in result["refusals"]:
             say("runs: not compared, " + reason)
         if result["error"]:

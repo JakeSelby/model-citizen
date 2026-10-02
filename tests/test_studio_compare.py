@@ -67,7 +67,7 @@ class Runs:
         self.root = Path(root)
         self.records = {}
 
-    def add(self, run_id, selected, rows_by_revision, status="succeeded", stop_after=None):
+    def add(self, run_id, selected, rows_by_revision, status="succeeded", stop_after=None, stamp=None):
         """`stop_after` keeps only that many tasks of the first target and stops at the cap, as
         the native runner does, so the second target never launches."""
         run_root = self.root / run_id
@@ -75,7 +75,8 @@ class Runs:
 
         def launch(command, **_kwargs):
             ref = command[command.index("--tag") + 1]
-            rows = [dict(row, tag=ref, harness_sha=ref, model=selected.model, schema_version=1)
+            rows = [dict(row, tag=ref, harness_sha=ref, model=selected.model, schema_version=1,
+                         **(stamp or {}))
                     for row in rows_for(rows_by_revision[ref])]
             if stop_after is not None:
                 kept = sorted({row["task"] for row in rows})[:stop_after]
@@ -187,8 +188,10 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(json.loads(printed), json.loads(json.dumps(payload)))
         measure = payload["result"]["arms"][0]["measures"]["cost_per_passed"]
         self.assertEqual(measure["reading"], "lower")
-        self.assertEqual(payload["preferred"],
-                         {"cost_usd": "lower", "cost_per_passed": "lower", "pass_rate": "higher"})
+        self.assertEqual(payload["preferred"], {"cost_per_passed": "lower", "pass_rate": "higher"})
+        self.assertEqual(payload["direction_withheld"], [
+            "the base is exploratory", "the candidate is exploratory",
+            "the engine marks candidate exploratory"])
         self.assertEqual(set(payload["preferred"]) - {key for key, _, _ in compare._engine().MEASURES},
                          set())
         self.assertEqual(json.loads(FIXTURE.read_text(encoding="utf-8")), json.loads(json.dumps(payload)))
@@ -245,6 +248,56 @@ class CompareTests(unittest.TestCase):
             "different evaluator packs: the base ran no pack, the candidate " + "f" * 64,
             "different per-trial budget caps: the base ran $2, the candidate $5"])
         self.assertEqual(compare.refusals(base, base), ["both sides are target 1 of the same run"])
+
+    def test_pinned_stamps_must_match_and_a_different_run_date_is_named(self):
+        stamp = {"cli_version": "2.1.0", "os": "linux", "prices_sha256": "p" * 64,
+                 "date": "2026-09-01"}
+        later = "00000000-0000-4000-8000-000000000007"
+        upgraded = "00000000-0000-4000-8000-000000000008"
+        self.runs.add(later, request([target("branch", "main", BASE_REV),
+                                      target("branch", "faster", CANDIDATE_REV)]),
+                      {BASE_REV: BASE, CANDIDATE_REV: CHEAPER}, stamp=stamp)
+        self.runs.add(upgraded, request([target("branch", "main", BASE_REV),
+                                         target("branch", "faster", CANDIDATE_REV)]),
+                      {BASE_REV: BASE, CANDIDATE_REV: CHEAPER},
+                      stamp=dict(stamp, cli_version="2.2.0", date="2026-10-01"))
+        _status, payload = route_call(self.runs, sides((later, 1), (upgraded, 2)))
+        self.assertFalse(payload["comparable"])
+        self.assertEqual(payload["refusals"], [
+            "different CLI versions: the base ran 2.1.0, the candidate 2.2.0"])
+        self.assertEqual(payload["notes"], [
+            "different run dates: the base ran 2026-09-01, the candidate 2026-10-01"])
+        _status, payload = route_call(self.runs, sides((FIRST_RUN, 1), (later, 2)))
+        self.assertEqual(payload["refusals"], [
+            "different CLI versions: the base ran unrecorded, the candidate 2.1.0",
+            "different container platforms: the base ran unrecorded, the candidate linux",
+            "different price tables: the base ran unrecorded, the candidate " + "p" * 64])
+        same_day = dict(stamp, date="2026-09-01")
+        self.runs.add("00000000-0000-4000-8000-000000000009",
+                      request([target("branch", "main", BASE_REV),
+                               target("branch", "faster", CANDIDATE_REV)]),
+                      {BASE_REV: BASE, CANDIDATE_REV: CHEAPER},
+                      stamp=dict(same_day, date="2026-10-01"))
+        code, printed = cli(self.runs, (later, 1), ("00000000-0000-4000-8000-000000000009", 2),
+                            json_mode=False)
+        self.assertEqual(code, 0)
+        self.assertIn("runs: note, different run dates: the base ran 2026-09-01, the candidate "
+                      "2026-10-01", printed)
+
+    def test_a_direction_is_withheld_unless_the_result_could_be_cited(self):
+        base = compare.load_side(self.runs, REPO, FIRST_RUN, 1)
+        candidate = compare.load_side(self.runs, REPO, FIRST_RUN, 2)
+        registered = [dict(side, evidence="pre-registered") for side in (base, candidate)]
+        solid = {"arms": [{"arm": "candidate", "exploratory": False}]}
+        self.assertEqual(compare.direction_withheld(*registered, solid), [])
+        self.assertEqual(compare.direction_withheld(
+            *registered, {"arms": [{"arm": "candidate", "exploratory": True}]}),
+            ["the engine marks candidate exploratory"])
+        self.assertEqual(compare.direction_withheld(registered[0], candidate, solid),
+                         ["the candidate is exploratory"])
+        dated = dict(registered[1], stamps=dict(registered[1]["stamps"], date=["2026-10-01"]))
+        self.assertEqual(compare.direction_withheld(registered[0], dated, solid),
+                         ["the two runs are from different dates"])
 
     def test_runs_with_different_per_trial_budget_caps_are_refused(self):
         run_id = "00000000-0000-4000-8000-000000000005"

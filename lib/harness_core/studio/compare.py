@@ -2,10 +2,12 @@
 
 A side is one target of one finished live replay: its harness arm's native rows are the run being
 compared, and its own bare arm stays with its own recorded analysis. Two sides are compared only
-when they ran the same tasks, model, trials per task and evaluator pack and finished the same
-trials; otherwise the comparison is refused and every difference is named. A comparable pair goes
-to `replay_stats.compare` with the base as control, and its output is returned verbatim: Studio
-computes no interval, ratio, reading or verdict of its own.
+when each comes from a succeeded run that did not stop at its spend cap and finished every task and
+trial it requested, and both ran the same tasks, model, trials per task, evaluator pack, per-trial
+budget cap and pinned environment stamps (`STAMP_FIELDS`); otherwise the comparison is refused and
+every reason is named. A comparable pair goes to `replay_stats.compare` with the base as control,
+and its output is returned verbatim: Studio computes no interval, ratio or reading of its own. A
+preferred direction is attached to a reading only when the result could be cited as evidence.
 """
 from __future__ import annotations
 
@@ -24,10 +26,18 @@ ENGINE = "replay_stats.compare"
 REPLAY_SUITE = "live-replay"
 COMPLETE_STATUS = "succeeded"
 # Which way each measure is preferable. The engine states no direction in its output, so this is
-# the one table: lower cost and higher pass rate are preferable, as the engine's own Pareto chart
-# says. A measure without an entry (tokens, turns, tool calls) gets the engine's reading alone,
-# since fewer of them is not better in itself.
-PREFERRED = {"cost_usd": "lower", "cost_per_passed": "lower", "pass_rate": "higher"}
+# the one table: a lower Cost-of-Pass and a higher pass rate are preferable, the two measures the
+# evidence standard's decision rule judges. Every other measure, per-attempt cost included, gets
+# the engine's reading alone: a run that gives up early is cheaper per attempt without being better.
+PREFERRED = {"cost_per_passed": "lower", "pass_rate": "higher"}
+# Row stamps the evidence standard's protocol item 2 (pinned inputs) and item 4 (held constant)
+# require equal across a comparison; a difference refuses it. `(field, what it names)`.
+STAMP_FIELDS = (("cli_version", "CLI versions"), ("os", "container platforms"),
+                ("prices_sha256", "price tables"), ("tier", "replay tiers"))
+# The run date is item 4's run window. Two runs are never in one window, so a different date is
+# named and withholds a direction (the result is not citable) rather than refusing the comparison.
+DATE_FIELD = "date"
+PREREGISTERED = "pre-registered"
 _ENGINE_MODULE = None
 
 
@@ -122,8 +132,21 @@ def load_side(supervisor: runs.RunSupervisor, repository: Path, run_id: str,
             "pack_digest": request.pack["digest"] if request.pack else None,
             "key": replay.comparison_key(request),
             "evidence": replay.target_evidence(request, target),
-            "finished": _finished(rows), "stale": stale, "stale_reason": reason,
+            "finished": _finished(rows), "stamps": _stamps(rows), "stale": stale, "stale_reason": reason,
             "analysis": recorded, "_rows": rows}
+
+
+def _stamps(rows: List[Mapping[str, Any]]) -> Dict[str, List[Any]]:
+    """Each stamp field's distinct values across the side's rows; absent reads as null."""
+    out = {}
+    for field in [name for name, _ in STAMP_FIELDS] + [DATE_FIELD]:
+        values = {json.dumps(row.get(field), sort_keys=True) for row in rows}
+        out[field] = [json.loads(value) for value in sorted(values)]
+    return out
+
+
+def _shown(values: List[Any]) -> str:
+    return ", ".join("unrecorded" if value is None else str(value) for value in values) or "none"
 
 
 def _listed(values: List[str]) -> str:
@@ -168,6 +191,35 @@ def refusals(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> List[str]
     if base["max_budget_usd"] != candidate["max_budget_usd"]:
         out.append("different per-trial budget caps: the base ran $%s, the candidate $%s"
                    % (base["max_budget_usd"], candidate["max_budget_usd"]))
+    for field, label in STAMP_FIELDS:
+        if base["stamps"][field] != candidate["stamps"][field]:
+            out.append("different %s: the base ran %s, the candidate %s"
+                       % (label, _shown(base["stamps"][field]), _shown(candidate["stamps"][field])))
+    return out
+
+
+def notes(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> List[str]:
+    """Differences named without refusing: the run dates."""
+    if base["stamps"][DATE_FIELD] == candidate["stamps"][DATE_FIELD]:
+        return []
+    return ["different run dates: the base ran %s, the candidate %s"
+            % (_shown(base["stamps"][DATE_FIELD]), _shown(candidate["stamps"][DATE_FIELD]))]
+
+
+def direction_withheld(base: Mapping[str, Any], candidate: Mapping[str, Any],
+                       result: Optional[Mapping[str, Any]]) -> List[str]:
+    """Why no reading may be labelled better or worse: a result the evidence standard says
+    supports no claim (an exploratory arm or side, item 1 and item 7) or a different run window
+    (item 4). Empty when a direction may be shown."""
+    out = []
+    for name, side in ((BASE, base), (CANDIDATE, candidate)):
+        if side["evidence"] != PREREGISTERED:
+            out.append("the %s is %s" % (name, side["evidence"]))
+    for arm in (result or {}).get("arms") or []:
+        if arm.get("exploratory"):
+            out.append("the engine marks %s exploratory" % arm.get("arm"))
+    if notes(base, candidate):
+        out.append("the two runs are from different dates")
     return out
 
 
@@ -190,6 +242,8 @@ def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, 
             "comparable": not reasons, "refusals": reasons,
             "stale": ["%s: %s" % (name, side["stale_reason"] or "stale")
                       for name, side in ((BASE, base), (CANDIDATE, candidate)) if side["stale"]],
+            "notes": notes(base, candidate),
+            "direction_withheld": direction_withheld(base, candidate, result),
             "preferred": dict(PREFERRED), "result": result, "error": error}
 
 

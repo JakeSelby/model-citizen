@@ -80,15 +80,27 @@ test("the preferred direction labels a reading better or worse, never flat", () 
   assert.deepEqual(verdictOf("inconclusive", "lower"), { label: "inconclusive", direction: null });
   assert.deepEqual(verdictOf("lower", undefined), { label: "lower", direction: null });
   const worse = clone(fixture);
+  worse.direction_withheld = [];
   Object.assign(worse.result!.arms![0].measures.pass_rate, { reading: "lower" });
   const html = render(worse);
   assert.match(html, /lower \(worse\)/);
   assert.match(html, /lower \(better\)/);
   assert.doesNotMatch(html, /flat/);
+  assert.doesNotMatch(html, /cost: lower \(/);
   const soft = clone(fixture);
   Object.assign(soft.result!.arms![0].measures.first_call_context, { estimand: "soft estimate" });
   assert.match(measureHeadlines(soft.result, soft.preferred).find((entry) => entry.key === "first_call_context")!.line,
     /estimand "soft estimate"/);
+});
+
+test("an exploratory or undated-window result shows the plain reading and says why", () => {
+  assert.ok(fixture.direction_withheld.length > 0);
+  const html = render(fixture);
+  assert.doesNotMatch(html, /\((better|worse)\)/);
+  assert.match(html, /cost per passed attempt: lower; /);
+  assert.match(html, /No reading is labelled better or worse: the base is exploratory; the candidate is exploratory; the engine marks candidate exploratory\./);
+  const dated = { ...clone(fixture), notes: ["different run dates: the base ran 2026-09-01, the candidate 2026-10-01"] };
+  assert.match(render(dated), /different run dates: the base ran 2026-09-01, the candidate 2026-10-01/);
 });
 
 test("a refused comparison names every difference and shows no figures", () => {

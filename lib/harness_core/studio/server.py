@@ -1644,6 +1644,8 @@ RUNS_COMPARE = ResponseSchema("json-object", (("schema_version", "integer"),
                                                 ("comparable", "boolean"),
                                                 ("refusals", "array"),
                                                 ("stale", "array"),
+                                                ("notes", "array"),
+                                                ("direction_withheld", "array"),
                                                 ("preferred", "object"),
                                                 ("result", "object-or-null"),
                                                 ("error", "string-or-null")))
