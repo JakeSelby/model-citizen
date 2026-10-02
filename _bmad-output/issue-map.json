@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 332,
+    "story": 333,
     "task": 41
   },
   "items": [
@@ -8497,6 +8497,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C102.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S332",
+      "github_number": 1152,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1152",
+      "title": "Let ablation runs use a pinned evaluator pack",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S332.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
