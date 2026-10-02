@@ -32,8 +32,6 @@ from test_studio_draft_apply import Home  # noqa: E402
 
 STANCE = "stances.voice"
 DRAFT = {"name": "first-run", "draft_id": "d1"}
-STANDING_ATTENTION = ("constrained roles: use `citizen role run`; `citizen role status` reports "
-                      "workers, not native qualification")
 
 
 def _row(phase, draft, apply_id="a1", **extra):
@@ -222,13 +220,8 @@ class FirstRunDraftTests(unittest.TestCase):
             self.assertEqual(json.loads(home.config.read_text(encoding="utf-8"))["stances"]["voice"], stance)
             self.assertEqual(sorted(status["commands"]["headless"]), sorted(shown))
 
-    def test_a_complete_twin_home_ends_with_doctor_clear_but_for_the_standing_roles_line(self):
-        """AC1 in a home with every identity field set and every client on PATH.
-
-        Doctor always prints its constrained-roles pointer with a backticked `citizen` command,
-        which the overview's parser counts as a repair, so no home can reach `passed` until that
-        classification changes. Every other check here is clear, and the guide reports that line.
-        """
+    def test_a_fully_configured_twin_home_ends_with_doctor_passed(self):
+        """AC1: every identity field set and every client on PATH, so the applied run reads green."""
         config = dict(self.initial, identity=dict(self.initial["identity"], name="Casey Example",
                                                   role="Developer", github="casey-example"))
         with self.first_run_draft(config, tools=(("codex", "codex-cli 0.130.0"),)) as (name, revision, home, _b):
@@ -236,11 +229,10 @@ class FirstRunDraftTests(unittest.TestCase):
             done = home.cli("draft", "apply", name, "--revision", revision, "--json", timeout=600)
             result = json.loads(done.stdout)
             self.assertEqual(result["status"], "applied", result)
-            attention = [check["message"] for check in result["doctor"]["checks"]
-                         if check["status"] == "attention"]
-            self.assertEqual(attention, [STANDING_ATTENTION], result["doctor"]["checks"])
+            self.assertEqual(result["doctor"]["status"], "passed", result["doctor"]["checks"])
             self.assertIn("drift: none", [check["message"] for check in result["doctor"]["checks"]])
-            self.assertEqual(self._status(home, name)["applied"]["doctor"], result["doctor"]["status"])
+            status = self._status(home, name)
+            self.assertEqual((status["state"], status["applied"]["doctor"]), ("complete", "passed"))
 
     def test_the_cli_reports_an_invalid_name_as_an_error_object(self):
         with tempfile.TemporaryDirectory() as temporary:

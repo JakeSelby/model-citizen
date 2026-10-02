@@ -58,6 +58,17 @@ class OverviewDomainTests(unittest.TestCase):
             "bin/harness install", "/plugin install model-citizen@market",
         ])
 
+    def test_the_constrained_roles_pointer_is_informational_not_a_repair(self):
+        """Regression: doctor prints it on every machine, so counting it kept every home amber."""
+        checks = overview.doctor_checks([
+            "  constrained roles: use `citizen role run`; `citizen role status` reports workers, "
+            "not native qualification",
+            "hooks: none; run `citizen sync`",
+        ])
+        self.assertEqual((checks[0]["status"], checks[0]["fixes"], checks[0]["fix"]),
+                         ("informational", [], None))
+        self.assertEqual(checks[1]["status"], "attention")
+
     def test_each_source_failure_stays_distinct_from_empty_or_healthy(self):
         sources = self.sources()
         sources["doctor"] = mock.Mock(side_effect=OSError("private detail"))

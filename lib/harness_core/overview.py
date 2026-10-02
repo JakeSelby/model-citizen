@@ -19,6 +19,9 @@ _SOURCE: Optional[Callable[[], Dict[str, Any]]] = None
 _REPAIR_COMMAND = re.compile(
     r"`((?:citizen|bin/harness)(?: [^`]+)?|/plugin install(?: [^`]*)?)`"
 )
+# Doctor lines that name a command as a pointer, not a repair: always informational, so a
+# correctly configured home can read green. Matched by line, never by its backticks.
+_INFORMATIONAL = re.compile(r"^constrained roles: ")
 _SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 _ATTENTION = re.compile(
     r"\b(?:error|failed|missing|problem|stale|unavailable|unreadable|warning)\b|not on PATH",
@@ -119,9 +122,10 @@ def doctor_checks(lines: Iterable[str]) -> List[Dict[str, Any]]:
         message = line.strip()
         if not message or message.startswith("model-citizen "):
             continue
-        fixes = [found.group(1) for found in _REPAIR_COMMAND.finditer(message)]
+        informational = _INFORMATIONAL.match(message) is not None
+        fixes = [] if informational else [found.group(1) for found in _REPAIR_COMMAND.finditer(message)]
         command = fixes[0] if fixes else None
-        tone = "attention" if fixes or _ATTENTION.search(message) else "informational"
+        tone = "attention" if not informational and (fixes or _ATTENTION.search(message)) else "informational"
         checks.append({"id": "doctor-%d" % (len(checks) + 1), "status": tone,
                        "message": message, "fix": command, "fixes": fixes})
     return checks
