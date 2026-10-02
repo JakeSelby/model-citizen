@@ -5,11 +5,11 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 159,
-    "chore": 103,
+    "chore": 104,
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 333,
+    "story": 334,
     "task": 41
   },
   "items": [
@@ -8601,6 +8601,32 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B158.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S333",
+      "github_number": 1171,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1171",
+      "title": "Jev: judge every reply on its way out for adherence to the rules",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S333.md",
+      "parent_bmad_id": "AH-E003",
+      "parent_github_number": 135,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C103",
+      "github_number": 1172,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1172",
+      "title": "Reserve the live-judge story's ID and write its story file",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C103.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

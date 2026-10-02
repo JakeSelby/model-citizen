@@ -109,6 +109,7 @@ development_status:
   ah-s245-jev-compliance-packs-calibrated-on-hand-labels: backlog
   ah-s266-local-governance-add-coding-pr-merge-a-user: done
   ah-s270-local-governance-bind-the-decision-provider-into: done
+  ah-s333-jev-judge-every-reply-on-its-way-out-for: backlog
   ah-sp001-jev-verify-stop-claims-against-gate-evidence: ready-for-dev
   ah-sp002-jev-evaluate-advisory-action-risk-and-tool: done
   ah-sp003-jev-evaluate-short-source-to-output-fidelity: done
@@ -572,6 +573,7 @@ development_status:
   ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-c101-run-the-registered-micro-tier-campaign-for-512: ready-for-dev
   ah-c102-run-the-registered-796-pilot-and-power-analysis: ready-for-dev
+  ah-c103-reserve-the-live-judge-story-s-id-and-write-its: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
