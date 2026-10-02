@@ -505,6 +505,7 @@ development_status:
   ah-b154-installing-the-harness-leaves-undeclared-files: ready-for-dev
   ah-b155-the-measured-against-bare-upcoming-entry-names-a: ready-for-dev
   ah-b156-the-freeze-record-still-names-release-v0-14-2: ready-for-dev
+  ah-b158-fix-benchmarks-a-pre-registration-that-fails-the: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done

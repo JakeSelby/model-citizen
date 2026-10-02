@@ -127,9 +127,9 @@ Rules for the analysis:
 
 1. If the pilot refutes any long mark, the posted result uses the corrected labels: the analysis
    relabels each refuted task's `task_long` before estimating, and `replay_power.py` is re-run
-   with `--have 7 <corrected long-task count> 5` in place of the fixed `--have 7 4 5`. That
-   corrected run decides the sizing reading above, and both are done before the result is posted
-   or #560 is sized.
+   with `--have 7 N 5`, where N is the corrected long-task count, in place of the fixed
+   `--have 7 4 5`. That corrected run decides the sizing reading above, and both are done before
+   the result is posted or #560 is sized.
 
 Command:
 
@@ -163,3 +163,7 @@ Append a dated entry for every change after the first trial: what changed, why, 
 it touches. Never edit an entry.
 
 - None yet.
+- 2026-10-02: wording fix only, made before any trial. The Decision rule's `--have 7 N 5`
+  replaces a literal that wrote the corrected long-task count inside angle brackets, which the
+  runner's placeholder check read as an unfilled slot, so no commit counted as a filled plan
+  (#1166). The rule's meaning and every figure are unchanged.
