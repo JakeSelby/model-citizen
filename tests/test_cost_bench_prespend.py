@@ -101,5 +101,12 @@ class PreSpendRefusalTests(unittest.TestCase):
                 run_tag(tmp)
 
 
+    def test_a_missing_observation_folder_still_records_zero_spend(self):
+        admit = mock.Mock(side_effect=SystemExit("replay-arms: refused"))
+        gone = mock.Mock(side_effect=lambda out: Path(out) / "observations-gone")
+        with mock.patch.object(BENCH.arms, "admit", admit):
+            self.assert_refused_at_zero(prepare_observation_dir=gone)
+
+
 if __name__ == "__main__":
     unittest.main()

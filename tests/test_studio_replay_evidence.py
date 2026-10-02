@@ -28,7 +28,7 @@ def target(kind, ref, revision, digest=None):
 
 
 def request(tasks=("one", "two"), repetitions=5, registration="plan.md", **changes):
-    value = {"targets": [target("release", "v1.0.0", "a" * 40),
+    value = {"evidence": "pre-registered" if registration else "exploratory","targets": [target("release", "v1.0.0", "a" * 40),
                          target("draft", "cost-pass", "b" * 40, replay.DEFAULT_CONFIG_DIGEST)],
              "model": "m", "repetitions": repetitions, "tasks": list(tasks),
              "max_budget_usd": "1", "spend_cap_usd": "200", "pre_registration": registration}
@@ -43,7 +43,7 @@ class EvidenceLabelTests(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         (self.root / "benchmarks").mkdir()
         (self.root / "benchmarks" / "tasks.json").write_text(json.dumps(
-            {"schema_version": 1, "tasks": [{"id": "one"}, {"id": "two"}]}), encoding="utf-8")
+            {"schema_version": 1, "tasks": [{"id": "one", "long": True}, {"id": "two"}]}), encoding="utf-8")
         self.plan(5)
 
     def plan(self, trials):
@@ -55,15 +55,52 @@ class EvidenceLabelTests(unittest.TestCase):
         self.assertIn("replay_power.py --have 2 1 5", sample["power_calculation"])
         self.assertEqual(sample["min_trials"], 5)
 
-    def test_a_whole_set_matching_its_registration_is_pre_registered(self):
-        labelled = replay.label_evidence(self.root, request())
-        self.assertEqual(labelled.evidence, replay.PREREGISTERED)
-        command = replay.command_for_target(labelled, labelled.targets[0], self.root, self.root / "o")
-        self.assertIn("--pre-registration", command)
-        self.assertNotIn("--exploratory", command)
+    def test_a_whole_set_of_release_targets_matching_its_registration_is_pre_registered(self):
+        both = request(targets=[target("release", "v1.0.0", "a" * 40), target("release", "v1.1.0", "c" * 40)])
+        labelled = replay.label_evidence(self.root, both)
+        self.assertEqual(replay.replay_evidence(labelled), replay.PREREGISTERED)
+        for chosen in labelled.targets:
+            command = replay.command_for_target(labelled, chosen, self.root, self.root / "o")
+            self.assertIn("--pre-registration", command)
+            self.assertNotIn("--exploratory", command)
         sampling = replay.sampling_payload(self.root, labelled)
-        self.assertEqual((sampling["registered"]["trials"], sampling["requested"]),
-                         (5, {"tasks": 2, "trials": 5}))
+        self.assertEqual((sampling["evidence"], sampling["registered"]["trials"], sampling["requested"]),
+                         ("pre-registered", 5, {"tasks": 2, "trials": 5}))
+        self.assertIn("every target is a release", sampling["note"])
+
+    def test_a_draft_target_is_exploratory_so_the_replay_is_too(self):
+        labelled = replay.label_evidence(self.root, request())
+        release, draft = labelled.targets
+        self.assertIn("--pre-registration", replay.command_for_target(labelled, release, self.root, self.root / "o"))
+        self.assertIn("--exploratory", replay.command_for_target(labelled, draft, self.root, self.root / "o"))
+        self.assertEqual(replay.replay_evidence(labelled), replay.EXPLORATORY)
+        sampling = replay.sampling_payload(self.root, labelled)
+        self.assertEqual([item["evidence"] for item in sampling["targets"]], ["pre-registered", "exploratory"])
+        self.assertTrue(sampling["note"].startswith("Mixed"))
+        with mock.patch.object(drafts, "read_config", return_value={"draft": {"revision": "b" * 40}, "config": {}}):
+            self.assertEqual(replay.draft_comparisons(self.root, labelled)[0]["evidence"], "exploratory")
+        two_drafts = request(targets=[target("draft", "x", "c" * 40), target("draft", "y", "d" * 40)])
+        self.assertEqual(replay.label_evidence(self.root, two_drafts).evidence, replay.EXPLORATORY)
+
+    def test_the_long_task_count_and_the_power_calculation_must_match(self):
+        (self.root / "benchmarks" / "tasks.json").write_text(json.dumps(
+            {"schema_version": 1, "tasks": [{"id": "one", "long": True}, {"id": "two"}]}), encoding="utf-8")
+        self.assertEqual(replay.label_evidence(self.root, request()).evidence, replay.PREREGISTERED)
+        (self.root / "benchmarks" / "tasks.json").write_text(json.dumps(
+            {"schema_version": 1, "tasks": [{"id": "one"}, {"id": "two"}]}), encoding="utf-8")
+        with self.assertRaisesRegex(replay.ReplayRefusal, "1 long"):
+            replay.label_evidence(self.root, request())
+        (self.root / "benchmarks" / "tasks.json").write_text(json.dumps(
+            {"schema_version": 1, "tasks": [{"id": "one", "long": True}, {"id": "two"}]}), encoding="utf-8")
+        (self.root / "plan.md").write_text(PLAN.format(trials=5).replace("--have 2 1 5", "--have 3 1 5"),
+                                           encoding="utf-8")
+        with self.assertRaisesRegex(replay.ReplayRefusal, "power calculation sized"):
+            replay.label_evidence(self.root, request())
+
+    def test_a_saved_request_without_a_label_reads_exploratory(self):
+        self.assertEqual(replay.ReplayRequest.parse(
+            {key: value for key, value in request().as_dict().items() if key != "evidence"}).evidence,
+            replay.EXPLORATORY)
 
     def test_a_task_subset_is_exploratory_and_says_so(self):
         labelled = replay.label_evidence(self.root, request(tasks=("one",)))

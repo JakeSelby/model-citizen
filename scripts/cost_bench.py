@@ -1697,10 +1697,13 @@ def _replay(tasks, opts, launch, sink, out):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(str(out))
         observations = opts.get("observation_dir")
-        if observations is not None and {p.name for p in Path(observations).iterdir()} <= {
-                arms.OBSERVATION_MARKER}:
-            # Nothing was observed, so a retry into the same folder is not refused for it.
-            shutil.rmtree(str(observations), ignore_errors=True)
+        try:
+            if observations is not None and Path(observations).is_dir() and {
+                    p.name for p in Path(observations).iterdir()} <= {arms.OBSERVATION_MARKER}:
+                # Nothing was observed, so a retry into the same folder is not refused for it.
+                shutil.rmtree(str(observations), ignore_errors=True)
+        except OSError:
+            pass  # the $0 spend record below is written whatever the folder holds
         _write_spend_sidecar(out, opts, 0.0, 0.0, False)
         raise
     return _run_replay(tasks, opts, launch, sink, out, names)

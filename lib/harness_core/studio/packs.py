@@ -67,8 +67,8 @@ def _entry(module, source: Path, repository: Path) -> Dict[str, Any]:
         module.close_pack(pack)
     return {"name": pack["name"], "version": pack["version"], "commit": pack["commit"],
             "digest": pack["digest"], "short_digest": pack["digest"][:12], "source": str(source),
-            "tasks": [{"id": task["id"], "label": task["id"].replace("-", " ").title()}
-                      for task in tasks]}
+            "tasks": [{"id": task["id"], "label": task["id"].replace("-", " ").title(),
+                       "long": task.get("long") is True} for task in tasks]}
 
 
 def discover(repository: Path) -> Dict[str, Any]:

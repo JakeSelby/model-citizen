@@ -23,6 +23,7 @@ type Props = {
   defaultModel?: string;
   rows?: ReplayMetricRow[];
   analysis?: ReplayAnalysis[] | null;
+  analysisError?: string | null;
   comparisons?: DraftComparison[];
   progress?: ReplayProgressRow[];
   runStatus?: string;
@@ -40,7 +41,7 @@ export function ReplayReadiness({ errors }: { errors: string[] }) {
   );
 }
 
-export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], analysis = null, comparisons = [], progress = [], runStatus, onStarted }: Props) {
+export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], analysis = null, analysisError = null, comparisons = [], progress = [], runStatus, onStarted }: Props) {
   const startingPack = initialPack(packs, defaultPack);
   const [draft, setDraft] = useState<ReplayLaunchInput>({
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
@@ -211,6 +212,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           </Table>
         </Table.ScrollContainer>
       )}
+      {analysisError && <Alert color="yellow" title="Engine analysis unknown">{analysisError}</Alert>}
       {analysis && analysis.map((entry) => <Paper key={entry.target} p="md" withBorder>
         <Text fw={600}>Engine analysis, target {entry.target} (cost_bench.py summarise)</Text>
         <Table><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>

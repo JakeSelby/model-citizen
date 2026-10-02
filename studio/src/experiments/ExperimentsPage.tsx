@@ -236,6 +236,7 @@ export function ExperimentsPage() {
         defaultModel={replayCatalog.default_model}
         rows={replayResult?.result?.table ?? []}
         analysis={replayResult?.result?.analysis ?? null}
+        analysisError={replayResult?.result?.analysis_error ?? null}
         comparisons={replayResult?.result?.comparisons ?? []}
         progress={replayResult?.progress ?? []}
         runStatus={replayResult?.run.status}

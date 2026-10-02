@@ -37,7 +37,8 @@ export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registratio
 /** The registered sample as the pre-registration states it, read by the server. */
 export type ReplaySampling = {
   evidence: "pre-registered" | "exploratory";
-  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null };
+  targets?: Array<{ target: ReplayTarget; evidence: "pre-registered" | "exploratory" }>;
+  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null };
   requested: { tasks: number; trials: number };
   note: string;
 };
@@ -103,6 +104,8 @@ export type ReplayRunResult = {
     stopped_at_cap: boolean;
     measures?: "source";
     analysis?: ReplayAnalysis[] | null;
+    analysis_error?: string | null;
+    evidence?: "pre-registered" | "exploratory";
     comparisons?: DraftComparison[];
   };
 };
@@ -241,28 +244,33 @@ export function engineValue(value: unknown): string {
   return value === undefined ? "absent" : JSON.stringify(value);
 }
 
-/** Label and value lines for one target's engine analysis, in the engine's own terms. */
+/**
+ * Every leaf of an engine value as a path and its JSON text, in the engine's own order. A list of
+ * plain values (an interval) is one leaf; nothing is dropped, so a new engine field still shows.
+ */
+export function engineLeaves(value: unknown, path = ""): Array<[string, string]> {
+  const plain = (item: unknown) => item === null || typeof item !== "object" ||
+    (Array.isArray(item) && item.every((inner) => inner === null || typeof inner !== "object"));
+  if (plain(value)) return [[path || "value", engineValue(value)]];
+  if (Array.isArray(value)) {
+    return value.length ? value.flatMap((item, index) => engineLeaves(item, `${path}[${index}]`)) : [[path, "[]"]];
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (!entries.length) return [[path || "value", "{}"]];
+  return entries.flatMap(([key, item]) => engineLeaves(item, path ? `${path}.${key}` : key));
+}
+
+/** Label and value lines for one target's engine analysis: every field the engine reported. */
 export function analysisLines(entry: ReplayAnalysis): Array<[string, string]> {
   if (entry.error !== undefined) return [["Engine refused", entry.error]];
-  const result = entry.result ?? {};
-  const lines: Array<[string, string]> = [];
-  const arms = (result.arms ?? {}) as Record<string, Record<string, unknown>>;
-  for (const arm of Object.keys(arms).sort()) {
-    for (const field of ["attempts", "passes", "errors", "pass_rate", "cost_of_pass", "cost_usd"]) {
-      lines.push([`${arm} ${field}`, engineValue(arms[arm][field])]);
-    }
-  }
-  for (const field of ["ratio", "ratio_undefined", "ratio_interval", "difference", "difference_interval",
-    "sm2_eligible", "limitation", "verdict", "reason", "claim"]) {
-    if (field in result) lines.push([field, engineValue(result[field])]);
-  }
-  return lines;
+  return engineLeaves(entry.result ?? {});
 }
 
 /** What the form says about the sample before a run. */
 export function samplingLines(sampling: ReplaySampling | undefined): string[] {
   if (!sampling) return [];
   const lines = [sampling.note, `This replay: ${sampling.requested.tasks} task(s), ${sampling.requested.trials} trial(s) per task and arm.`];
+  for (const item of sampling.targets ?? []) lines.push(`${item.target.kind} ${item.target.ref}: ${item.evidence}.`);
   if (sampling.registered) {
     lines.push(`Registered: ${sampling.registered.tasks} task(s), ${sampling.registered.trials} trial(s) per task and arm (floor ${sampling.registered.min_trials}).`);
     if (sampling.registered.power_calculation) lines.push(`Power calculation: ${sampling.registered.power_calculation}`);

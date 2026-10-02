@@ -197,7 +197,8 @@ class ReplayRequest:
                 or not HEX40.fullmatch(pack["commit"]) or not HEX64.fullmatch(pack["digest"])
                 or not Path(pack["source"]).is_absolute()):
             raise ReplayError("replay pack must be a resolved evaluator pack")
-        evidence = value.get("evidence", PREREGISTERED if registration else EXPLORATORY)
+        # A saved request from before the label existed reads exploratory, never pre-registered.
+        evidence = value.get("evidence", EXPLORATORY)
         if evidence not in (PREREGISTERED, EXPLORATORY) or (evidence == PREREGISTERED
                                                             and not registration):
             raise ReplayError("a pre-registered replay names its pre-registration")
@@ -476,6 +477,17 @@ def _registered(request: ReplayRequest, target: ReplayTarget) -> bool:
     """A release target of a pre-registered, whole-set replay runs registered; all else runs
     `--exploratory`, which writes no history row."""
     return request.evidence == PREREGISTERED and target.kind == "release"
+
+
+def target_evidence(request: ReplayRequest, target: ReplayTarget) -> str:
+    """The label of the command one target actually runs."""
+    return PREREGISTERED if _registered(request, target) else EXPLORATORY
+
+
+def replay_evidence(request: ReplayRequest) -> str:
+    """Pre-registered only when every command the replay runs is registered."""
+    return (PREREGISTERED if all(_registered(request, target) for target in request.targets)
+            else EXPLORATORY)
 
 
 def command_for_target(request: ReplayRequest, target: ReplayTarget, repository: Path,
@@ -969,7 +981,7 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
     try:
         write_analysis(repository, output, summary)
     except (OSError, ReplayError):
-        pass  # the result route reports a missing analysis as none; the run itself stands
+        pass  # the run stands; `result_payload` reports the missing analysis as `analysis_error`
     if failure is not None:
         message, cause = failure
         if cause is not None:
@@ -1044,6 +1056,8 @@ def _engine_module(name: str):
 
 
 _LEADING_INT = re.compile(r"^\s*(\d+)\b")
+# `replay_power.py --have K N M`, as the pre-registration template asks the field to quote it.
+_HAVE = re.compile(r"--have\s+(\d+)\s+(\d+)\s+(\d+)")
 _LONG_COUNT = re.compile(r"of which\s+(\d+)\s+(?:are|is)\s+long", re.IGNORECASE)
 
 
@@ -1064,9 +1078,25 @@ def registered_sample(repository: Path, registration: str) -> Dict[str, Any]:
         raise ReplayRefusal("replay_registration_unreadable",
                             "the pre-registration states no task count or trials per task and arm")
     long = _LONG_COUNT.search(sample.get("Tasks", ""))
+    power = sample.get("Power calculation")
+    have = _HAVE.search(power or "")
     return {"tasks": int(tasks.group(1)), "long": int(long.group(1)) if long else None,
-            "trials": int(trials.group(1)), "power_calculation": sample.get("Power calculation"),
+            "trials": int(trials.group(1)), "power_calculation": power,
+            "have": tuple(int(have.group(i)) for i in (1, 2, 3)) if have else None,
             "min_trials": _engine_module("replay_power").MIN_REPS}
+
+
+def _long_count(repository: Path, request: ReplayRequest) -> int:
+    """How many of the chosen tasks the pack or task list marks long."""
+    if request.pack is not None:
+        try:
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+        except ValueError as exc:
+            raise ReplayError(str(exc)) from exc
+        flags = {item["id"]: item.get("long") is True for item in chosen["tasks"]}
+    else:
+        flags = {item["id"]: item.get("long") is True for item in _repository_tasks(repository)}
+    return sum(1 for task in request.tasks if flags.get(task))
 
 
 def whole_set(repository: Path, request: ReplayRequest) -> bool:
@@ -1087,17 +1117,25 @@ def label_evidence(repository: Path, request: ReplayRequest) -> ReplayRequest:
     """Decide the evidence label: a whole set with a pre-registration whose registered sample it
     matches is pre-registered; a task subset, or no pre-registration, is exploratory and writes no
     history. A whole registered set that departs from its registered sample is refused."""
-    if not request.pre_registration or not whole_set(repository, request):
+    if (not request.pre_registration or not whole_set(repository, request)
+            or not any(target.kind == "release" for target in request.targets)):
         return _replace(request, evidence=EXPLORATORY)
     registered = registered_sample(repository, request.pre_registration)
+    long_tasks = _long_count(repository, request)
     if (registered["tasks"] != len(request.tasks) or registered["trials"] != request.repetitions
-            or registered["trials"] < registered["min_trials"]):
+            or registered["trials"] < registered["min_trials"]
+            or registered["long"] is not None and registered["long"] != long_tasks
+            or registered["have"] is not None
+            and registered["have"] != (len(request.tasks), long_tasks, request.repetitions)):
         raise ReplayRefusal(
             "replay_sample_unregistered",
-            "the pre-registration registers %d task(s) and %d trial(s) per task and arm (at least "
-            "%d); this replay runs %d and %d" % (registered["tasks"], registered["trials"],
-                                                 registered["min_trials"], len(request.tasks),
-                                                 request.repetitions))
+            "the pre-registration registers %d task(s) (%s long) and %d trial(s) per task and arm "
+            "(at least %d)%s; this replay runs %d task(s) (%d long) and %d"
+            % (registered["tasks"], "unstated" if registered["long"] is None else registered["long"],
+               registered["trials"], registered["min_trials"],
+               "" if registered["have"] is None else
+               ", and its power calculation sized k, n, m = %d, %d, %d" % registered["have"],
+               len(request.tasks), long_tasks, request.repetitions))
     return _replace(request, evidence=PREREGISTERED)
 
 
@@ -1106,12 +1144,20 @@ def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]
     and what this replay asks for."""
     registered = None
     if request.evidence == PREREGISTERED and request.pre_registration:
-        registered = registered_sample(repository, request.pre_registration)
-    note = ("Pre-registered: the release target runs the registered sample and may write history."
-            if request.evidence == PREREGISTERED else
-            "Exploratory: a task subset, or a replay with no pre-registration, writes no history "
-            "row and is never cited as evidence.")
-    return {"evidence": request.evidence, "registered": registered,
+        registered = dict(registered_sample(repository, request.pre_registration))
+        registered["have"] = list(registered["have"]) if registered["have"] else None
+    labels = [{"target": target.as_dict(), "evidence": target_evidence(request, target)}
+              for target in request.targets]
+    evidence = replay_evidence(request)
+    if evidence == PREREGISTERED:
+        note = "Pre-registered: every target is a release that runs the registered sample."
+    elif registered is not None:
+        note = ("Mixed: each release target runs the registered sample and may write history; "
+                "every other target runs exploratory, so the replay as a whole is exploratory.")
+    else:
+        note = ("Exploratory: a task subset, a draft or a replay with no pre-registration writes "
+                "no history row and is never cited as evidence.")
+    return {"evidence": evidence, "targets": labels, "registered": registered,
             "requested": {"tasks": len(request.tasks), "trials": request.repetitions},
             "note": note}
 
@@ -1149,7 +1195,7 @@ def draft_comparisons(repository: Path, request: ReplayRequest) -> List[Dict[str
                     "tasks": list(request.tasks), "model": request.model,
                     "trials": request.repetitions,
                     "pack_digest": request.pack["digest"] if request.pack else None,
-                    "evidence": request.evidence, "key": comparison_key(request),
+                    "evidence": target_evidence(request, target), "key": comparison_key(request),
                     "stale": stale, "stale_reason": reason})
     return out
 
@@ -1169,6 +1215,24 @@ def engine_analysis(repository: Path, results: Path) -> Dict[str, Any]:
     except ValueError:
         lines = (done.stderr or "").strip().splitlines()
         return {"error": lines[-1] if lines else "the engine printed no analysis"}
+
+
+def result_payload(repository: Path, run_root: Path, request: ReplayRequest,
+                   summary: Mapping[str, Any]) -> Dict[str, Any]:
+    """The result route's `result`: the summary's figures, the engine's analysis as recorded, an
+    `analysis_error` when none could be read, and each draft's matched comparison."""
+    result = {name: summary[name] for name in (
+        "targets", "table", "spend_usd", "reported_spend_usd", "spend_cap_usd", "stopped_at_cap")}
+    result["measures"] = summary.get("measures", MEASURES)
+    result["evidence"] = replay_evidence(request)
+    try:
+        result["analysis"] = read_analysis(Path(run_root) / "replay")
+        result["analysis_error"] = (None if result["analysis"] is not None else
+                                    "no engine analysis was recorded for this run")
+    except ReplayError as exc:
+        result["analysis"], result["analysis_error"] = None, str(exc)
+    result["comparisons"] = draft_comparisons(repository, request)
+    return result
 
 
 def write_analysis(repository: Path, output: Path, summary: Mapping[str, Any]) -> None:
@@ -1219,7 +1283,8 @@ def _repository_tasks(repository: Path) -> List[Dict[str, str]]:
             or any(not isinstance(item, dict) or not IDENTIFIER.fullmatch(str(item.get("id", "")))
                    for item in raw)):
         raise ReplayError("replay task catalog is invalid")
-    return [{"id": item["id"], "label": item["id"].replace("-", " ").title()} for item in raw]
+    return [{"id": item["id"], "label": item["id"].replace("-", " ").title(),
+             "long": item.get("long") is True} for item in raw]
 
 
 def task_catalog(repository: Path) -> Dict[str, Any]:

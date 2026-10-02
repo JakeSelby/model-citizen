@@ -15,7 +15,7 @@ test("a zero-pass analysis keeps the undefined ratio and its reason", () => {
     ratio: null, ratio_undefined: "bare passed no task", ratio_interval: null,
     difference: 0, difference_interval: [-0.2, 0.2], verdict: "inconclusive", reason: "r", claim: null,
   } }));
-  assert.equal(lines.get("bare cost_of_pass"), "null");
+  assert.equal(lines.get("arms.bare.cost_of_pass"), "null");
   assert.equal(lines.get("ratio"), "null");
   assert.equal(lines.get("ratio_undefined"), "\"bare passed no task\"");
   assert.equal(lines.get("difference_interval"), "[-0.2,0.2]");

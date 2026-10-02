@@ -31,7 +31,7 @@ def fixture_tasks(*identities):
                     "packs": [], "default_digest": None, "skipped": []}), \
                 mock.patch.object(replay, "registered_sample", lambda _repository, _plan: {
                     "tasks": len(identities), "long": None, "trials": 1,
-                    "power_calculation": None, "min_trials": 1}):
+                    "power_calculation": None, "have": None, "min_trials": 1}):
             yield Path(root)
 
 
@@ -160,7 +160,7 @@ class StudioReplayTests(unittest.TestCase):
         self.assertIsNone(parsed.pre_registration)
 
     def test_release_writes_project_history_while_draft_is_exploratory(self):
-        parsed = replay.ReplayRequest.parse(request())
+        parsed = replay.ReplayRequest.parse(dict(request(), evidence="pre-registered"))
         with tempfile.TemporaryDirectory() as temporary:
             release = replay.command_for_target(parsed, parsed.targets[0], REPO,
                                                 Path(temporary) / "release")
@@ -581,7 +581,7 @@ class StudioReplayTests(unittest.TestCase):
         }.issubset(routes))
         with fixture_tasks("link-alias") as root:
             catalog = replay.task_catalog(root)
-        self.assertEqual(catalog["tasks"], [{"id": "link-alias", "label": "Link Alias"}])
+        self.assertEqual(catalog["tasks"], [{"id": "link-alias", "label": "Link Alias", "long": False}])
         server.REPLAY_CATALOG.validate(catalog)
         self.assertIn("release", catalog["target_kinds"])
 
@@ -984,7 +984,7 @@ class ReplayReviewFixTests(unittest.TestCase):
         self.assertTrue((REPO / route.cli_command[1]).is_file())
         self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
                          "python3 scripts/cost_bench.py replay")
-        parsed = replay.ReplayRequest.parse(request())
+        parsed = replay.ReplayRequest.parse(dict(request(), evidence="pre-registered"))
         text = replay.preview_payload([], parsed)["command"]
         self.assertNotIn("citizen", text)
         bench = load_cost_bench()
