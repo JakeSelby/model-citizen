@@ -503,6 +503,7 @@ development_status:
   ah-b152-move-the-bash-command-grader-out-of-grade-bash: ready-for-dev
   ah-b153-a-pack-test-intermittently-fails-cleanup-while: ready-for-dev
   ah-b154-installing-the-harness-leaves-undeclared-files: ready-for-dev
+  ah-b155-the-measured-against-bare-upcoming-entry-names-a: ready-for-dev
   ah-b156-the-freeze-record-still-names-release-v0-14-2: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
@@ -568,6 +569,7 @@ development_status:
   ah-c099-add-resume-tests-that-change-the-model-or-the: ready-for-dev
   ah-c100-resolve-canonical-plugin-workflow-findings-from: ready-for-dev
   ah-c101-run-the-registered-micro-tier-campaign-for-512: ready-for-dev
+  ah-c102-run-the-registered-796-pilot-and-power-analysis: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done

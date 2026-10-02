@@ -232,7 +232,7 @@
     {
       "title": "Measured against bare",
       "line": "Proof set 1 runs the harness against bare Claude Code, and harness evidence verify re-derives every published figure from its rows, whatever they show.",
-      "issue": 799
+      "issue": 560
     },
     {
       "title": "The superpowers mode",

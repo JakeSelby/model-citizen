@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 157,
-    "chore": 102,
+    "chore": 103,
     "decision": 14,
     "epic": 27,
     "spike": 19,
@@ -8503,6 +8503,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C102",
+      "github_number": 1144,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1144",
+      "title": "Run the registered #796 pilot and power analysis",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C102.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S332",
       "github_number": 1152,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1152",
@@ -8536,6 +8549,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B154.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B155",
+      "github_number": 1160,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1160",
+      "title": "The 'Measured against bare' upcoming entry names a closed issue",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B155.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
