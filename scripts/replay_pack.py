@@ -31,9 +31,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oracle_metrics  # noqa: E402  a task's declared metrics and which way each improves
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 1
@@ -258,6 +262,7 @@ def task_errors(spec, task_dir, document):
                       % (where, str(spec["long"]).lower(), calls,
                          "above" if calls > document["break_even_calls"] else "at or below",
                          document["break_even_calls"]))
+    errors.extend(oracle_metrics.declaration_errors(spec.get("metrics"), where))
     for name in (CHECK_FILE, SOLUTION_FILE):
         path = task_dir / name
         if not path.is_file():
@@ -310,6 +315,8 @@ def load_set(pack, set_name, tier):
                          "canary": document["canary"], "name": pack["name"], "source": pack["source"]}}
         if "mechanism" in task_spec:
             task["mechanism"] = task_spec["mechanism"]
+        if "metrics" in task_spec:
+            task["metrics"] = task_spec["metrics"]
         tasks.append(task)
     if errors:
         raise PackError("pack %s %s, set %s:\n  %s" % (pack["name"], pack["version"], set_name, "\n  ".join(errors)))

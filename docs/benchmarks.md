@@ -419,6 +419,34 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
   in its docstring.
 
+### Oracle metrics
+
+A task's check may return named numbers beside its pass or fail, so behaviour such as correctness,
+conciseness or format adherence lands on the same rows without changing how a run is scored.
+
+- **The task declares them.** `"metrics": {"<name>": "higher" | "lower"}` in a pack's `task.json`,
+  or a task of `benchmarks/tasks.json`, names each metric in lower snake case and which way it
+  improves. Loading refuses an empty declaration, any other direction and any other name.
+- **The check returns them.** `check(root)` returns the original verdict, a list of error strings
+  that passes when empty, or `{"pass": <bool>, "metrics": {"<name>": <number or null>},
+  "errors": [<str>]}`, with `metrics` and `errors` optional. Either form keeps working; a task that
+  declares no metrics writes rows byte-identical to before.
+- **A broken check is a check error, never a fail.** A `pass` that is not a boolean, an unknown
+  key, `metrics` that is not an object, or a metric the task does not declare makes the attempt
+  `error: true` with `error_kind` `check: ValueError`, as any check that cannot run does.
+- **A bad value is unknown, never 0.** Each row of a declaring task carries `metrics`, every
+  declared name to a number or `null`, `metric_directions` and `metric_errors`. A metric that is
+  not reported, not a number or not finite is `null` with its reason in `metric_errors`; an explicit
+  `null` is the check saying it could not measure, with no reason recorded. A run that errored
+  before it was scored has every metric `null`.
+- **`summarise` reports each metric per arm and per task:** its mean over known values, how many
+  were known and how many unknown. The harness-minus-bare difference uses the tasks with a known
+  value in both arms and carries the paired, task-clustered percentile interval SM-2 uses, with the
+  same seed and resamples. It reads `better` or `worse` by the declared direction when the interval
+  excludes zero, `inconclusive` otherwise, and never enters SM-2's verdict. Under `--json` it is the
+  `metrics` key, absent when no row carries metrics. Pair, ablation and two-by-two reports do not
+  read metrics yet.
+
 ### Pairs
 
 `replay --pair <manifest>` judges one policy change on what the whole task costs. It runs one
