@@ -609,6 +609,24 @@ worse than no log — and `telemetry.decisions: false` in `config.json` turns th
 after which no row, no file and no directory is written. See
 [telemetry.md](telemetry.md#the-decision-log-switch).
 
+### Rows the test suite wrote
+
+Before 0.15.0 some of this repository's tests ran hooks against the real home, so a machine that
+ran the suite may hold rows no session produced. Claude Code and Codex name a session by a UUID;
+the test rows carry short made-up ids such as `s`, `x`, `probe` or `pid-862`, and their outcome
+rows carry the same id. Count the ids first, then keep only UUID-named and session-less rows in a
+copy, and replace the log with it once the counts look right:
+
+```sh
+log=~/.local/state/agent-harness/decisions.jsonl
+jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head
+jq -c 'select((.session_id // "") | test("^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$"))' \
+  "$log" > "$log.clean"
+```
+
+The suite now runs on a disposable home, and a guard test fails if a hook's row reaches the
+real one.
+
 ### Sampled allows
 
 One Bash command in twenty that the harness **allowed** is written as a `grade-bash` row of its

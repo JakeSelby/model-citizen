@@ -429,6 +429,13 @@ GRADE3 = [
 
 
 class GradeTests(unittest.TestCase):
+    def setUp(self):
+        # The suite's own home is a temporary directory, which the grader rightly treats as
+        # scratch; `$HOME` here must stand for a user's real home, so it is one outside them.
+        patcher = mock.patch.dict(os.environ, {"HOME": "/home/grade-tests"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_read_only_commands_grade_zero(self):
         self.assertEqual([c for c in GRADE0 if grade(c) != 0], [])
 
