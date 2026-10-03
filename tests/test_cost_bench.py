@@ -283,8 +283,8 @@ class ReplayArmTests(unittest.TestCase):
 
     def test_a_run_is_a_fresh_container_with_the_snapshot_its_only_mount(self):
         """#428: no arm reads the host's home. The run is `docker run --rm` of the arm's image on
-        the egress network, with the snapshot mounted and nothing else, and the credential named
-        but never valued on the command line."""
+        the egress network, with the snapshot mounted and nothing else bar the trial's read-only
+        cache nonce (#1174), and the credential named but never valued on the command line."""
         with tempfile.TemporaryDirectory() as tmp:
             launch = Launch([json.dumps(result())] * 2)
             opts = options(tmp, reps=1)
@@ -293,8 +293,9 @@ class ReplayArmTests(unittest.TestCase):
                 self.assertEqual(command[:3], ["docker", "run", "--rm"])
                 self.assertEqual(command[command.index("--network") + 1], opts["network"])
                 self.assertIn(opts["arms"][arm]["image"], command)
-                self.assertEqual(len(mounts(command)), 1)
+                self.assertEqual(len(mounts(command)), 2)
                 self.assertTrue(mounts(command)[0].endswith(":/work"))
+                self.assertTrue(mounts(command)[1].endswith(":%s:ro" % BENCH.arms.MANAGED_MEMORY))
                 self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", env_flags(command))
                 self.assertNotIn(SECRET, " ".join(command))
                 self.assertNotIn(str(Path.home()), " ".join(command))
