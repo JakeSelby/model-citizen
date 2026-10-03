@@ -384,6 +384,7 @@ development_status:
   ah-s326-show-calibrated-compliance-judge-evidence-in: ready-for-dev
   ah-s328-report-field-and-codex-evaluation-evidence-in: ready-for-dev
   ah-s345-show-and-launch-the-definitive-evaluation-in-the: backlog
+  ah-s346-pre-register-a-draft-test-so-it-can-say-whether: backlog
 
   ah-e026-adopt-the-studio-from-install-to-a-tuned-harness: in-progress
   ah-s313-first-run-in-the-studio-from-install-to-an: ready-for-dev

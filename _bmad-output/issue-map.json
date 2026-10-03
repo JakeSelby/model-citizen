@@ -9,7 +9,7 @@
     "decision": 14,
     "epic": 27,
     "spike": 19,
-    "story": 346,
+    "story": 347,
     "task": 39
   },
   "items": [
@@ -8562,6 +8562,19 @@
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S345.md",
+      "parent_bmad_id": "AH-E025",
+      "parent_github_number": 958,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S346",
+      "github_number": 1211,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1211",
+      "title": "Pre-register a draft test so it can say whether the change helped",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S346.md",
       "parent_bmad_id": "AH-E025",
       "parent_github_number": 958,
       "lifecycle": "active",
