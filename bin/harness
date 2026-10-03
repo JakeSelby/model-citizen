@@ -83,6 +83,7 @@ from harness_core import overview as overview_core
 from harness_core import studio
 from harness_core.studio import activity as studio_activity
 from harness_core.studio import compare as studio_compare
+from harness_core.studio import draft_tests as studio_draft_tests
 from harness_core.studio import settings as studio_settings
 from harness_core.studio import selection_editing as studio_selection_editing
 from harness_core.studio import module_editing as studio_module_editing
@@ -3895,6 +3896,23 @@ def cmd_draft(args: argparse.Namespace) -> int:
         for line in status["commands"]["headless"]:
             say("  " + line)
         return 0
+    if args.action == "test":
+        try:
+            supervisor = studio.runs.RunSupervisor(
+                state_dir() / "studio", studio.runs.default_catalog_path(REPO), repository=REPO)
+            result = studio_draft_tests.verdicts(supervisor, repo, supervisor.state_root, args.name)
+        except (OSError, studio.runs.RunError, studio_draft_tests.DraftTestError) as exc:
+            code = getattr(exc, "code", "draft_test_unavailable")
+            message = str(exc) if not isinstance(exc, OSError) else "run state I/O failed"
+            say(json.dumps({"error": {"code": code, "message": message}}, sort_keys=True)
+                if args.json else "draft test: " + message)
+            return 2
+        if args.json:
+            say(json.dumps(result, sort_keys=True))
+        else:
+            for line in studio_draft_tests.render(result):
+                say(line)
+        return 0
     if args.action == "review":
         result = studio_apply.review(repo, args.name, home())
         if args.json:
@@ -7202,6 +7220,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     first_run.add_argument("name", nargs="?", default=studio_first_run.DRAFT)
     first_run.add_argument("--json", action="store_true")
     first_run.set_defaults(func=cmd_draft)
+    test_parser = draft_sub.add_parser(
+        "test", help="show each checkpoint's verdict from testing the draft against its base, "
+                     "whether it is stale, and the comparison it came from")
+    test_parser.add_argument("name")
+    test_parser.add_argument("--json", action="store_true")
+    test_parser.set_defaults(func=cmd_draft)
     review_parser = draft_sub.add_parser(
         "review", help="show every file and configuration key a draft changes, its checks, budget "
                        "delta and the exact commands applying it runs")
