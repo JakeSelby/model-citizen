@@ -344,8 +344,9 @@ class ReportTests(unittest.TestCase):
             with redirect_stdout(out):
                 self.assertEqual(BENCH.main(["summarise", "--results", tmp, "--resamples", "200"]), 0)
             sm2 = BENCH.replay_stats.render(BENCH.replay_stats.analyse(rows, BENCH.replay_stats.SEED, 200))
-            self.assertTrue(out.getvalue().startswith(sm2))
-            tail = out.getvalue()[len(sm2):]
+            head = BENCH.CACHE_BASIS_TEXT[BENCH.CACHE_SHARED] + sm2  # the cache basis line, then SM-2
+            self.assertTrue(out.getvalue().startswith(head))
+            tail = out.getvalue()[len(head):]
             self.assertIn("break-even 7.6 absorbed calls", tail)
             self.assertEqual(tail.count(": missed-above-break-even"), 3)
             out = io.StringIO()
@@ -353,6 +354,7 @@ class ReportTests(unittest.TestCase):
                 BENCH.main(["summarise", "--results", tmp, "--resamples", "200", "--json", "--break-even", "20"])
             printed = json.loads(out.getvalue())
         block = printed.pop("delegation")
+        self.assertEqual(printed.pop("cache_basis"), BENCH.CACHE_SHARED)
         sm2 = BENCH.replay_stats.analyse(rows, BENCH.replay_stats.SEED, 200)
         self.assertEqual(printed, json.loads(json.dumps(sm2, sort_keys=True)))  # SM-2's fields, unchanged
         self.assertEqual((block["break_even"], block["break_even_source"]), (20.0, "override, --break-even"))

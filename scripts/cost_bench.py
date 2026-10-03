@@ -25,6 +25,7 @@ import os
 import platform
 import posixpath
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -600,6 +601,28 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effo
 
 _NAMES = itertools.count(1)
 
+# The cache basis a row was measured on. `cold`: the trial's own nonce opened its session segment,
+# so it paid its own prefix write; `shared`: a row from before the nonce (#1174), which may have
+# read an earlier trial's session segment from cache, so its cost understates a cold session.
+CACHE_COLD, CACHE_SHARED = "cold", "shared"
+
+
+def trial_memory(dest):
+    """(path, nonce): a one-line managed memory file in `dest`, unique to one trial.
+
+    Mounted as `replay_arms.MANAGED_MEMORY`, it is the first thing in the session segment: the
+    first message after the system prompt, holding the memory files and then the task prompt. The
+    prompt cache matches on a prefix, so a nonce there makes every trial write its own session
+    segment, as a real session does, while the system prompt and tools before it stay as cached
+    as a real session finds them. A nonce in the task prompt would sit after the session segment
+    and leave it shared between trials. Plain text, not a comment, so it reaches the model."""
+    nonce = secrets.token_hex(16)
+    path = Path(dest) / "trial-memory.md"
+    path.write_text("Benchmark trial %s. This line identifies the trial and asks nothing.\n" % nonce,
+                    encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path, nonce
+
 
 def container_name(*parts):
     """A container name unique to this process, so one that times out can be stopped by name."""
@@ -643,16 +666,19 @@ def check_observer_settings(record):
         raise SystemExit("cost-bench: native observer settings differ from the declared inputs")
 
 
-def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None):
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None,
+               memory=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written. `arm` names a pair arm, whose selection is
-    passed by value; `observation_run` is one native session's observation stage."""
+    passed by value; `observation_run` is one native session's observation stage; `memory` is the
+    trial's cache nonce (`trial_memory`)."""
     check_observer_settings(record)
     env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
-                               observation_dir=observation_run["mount"] if observation_run else None)
+                               observation_dir=observation_run["mount"] if observation_run else None,
+                               managed_memory=memory)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -663,7 +689,8 @@ def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=Non
         raise
 
 
-def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None, observation_run=None):
+def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None, observation_run=None,
+                memory=None):
     """(completed run or None, timeout or None, ledger status): a pair harness arm's run.
 
     The container is kept after it exits so its usage ledger can be copied out to `dest`
@@ -676,7 +703,7 @@ def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, 
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
                                observation_dir=observation_run["mount"] if observation_run else None,
-                               keep=True)
+                               keep=True, managed_memory=memory)
     client = opts.get("client_env") or arms.client_env()
     quiet = {"env": client, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "universal_newlines": True}
     done = timeout = None
@@ -1383,7 +1410,7 @@ def _attempt(task, rep, arm, opts, launch):
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
     profile = arm_profile(arm, env, opts)
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
-               rep=rep, passed=None, error=False,
+               rep=rep, passed=None, error=False, cache_basis=CACHE_COLD, cache_nonce=None,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, first_call_context=None, tool_counts={}, spawns=None,
                spawn_offered=None, gather_calls=None, absorbed_calls=None, workflow_launches=None,
@@ -1425,13 +1452,14 @@ def _attempt(task, rep, arm, opts, launch):
     try:
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         task_workdir(task, opts["repo"], workdir)
+        memory, row["cache_nonce"] = trial_memory(workdir.parent)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
         timeout = None
         if kept:
             copied = workdir.parent / "usage.jsonl"
             done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied,
-                                                                 launch, arm, observed)
+                                                                 launch, arm, observed, memory)
             if row["decision_ledger"] == replay_pair.LEDGER_READ:
                 try:
                     keep_decisions(copied, replay_pair.decisions_file(opts["decisions"], task["id"], arm, rep))
@@ -1439,7 +1467,7 @@ def _attempt(task, rep, arm, opts, launch):
                     row["decision_ledger"] = "%s: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
         else:
             try:
-                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed)
+                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed, memory)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
         if timeout is not None:
@@ -1747,6 +1775,23 @@ def summarise(rows, field="cost_usd"):
     return out
 
 
+def cache_basis(rows):
+    """The cache basis the rows' costs stand on, stated in every two-arm report.
+
+    `cold` only when every row carries its own nonce and no two share one (`trial_memory`);
+    otherwise `shared`, because some trial may have read another's session segment from cache, so
+    the arm with the larger session segment reads cheaper than it is (#1174)."""
+    nonces = [r.get("cache_nonce") for r in rows]
+    cold = bool(rows) and None not in nonces and len(set(nonces)) == len(nonces)
+    return CACHE_COLD if cold else CACHE_SHARED
+
+
+CACHE_BASIS_TEXT = {
+    CACHE_COLD: "cache basis: cold, every trial opened its session segment with its own nonce\n",
+    CACHE_SHARED: "cache basis: shared, trials may have read another trial's session segment from cache, "
+                  "so the arm with the larger one reads cheaper than it is\n"}
+
+
 def per_task(rows, field="cost_usd"):
     """One cell per task: each arm's mean cost, the ratio between them, and each arm's spread.
 
@@ -1949,8 +1994,10 @@ def cmd_summarise(args):
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
     delegation = delegation_verdict.report(rows, args.break_even)
-    sys.stdout.write(json.dumps(dict(result, delegation=delegation), indent=2, sort_keys=True) + "\n"
-                     if args.json else replay_stats.render(result) + delegation_verdict.render(delegation))
+    basis = cache_basis(rows)
+    sys.stdout.write(json.dumps(dict(result, delegation=delegation, cache_basis=basis), indent=2, sort_keys=True)
+                     + "\n" if args.json
+                     else CACHE_BASIS_TEXT[basis] + replay_stats.render(result) + delegation_verdict.render(delegation))
     return 0
 
 

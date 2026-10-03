@@ -262,6 +262,21 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   plan sign-in. Run order changes it, because a later run finds its prefix already cached, so each
   row also carries a cache-normalised cost that reprices every thread's first-turn cache reads as
   cache writes. It is empty when the CLI output does not carry per-turn usage.
+- **Every trial starts cold, and the report says so.** Reps of one task and arm send the same
+  prompt, so within the cache lifetime a later rep read the earlier one's session segment, the
+  first message after the system prompt that holds the memory files and the prompt, instead of
+  writing it. That favoured the arm with the larger segment: in the 2026-10-02 pilot's saved
+  streams every rep read the 23.6k-token system prompt and tools from cache, rep 1 wrote the rest
+  (3.9k bare, 14.4k harness) and reps 2 to 5 read it all, which put the Cost-of-Pass ratio at
+  1.42 against about 1.66 with every session paying its own write (#1174). Each trial now mounts
+  a one-line file holding its own nonce as Claude Code's managed memory file,
+  `/etc/claude-code/CLAUDE.md`, the first memory it loads, so the nonce opens the session segment
+  and every trial writes it, while the system prompt stays as cached as a real session finds it.
+  A nonce in the task prompt would not do: the prompt comes after the memory files. Both arms get
+  the file, so they still differ by image alone. Each row records `cache_nonce` and
+  `cache_basis: cold`; `summarise` states the basis on its first line and as `cache_basis` in
+  JSON, and reads rows without a distinct nonce on every row, any from before this change, as
+  `shared`.
 - **Beside it, `cache_miss_ratio`: how much of its prefix the run re-bought.**
   `cache_write / (cache_read + cache_write)` summed over every turn the run opened, subagent
   threads included, because a fan-out's fresh prefix is part of what the run cost. The
