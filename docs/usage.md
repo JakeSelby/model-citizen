@@ -582,7 +582,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | point | the judgment | the outcome, when there is one |
 | --- | --- | --- |
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
-| `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
+| `stop-gate` | `blocked`, `released`, `declined` (the session gave a `Gate cannot pass:` reason after a block) or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
 | `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |

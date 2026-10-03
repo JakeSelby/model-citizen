@@ -16,6 +16,8 @@ The stop gate hashes HEAD, staged and unstaged binary differences, untracked fil
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.
 The retry budget is counted per session, so sessions sharing a checkout do not reset each other.
+After a block, a final message with a line that starts `Gate cannot pass:` and gives a reason
+releases the turn as unverified and is logged as `declined`; any other finish is blocked again.
 Unexpected gate errors block. State writes are atomic.
 
 Constrained roles use [isolated CLI workers](role-workers.md), with shared role/stance resolution
