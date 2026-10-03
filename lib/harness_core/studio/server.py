@@ -29,6 +29,7 @@ from . import (activity, auth, compare, drafts, free_suites, live_updates, modul
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
 from . import first_run
+from . import rollback as draft_rollback
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -1404,6 +1405,52 @@ def _draft_recover(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _run_draft_rollback(repo_root: Path, apply_id: str, draft: str) -> Dict[str, object]:
+    """Run `citizen draft rollback` itself, under the CLI's own locks."""
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "rollback", apply_id,
+               "--draft", draft, "--via-studio", "--json"]
+    try:
+        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
+                              text=True, timeout=1800)
+        payload = json.loads(done.stdout.strip().splitlines()[-1])
+        if not isinstance(payload, dict):
+            raise ValueError("rollback did not answer with an object")
+        return payload
+    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+        return draft_apply._result("failed", "rollback-unavailable",
+                                   "citizen draft rollback did not report a result; check Activity "
+                                   "and `citizen doctor` before retrying")
+
+
+def _draft_rollback_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("apply_id",))
+    if request is None:
+        return
+    if not isinstance(request["apply_id"], str) or not draft_rollback.APPLY_ID.match(request["apply_id"]):
+        handler._error(400, "invalid_request")
+        return
+    payload = draft_rollback.preview(request["apply_id"])
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_rollback(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("apply_id", "confirm"))
+    if request is None:
+        return
+    if not isinstance(request["apply_id"], str) or not draft_rollback.APPLY_ID.match(request["apply_id"]) \
+            or not isinstance(request["confirm"], str) or not request["confirm"]:
+        handler._error(400, "invalid_request")
+        return
+    # `confirm` is the applied draft's name, typed back; the CLI refuses any other draft.
+    payload = handler.server.mutations.call(lambda: _run_draft_rollback(
+        handler.server.repo_root, request["apply_id"], request["confirm"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _draft_apply(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("draft", "revision", "confirm"))
     if request is None:
@@ -1652,6 +1699,13 @@ APPLY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                ("holder", "string"), ("apply_id", "string"),
                                                ("review", "object"), ("doctor", "object"),
                                                ("restored", "boolean"), ("log", "array")))
+ROLLBACK_PREVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("apply", "object"), ("destination", "string"),
+                                                   ("config", "array"), ("files", "array"),
+                                                   ("commands", "array"), ("refusals", "array"),
+                                                   ("can_rollback", "boolean"),
+                                                   ("rollback_command", "string"),
+                                                   ("nothing_changed", "boolean")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1828,6 +1882,10 @@ ROUTES = RouteRegistry((
           _first_run_status, None, "application/json", first_run.CLI_COMMANDS["status"]),
     Route("POST", "/api/first-run/start", "application/json", FIRST_RUN,
           _first_run_start, None, "application/json", first_run.CLI_COMMANDS["start"]),
+    Route("POST", "/api/configure/apply/rollback/preview", "application/json", ROLLBACK_PREVIEW,
+          _draft_rollback_preview, None, "application/json", draft_rollback.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/apply/rollback", "application/json", APPLY_RESULT,
+          _draft_rollback, None, "application/json", draft_rollback.CLI_COMMANDS["rollback"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,

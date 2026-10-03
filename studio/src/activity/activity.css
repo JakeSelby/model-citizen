@@ -62,3 +62,9 @@
     margin-bottom: var(--studio-space-2);
   }
 }
+
+.activity-row-focused {
+  border-left-color: var(--studio-primary);
+  outline: var(--studio-focus-width) solid var(--studio-primary);
+  outline-offset: var(--studio-focus-offset);
+}
