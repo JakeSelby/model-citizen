@@ -28,7 +28,7 @@ from . import (activity, auth, compare, drafts, free_suites, live_updates, modul
                module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import first_run
+from . import eval_tiers, first_run
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -813,6 +813,96 @@ def _runs_compare(handler: Handler, route: Route) -> None:
                                        handler.server.repo_root, sides)
     except compare.CompareError as exc:
         handler._error(_COMPARE_STATUS.get(exc.code, 409), exc.code)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
+    return eval_tiers.EvalAdmission(
+        handler.server.repo_root, handler.server.store.path,
+        handler.server.run_supervisor, handler.server.target_service)
+
+
+_EVAL_STATUS = {"invalid_request": 400, "eval_engine_absent": 404}
+
+
+def _eval_error(handler: Handler, exc: eval_tiers.EvalTierError) -> None:
+    handler._error(_EVAL_STATUS.get(exc.code, 400), exc.code)
+
+
+def _evals_catalog(handler: Handler, route: Route) -> None:
+    payload = eval_tiers.catalog(handler.server.repo_root)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _evals_start_free(handler: Handler, route: Route) -> None:
+    payload = getattr(handler, "request_json", {})
+    if not isinstance(payload, dict) or set(payload) not in ({"suite"}, {"suite", "raw"}):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        admission = _eval_admission(handler)
+        result = handler.server.mutations.call(
+            lambda: admission.start_free(payload["suite"], payload.get("raw")))
+    except eval_tiers.EvalTierError as exc:
+        _eval_error(handler, exc)
+        return
+    route.response_schema.validate(result)
+    handler._json(200, result)
+
+
+def _evals_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("request",))
+    if request is None:
+        return
+    try:
+        # Resolving builds the target; it stays off the one mutation thread, as a replay's does.
+        admission = _eval_admission(handler)
+        resolved = admission.resolve(request["request"])
+        payload = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
+    except eval_tiers.EvalTierError as exc:
+        _eval_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _evals_start(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("request", "confirmation_token"))
+    if request is None:
+        return
+    if not isinstance(request["confirmation_token"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        admission = _eval_admission(handler)
+        confirmed = admission.confirm(request["request"])
+        payload = handler.server.mutations.call(lambda: admission.start_confirmed(
+            confirmed, request["confirmation_token"]))
+    except eval_tiers.EvalTierError as exc:
+        _eval_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _evals_result(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("run_id",))
+    if request is None:
+        return
+    if not isinstance(request["run_id"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = handler.server.mutations.call(lambda: eval_tiers.result_payload(
+            handler.server.run_supervisor, request["run_id"]))
+    except runs.RunError:
+        handler._error(404, "eval_not_found")
+        return
+    except (ValueError, eval_tiers.EvalTierError):
+        handler._error(409, "eval_result_invalid")
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -1734,6 +1824,28 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
                                                   ("request", "object"),
                                                   ("command", "string"),
                                                   ("sampling", "object")))
+EVAL_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                ("tiers", "array"), ("units", "array"),
+                                                ("default_model", "string"),
+                                                ("default_repetitions", "integer"),
+                                                ("commands", "object")))
+EVAL_PREVIEW = ResponseSchema("json-object", (("estimate", "object"), ("caps", "object"),
+                                                ("pricing", "object"),
+                                                ("confirmation_required", "boolean"),
+                                                ("confirmation_token", "string"),
+                                                ("cost_class", "string"),
+                                                ("case_identities", "array"),
+                                                ("request", "object"),
+                                                ("evidence", "string"),
+                                                ("command", "string")))
+EVAL_FREE_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),
+                                                 ("suite", "string"), ("command", "string")))
+EVAL_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),
+                                            ("suite", "string"), ("request", "object")))
+EVAL_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                               ("run", "object"),
+                                               ("result", "object-or-null"),
+                                               ("analysis_error", "string-or-null")))
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))
@@ -1883,6 +1995,17 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/runs/replay/result", "application/json",
           REPLAY_RESULT, _replay_result, None, "application/json",
           ("citizen", "runs", "show")),
+    Route("GET", "/api/evals/catalog", "application/json", EVAL_CATALOG,
+          _evals_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
+    Route("POST", "/api/evals/run", "application/json", EVAL_FREE_RUN,
+          _evals_start_free, None, "application/json", ("citizen", "runs", "start")),
+    Route("POST", "/api/evals/preview", "application/json", EVAL_PREVIEW,
+          _evals_preview, None, "application/json", ("citizen", "runs", "spend-preview")),
+    Route("POST", "/api/evals/start", "application/json", EVAL_RUN,
+          _evals_start, None, "application/json", ("citizen", "runs", "start")),
+    Route("POST", "/api/evals/result", "application/json", EVAL_RESULT,
+          _evals_result, None, "application/json",
+          ("python3", "scripts/cost_bench.py", "summarise", "--json")),
     Route("POST", "/api/runs/compare", "application/json",
           RUNS_COMPARE, _runs_compare, None, "application/json",
           ("citizen", "runs", "compare")),
