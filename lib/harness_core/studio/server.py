@@ -824,7 +824,9 @@ def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
         handler.server.run_supervisor, handler.server.target_service)
 
 
-_EVAL_STATUS = {"invalid_request": 400, "eval_engine_absent": 404}
+_EVAL_STATUS = {"invalid_request": 400, "eval_engine_absent": 404,
+                "replay_target_busy": 409, "replay_worktree_dirty": 409,
+                "replay_target_config_unsupported": 409, "eval_target_changed": 409}
 
 
 def _eval_error(handler: Handler, exc: eval_tiers.EvalTierError) -> None:
@@ -832,6 +834,8 @@ def _eval_error(handler: Handler, exc: eval_tiers.EvalTierError) -> None:
 
 
 def _evals_catalog(handler: Handler, route: Route) -> None:
+    if _required_request(handler, ()) is None:
+        return
     payload = eval_tiers.catalog(handler.server.repo_root)
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -1826,8 +1830,7 @@ REPLAY_PREVIEW = ResponseSchema("json-object", (("estimate", "object"),
                                                   ("sampling", "object")))
 EVAL_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                                 ("tiers", "array"), ("units", "array"),
-                                                ("default_model", "string"),
-                                                ("default_repetitions", "integer"),
+                                                ("unit_model", "string"),
                                                 ("commands", "object")))
 EVAL_PREVIEW = ResponseSchema("json-object", (("estimate", "object"), ("caps", "object"),
                                                 ("pricing", "object"),
@@ -1995,8 +1998,8 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/runs/replay/result", "application/json",
           REPLAY_RESULT, _replay_result, None, "application/json",
           ("citizen", "runs", "show")),
-    Route("GET", "/api/evals/catalog", "application/json", EVAL_CATALOG,
-          _evals_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
+    Route("POST", "/api/evals/catalog", "application/json", EVAL_CATALOG,
+          _evals_catalog, None, "application/json", ("citizen", "runs", "catalog", "--json")),
     Route("POST", "/api/evals/run", "application/json", EVAL_FREE_RUN,
           _evals_start_free, None, "application/json", ("citizen", "runs", "start")),
     Route("POST", "/api/evals/preview", "application/json", EVAL_PREVIEW,

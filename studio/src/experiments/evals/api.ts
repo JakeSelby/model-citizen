@@ -1,8 +1,17 @@
 import type { EvalCatalog, EvalPreview, EvalRunResult, PaidTierInput, ResolvedPaidTier } from "./model";
 
+/** A refusal the server answered: `status` tells a final answer (4xx) from a transient one. */
+export class EvalApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
+  if (!response.ok) throw new EvalApiError(body.error ?? `Request failed (${response.status}).`, response.status);
   return body;
 }
 
@@ -16,8 +25,8 @@ async function post<T>(path: string, body: Record<string, unknown>): Promise<T> 
   }));
 }
 
-export async function loadEvalCatalog(): Promise<EvalCatalog> {
-  return json<EvalCatalog>(await fetch("/api/evals/catalog", { credentials: "same-origin" }));
+export function loadEvalCatalog(): Promise<EvalCatalog> {
+  return post<EvalCatalog>("/api/evals/catalog", {});
 }
 
 export function startFreeTier(suite: string, raw?: string): Promise<{ run_id: string; command: string }> {

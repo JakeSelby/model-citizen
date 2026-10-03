@@ -19,6 +19,7 @@ suite prints the engine's own output as one JSON line, and a paid suite records 
 from __future__ import annotations
 
 import argparse
+import signal
 import importlib.util
 import json
 import os
@@ -31,6 +32,7 @@ import tempfile
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import replay, runs, spend_guard
@@ -42,11 +44,14 @@ OUTPUT_DIR = "eval"
 MAX_STDOUT_BYTES = runs.MAX_REPORT_BYTES
 MAX_ANALYSIS_BYTES = 8 * 1024 * 1024
 PRICING_SOURCE = "api_credit"
+# The model a unit eval runs: the engine requires one and has no default, so the Studio pins the
+# live replay's default rather than offering a choice the story leaves to the engine.
 DEFAULT_MODEL = "claude-haiku-4-5"
-DEFAULT_REPS = 5
+RAW_RUN = re.compile(r"^.+-[A-Za-z0-9]+-[0-9]+\.json$")  # `replay_detect.parse_name`'s shape
+MAX_RAW_FILES = 5000
+MAX_RAW_BYTES = 512 * 1024 * 1024
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 UNIT = re.compile(r"^rules\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$")
 PAID_TARGETS = ("branch", "draft", "installed", "release", "worktree")
 
 
@@ -144,8 +149,7 @@ def native_command(suite_id: str, parameters: Mapping[str, str], max_budget: str
         command += ["--tier", "micro"]
     else:
         command += ["--design", "unit-economy", "--unit", parameters.get("unit", "<unit>"),
-                    "--model", parameters.get("model", DEFAULT_MODEL),
-                    "--reps", parameters.get("reps", str(DEFAULT_REPS))]
+                    "--model", parameters.get("model", DEFAULT_MODEL)]
     return command + ["--run-cap", max_budget, "--spend-cap", cap, "--exploratory"]
 
 
@@ -163,8 +167,7 @@ def catalog(repository: Path) -> Dict[str, Any]:
                       "target_kinds": list(PAID_TARGETS) if suite in PAID else ["installed"],
                       "command": " ".join(shlex.quote(part) for part in native_command(suite, {}))})
     return {"schema_version": SCHEMA_VERSION, "tiers": tiers,
-            "units": rule_units(repository), "default_model": DEFAULT_MODEL,
-            "default_repetitions": DEFAULT_REPS,
+            "units": rule_units(repository), "unit_model": DEFAULT_MODEL,
             "commands": {"summarise": " ".join(summarise_command())}}
 
 
@@ -181,15 +184,12 @@ class PaidRequest:
     suite_id: str
     target_kind: str
     target_ref: str
-    model: Optional[str]
-    repetitions: Optional[int]
     unit: Optional[str]
     max_budget_usd: str
     spend_cap_usd: str
     revision: Optional[str] = None
 
-    KEYS = frozenset(("suite", "target", "unit", "model", "repetitions", "max_budget_usd",
-                      "spend_cap_usd", "revision"))
+    KEYS = frozenset(("suite", "target", "unit", "max_budget_usd", "spend_cap_usd", "revision"))
 
     @classmethod
     def parse(cls, value: Any, resolved: bool = False) -> "PaidRequest":
@@ -204,16 +204,11 @@ class PaidRequest:
                 or not isinstance(target.get("ref"), str) or not target["ref"]
                 or len(target["ref"]) > 4096 or "\0" in target["ref"]):
             raise EvalTierError("the target needs exactly a kind and a ref", "invalid_request")
-        model = repetitions = unit = None
+        unit = None
         if suite == "unit-eval":
             unit = _text(value.get("unit"), UNIT, "unit")
-            model = _text(value.get("model", DEFAULT_MODEL), MODEL, "model")
-            repetitions = value.get("repetitions", DEFAULT_REPS)
-            if (not isinstance(repetitions, int) or isinstance(repetitions, bool)
-                    or not 1 <= repetitions <= 20):
-                raise EvalTierError("repetitions must be between one and twenty", "invalid_request")
-        elif any(name in value for name in ("unit", "model", "repetitions")):
-            raise EvalTierError("the micro tier pins its tasks, model and reps", "invalid_request")
+        elif "unit" in value:
+            raise EvalTierError("the micro tier names no unit", "invalid_request")
         try:
             maximum = replay._money(value.get("max_budget_usd"), "--max-budget-usd")
             cap = replay._money(value.get("spend_cap_usd"), "--spend-cap")
@@ -226,8 +221,7 @@ class PaidRequest:
             revision = _text(revision, HEX40, "revision")
         elif revision is not None:
             raise EvalTierError("the server resolves the revision", "invalid_request")
-        return cls(suite, target["kind"], target["ref"], model, repetitions, unit, maximum, cap,
-                   revision)
+        return cls(suite, target["kind"], target["ref"], unit, maximum, cap, revision)
 
     def as_dict(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"suite": self.suite_id,
@@ -235,7 +229,7 @@ class PaidRequest:
                                "max_budget_usd": self.max_budget_usd,
                                "spend_cap_usd": self.spend_cap_usd}
         if self.suite_id == "unit-eval":
-            out.update(unit=self.unit, model=self.model, repetitions=self.repetitions)
+            out["unit"] = self.unit
         if self.revision is not None:
             out["revision"] = self.revision
         return out
@@ -243,8 +237,7 @@ class PaidRequest:
     def parameters(self, repository: Path) -> Dict[str, str]:
         values = {"repository": str(Path(repository).resolve()), "revision": self.revision or ""}
         if self.suite_id == "unit-eval":
-            values.update(unit=self.unit or "", model=self.model or "",
-                          reps=str(self.repetitions))
+            values.update(unit=self.unit or "", model=DEFAULT_MODEL)
         return values
 
 
@@ -257,15 +250,18 @@ class EvalAdmission:
         self.supervisor = supervisor
         self.replay = replay.ReplayAdmission(repository, state_directory, supervisor,
                                              target_service)
+        self.confirmed_target: Optional[Dict[str, Any]] = None
 
-    def _resolve(self, request: PaidRequest) -> PaidRequest:
+    def _resolve_target(self, request: PaidRequest) -> Dict[str, Any]:
         # The replay's resolution: a full revision, a dirty worktree or edited draft refused.
         try:
-            target = self.replay._resolve(request.target_kind, request.target_ref)
+            return dict(self.replay._resolve(request.target_kind, request.target_ref))
         except replay.ReplayError as exc:
             raise EvalTierError(str(exc), getattr(exc, "code", "eval_refused")) from exc
+
+    def _resolve(self, request: PaidRequest) -> PaidRequest:
         values = request.as_dict()
-        values["revision"] = target["revision"]
+        values["revision"] = self._resolve_target(request)["revision"]
         return PaidRequest.parse(values, resolved=True)
 
     def start_free(self, suite_id: Any, raw: Any = None) -> Dict[str, Any]:
@@ -310,8 +306,10 @@ class EvalAdmission:
     def confirm(self, value: Any) -> PaidRequest:
         request = PaidRequest.parse(value, resolved=True)
         require_available(self.repository, request.suite_id)
-        if self._resolve(request).revision != request.revision:
+        target = self._resolve_target(request)
+        if target["revision"] != request.revision:
             raise EvalTierError("the target changed after the spend preview", "eval_target_changed")
+        self.confirmed_target = target
         return request
 
     def start_confirmed(self, request: PaidRequest, token: Any) -> Dict[str, Any]:
@@ -322,7 +320,11 @@ class EvalAdmission:
             started = self.supervisor.start(
                 request.suite_id, request.parameters(self.repository), request.target_kind,
                 request.target_ref, confirmed=token, max_budget_usd=request.max_budget_usd,
-                spend_cap_usd=request.spend_cap_usd, pricing_source=PRICING_SOURCE)
+                spend_cap_usd=request.spend_cap_usd, pricing_source=PRICING_SOURCE,
+                # The record must name the revision the engine runs: refuse a target that moved.
+                expected_target=self.confirmed_target or {
+                    "kind": request.target_kind, "ref": request.target_ref,
+                    "revision": request.revision})
         except runs.RunError as exc:
             raise EvalTierError(str(exc)) from exc
         return {"run_id": started["run_id"], "status": started["status"],
@@ -395,21 +397,31 @@ def run_hook_matrix(root: Path) -> Dict[str, Any]:
                                "studio_hook_matrix")
     matrix = engine.compact(engine.compute_parallel())
     committed = json.loads(engine.MATRIX.read_text(encoding="utf-8"))
-    moved = engine.differences(engine.expand(committed), engine.expand(matrix))
-    return {"matrix": matrix, "moved": moved, "base": engine.BASE, "same": engine.SAME}
+    expanded = engine.expand(matrix)
+    moved = engine.differences(engine.expand(committed), expanded)
+    return {"variants": matrix["variants"], "rows": matrix["rows"], "calls": matrix["calls"],
+            "grid": hook_grid(matrix, expanded), "moved": moved, "runtime": matrix["runtime"]}
+
+
+def hook_grid(matrix: Mapping[str, Any], expanded: Mapping[Tuple[str, str, str], str]
+              ) -> Dict[str, List[Dict[str, Any]]]:
+    """Per hook, each recorded call's verdict under every variant, read from the engine's `expand`."""
+    return {row: [{"call": call, "cells": [expanded[(row, call, variant)]
+                                           for variant in matrix["variants"]]}
+                  for call in matrix["calls"]]
+            for row in matrix["rows"]}
 
 
 def run_rule_detection(root: Path, raw: Path) -> Dict[str, Any]:
     """`cost_bench.py detect --raw` over a copy, so the saved directory is never written."""
     if not raw.is_dir():
         raise EvalTierError("rule detection needs a saved raw directory")
+    engine = _load_file_module(root / "scripts" / "replay_detect.py", "studio_replay_detect")
     with tempfile.TemporaryDirectory(prefix="studio-detect-") as scratch:
         copy = Path(scratch) / "raw"
-        shutil.copytree(str(raw), str(copy), symlinks=True)
-        engine = _load_file_module(root / "scripts" / "replay_detect.py", "studio_replay_detect")
-        stale = copy / engine.DETECTIONS
-        if stale.exists():
-            stale.unlink()
+        copied = copy_run_files(raw, copy)
+        if not copied:
+            raise EvalTierError("the directory holds no saved run file (<task>-<arm>-<rep>.json)")
         done = subprocess.run([sys.executable, str(root / "scripts" / "cost_bench.py"), "detect",
                                "--raw", str(copy)], cwd=str(root), stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, text=True)
@@ -421,26 +433,87 @@ def run_rule_detection(root: Path, raw: Path) -> Dict[str, Any]:
     return {"raw": str(raw), "summary": done.stdout.strip(), "detections": rows}
 
 
-def _read_sidecar(path: Path, revision: str, run_cap: str, spend_cap: str) -> Dict[str, Any]:
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if (not isinstance(value, dict) or value.get("schema_version") != 1
-            or value.get("tag") != revision
-            or Decimal(str(value.get("run_cap_usd"))) != Decimal(run_cap)
-            or Decimal(str(value.get("spend_cap_usd"))) != Decimal(spend_cap)
-            or not isinstance(value.get("stopped_at_cap"), bool)):
-        raise EvalTierError("the replay's spend record does not match its run")
-    charged = value.get("charged_spend_usd")
-    if (not isinstance(charged, (int, float)) or isinstance(charged, bool) or charged < 0):
-        raise EvalTierError("the replay's spend record has no charged spend")
-    return value
+def copy_run_files(raw: Path, copy: Path) -> int:
+    """Copy only the top-level regular run files the engine reads, within count and byte limits."""
+    copy.mkdir(mode=0o700)
+    files = []
+    total = 0
+    with os.scandir(str(raw)) as entries:
+        for entry in entries:
+            if not RAW_RUN.fullmatch(entry.name) or not entry.is_file(follow_symlinks=False):
+                continue
+            files.append(entry)
+            total += entry.stat(follow_symlinks=False).st_size
+            if len(files) > MAX_RAW_FILES or total > MAX_RAW_BYTES:
+                raise EvalTierError("the raw directory holds more than %d run files or %d bytes"
+                                    % (MAX_RAW_FILES, MAX_RAW_BYTES))
+    for entry in files:
+        shutil.copyfile(entry.path, str(copy / entry.name), follow_symlinks=False)
+    return len(files)
+
+
+def _terminate_cleanly(_signum, _frame):
+    # The supervisor stops a timed-out run with SIGTERM; exiting through SystemExit lets each
+    # `TemporaryDirectory` remove its copy instead of leaving it in TMPDIR.
+    raise SystemExit(143)
+
+
+def _read_rows(path: Path) -> List[Dict[str, Any]]:
+    """The engine's native rows, read whole: every cell's arm counts, not only the two-arm names."""
+    rows = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        cost = row.get("cost_usd") if isinstance(row, dict) else None
+        if not isinstance(row, dict) or (cost is not None and (
+                not isinstance(cost, (int, float)) or isinstance(cost, bool) or cost < 0)):
+            raise EvalTierError("result line %d does not match the native schema" % number)
+        rows.append(row)
+    return rows
+
+
+def settle_spend(results: Path, revision: str, run_cap: str, spend_cap: str,
+                 returncode: int) -> Tuple[float, bool, Optional[str]]:
+    """`(charged, stopped, failure)`, as the live replay settles a target.
+
+    No output folder after a non-zero exit means cost_bench refused before any spend. Otherwise
+    the sidecar is read and reconciled against the rows by `replay._read_spend`; one that is
+    missing, malformed or disagrees with the rows charges the whole cap, since spend is unknown."""
+    if not results.exists() and returncode != 0:
+        return 0.0, False, None
+    try:
+        rows = (_read_rows(results / replay.RESULTS_NAME)
+                if (results / replay.RESULTS_NAME).is_file() else [])
+        record = replay._read_spend(results / replay.SPEND_NAME,
+                                    SimpleNamespace(execution_ref=revision), run_cap, spend_cap,
+                                    rows)
+        if record["stopped_at_cap"] != (returncode == 1):
+            raise EvalTierError("the replay's spend record does not match its exit status")
+        return round(float(record["charged_spend_usd"]), 6), record["stopped_at_cap"], None
+    except (OSError, ValueError, ArithmeticError, TypeError, KeyError) as exc:
+        return round(float(Decimal(spend_cap)), 6), True, str(exc) or type(exc).__name__
+
+
+def write_spend_result(result_path: Path, run_id: str, suite: str, spend: float,
+                       stop_reason: Optional[str], ran: bool) -> None:
+    value = {"schema_version": 1, "run_id": run_id, "spend_usd": spend,
+             "cases": [{"id": suite, "status": "completed" if ran else "not_run",
+                        "spend_usd": spend}],
+             "stop_reason": stop_reason}
+    descriptor = os.open(str(result_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                         0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, sort_keys=True)
+        stream.write("\n")
 
 
 def paid_command(suite: str, repository: Path, revision: str, out: Path, raw: Path,
                  run_cap: str, spend_cap: str, unit: Optional[str] = None,
-                 model: Optional[str] = None, reps: Optional[str] = None) -> List[str]:
+                 model: Optional[str] = None) -> List[str]:
     parameters = {"revision": revision}
     if suite == "unit-eval":
-        parameters.update(unit=unit or "", model=model or "", reps=reps or "")
+        parameters.update(unit=unit or "", model=model or DEFAULT_MODEL)
     command = native_command(suite, parameters, run_cap, spend_cap)
     return ([sys.executable, str(Path(repository) / "scripts" / "cost_bench.py")] + command[2:]
             + ["--out", str(out), "--raw", str(raw)])
@@ -454,24 +527,17 @@ def run_paid(suite: str, repository: Path, revision: str, run_cap: str, spend_ca
     native_out, raw = output / "out", output / "raw"
     command = paid_command(suite, repository, revision, native_out, raw, run_cap, spend_cap,
                            **unit_args)
-    done = launch(command, cwd=str(repository))
+    try:
+        returncode = getattr(launch(command, cwd=str(repository)), "returncode", 2)
+    except Exception:  # the spend is settled from what the engine left behind
+        returncode = 2
     results = native_out / revision
-    sidecar = results / replay.SPEND_NAME
-    spend, stopped = 0.0, False
-    if sidecar.is_file():
-        record = _read_sidecar(sidecar, revision, run_cap, spend_cap)
-        spend, stopped = round(float(record["charged_spend_usd"]), 6), record["stopped_at_cap"]
-    stop_reason = "spend_cap" if stopped else (None if done.returncode == 0 else "runner_failure")
-    ran = spend > 0 or done.returncode == 0
-    value = {"schema_version": 1, "run_id": run_id, "spend_usd": spend,
-             "cases": [{"id": suite, "status": "completed" if ran else "not_run",
-                        "spend_usd": spend}],
-             "stop_reason": stop_reason}
-    descriptor = os.open(str(result_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                         0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-        json.dump(value, stream, sort_keys=True)
-        stream.write("\n")
+    spend, stopped, failure = settle_spend(results, revision, run_cap, spend_cap, returncode)
+    stop_reason = ("runner_failure" if failure else "spend_cap" if stopped else
+                   None if returncode == 0 else "runner_failure")
+    ran = spend > 0 or returncode == 0
+    write_spend_result(result_path, run_id, suite, spend, stop_reason, ran)
+    done = SimpleNamespace(returncode=returncode)
     analysis: Dict[str, Any] = {"command": summarise_command(str(results)),
                                 "replay_command": command[2:], "replay_exit": done.returncode,
                                 "spend_usd": spend, "stopped_at_cap": stopped,
@@ -489,9 +555,11 @@ def run_paid(suite: str, repository: Path, revision: str, run_cap: str, spend_ca
                                  ["the engine printed no analysis"])[-1]
     else:
         analysis["error"] = "the replay wrote no results (exit %d)" % done.returncode
+    if failure:
+        analysis["spend_error"] = "spend unknown, the whole cap was charged: " + failure
     (output / ANALYSIS_NAME).write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n",
                                         encoding="utf-8")
-    return 0 if done.returncode == 0 else (1 if stopped else 2)
+    return 0 if done.returncode == 0 and not failure else (1 if stopped and not failure else 2)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -509,10 +577,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if name == "unit-eval":
             paid.add_argument("--unit", required=True)
             paid.add_argument("--model", required=True)
-            paid.add_argument("--reps", required=True)
         paid.add_argument("--max-budget-usd", required=True)
         paid.add_argument("--spend-cap", required=True)
     args = parser.parse_args(argv)
+    signal.signal(signal.SIGTERM, _terminate_cleanly)
     try:
         if args.suite == "hook-matrix":
             _emit(args.suite, run_hook_matrix(Path(args.root).resolve()))
@@ -526,11 +594,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             raise EvalTierError("a paid tier needs its run identity and result path")
         if not HEX40.fullmatch(args.revision):
             raise EvalTierError("a paid tier needs a full resolved revision")
-        extra = ({"unit": args.unit, "model": args.model, "reps": args.reps}
-                 if args.suite == "unit-eval" else {})
-        return run_paid(args.suite, Path(args.repository).resolve(), args.revision,
-                        args.max_budget_usd, args.spend_cap, Path(result), run_id, **extra)
-    except (OSError, ValueError) as exc:
+        extra = ({"unit": args.unit, "model": args.model} if args.suite == "unit-eval" else {})
+        try:
+            return run_paid(args.suite, Path(args.repository).resolve(), args.revision,
+                            args.max_budget_usd, args.spend_cap, Path(result), run_id, **extra)
+        except Exception:
+            # Always leave a spend result: unknown spend is charged at the whole cap.
+            if not Path(result).exists():
+                write_spend_result(Path(result), run_id, args.suite,
+                                   round(float(Decimal(args.spend_cap)), 6), "runner_failure",
+                                   True)
+            raise
+    except (OSError, ValueError, ArithmeticError) as exc:
         print("studio-eval: " + str(exc), file=sys.stderr)
         return 2
 

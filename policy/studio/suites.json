@@ -211,9 +211,7 @@
         "--unit",
         "{param:unit}",
         "--model",
-        "{param:model}",
-        "--reps",
-        "{param:reps}"
+        "{param:model}"
       ],
       "parameters": {
         "repository": {
@@ -235,11 +233,6 @@
           "kind": "pattern",
           "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$",
           "max_length": 200
-        },
-        "reps": {
-          "kind": "pattern",
-          "pattern": "^(?:[1-9]|1[0-9]|20)$",
-          "max_length": 2
         }
       },
       "cost_class": "spends_usage",

@@ -1,18 +1,23 @@
-import { Alert, Badge, Button, Code, Group, NumberInput, Paper, Select, Stack, Table, Text, TextInput, Title } from "@mantine/core";
+import { Alert, Badge, Button, Code, Group, Paper, Select, Stack, Table, Text, TextInput, Title } from "@mantine/core";
 import { useEffect, useState } from "react";
 
 import { StatusBadge } from "../../components/StudioKit";
-import { loadEvalResult, previewPaidTier, startFreeTier, startPaidTier } from "./api";
+import { EvalApiError, loadEvalResult, previewPaidTier, startFreeTier, startPaidTier } from "./api";
 import {
-  hookGrid, isHookMatrix, isPaidAnalysis, isTerminal, paidAnalysisLines, paidInput, tierById,
+  isHookMatrix, isPaidAnalysis, isTerminal, paidAnalysisLines, paidInput, tierById,
   type EvalCatalog, type EvalPreview, type EvalRunResult, type HookMatrixResult, type PaidAnalysis, type PaidTierInput,
 } from "./model";
 
 const POLL_MS = 1500;
 
-/** Poll one tier run until it ends; the engine's result arrives with the terminal status. */
-export function useEvalRun(runId: string): EvalRunResult | null {
-  const [result, setResult] = useState<EvalRunResult | null>(null);
+export type EvalRunState = { result: EvalRunResult | null; error: string };
+
+/**
+ * Poll one tier run until it ends; the engine's result arrives with the terminal status. A refusal
+ * the server answered (4xx, such as an unreadable result) is final: polling stops and it is shown.
+ */
+export function useEvalRun(runId: string): EvalRunState {
+  const [state, setState] = useState<EvalRunState>({ result: null, error: "" });
   useEffect(() => {
     if (!runId) return undefined;
     let stopped = false;
@@ -20,20 +25,27 @@ export function useEvalRun(runId: string): EvalRunResult | null {
     const tick = () => {
       void loadEvalResult(runId).then((value) => {
         if (stopped) return;
-        setResult(value);
+        setState({ result: value, error: "" });
         if (!isTerminal(value.run.status)) timer = setTimeout(tick, POLL_MS);
-      }).catch(() => { if (!stopped) timer = setTimeout(tick, POLL_MS * 2); });
+      }).catch((caught: unknown) => {
+        if (stopped) return;
+        if (caught instanceof EvalApiError && caught.status >= 400 && caught.status < 500) {
+          setState((current) => ({ ...current, error: caught.message }));
+          return;
+        }
+        timer = setTimeout(tick, POLL_MS * 2);
+      });
     };
-    setResult(null);
+    setState({ result: null, error: "" });
     tick();
     return () => { stopped = true; if (timer) clearTimeout(timer); };
   }, [runId]);
-  return result;
+  return state;
 }
 
-export function HookMatrixGrid({ result }: { result: HookMatrixResult }) {
-  const [row, setRow] = useState(result.matrix.rows[0] ?? "");
-  const grid = hookGrid(result.matrix, row, result.base, result.same);
+export function HookMatrixGrid({ result, initialRow }: { result: HookMatrixResult; initialRow?: string }) {
+  const [row, setRow] = useState(initialRow ?? result.rows[0] ?? "");
+  const grid = result.grid[row] ?? [];
   return (
     <Stack gap="sm">
       {result.moved.length > 0
@@ -41,13 +53,13 @@ export function HookMatrixGrid({ result }: { result: HookMatrixResult }) {
             <Code block>{result.moved.join("\n")}</Code>
           </Alert>
         : <Text c="dimmed" size="sm">Every cell matches the committed matrix.</Text>}
-      <Select aria-label="Hook" data={result.matrix.rows} onChange={(value) => setRow(value ?? "")} value={row || null} />
+      <Select data={result.rows} label="Hook" onChange={(value) => setRow(value ?? "")} value={row || null} />
       <Table.ScrollContainer minWidth={900}>
         <Table aria-label={`Hook matrix for ${row}`} striped withTableBorder>
-          <Table.Thead><Table.Tr><Table.Th>Recorded call</Table.Th>{result.matrix.variants.map((variant) => <Table.Th key={variant}>{variant}</Table.Th>)}</Table.Tr></Table.Thead>
+          <Table.Thead><Table.Tr><Table.Th>Recorded call</Table.Th>{result.variants.map((variant) => <Table.Th key={variant}>{variant}</Table.Th>)}</Table.Tr></Table.Thead>
           <Table.Tbody>{grid.map((line) => <Table.Tr key={line.call}>
             <Table.Td><Code>{line.call}</Code></Table.Td>
-            {line.cells.map((cell, index) => <Table.Td key={result.matrix.variants[index]}>{cell}</Table.Td>)}
+            {line.cells.map((cell, index) => <Table.Td data-cell={`${row}|${line.call}|${result.variants[index]}`} key={result.variants[index]}>{cell}</Table.Td>)}
           </Table.Tr>)}</Table.Tbody>
         </Table>
       </Table.ScrollContainer>
@@ -68,14 +80,15 @@ export function PaidAnalysisView({ analysis, title }: { analysis: PaidAnalysis; 
   );
 }
 
-export function EvalResultView({ result }: { result: EvalRunResult }) {
-  const value = result.result;
+export function EvalResultView({ result, error = "", initialRow }: { result: EvalRunResult | null; error?: string; initialRow?: string }) {
+  const value = result?.result ?? null;
   return (
     <Stack gap="sm">
-      <Group gap="xs"><Text size="sm">Run {result.run.run_id}</Text><StatusBadge>{result.run.status}</StatusBadge></Group>
-      {result.analysis_error && <Alert color="yellow" title="Engine result unknown">{result.analysis_error}</Alert>}
-      {isHookMatrix(value) && <HookMatrixGrid result={value} />}
-      {isPaidAnalysis(value) && <PaidAnalysisView analysis={value} title={result.run.suite === "unit-eval" ? "Unit eval" : "Micro tier"} />}
+      {result && <Group gap="xs"><Text size="sm">Run {result.run.run_id}</Text><StatusBadge>{result.run.status}</StatusBadge></Group>}
+      {error && <Alert color="red" title="Result unavailable">{error}</Alert>}
+      {result?.analysis_error && <Alert color="yellow" title="Engine result unknown">{result.analysis_error}</Alert>}
+      {isHookMatrix(value) && <HookMatrixGrid initialRow={initialRow} result={value} />}
+      {isPaidAnalysis(value) && <PaidAnalysisView analysis={value} title={result?.run.suite === "unit-eval" ? "Unit eval" : "Micro tier"} />}
       {value && !isHookMatrix(value) && !isPaidAnalysis(value) && <Code block>{JSON.stringify(value, null, 2)}</Code>}
     </Stack>
   );
@@ -88,28 +101,23 @@ export function PaidTierForm({ suite, unit, catalog, onStarted }: {
   const tier = tierById(catalog, suite);
   const [kind, setKind] = useState("installed");
   const [ref, setRef] = useState("");
-  const [model, setModel] = useState(catalog.default_model);
-  const [repetitions, setRepetitions] = useState(catalog.default_repetitions);
   const [maxBudget, setMaxBudget] = useState("");
   const [spendCap, setSpendCap] = useState("");
   const [preview, setPreview] = useState<EvalPreview | null>(null);
   const [error, setError] = useState("");
   if (!tier) return null;
-  const input = paidInput(suite, { kind, ref, unit, model, repetitions, maxBudget, spendCap });
+  const input = paidInput(suite, { kind, ref, unit, maxBudget, spendCap });
   const reset = () => { setPreview(null); setError(""); };
   return (
     <Stack gap="sm">
       <Group grow>
-        <Select aria-label="Target kind" data={tier.target_kinds} onChange={(value) => { setKind(value ?? "installed"); reset(); }} value={kind} />
-        <TextInput aria-label="Target reference" onChange={(event) => { setRef(event.currentTarget.value); reset(); }} placeholder="Branch, tag, path or draft" value={ref} />
+        <Select data={tier.target_kinds} label="Target kind" onChange={(value) => { setKind(value ?? "installed"); reset(); }} value={kind} />
+        <TextInput label="Target reference" onChange={(event) => { setRef(event.currentTarget.value); reset(); }} placeholder="Branch, tag, path or draft" value={ref} />
       </Group>
-      {suite === "unit-eval" && <Group grow>
-        <TextInput aria-label="Model" onChange={(event) => { setModel(event.currentTarget.value); reset(); }} value={model} />
-        <NumberInput aria-label="Trials per task and arm" max={20} min={1} onChange={(value) => { setRepetitions(Number(value) || 1); reset(); }} value={repetitions} />
-      </Group>}
+      {suite === "unit-eval" && <Text c="dimmed" size="xs">Model {catalog.unit_model}, with the engine's default tasks and trials.</Text>}
       <Group grow>
-        <TextInput aria-label="Per-run cap (USD)" onChange={(event) => { setMaxBudget(event.currentTarget.value); reset(); }} placeholder="Per-run cap, USD" value={maxBudget} />
-        <TextInput aria-label="Spend cap (USD)" onChange={(event) => { setSpendCap(event.currentTarget.value); reset(); }} placeholder="Whole-run spend cap, USD" value={spendCap} />
+        <TextInput description="--max-budget-usd, each run" label="Per-run cap (USD)" onChange={(event) => { setMaxBudget(event.currentTarget.value); reset(); }} value={maxBudget} />
+        <TextInput description="--spend-cap, the whole run" label="Spend cap (USD)" onChange={(event) => { setSpendCap(event.currentTarget.value); reset(); }} value={spendCap} />
       </Group>
       <Group>
         <Button disabled={!ref.trim() || !maxBudget.trim() || !spendCap.trim()} variant="light" onClick={() => {
@@ -135,7 +143,7 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
   const [runId, setRunId] = useState("");
   const [raw, setRaw] = useState("");
   const [error, setError] = useState("");
-  const result = useEvalRun(runId);
+  const run = useEvalRun(runId);
   const startFree = (suite: string, rawDirectory?: string) => {
     setError("");
     void startFreeTier(suite, rawDirectory).then((started) => setRunId(started.run_id))
@@ -152,8 +160,8 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
             <Text c="dimmed" size="sm">{tier.description}</Text>
             <Code>{tier.command}</Code>
             {tier.id === "hook-matrix" && <Group><Button variant="light" onClick={() => startFree("hook-matrix")}>Run the hook matrix</Button></Group>}
-            {tier.id === "rule-detection" && <Group grow>
-              <TextInput aria-label="Saved raw directory" onChange={(event) => setRaw(event.currentTarget.value)} placeholder="/absolute/path/to/raw" value={raw} />
+            {tier.id === "rule-detection" && <Group align="flex-end" grow>
+              <TextInput description="Its top-level <task>-<arm>-<rep>.json files are copied and read" label="Saved raw directory" onChange={(event) => setRaw(event.currentTarget.value)} placeholder="/absolute/path/to/raw" value={raw} />
               <Button disabled={!raw.startsWith("/")} variant="light" onClick={() => startFree("rule-detection", raw)}>Detect offline</Button>
             </Group>}
             {tier.id === "micro-tier" && <PaidTierForm catalog={catalog} suite="micro-tier" onStarted={setRunId} />}
@@ -161,9 +169,23 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
           </Stack>
         </Paper>)}
         {error && <Alert color="red" title="Refused">{error}</Alert>}
-        {result && <EvalResultView result={result} />}
+        {(run.result || run.error) && <EvalResultView error={run.error} result={run.result} />}
       </Stack>
     </Paper>
+  );
+}
+
+/** What "Test this rule" shows on the rule's page: the launch form when open, then the run's result. */
+export function TestThisRuleView({ unit, catalog, open, onToggle, onStarted, run }: {
+  unit: string; catalog: EvalCatalog; open: boolean; onToggle: () => void;
+  onStarted: (runId: string) => void; run: EvalRunState;
+}) {
+  return (
+    <Stack gap="sm">
+      <Group><Button variant="light" onClick={onToggle}>Test this rule</Button><Text c="dimmed" size="xs">Unit eval of <Code>{unit}</Code>, alone and with the economy concern.</Text></Group>
+      {open && <PaidTierForm catalog={catalog} suite="unit-eval" unit={unit} onStarted={onStarted} />}
+      {(run.result || run.error) && <EvalResultView error={run.error} result={run.result} />}
+    </Stack>
   );
 }
 
@@ -171,12 +193,6 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
 export function TestThisRule({ unit, catalog }: { unit: string; catalog: EvalCatalog }) {
   const [open, setOpen] = useState(false);
   const [runId, setRunId] = useState("");
-  const result = useEvalRun(runId);
-  return (
-    <Stack gap="sm">
-      <Group><Button variant="light" onClick={() => setOpen(!open)}>Test this rule</Button><Text c="dimmed" size="xs">Unit eval of <Code>{unit}</Code>, alone and with the economy concern.</Text></Group>
-      {open && <PaidTierForm catalog={catalog} suite="unit-eval" unit={unit} onStarted={setRunId} />}
-      {result && <EvalResultView result={result} />}
-    </Stack>
-  );
+  const run = useEvalRun(runId);
+  return <TestThisRuleView catalog={catalog} onStarted={setRunId} onToggle={() => setOpen(!open)} open={open} run={run} unit={unit} />;
 }

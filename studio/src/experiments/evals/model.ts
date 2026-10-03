@@ -15,8 +15,7 @@ export type EvalCatalog = {
   schema_version: number;
   tiers: EvalTier[];
   units: string[];
-  default_model: string;
-  default_repetitions: number;
+  unit_model: string;
   commands: Record<string, string>;
 };
 
@@ -24,8 +23,6 @@ export type PaidTierInput = {
   suite: "micro-tier" | "unit-eval";
   target: { kind: string; ref: string };
   unit?: string;
-  model?: string;
-  repetitions?: number;
   max_budget_usd: string;
   spend_cap_usd: string;
 };
@@ -45,17 +42,15 @@ export type EvalPreview = {
   command: string;
 };
 
-/** The engine's compact hook matrix: a base cell per row and call, and only the variants that differ. */
-export type HookMatrix = {
-  schema_version: number;
+/** The hook matrix as the engine expanded it: per hook, each recorded call's verdict under every variant. */
+export type HookMatrixResult = {
   runtime: string;
   variants: string[];
   rows: string[];
   calls: string[];
-  cells: Record<string, Record<string, Record<string, string>>>;
+  grid: Record<string, Array<{ call: string; cells: string[] }>>;
+  moved: string[];
 };
-
-export type HookMatrixResult = { matrix: HookMatrix; moved: string[]; base: string; same: string };
 
 export type PaidAnalysis = {
   command: string[];
@@ -93,31 +88,6 @@ export function unitFor(catalog: EvalCatalog | null, kind: string, name: string)
   return catalog.units.includes(unit) ? unit : null;
 }
 
-/** One cell, read the way the engine's `expand` reads it: a missing entry is `as-dispatcher` throughout. */
-export function hookCell(matrix: HookMatrix, row: string, call: string, variant: string, base = "base", same = "as-dispatcher"): string {
-  const entry = matrix.cells[row]?.[call] ?? { [base]: same };
-  return entry[variant] ?? entry[base];
-}
-
-/** Every call of one hook row against every variant, in the engine's order. */
-export function hookGrid(matrix: HookMatrix, row: string, base = "base", same = "as-dispatcher"): Array<{ call: string; cells: string[] }> {
-  return matrix.calls.map((call) => ({
-    call,
-    cells: matrix.variants.map((variant) => hookCell(matrix, row, call, variant, base, same)),
-  }));
-}
-
-/** Every expanded cell as `row|call|variant=cell`, sorted; the parity fixture digests the same lines. */
-export function hookCellLines(matrix: HookMatrix): string[] {
-  const lines: string[] = [];
-  for (const row of matrix.rows) {
-    for (const call of matrix.calls) {
-      for (const variant of matrix.variants) lines.push(`${row}|${call}|${variant}=${hookCell(matrix, row, call, variant)}`);
-    }
-  }
-  return lines.sort();
-}
-
 /** The engine's analysis as path and value lines, every field, through the generic analysis view. */
 export function paidAnalysisLines(analysis: PaidAnalysis): Array<[string, string]> {
   if (analysis.result === null) return [["Engine refused", analysis.error ?? "no analysis"]];
@@ -125,21 +95,21 @@ export function paidAnalysisLines(analysis: PaidAnalysis): Array<[string, string
 }
 
 export function isHookMatrix(result: EvalRunResult["result"]): result is HookMatrixResult {
-  return result !== null && typeof result === "object" && "matrix" in result && "moved" in result;
+  return result !== null && typeof result === "object" && "grid" in result && "moved" in result;
 }
 
 export function isPaidAnalysis(result: EvalRunResult["result"]): result is PaidAnalysis {
   return result !== null && typeof result === "object" && "replay_command" in result;
 }
 
-/** The request a paid tier sends; the micro tier pins its tasks, model and reps. */
+/** The request a paid tier sends: a target and caps, and a unit eval's unit; the engine's defaults do the rest. */
 export function paidInput(suite: PaidTierInput["suite"], form: {
-  kind: string; ref: string; unit?: string; model: string; repetitions: number; maxBudget: string; spendCap: string;
+  kind: string; ref: string; unit?: string; maxBudget: string; spendCap: string;
 }): PaidTierInput {
   const input: PaidTierInput = {
     suite, target: { kind: form.kind, ref: form.ref.trim() },
     max_budget_usd: form.maxBudget.trim(), spend_cap_usd: form.spendCap.trim(),
   };
-  if (suite === "unit-eval") Object.assign(input, { unit: form.unit, model: form.model.trim(), repetitions: form.repetitions });
+  if (suite === "unit-eval") input.unit = form.unit;
   return input;
 }
