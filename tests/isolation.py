@@ -51,4 +51,33 @@ def without_harness_vars(env=None):
     return clean
 
 
+# Git's automatic maintenance can detach a background process that is still writing into `.git`
+# when a test removes its temporary repository, so the cleanup fails with "Directory not empty".
+# Every git child that inherits this process's environment runs with both settings off.
+QUIET_GIT_CONFIG = (("maintenance.auto", "false"), ("gc.auto", "0"))
+
+
+def quiet_git_maintenance(env=None):
+    """Add `QUIET_GIT_CONFIG` to `env` (default `os.environ`) as `GIT_CONFIG_KEY_n` entries.
+
+    Entries already in the environment are kept and these are appended after them; a setting
+    already present is not added twice. Returns the environment it changed.
+    """
+    env = os.environ if env is None else env
+    try:
+        count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        count = 0
+    present = set((env.get("GIT_CONFIG_KEY_%d" % i), env.get("GIT_CONFIG_VALUE_%d" % i))
+                  for i in range(count))
+    for key, value in QUIET_GIT_CONFIG:
+        if (key, value) not in present:
+            env["GIT_CONFIG_KEY_%d" % count] = key
+            env["GIT_CONFIG_VALUE_%d" % count] = value
+            count += 1
+    env["GIT_CONFIG_COUNT"] = str(count)
+    return env
+
+
 drop_inherited_config_dir()
+quiet_git_maintenance()

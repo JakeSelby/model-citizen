@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 161,
+    "bug": 166,
     "chore": 105,
     "decision": 15,
     "epic": 28,
@@ -8575,6 +8575,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B156.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B165",
+      "github_number": 1164,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1164",
+      "title": "test(benchmarks): keep git maintenance out of repositories replay_pack.materialize creates",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B165.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
