@@ -301,7 +301,7 @@ class LedgerCopyTests(unittest.TestCase):
             self.assertEqual(runs[0][:3], ["docker", "run", "--rm"])
             for command in runs[1:]:
                 self.assertNotIn("--rm", command)
-                self.assertEqual(len([p for p in command if p == "-v"]), 1)  # still one mount
+                self.assertEqual(len([p for p in command if p == "-v"]), 2)  # the snapshot and the cache nonce
             copy = [c for c, _ in launch.calls if c[1] == "cp"][0]
             home = arm_record("harness")["manifest"]["roots"]["home"]  # the image user's, never the host's
             self.assertEqual(copy[2].split(":", 1)[1], home + "/" + PAIR.LEDGER)
