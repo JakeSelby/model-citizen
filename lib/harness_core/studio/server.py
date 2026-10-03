@@ -820,7 +820,8 @@ def _runs_compare(handler: Handler, route: Route) -> None:
 
 # A draft that is not there is 404; a request that names the wrong draft or checkpoint is the
 # client's to plan again (409); every other refusal is the client's to fix (400).
-_DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft_unavailable": 409}
+_DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft_unavailable": 409,
+                      "draft_test_unchanged": 409, "draft_test_records_unsafe": 409}
 
 
 def _draft_test_error(handler: Handler, exc: Exception) -> None:
@@ -839,11 +840,13 @@ def _draft_test_plan(handler: Handler, route: Route) -> None:
     try:
         planned = draft_tests.parse_plan(request["effect"], request["cv"])
         draft = draft_tests.identity(handler.server.repo_root, request["draft"])
+        form = draft_tests.replay_form(draft, request["request"])
+        # Power needs only the task count and trials, so it answers before any target build.
+        power = draft_tests.power(handler.server.repo_root,
+                                  *draft_tests.form_size(form), planned)
         admission = _replay_admission(handler)
-        resolved = admission.resolve(draft_tests.replay_form(draft, request["request"]))
+        resolved = admission.resolve(form)
         draft_tests.check_request(draft, resolved)
-        power = draft_tests.power(handler.server.repo_root, len(resolved.tasks),
-                                  resolved.repetitions, planned)
         preview = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
@@ -866,11 +869,12 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
     try:
         planned = draft_tests.parse_plan(request["effect"], request["cv"])
         draft = draft_tests.identity(handler.server.repo_root, request["draft"])
-        draft_tests.check_request(draft, replay.ReplayRequest.parse(request["request"]))
+        selected = replay.ReplayRequest.parse(request["request"])
+        draft_tests.check_request(draft, selected)
+        power = draft_tests.power(handler.server.repo_root, len(selected.tasks),
+                                  selected.repetitions, planned)
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
-        power = draft_tests.power(handler.server.repo_root, len(confirmed.tasks),
-                                  confirmed.repetitions, planned)
         started = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:

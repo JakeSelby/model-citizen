@@ -37,7 +37,7 @@
           "tasks": 3,
           "trials": 2
         },
-        "power_line": "Too few trials for the effect you stated: fewer than 5 trials per task: the engine marks the result exploratory; 6 attempt(s) per side resolve a change of 49.8% at the least, more than the 15.0% you want to detect; run 17 trials per task instead.",
+        "power_line": "Too few trials for the effect you stated: fewer than 5 trials per task: the engine marks the result exploratory; 6 attempt(s) per side resolve a change of 49.8% at the least, more than the 15.0% you want to detect; run 17 trials per task instead. The figure treats attempts as independent; the verdict's intervals resample tasks, so few tasks can still read inconclusive.",
         "readings": {
           "cost_per_passed": {
             "control_n": 6,
@@ -104,95 +104,10 @@
   "schema_version": 1,
   "tests": [
     {
-      "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      "comparison": {
-        "base": {
-          "run_id": "00000000-0000-4000-8000-000000000011",
-          "target": 1
-        },
-        "candidate": {
-          "run_id": "00000000-0000-4000-8000-000000000011",
-          "target": 2
-        },
-        "command": "citizen runs compare 00000000-0000-4000-8000-000000000011:1 00000000-0000-4000-8000-000000000011:2"
-      },
       "created_at": "2026-10-01T00:00:00+00:00",
-      "headline": "Exploratory: no claim. A draft test is exploratory: the draft runs unregistered, so its result is never cited as evidence and the Studio does not say whether the draft helped.",
-      "power": {
-        "attempts_per_side": 6,
-        "confidence": 0.95,
-        "cv": 0.25,
-        "cv_source": "stated with this test",
-        "effect": 0.15,
-        "enough": false,
-        "max_trials": 20,
-        "min_trials": 5,
-        "minimum_detectable_effect": 0.4984,
-        "needed_trials": 17,
-        "power": 0.8,
-        "reasons": [
-          "fewer than 5 trials per task: the engine marks the result exploratory",
-          "6 attempt(s) per side resolve a change of 49.8% at the least, more than the 15.0% you want to detect"
-        ],
-        "tasks": 3,
-        "trials": 2
-      },
-      "power_line": "Too few trials for the effect you stated: fewer than 5 trials per task: the engine marks the result exploratory; 6 attempt(s) per side resolve a change of 49.8% at the least, more than the 15.0% you want to detect; run 17 trials per task instead.",
-      "readings": {
-        "cost_per_passed": {
-          "control_n": 6,
-          "effect": -0.4583,
-          "estimand": "measured",
-          "estimate": 0.5417,
-          "interval": [
-            -0.49,
-            -0.41
-          ],
-          "kind": "pooled",
-          "label": "cost per passed attempt",
-          "n": 6,
-          "reading": "lower",
-          "reason": null,
-          "resolvable": 0.04,
-          "spread": {
-            "max_over_min": 1.1,
-            "sd": 0.042151
-          }
-        },
-        "pass_rate": {
-          "control_n": 6,
-          "effect": 0.0,
-          "estimand": "measured",
-          "estimate": 0.0,
-          "interval": [
-            0.0,
-            0.0
-          ],
-          "kind": "difference",
-          "label": "pass rate",
-          "n": 6,
-          "reading": "inconclusive",
-          "reason": "the interval spans no effect",
-          "resolvable": 0.0,
-          "spread": {
-            "max_over_min": 1.0,
-            "sd": 0.0
-          }
-        }
-      },
-      "reasons": [
-        "the base is exploratory",
-        "the candidate is exploratory",
-        "the engine marks candidate exploratory"
-      ],
+      "latest": true,
       "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-      "run_id": "00000000-0000-4000-8000-000000000011",
-      "spend_usd": 21.25,
-      "stale": true,
-      "stale_copy": "Stale: the draft changed after this comparison.",
-      "stale_reason": "the draft has a newer checkpoint",
-      "status": "succeeded",
-      "verdict": "exploratory"
+      "run_id": "00000000-0000-4000-8000-000000000011"
     }
   ],
   "unreadable_records": 0

@@ -51,10 +51,9 @@ def draft_at(revision=FIRST_REV, draft_id=DRAFT_ID, exists=True):
             raise drafts.DraftError("not-found", "draft does not exist: " + name)
         return operation(Path("/nonexistent"), state(revision, draft_id), {})
 
-    def config(_repo, name):
-        if not exists or name != "tuned":
-            raise drafts.DraftError("not-found", "draft does not exist: " + name)
-        return {"draft": {"revision": revision}, "config": {}}
+    def config(_repo, _name):
+        # The writer-lock read: a verdict must never need it, so it always answers busy here.
+        raise drafts.DraftError("busy", "draft is busy")
 
     with mock.patch.object(drafts, "read_snapshot", side_effect=snapshot), \
             mock.patch.object(drafts, "read_config", side_effect=config):
@@ -71,6 +70,7 @@ def tested(root, specs):
     supervisor = Runs(Path(root) / "runs")
     supervisor.root.mkdir()
     supervisor.state_root = Path(root) / "state"
+    supervisor.state_root.mkdir(mode=0o700)  # the supervisor's own root always exists
     for run_id, revision, candidate, created in specs:
         selected = draft_request(revision)
         supervisor.add(run_id, selected, {BASE_REV: BASE, revision: candidate})
@@ -201,6 +201,23 @@ class PairTests(unittest.TestCase):
         with self.assertRaises(draft_tests.DraftTestError):
             draft_tests.replay_form(draft, dict(FORM, pre_registration="x"))
 
+    def test_a_draft_still_at_its_base_commit_is_refused_before_anything_runs(self):
+        with draft_at(BASE_REV):
+            draft = draft_tests.identity(REPO, "tuned")
+        with self.assertRaises(draft_tests.DraftTestError) as caught:
+            draft_tests.replay_form(draft, FORM)
+        self.assertEqual(caught.exception.code, "draft_test_unchanged")
+        with self.assertRaises(draft_tests.DraftTestError) as caught:
+            draft_tests.check_request(draft, draft_request(BASE_REV))
+        self.assertEqual(caught.exception.code, "draft_test_unchanged")
+
+    def test_an_unreadable_draft_configuration_is_unavailable_not_an_error(self):
+        with mock.patch.object(drafts, "read_snapshot",
+                               side_effect=draft_tests.targets.TargetError("bad")):
+            with self.assertRaises(draft_tests.DraftTestError) as caught:
+                draft_tests.identity(REPO, "tuned")
+        self.assertEqual(caught.exception.code, "draft_unavailable")
+
     def test_a_draft_target_is_never_registered_so_no_draft_test_can_be_cited(self):
         registered = replay.ReplayRequest.parse(dict(
             draft_request().as_dict(), pre_registration="docs/x.md", evidence="pre-registered",
@@ -210,19 +227,51 @@ class PairTests(unittest.TestCase):
 
 class ClaimTests(unittest.TestCase):
     @staticmethod
-    def comparison(cost="lower", passing="higher", withheld=(), comparable=True, error=None):
+    def comparison(cost=(-0.3, -0.1), passing=(-0.05, 0.05), withheld=(), comparable=True,
+                   error=None, reading="lower"):
+        """`cost` is the engine's Cost-of-Pass effect interval (the ratio less 1.0); `passing` its
+        pass-rate difference interval. `reading` is set to mislead, to prove it is not used."""
         return {"comparable": comparable, "refusals": [] if comparable else ["different models"],
                 "error": error, "direction_withheld": list(withheld),
                 "preferred": dict(compare.PREFERRED),
-                "result": {"arms": [{"measures": {"cost_per_passed": {"reading": cost},
-                                                  "pass_rate": {"reading": passing}}}]}}
+                "result": {"arms": [{"measures": {
+                    "cost_per_passed": {"reading": reading,
+                                        "interval": None if cost is None else list(cost)},
+                    "pass_rate": {"reading": "higher", "interval": list(passing)}}}]}}
 
-    def test_helped_only_when_citable_and_both_judged_measures_read_their_preferred_way(self):
+    def test_helped_is_the_evidence_standards_decision_rule_on_the_engines_intervals(self):
+        delta = compare._engine().DELTA
+        self.assertEqual(delta, 0.125)
         self.assertEqual(draft_tests.claim(self.comparison())["verdict"], "helped")
-        self.assertEqual(draft_tests.claim(self.comparison(passing="inconclusive"))["verdict"],
+        # Cheaper with a lower pass rate still inside the margin: SM-2 supports it.
+        self.assertEqual(draft_tests.claim(self.comparison(passing=(-0.10, -0.02)))["verdict"],
+                         "helped")
+        # Non-inferiority fails at the margin itself, and a ratio interval touching 1.0 is not below.
+        self.assertEqual(draft_tests.claim(self.comparison(passing=(-0.125, 0.0)))["verdict"],
                          "inconclusive")
-        self.assertEqual(draft_tests.claim(self.comparison(cost="higher"))["verdict"], "worse")
-        self.assertEqual(draft_tests.claim(self.comparison(passing="lower"))["verdict"], "worse")
+        self.assertEqual(draft_tests.claim(self.comparison(cost=(-0.3, 0.0)))["verdict"],
+                         "inconclusive")
+        value = draft_tests.claim(self.comparison(passing=(-0.10, -0.02)))
+        self.assertEqual(value["reasons"], ["Cost-of-Pass ratio interval [0.7, 0.9]",
+                                            "pass-rate difference interval [-0.1, -0.02] against "
+                                            "the margin 0.125"])
+
+    def test_worse_is_the_exact_mirror_and_anything_else_is_inconclusive(self):
+        self.assertEqual(draft_tests.claim(self.comparison(cost=(0.1, 0.3)))["verdict"], "worse")
+        self.assertEqual(draft_tests.claim(self.comparison(cost=(0.1, 0.3), passing=(0.02, 0.10)))
+                         ["verdict"], "worse")
+        # Dearer but better by more than the margin is not the mirror: inconclusive.
+        self.assertEqual(draft_tests.claim(self.comparison(cost=(0.1, 0.3), passing=(0.05, 0.2)))
+                         ["verdict"], "inconclusive")
+        # Cheaper with a pass rate wholly below the margin is neither.
+        self.assertEqual(draft_tests.claim(self.comparison(passing=(-0.3, -0.2)))["verdict"],
+                         "inconclusive")
+        self.assertEqual(draft_tests.claim(self.comparison(cost=None)),
+                         {"verdict": "inconclusive",
+                          "reasons": ["the engine gives no interval for Cost-of-Pass"]})
+        # The reading alone never decides: an interval spanning 1.0 under a "lower" reading.
+        self.assertEqual(draft_tests.claim(self.comparison(cost=(-0.2, 0.1)))["verdict"],
+                         "inconclusive")
 
     def test_a_withheld_direction_refusal_or_engine_error_never_reads_helped(self):
         value = draft_tests.claim(self.comparison(withheld=["the candidate is exploratory"]))
@@ -237,6 +286,8 @@ class VerdictTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        draft_tests._CACHE.clear()
+        self.addCleanup(draft_tests._CACHE.clear)
 
     def test_a_finished_test_shows_its_verdict_readings_spend_and_comparison(self):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
@@ -244,7 +295,10 @@ class VerdictTests(unittest.TestCase):
             payload = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
             expected = compare.compare_runs(supervisor, REPO, {"base": (RUN_ONE, 1),
                                                                "candidate": (RUN_ONE, 2)})
-        test = payload["tests"][0]
+        test = payload["checkpoints"][0]["latest"]
+        self.assertEqual(payload["tests"], [{"run_id": RUN_ONE, "revision": FIRST_REV,
+                                             "created_at": "2026-10-01T00:00:00+00:00",
+                                             "latest": True}])
         self.assertEqual(test["verdict"], "exploratory")
         self.assertEqual(test["reasons"], expected["direction_withheld"])
         self.assertTrue(test["headline"].startswith("Exploratory: no claim."))
@@ -263,11 +317,11 @@ class VerdictTests(unittest.TestCase):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
         supervisor.records[RUN_ONE] = (supervisor.records[RUN_ONE][0], "running")
         with draft_at():
-            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["tests"][0]
+            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["checkpoints"][0]["latest"]
         self.assertEqual((test["verdict"], test["spend_usd"]), ("running", None))
         del supervisor.records[RUN_ONE]
         with draft_at():
-            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["tests"][0]
+            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["checkpoints"][0]["latest"]
         self.assertEqual((test["verdict"], test["reasons"]),
                          ("unavailable", ["the run is no longer known"]))
 
@@ -287,6 +341,40 @@ class VerdictTests(unittest.TestCase):
                          (True, "the draft has a newer checkpoint",
                           "Stale: the draft changed after this comparison."))
         self.assertFalse(payload["checkpoints"][0]["latest"]["stale"])
+        self.assertEqual([test["latest"] for test in payload["tests"]], [True, False, True])
+
+    def test_only_each_checkpoints_latest_test_is_compared_and_the_result_cached(self):
+        supervisor = tested(self.tmp.name, [
+            (RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00"),
+            (RUN_TWO, SECOND_REV, NOISY, "2026-10-02T00:00:00+00:00"),
+            (RUN_THREE, SECOND_REV, CHEAPER, "2026-10-03T00:00:00+00:00")])
+        with draft_at(SECOND_REV), mock.patch.object(compare, "compare_runs",
+                                                     wraps=compare.compare_runs) as counted:
+            first = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
+            self.assertEqual(sorted(call.args[2]["base"][0] for call in counted.call_args_list),
+                             [RUN_ONE, RUN_THREE])
+            second = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
+            self.assertEqual(counted.call_count, 2)
+            self.assertEqual(first, second)
+            # A changed recorded result changes the digest, so the run is compared again.
+            analysis = supervisor.root / RUN_THREE / "replay" / replay.ANALYSIS_NAME
+            analysis.write_text(analysis.read_text() + " ")
+            draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
+            self.assertEqual(counted.call_count, 3)
+
+    def test_staleness_comes_from_the_snapshot_never_the_writer_lock(self):
+        supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
+        # `draft_at` answers every writer-lock read busy; a fresh checkpoint must still read current.
+        with draft_at(), mock.patch.object(drafts, "read_snapshot",
+                                           wraps=drafts.read_snapshot) as snapshot:
+            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root,
+                                        "tuned")["checkpoints"][0]["latest"]
+        self.assertEqual((test["stale"], test["stale_reason"]), (False, None))
+        self.assertEqual(snapshot.call_count, 1)
+        with draft_at(FIRST_REV):
+            item = draft_tests.identity(REPO, "tuned")
+        self.assertEqual(draft_tests.staleness(item, FIRST_REV, "other"),
+                         (True, "the draft's configuration changed"))
 
     def test_another_drafts_tests_are_left_out_and_unreadable_records_counted(self):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
@@ -301,16 +389,40 @@ class VerdictTests(unittest.TestCase):
         path = supervisor.state_root / draft_tests.RECORDS_DIR / (RUN_ONE + ".json")
         path.write_text(json.dumps(dict(json.loads(path.read_text()), power={})), encoding="utf-8")
         with draft_at():
-            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["tests"][0]
+            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")["checkpoints"][0]["latest"]
         self.assertEqual(test["power_line"], "The power check recorded with this test is unreadable.")
         self.assertEqual(test["verdict"], "exploratory")
 
-    def test_a_record_is_written_once(self):
+    def test_a_record_is_written_once_and_whole_or_not_at_all(self):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
+        records = supervisor.state_root / draft_tests.RECORDS_DIR
         with draft_at():
+            draft = draft_tests.identity(REPO, "tuned")
             with self.assertRaises(FileExistsError):
-                draft_tests.record(supervisor.state_root, RUN_ONE, draft_tests.identity(REPO, "tuned"),
-                                   draft_request(), {})
+                draft_tests.record(supervisor.state_root, RUN_ONE, draft, draft_request(), {})
+            with mock.patch.object(draft_tests.os, "write", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    draft_tests.record(supervisor.state_root, RUN_TWO, draft, draft_request(), {})
+        self.assertEqual(sorted(path.name for path in records.iterdir()), [RUN_ONE + ".json"])
+        # A temporary left by a crash is neither read nor counted.
+        (records / (".%s.x.tmp" % RUN_TWO)).write_text("{")
+        self.assertEqual(draft_tests.read_records(supervisor.state_root)[1], 0)
+
+    def test_a_symlinked_records_directory_is_refused(self):
+        supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
+        records = supervisor.state_root / draft_tests.RECORDS_DIR
+        elsewhere = Path(self.tmp.name) / "elsewhere"
+        records.rename(elsewhere)
+        records.symlink_to(elsewhere)
+        with draft_at():
+            for action in (lambda: draft_tests.read_records(supervisor.state_root),
+                           lambda: draft_tests.record(supervisor.state_root, RUN_TWO,
+                                                      draft_tests.identity(REPO, "tuned"),
+                                                      draft_request(), {})):
+                with self.assertRaises(draft_tests.DraftTestError) as caught:
+                    action()
+                self.assertEqual(caught.exception.code, "draft_test_records_unsafe")
+        self.assertEqual(sorted(path.name for path in elsewhere.iterdir()), [RUN_ONE + ".json"])
 
 
 class RouteTests(unittest.TestCase):
@@ -318,6 +430,8 @@ class RouteTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
+        draft_tests._CACHE.clear()
+        self.addCleanup(draft_tests._CACHE.clear)
 
     def test_plan_pairs_the_base_and_the_draft_and_reports_power_before_anything_starts(self):
         admission = Admission()
@@ -368,6 +482,8 @@ class RouteTests(unittest.TestCase):
                 ("/api/configure/test/plan", dict(draft="missing", request=FORM, **PLAN),
                  (404, "draft_not_found")),
                 ("/api/configure/test/plan", dict(draft="tuned", request=dict(FORM, repetitions=0),
+                                                  **PLAN), (400, "invalid_request")),
+                ("/api/configure/test/plan", dict(draft="tuned", request=dict(FORM, model=""),
                                                   **PLAN), (400, "replay_refused")),
                 ("/api/configure/test/start", dict(draft="tuned", request={}, confirmation_token=1,
                                                    **PLAN), (400, "invalid_request")),
@@ -377,6 +493,35 @@ class RouteTests(unittest.TestCase):
             for path, body, (code, name) in cases:
                 status, payload = route_call(self.supervisor, path, body, admission)
                 self.assertEqual((status, payload), (code, {"error": name}), (path, body))
+
+    def test_power_is_checked_before_any_target_is_built(self):
+        admission = Admission()
+        refusal = draft_tests.DraftTestError("none declared", "draft_test_planning_unavailable")
+        with draft_at(), mock.patch.object(draft_tests, "declared_planning", side_effect=refusal):
+            status, payload = route_call(self.supervisor, "/api/configure/test/plan", dict(
+                draft="tuned", request=FORM, effect=0.15, cv=None), admission)
+        self.assertEqual((status, payload), (400, {"error": "draft_test_planning_unavailable"}))
+        self.assertEqual(admission.forms, [])
+
+    def test_a_draft_at_its_base_commit_is_refused_by_both_routes(self):
+        admission = Admission(revision=BASE_REV)
+        with draft_at(BASE_REV):
+            for path, body in (("/api/configure/test/plan", dict(draft="tuned", request=FORM, **PLAN)),
+                               ("/api/configure/test/start", dict(
+                                   draft="tuned", request=draft_request(BASE_REV).as_dict(),
+                                   confirmation_token="token", **PLAN))):
+                status, payload = route_call(self.supervisor, path, body, admission)
+                self.assertEqual((status, payload), (409, {"error": "draft_test_unchanged"}), path)
+        self.assertEqual((admission.forms, admission.started), ([], []))
+
+    def test_a_started_test_whose_record_fails_is_a_500_and_the_run_is_named_started(self):
+        admission = Admission()
+        with draft_at(), mock.patch.object(draft_tests, "record", side_effect=OSError("disk")):
+            status, payload = route_call(self.supervisor, "/api/configure/test/start", dict(
+                draft="tuned", request=draft_request().as_dict(), confirmation_token="token",
+                **PLAN), admission)
+        self.assertEqual((status, payload), (500, {"error": "draft_test_unrecorded"}))
+        self.assertEqual(len(admission.started), 1)
 
     def test_the_routes_name_their_citizen_commands(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}

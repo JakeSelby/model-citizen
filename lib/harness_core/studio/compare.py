@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from . import replay, runs
 
@@ -39,6 +39,7 @@ STAMP_FIELDS = (("cli_version", "CLI versions"), ("os", "container platforms"),
 DATE_FIELD = "date"
 PREREGISTERED = "pre-registered"
 _ENGINE_MODULE = None
+Staleness = Callable[[Path, "replay.ReplayTarget"], Tuple[bool, Optional[str]]]
 
 
 class CompareError(ValueError):
@@ -86,8 +87,10 @@ def _finished(rows: List[Mapping[str, Any]]) -> Dict[str, int]:
 
 
 def load_side(supervisor: runs.RunSupervisor, repository: Path, run_id: str,
-              index: int) -> Dict[str, Any]:
-    """One finished replay target: its identity, recorded analysis, staleness and harness rows."""
+              index: int, staleness: Optional[Staleness] = None) -> Dict[str, Any]:
+    """One finished replay target: its identity, recorded analysis, staleness and harness rows.
+    `staleness(repository, target)` defaults to `replay.draft_staleness`; a caller holding a
+    snapshot of the draft passes its own, so a read never takes the draft's writer lock."""
     try:
         run = supervisor.show(run_id)
     except (runs.RunError, OSError) as exc:
@@ -121,7 +124,7 @@ def load_side(supervisor: runs.RunSupervisor, repository: Path, run_id: str,
     recorded = next((dict(item) for item in analysis or [] if item.get("target") == position), None)
     if recorded is not None:
         recorded["target"] = index
-    stale, reason = replay.draft_staleness(repository, target)
+    stale, reason = (staleness or replay.draft_staleness)(repository, target)
     checked = target.kind == "draft" and bool(target.draft)
     freshness = ("stale" if stale else "current") if checked else "not checked"
     return {"run_id": run_id, "target": index, "ref": target.as_dict(),
@@ -248,9 +251,11 @@ def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, 
 
 
 def compare_runs(supervisor: runs.RunSupervisor, repository: Path,
-                 sides: Mapping[str, Tuple[str, int]]) -> Dict[str, Any]:
+                 sides: Mapping[str, Tuple[str, int]],
+                 staleness: Optional[Staleness] = None) -> Dict[str, Any]:
     """The route's and `citizen runs compare`'s one answer for two `(run_id, target)` sides."""
-    loaded = {name: load_side(supervisor, repository, *sides[name]) for name in SIDES}
+    loaded = {name: load_side(supervisor, repository, *sides[name], staleness=staleness)
+              for name in SIDES}
     return compare(loaded[BASE], loaded[CANDIDATE])
 
 

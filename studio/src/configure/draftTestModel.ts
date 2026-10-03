@@ -50,7 +50,10 @@ export type DraftTestCheckpoint = { revision: string; current: boolean; latest: 
 
 export type DraftTestVerdicts = {
   schema_version: number; draft: string; revision: string; base_revision: string;
-  evidence_note: string; tests: DraftTestVerdict[]; checkpoints: DraftTestCheckpoint[];
+  evidence_note: string;
+  /** Every test, newest first; only each checkpoint's latest is scored (`checkpoints`). */
+  tests: Array<{ run_id: string; revision: string; created_at: string; latest: boolean }>;
+  checkpoints: DraftTestCheckpoint[];
   unreadable_records: number;
 };
 
@@ -136,6 +139,8 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_mismatch: "The draft changed since the plan; check power and spend again.",
     draft_test_planning_unavailable: "State a coefficient of variation: no planning assumption is declared.",
     draft_test_unrecorded: "The test started, but it could not be linked to this draft.",
+    draft_test_unchanged: "This draft has no checkpoint beyond its base yet, so there is nothing to test.",
+    draft_test_records_unsafe: "The Studio's test records are not a private directory; nothing was read or written.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
     replay_target_config_unsupported: "This draft changed its configuration, which a replay cannot measure.",
   };

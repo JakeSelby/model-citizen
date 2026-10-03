@@ -52,10 +52,38 @@ export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; 
           <Button size="xs" variant="light" disabled={test.verdict === "running"} onClick={open}>Open comparison</Button>
           <CommandChip command={test.comparison.command} label="Comparison" />
         </Group>
-        {error && <Text c="red" size="sm">{error}</Text>}
+        <Text aria-live="polite" c="red" size="sm">{error}</Text>
         {comparison && <CompareReport result={comparison} />}
       </Stack>
     </Paper>
+  );
+}
+
+/** The power check before a run: enough, or too few with the number needed and a way to use it. */
+export function PowerNotice({ plan, onUseTrials }: { plan: DraftTestPlan; onUseTrials: () => void }) {
+  return (
+    <Alert color={plan.power.enough ? "blue" : "yellow"} title={plan.power.enough ? "Enough trials" : "Too few trials"}>
+      <Text size="sm">{plan.power_line}</Text>
+      <Text c="dimmed" size="xs">Planning assumption: coefficient of variation {plan.power.cv} ({plan.power.cv_source}).</Text>
+      {!plan.power.enough && plan.power.needed_trials !== null && (
+        <Button mt="xs" size="xs" variant="light" onClick={onUseTrials}>
+          Use {plan.power.needed_trials} trials per task
+        </Button>
+      )}
+    </Alert>
+  );
+}
+
+/** The latest verdict of every tested checkpoint, newest first. */
+export function CheckpointList({ verdicts }: { verdicts: DraftTestVerdicts | null }) {
+  if (!verdicts) return null;
+  if (verdicts.checkpoints.length === 0) return <Text c="dimmed" size="sm">No tests of this draft yet.</Text>;
+  return (
+    <Stack gap="sm">
+      {verdicts.checkpoints.map((entry) => (
+        <VerdictCard count={entry.tests} current={entry.current} key={entry.latest.run_id} test={entry.latest} />
+      ))}
+    </Stack>
   );
 }
 
@@ -162,19 +190,13 @@ export function DraftTest({ draft, revision }: Props) {
           <TextInput label="Whole test cap (USD)" value={form.spend_cap_usd} disabled={busy}
             onChange={(event) => update({ ...form, spend_cap_usd: event.currentTarget.value })} />
         </Group>
-        {errors.length > 0 && form.tasks.length > 0 && <ul className="message-list">{errors.map((error) => <li key={error}>{error}</li>)}</ul>}
+        <div aria-live="polite" role="group" aria-label="What the test still needs">
+          {errors.length > 0 && <ul className="message-list">{errors.map((error) => <li key={error}>{error}</li>)}</ul>}
+        </div>
         <Text aria-live="polite" c="dimmed" size="sm">{status}</Text>
         {plan && (
           <Stack gap="xs">
-            <Alert color={plan.power.enough ? "blue" : "yellow"} title={plan.power.enough ? "Enough trials" : "Too few trials"}>
-              <Text size="sm">{plan.power_line}</Text>
-              <Text c="dimmed" size="xs">Planning assumption: coefficient of variation {plan.power.cv} ({plan.power.cv_source}).</Text>
-              {!plan.power.enough && plan.power.needed_trials !== null && (
-                <Button mt="xs" size="xs" variant="light" onClick={() => update(withNeededTrials(form, plan.power))}>
-                  Use {plan.power.needed_trials} trials per task
-                </Button>
-              )}
-            </Alert>
+            <PowerNotice plan={plan} onUseTrials={() => update(withNeededTrials(form, plan.power))} />
             <Alert color="blue" title="Spend guard">
               Estimate: {plan.preview.estimate.amount_usd === null ? "No matching history" : `$${plan.preview.estimate.amount_usd.toFixed(2)}`}. Cap: ${plan.preview.caps.spend_cap_usd}.
             </Alert>
@@ -189,10 +211,7 @@ export function DraftTest({ draft, revision }: Props) {
           <Title order={3}>Verdicts by checkpoint</Title>
           <Button size="xs" variant="subtle" onClick={() => { void refresh(); }}>Refresh</Button>
         </Group>
-        {verdicts && verdicts.checkpoints.length === 0 && <Text c="dimmed" size="sm">No tests of this draft yet.</Text>}
-        {verdicts?.checkpoints.map((entry) => (
-          <VerdictCard count={entry.tests} current={entry.current} key={entry.latest.run_id} test={entry.latest} />
-        ))}
+        <CheckpointList verdicts={verdicts} />
       </Stack>
     </Paper>
   );
