@@ -858,6 +858,9 @@ def arm_env(proxy=None, stance_cost=None, selection=None):
 
 
 OBSERVATION_MOUNT = "/observations"
+# Claude Code's managed memory file on Linux, the first memory it loads: a file mounted here opens
+# the session segment, the first message after the system prompt (`cost_bench.trial_memory`).
+MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
 OBSERVATION_MARKER = ".model-citizen-benchmark-output"
 
 
@@ -879,7 +882,7 @@ def observation_mount(path):
 
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
-                observation_dir=None, keep=False):
+                observation_dir=None, keep=False, managed_memory=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -889,8 +892,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     names a host path in `host_paths` is refused. The extra output is accepted only with the marker
     `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
-    it is removed by name; it needs a `name`."""
-    reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
+    it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
+    `MANAGED_MEMORY`, the per-trial cache nonce."""
+    sources = [str(p) for p in (workdir, managed_memory) if p is not None]
+    reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
     if keep and not name:
@@ -904,6 +909,8 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, error))
     if observation:
         command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
+    if managed_memory is not None:
+        command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):

@@ -8646,6 +8646,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B160",
+      "github_number": 1174,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1174",
+      "title": "fix(benchmarks): replay trials share a warm prompt cache, understating the harness arm's cost",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B160.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-E027",
       "github_number": 1175,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1175",
