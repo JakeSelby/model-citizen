@@ -1022,7 +1022,7 @@ def _stream_diagnostics(messages, streamed):
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "")
                 tools[name] = tools.get(name, 0) + 1
-                if name in GATHER_TOOLS:
+                if delegation_verdict.gather_call(name, block.get("input")):
                     gathers.append(thread)
                 elif name in SPAWN_TOOLS:
                     spawn_calls.append((block.get("id"), thread))
@@ -1088,7 +1088,7 @@ def parse_result(stdout):
     inside a `Workflow` agent is in `tool_counts` and not in `spawns`.
 
     `spawn_offered` is whether the `init` event listed a spawn tool. `gather_calls` counts
-    `GATHER_TOOLS` calls in every thread, `absorbed_calls` those made inside a counted spawn's thread,
+    gather calls in every thread (`delegation_verdict.gather_call`: the read tools and read-only Bash), `absorbed_calls` those made inside a counted spawn's thread,
     and `workflow_launches` the `Workflow` calls, which are not spawns (`delegation_verdict`).
     With no assistant message the four counts are None, never zero; `tool_counts` stays `{}`.
 
