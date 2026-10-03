@@ -211,6 +211,17 @@ test("an open interrupted apply offers Restore and Abandon behind the draft's na
   assert.match(blocked, /citizen draft recover --json/);
   assert.doesNotMatch(render(h(RecoverControls, { ...props, confirmation: "older" })), /aria-disabled/);
   assert.doesNotMatch(render(h(RecoverControls, { ...props, review: CLEAN, confirmation: "" })), /interrupted|Restore/);
+  const rollback = { ...INTERRUPTED, interrupted: { ...INTERRUPTED.interrupted!, kind: "rollback" as const } };
+  const named = render(h(RecoverControls, { ...props, review: rollback, confirmation: "" }));
+  assert.match(named, /A rollback of older(&#x27;|')s apply was interrupted/);
+  assert.doesNotMatch(named, /An apply of older/);
+});
+
+test("an interrupted rollback is named as a rollback in every headline", () => {
+  assert.equal(resultHeadline(result({ status: "abandoned", applied: false, error_code: "interrupted-rollback" })),
+    "The interrupted rollback was abandoned. What it wrote was kept.");
+  assert.equal(resultHeadline(result({ status: "refused", applied: false, error_code: "interrupted-rollback" })),
+    "Not applied: an earlier rollback was interrupted. Restore or abandon it first. Nothing changed.");
 });
 
 test("the recover API posts the action and the typed draft with CSRF", async () => {

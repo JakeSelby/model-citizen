@@ -603,8 +603,8 @@ def _plan(repo: Path, worktree: Path, state: Dict[str, Any], raw_config: Dict[st
                                                                       "when it finishes"})
     elif interrupted:
         refusals.append({"code": "interrupted-apply", "message": (
-            "an earlier apply of draft %s was interrupted; restore it (`citizen draft recover`) or "
-            "abandon it (`citizen draft recover --abandon`) first" % interrupted[-1].get("draft", "?"))})
+            "an earlier %s was interrupted; restore it (`citizen draft recover`) or "
+            "abandon it (`citizen draft recover --abandon`) first" % interrupted_what(interrupted[-1]))})
     described = drafts.describe(repo, worktree, state)
     if described["rebase_conflicted"]:
         refusals.append({"code": "draft-rebasing", "message": "the draft is in the middle of a rebase"})
@@ -808,6 +808,14 @@ def unfinished_applies(home: Path) -> List[Dict[str, Any]]:
     return [row for key, row in intents.items() if key not in finished]
 
 
+def interrupted_what(intent: Mapping[str, Any]) -> str:
+    """How an open intent is named to the user: an apply, or a rollback of one."""
+    if intent.get("kind") == "rollback":
+        return "rollback of draft %s's apply %s" % (intent.get("draft", "?"),
+                                                    str(intent.get("reverses") or "")[:12])
+    return "apply of draft %s" % intent.get("draft", "?")
+
+
 def running_apply(home: Path) -> str:
     """The apply or rollback holding the sync lock right now, by its live holder record, or ""."""
     record = reconcile.lock_holder_record(journal_path(home).parent)
@@ -823,6 +831,7 @@ def running_apply(home: Path) -> str:
 
 def _interrupted_offer(intent: Mapping[str, Any]) -> Dict[str, Any]:
     return {"apply_id": str(intent.get("apply_id", "")), "draft": str(intent.get("draft", "")),
+            "kind": "rollback" if intent.get("kind") == "rollback" else "apply",
             "started": str(intent.get("ts", "")),
             "recover_command": "citizen draft recover --json",
             "abandon_command": "citizen draft recover --abandon --json"}
@@ -891,6 +900,14 @@ def apply(repo: Path, name: str, revision: str, operations: Operations, actor: s
                 _sep, _colon, named = text.partition(": ")
                 return _result("refused", "busy", text + "; nothing was applied", holder=named)
             interrupted = unfinished_applies(home)
+            if interrupted and interrupted[-1].get("kind") == "rollback" \
+                    and interrupted[-1].get("draft") != name:
+                # Restoring another draft's rollback needs that draft's own confirmation.
+                return _result("refused", "interrupted-rollback", (
+                    "an earlier %s was interrupted; restore it (`citizen draft recover`) or abandon "
+                    "it (`citizen draft recover --abandon`) first. Nothing was applied"
+                    % interrupted_what(interrupted[-1])),
+                    apply_id=str(interrupted[-1].get("apply_id", "")))
             if interrupted:
                 return _recover(home, interrupted[-1], operations, log, actor)
             planned = _plan(repo, worktree, state, raw_config, home, checks=checks, applying=True)
@@ -1056,9 +1073,9 @@ def _recover(home: Path, intent: Dict[str, Any], operations: Operations, log: Li
         conflicts.append("the journal row could not be read back (%s)" % exc)
     if conflicts:
         return _result("refused", "interrupted-apply-conflict", (
-            "an earlier apply of draft %s was interrupted, and %s changed since. Put those back "
+            "an earlier %s was interrupted, and %s changed since. Put those back "
             "yourself and run `citizen draft recover`, or keep them with `citizen draft recover "
-            "--abandon`. Nothing was applied" % (identity["draft"], ", ".join(conflicts))),
+            "--abandon`. Nothing was applied" % (interrupted_what(intent), ", ".join(conflicts))),
             apply_id=str(identity["apply_id"] or ""))
     interrupt: Optional[BaseException] = None
     try:
@@ -1089,8 +1106,7 @@ def _recover(home: Path, intent: Dict[str, Any], operations: Operations, log: Li
             interrupt = exc
     # An interrupted rollback is undone as a rollback: the apply it reversed is in effect again.
     rollback = intent.get("kind") == "rollback"
-    what = ("a rollback of draft %s's apply %s" % (identity["draft"], str(intent.get("reverses"))[:12])
-            if rollback else "an apply of draft %s" % identity["draft"])
+    what = "a " + interrupted_what(intent) if rollback else "an " + interrupted_what(intent)
     note = ""
     if restored:
         note = _journal_outcome(home, dict(identity, ts=_now(), phase="recovered"))
@@ -1154,13 +1170,20 @@ def recover(operations: Operations, abandon: bool = False, draft: str = "", acto
             except OSError as exc:
                 return _result("failed", "journal-unavailable",
                                "the apply journal could not record the abandon (%s)" % exc)
-            _decision(operations, identity, [], "abandoned",
-                      "An interrupted apply of draft %s was abandoned; its writes were kept."
-                      % identity["draft"])
-            return _result("abandoned", "", (
-                "the interrupted apply of draft %s was abandoned: its configuration and files are "
-                "kept as they are now. Run `citizen sync` if the projection needs it"
-                % identity["draft"]), apply_id=str(identity["apply_id"] or ""))
+            if intent.get("kind") == "rollback":
+                _decision(operations, identity, [], "abandoned",
+                          "An interrupted %s was abandoned; what it wrote was kept."
+                          % interrupted_what(intent), event="studio.rollback",
+                          extra={"reverses": str(intent.get("reverses") or "")})
+            else:
+                _decision(operations, identity, [], "abandoned",
+                          "An interrupted apply of draft %s was abandoned; its writes were kept."
+                          % identity["draft"])
+            return _result("abandoned", "interrupted-rollback" if intent.get("kind") == "rollback"
+                           else "", (
+                "the interrupted %s was abandoned: its configuration and files are kept as they "
+                "are now. Run `citizen sync` if the projection needs it"
+                % interrupted_what(intent)), apply_id=str(identity["apply_id"] or ""))
         return _recover(home, intent, operations, log, actor)
 
 

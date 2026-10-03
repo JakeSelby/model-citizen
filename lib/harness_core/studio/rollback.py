@@ -138,17 +138,20 @@ def _in_effect_successor(entries: List[Dict[str, Any]], target: Mapping[str, Any
 
 
 def _abandoned_holds(home: Path, target: Mapping[str, Any], entry: Mapping[str, Any]) -> List[str]:
-    """The keys and files an abandoned later entry shares with `target` and still holds.
+    """The keys and files an abandoned later entry shares with `target` and still holds, each
+    with the value to put back.
 
     A key or file it wrote that still has its value, and that is not already the target's prior
-    value, is a write the rollback would overwrite. One since changed back or over is not.
+    value, is a write the rollback would overwrite. One since changed back or over is not. As for
+    an entry in effect, a file it left in a personal root the target registered counts too: the
+    rollback would un-register the root and orphan it.
     """
     live_path = draft_apply.config_file(home)
     current = draft_apply._flatten(draft_apply._read_json_bytes(
         live_path.read_bytes() if live_path.is_file() else None))
     prior = draft_apply._flatten(draft_apply._read_json_bytes(
         draft_apply._decoded(target["intent"].get("prior_config"))))
-    target_keys = {str(item.get("key")) for item in _items(target["intent"], "config")}
+    target_keys = {str(item.get("key")): item for item in _items(target["intent"], "config")}
     target_files = {str(item.get("path")): item for item in _items(target["intent"], "files")}
     held: List[str] = []
     for item in _items(entry["intent"], "config"):
@@ -161,17 +164,29 @@ def _abandoned_holds(home: Path, target: Mapping[str, Any], entry: Mapping[str, 
         back = (key in current) == (key in prior) and (
             key not in current or draft_apply._canonical(current[key]) == draft_apply._canonical(prior[key]))
         if written and not back:
-            held.append("configuration key " + key)
+            wanted = target_keys[key]
+            held.append("configuration key %s (now %s; set it back to %s)" % (
+                key, draft_apply._value_text(current[key]) if key in current else "unset",
+                "unset" if wanted.get("action") == "unset"
+                else draft_apply._value_text(wanted.get("applied"))))
     dest = Path(str(entry["intent"].get("destination") or draft_apply.destination(home)))
+    registered = "primitive_roots" in target_keys and \
+        str(target["intent"].get("destination") or "") == str(dest)
     for item in _items(entry["intent"], "files"):
         path = str(item.get("path"))
-        if path not in target_files:
+        if path not in target_files and not registered:
             continue
         live, _mode = draft_apply._live_file(draft_apply._contained(dest, path), path)
         digest = draft_apply._digest(live)
-        if digest == item.get("applied_sha256") and digest != draft_apply._digest(
-                draft_apply._decoded(target_files[path].get("prior"))):
-            held.append(str(dest / path))
+        if digest != item.get("applied_sha256") or digest is None:
+            continue
+        if path not in target_files:
+            held.append("%s (in the personal root this rollback un-registers; move it out or "
+                        "delete it)" % (dest / path))
+        elif digest != draft_apply._digest(draft_apply._decoded(target_files[path].get("prior"))):
+            held.append("%s (put back the content %s wrote%s)" % (
+                dest / path, _label(target),
+                ", or delete it" if target_files[path].get("action") == "delete" else ""))
     return held
 
 
@@ -206,9 +221,9 @@ def _restorable(home: Path, apply_id: str) -> Tuple[Dict[str, Any], Dict[str, An
     unfinished = [entry for entry in entries if entry["status"] == "open"]
     if unfinished:
         raise _Refused("interrupted-apply", (
-            "an earlier apply of draft %s was interrupted; restore it (`citizen draft recover`) or "
+            "an earlier %s was interrupted; restore it (`citizen draft recover`) or "
             "abandon it (`citizen draft recover --abandon`) first"
-            % unfinished[-1]["intent"].get("draft", "?")))
+            % draft_apply.interrupted_what(unfinished[-1]["intent"])))
     if target["status"] != "completed":
         reason = {"abandoned": "its interrupted writes were abandoned and kept as they are",
                   "failed": "it failed and was restored, so nothing of it is live",
@@ -223,18 +238,23 @@ def _restorable(home: Path, apply_id: str) -> Tuple[Dict[str, Any], Dict[str, An
     effective = set(_in_effect(entries))
     later = [entry for entry in entries[position + 1:]
              if entry["apply_id"] in effective and touched & set(_touched(entry))]
-    shared = [", ".join(sorted(touched & set(_touched(entry)))) for entry in later]
-    for entry in entries[position + 1:]:
-        if entry["status"] == "abandoned":
-            held = _abandoned_holds(home, target, entry)
-            if held:
-                later.append(entry)
-                shared.append(", ".join(held))
     if later:
         raise _Refused("later-apply", (
             "%s changed %s again since %s; roll %s back first. Nothing was changed" % (
-                "; ".join(_label(entry) for entry in later), "; ".join(shared),
+                "; ".join(_label(entry) for entry in later),
+                "; ".join(", ".join(sorted(touched & set(_touched(entry)))) for entry in later),
                 _label(target), "them" if len(later) > 1 else "it")))
+    abandoned = [(entry, _abandoned_holds(home, target, entry)) for entry in entries[position + 1:]
+                 if entry["status"] == "abandoned"]
+    abandoned = [(entry, held) for entry, held in abandoned if held]
+    if abandoned:
+        # An abandoned entry cannot be rolled back, so the way through is by hand.
+        raise _Refused("abandoned-later-change", (
+            "%s, abandoned with its writes kept, still holds what %s wrote over: %s. Restore the "
+            "listed keys and files to the values shown, then roll back again; if that change is "
+            "still open, run `citizen draft recover` instead. Nothing was changed" % (
+                "; ".join(_label(entry) for entry, _held in abandoned),
+                _label(target), "; ".join("; ".join(held) for _entry, held in abandoned))))
     return target, _restore_plan(home, target)
 
 
@@ -532,14 +552,29 @@ def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public
         return _outcome("refused", "journal-unavailable",
                         "the apply journal could not be written (%s); nothing was changed" % exc, public)
     names = [row["path"] for row in files]
+    try:
+        # Read once more after the journal's fsync, right before the write: an edit saved in
+        # between is kept, and the intent closes with nothing written.
+        drifted = _drifted(plan, files)
+    except (draft_apply.ApplyError, OSError) as exc:
+        drifted = [str(exc)]
+    if drifted:
+        message = ("%s changed while the rollback was starting; rollback never overwrites a later "
+                   "edit. Nothing was changed" % ", ".join(drifted))
+        note = draft_apply._journal_outcome(home, dict(identity, ts=draft_apply._now(), phase="failed",
+                                                       reason=message, restored=True))
+        _record(operations, identity, names, "failed", "Rollback stopped before writing: " + message)
+        return _outcome("failed", "rollback-conflict", message + note, public, apply_id=rollback_id,
+                        restored=True)
     synced = wrote_config = False
     try:
-        wrote_config = plan["restored_bytes"] != plan["current_bytes"]
         if plan["restored_bytes"] is None:
             if live_path.exists():
                 live_path.unlink()
-        elif wrote_config:
+            wrote_config = plan["current_bytes"] is not None
+        elif plan["restored_bytes"] != plan["current_bytes"]:
             draft_apply.drafts._atomic_bytes(live_path, plan["restored_bytes"], plan["restored_mode"])
+            wrote_config = True
         draft_apply._restore_root(dest, [{"path": row["path"], "prior": row["prior"],
                                           "prior_mode": row["prior_mode"]} for row in files],
                                   plan["created"])
@@ -553,7 +588,9 @@ def _execute(home: Path, target: Mapping[str, Any], plan: Dict[str, Any], public
         message = str(exc) or exc.__class__.__name__
         note = draft_apply._journal_outcome(home, dict(identity, ts=draft_apply._now(), phase="failed",
                                                        reason=message, restored=restored))
-        _record(operations, identity, names, "failed", "Rollback failed and was undone: " + message)
+        _record(operations, identity, names, "failed", (
+            "Rollback failed and was undone: " if restored else
+            "Rollback failed and undoing it did not complete; run `citizen draft recover`: ") + message)
         if not isinstance(exc, (Exception, SystemExit)):
             raise
         return _outcome("failed", getattr(exc, "code", "rollback-failed"), message + (

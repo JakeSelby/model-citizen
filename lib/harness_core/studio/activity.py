@@ -200,7 +200,8 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
     titles = {"apply": "Draft applied", "rollback": "Apply rolled back"}
     if action == "rollback" and outcome != "completed":
         # An interrupted rollback that recovery undid, or one that failed.
-        titles["rollback"] = "Rollback undone" if outcome == "recovered" else "Rollback failed"
+        titles["rollback"] = {"recovered": "Rollback undone",
+                              "abandoned": "Rollback abandoned"}.get(outcome, "Rollback failed")
     # The journal id of an apply or rollback; a completed one is what `citizen draft rollback` takes.
     apply_id = identity if action in titles and APPLY_ID.fullmatch(identity) else ""
     # A rollback links to the apply (or rollback) it reversed, by that entry's Activity id.

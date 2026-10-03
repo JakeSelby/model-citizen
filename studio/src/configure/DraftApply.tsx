@@ -131,7 +131,9 @@ export function RecoverControls({ review, confirmation, busy, onConfirm, onRecov
   if (!interrupted) return null;
   const ready = canRecover(review, confirmation);
   return (
-    <Alert color="yellow" title={`An apply of ${interrupted.draft} was interrupted`}>
+    <Alert color="yellow" title={interrupted.kind === "rollback"
+      ? `A rollback of ${interrupted.draft}'s apply was interrupted`
+      : `An apply of ${interrupted.draft} was interrupted`}>
       <Stack gap="sm">
         <Text size="sm">Restore puts back only the keys and files it wrote, then syncs. Abandon keeps them as they are now.</Text>
         <TextInput label="Confirm the interrupted draft" description={`Type ${interrupted.draft} to confirm.`}

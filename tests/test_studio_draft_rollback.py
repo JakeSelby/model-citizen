@@ -383,6 +383,29 @@ class RollbackTests(unittest.TestCase):
             self.assertTrue((home.dest / "rules").is_dir())
             self.assertEqual(list((home.dest / "rules").iterdir()), [])
 
+    def test_applying_another_draft_refuses_an_open_rollback_it_cannot_confirm(self):
+        with self.home() as home:
+            name, revision = self.draft(home, "rollback-cross")
+            revision = self.add_rule(name, revision)
+            draft_apply._journal(home.path, {
+                "apply_id": uuid.uuid4().hex, "phase": "intent", "kind": "rollback",
+                "reverses": "c" * 32, "draft": "someone-else", "ts": "t", "config": [], "files": [],
+                "prior_config": draft_apply._encoded(home.config.read_bytes()), "prior_mode": 0o600,
+                "destination": str(home.dest), "created": []})
+            before = _snapshot(home)
+            review = json.loads(home.cli("draft", "review", name, "--json").stdout)
+            refusal = next(item for item in review["refusals"] if item["code"] == "interrupted-apply")
+            self.assertIn("an earlier rollback of draft someone-else's apply cccccccccccc", refusal["message"])
+            self.assertEqual(review["interrupted"]["kind"], "rollback")
+            done = home.cli("draft", "apply", name, "--revision", revision, "--json")
+            result = json.loads(done.stdout)
+            self.assertEqual((done.returncode, result["status"], result["error_code"]),
+                             (1, "refused", "interrupted-rollback"), result["message"])
+            self.assertIn("an earlier rollback of draft someone-else's apply", result["message"])
+            self.assertIn("`citizen draft recover`", result["message"])
+            self.assertEqual(_snapshot(home), before)
+            self.assertEqual(len(draft_apply.unfinished_applies(home.path)), 1)
+
     def test_a_held_lock_refuses_naming_its_holder(self):
         with self.home() as home:
             with reconcile.lock(home.state, holder="citizen sync"):
@@ -453,12 +476,109 @@ class JournalTests(unittest.TestCase):
         self.assertEqual(self.code(later), "not-applied")
         self.config.write_bytes(b'{"mode": "c"}\n')
         refusals = draft_rollback.preview(first, self.home)["refusals"]
-        self.assertEqual(refusals[0]["code"], "later-apply")
-        self.assertIn(later[:12], refusals[0]["message"])
-        self.assertIn("configuration key mode", refusals[0]["message"])
+        self.assertEqual(refusals[0]["code"], "abandoned-later-change")
+        message = refusals[0]["message"]
+        self.assertIn(later[:12], message)
+        self.assertIn("configuration key mode (now c; set it back to b)", message)
+        self.assertIn("Restore the listed keys and files to the values shown", message)
+        self.assertIn("`citizen draft recover`", message)
+        self.assertNotIn("roll it back first", message)
         # Put back to what the first apply wrote: the abandoned write is gone, so it clears.
         self.config.write_bytes(b'{"mode": "b"}\n')
         self.assertEqual(self.code(first), "")
+
+    def test_an_abandoned_file_in_a_root_the_target_registered_blocks_it(self):
+        first, later = uuid.uuid4().hex, uuid.uuid4().hex
+        self.config.write_bytes(b'{"primitive_roots": "b"}\n')
+        self.intent(first, key="primitive_roots")
+        self.row(first, "completed")
+        orphan = self.home / "root" / "rules" / "b.md"
+        orphan.parent.mkdir(parents=True)
+        orphan.write_bytes(b"mine\n")
+        self.row(later, "intent", prior_config=draft_apply._encoded(b"{}"), config=[],
+                 files=[{"path": "rules/b.md", "action": "write", "prior": None,
+                         "applied_sha256": draft_apply._digest(b"mine\n")}],
+                 destination=str(self.home / "root"))
+        self.row(later, "abandoned")
+        refusals = draft_rollback.preview(first, self.home)["refusals"]
+        self.assertEqual(refusals[0]["code"], "abandoned-later-change")
+        self.assertIn("%s (in the personal root this rollback un-registers; move it out or delete it)"
+                      % orphan, refusals[0]["message"])
+        orphan.unlink()
+        self.assertEqual(self.code(first), "")
+
+    def operations(self, sync=lambda dry: SETTLED, record=None):
+        state = self.home / ".local" / "state" / "agent-harness"
+        state.mkdir(parents=True, exist_ok=True)
+        return draft_apply.Operations(
+            lock=lambda holder: reconcile.lock(state, holder=holder),
+            config_lock=lambda holder: reconcile.lock(self.config.parent, holder=holder),
+            config_set=lambda key, value: None, config_unset=lambda key: None,
+            sync=sync, doctor=lambda: [], record=record or (lambda row: None))
+
+    def test_abandoning_an_open_rollback_is_recorded_as_a_rollback(self):
+        first, undo = uuid.uuid4().hex, uuid.uuid4().hex
+        self.intent(first)
+        self.row(first, "completed")
+        self.row(undo, "intent", kind="rollback", reverses=first,
+                 prior_config=draft_apply._encoded(b'{"mode": "b"}\n'),
+                 config=[{"key": "mode", "action": "set", "applied": "a"}], files=[],
+                 destination=str(self.home / "root"))
+        records = []
+        result = draft_apply.recover(self.operations(record=records.append), abandon=True, draft="d",
+                                     home=self.home)
+        self.assertEqual((result["status"], result["error_code"]), ("abandoned", "interrupted-rollback"))
+        self.assertIn("interrupted rollback of draft d's apply %s was abandoned" % first[:12], result["message"])
+        self.assertEqual((records[0]["event"], records[0]["detail"]["outcome"],
+                          records[0]["detail"]["reverses"]), ("studio.rollback", "abandoned", first))
+        entry = activity._event_entry(records[0])
+        self.assertEqual((entry["title"], entry["rollback_target"]), ("Rollback abandoned", ""))
+        self.assertNotIn("apply of draft", records[0]["detail"]["reason"])
+
+    def test_an_edit_saved_while_the_intent_is_journalled_closes_it_unwritten(self):
+        first = uuid.uuid4().hex
+        self.intent(first)
+        self.row(first, "completed")
+        real = draft_apply._journal
+
+        def journal_then_edit(home, row):
+            real(home, row)
+            if row["phase"] == "intent" and row.get("kind") == "rollback":
+                self.config.write_bytes(b'{"mode": "b", "other": 1}\n')
+
+        records = []
+        with mock.patch.object(draft_apply, "_journal", side_effect=journal_then_edit):
+            result = draft_rollback.rollback(first, self.operations(record=records.append), home=self.home)
+        self.assertEqual((result["status"], result["error_code"], result["restored"]),
+                         ("failed", "rollback-conflict", True))
+        self.assertEqual(self.config.read_bytes(), b'{"mode": "b", "other": 1}\n')
+        rows = [json.loads(line) for line in
+                draft_apply.journal_path(self.home).read_text(encoding="utf-8").splitlines()]
+        self.assertEqual((rows[-1]["phase"], rows[-1]["restored"]), ("failed", True))
+        self.assertEqual(draft_apply.unfinished_applies(self.home), [])
+        self.assertIn("stopped before writing", records[0]["detail"]["reason"])
+
+    def test_a_failure_event_says_whether_the_undo_finished(self):
+        for undone in (True, False):
+            first = uuid.uuid4().hex
+            self.config.write_bytes(b'{"mode": "b"}\n')
+            journal = draft_apply.journal_path(self.home)
+            if journal.exists():
+                journal.unlink()
+            self.intent(first)
+            self.row(first, "completed")
+            records = []
+            outcomes = iter([SETTLED, {"code": 1, "attention": [], "refused": True}])
+            with mock.patch.object(draft_rollback, "_undo", return_value=undone):
+                result = draft_rollback.rollback(first, self.operations(
+                    sync=lambda dry: next(outcomes), record=records.append), home=self.home)
+            self.assertEqual((result["status"], result["restored"]), ("failed", undone))
+            reason = records[0]["detail"]["reason"]
+            if undone:
+                self.assertIn("failed and was undone", reason)
+            else:
+                self.assertIn("did not complete; run `citizen draft recover`", reason)
+                self.assertNotIn("was undone", reason)
 
     def test_an_abandoned_rollback_of_the_target_does_not_block_it(self):
         first, undo = uuid.uuid4().hex, uuid.uuid4().hex
