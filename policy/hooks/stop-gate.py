@@ -11,11 +11,15 @@ where the root is listed in ~/.config/agent-harness/trusted.txt by `harness trus
 Bounded: after MAX_BLOCKS consecutive blocks the turn is released, so a gate that can never
 pass cannot trap a session. The count is kept per session, so two sessions stopping in the same
 checkout never reset each other's; a session silent for STALE_SECONDS is forgotten. A timeout releases the turn as unverified; unexpected errors block. Neither records success.
+Declinable: once this session has been blocked, a final message carrying a line that opens with
+`Gate cannot pass:` and a reason (see `stated_reason`) releases the turn as unverified, logged as
+`declined`. Any other finish is blocked again while the gate stays red.
 """
 import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,6 +33,13 @@ TAIL_LINES = 30
 GATE_FILES = ("AGENTS.md", "CLAUDE.md")
 STATE = Path.home() / ".local" / "state" / "agent-harness" / "stop-gate"
 TRUSTED = Path.home() / ".config" / "agent-harness" / "trusted.txt"
+DECLINE_MARKER = "Gate cannot pass:"
+MIN_REASON_CHARS = 12
+# The marker opens its own line, after at most a list bullet, a quote mark or bold emphasis, so a
+# message that merely mentions the phrase mid-sentence, or quotes this hook's instruction, does not
+# match. The reason is everything after the colon on that line.
+DECLINE_LINE = re.compile(r"^\s*(?:[-*>]\s+)?(?:\*\*|__)?gate cannot pass(?:\*\*|__)?\s*:"
+                          r"(?:\*\*|__)?\s*(?P<why>.*?)\s*$", re.IGNORECASE)
 
 
 _LOG = []
@@ -71,6 +82,43 @@ def log_gate(payload, root, commands, answer, outcome):
     identity = module.record("stop-gate", answer, text, payload, transcript=transcript)
     if identity and outcome is not None:
         module.observe(identity, outcome, "stop-gate", payload.get("session_id") or "")
+
+
+def final_message(payload):
+    """The text of the turn's last assistant message, or "" when it cannot be read.
+
+    The event's own `last_assistant_message` is taken when the runtime sends one; otherwise the
+    transcript the event names is read through the decision log's bounded reader. Nothing read
+    means nothing to honour, so every failure here keeps the block.
+    """
+    text = payload.get("last_assistant_message")
+    if isinstance(text, str) and text.strip():
+        return text
+    transcript = (payload.get("transcript_path") or payload.get("rollout_path")
+                  or payload.get("session_path") or "")
+    module = decisions()
+    if not transcript or module is None:
+        return ""
+    try:
+        claim, _ = module.read_claim(transcript)
+    except Exception:
+        return ""
+    return claim or ""
+
+
+def stated_reason(text):
+    """The reason a final message gives for the gate not passing, or None when it gives none.
+
+    Only an explicit `Gate cannot pass: <why>` line counts, with at least MIN_REASON_CHARS of
+    reason, so an ordinary "done" never releases a red gate. The block message names the line.
+    """
+    for line in (text or "").split("\n"):
+        match = DECLINE_LINE.match(line)
+        if match:
+            why = match.group("why").strip(" *_`")
+            if len(why) >= MIN_REASON_CHARS:
+                return why
+    return None
 
 
 def git(root, *args):
@@ -239,7 +287,9 @@ def reason(path, cmd, code, output):
         f"The gate in {path.name} is red: `{cmd}` exited {code}.\n\n"
         f"{tail}\n\n"
         "That command is the check block this repository defines under `## Gate`, run at the end "
-        "of a turn once files have changed. Fix it and finish, or say why it cannot pass."
+        "of a turn once files have changed. Fix it and finish. If it cannot pass for a reason "
+        "outside this task, end your reply with a line that starts `" + DECLINE_MARKER + "` "
+        "followed by why; that ends the turn as unverified. Any other finish is blocked again."
     )
 
 
@@ -314,7 +364,14 @@ def main():
 
     now = time.time()
     sessions = live_sessions(read_state(path), now)
-    blocks = sessions.get(session, {}).get("blocks", 0) + 1
+    prior = sessions.get(session, {}).get("blocks", 0)
+    if prior:
+        why = stated_reason(final_message(payload))
+        if why is not None:
+            release(path, session, "declined: " + why[:200])
+            log_gate(payload, root, commands, "declined", "failed")
+            return
+    blocks = prior + 1
     if blocks >= MAX_BLOCKS:
         release(path, session, f"released after {MAX_BLOCKS} blocks; gate still red")
         log_gate(payload, root, commands, "released", "failed")

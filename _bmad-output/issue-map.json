@@ -8607,6 +8607,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B159",
+      "github_number": 1169,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1169",
+      "title": "fix(hooks): the stop gate ignores a stated reason the gate cannot pass",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B159.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S333",
       "github_number": 1171,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1171",
