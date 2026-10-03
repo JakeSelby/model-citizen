@@ -590,7 +590,7 @@ python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [-
   and `rule_adherence` (scored, compliant, unknown, rate, interval) or `unmeasured`. The schema
   also holds `bare`, `effects.<metric>.<contrast>` (value, interval, undefined reason), `primary`,
   `verdict`, `reason`, `claim`, `sm2_eligible`, `limitation`, `estimand`, `method`, `seed`,
-  `resamples`, `indeterminate_resamples` and the post-run `parity`.
+  `resamples`, `indeterminate_resamples`, the post-run `parity` and `cache_basis`.
   `tests/fixtures/unit-economy/result.v1.json` is the committed example.
 - **Parity after the run.** `summarise` exits 1 when the rows hold two values of the model, Claude
   Code version, commit, effort, schedule seed or design record. It does the same when a row's

@@ -423,7 +423,7 @@ class RederivationTests(unittest.TestCase):
             printed = json.loads(out.getvalue())
             self.assertIn("delegation", printed)  # a separate key; SM-2's result is untouched
             printed.pop("delegation")
-            self.assertIn(printed.pop("cache_basis"), (BENCH.CACHE_COLD, BENCH.CACHE_SHARED))
+            self.assertEqual(printed.pop("cache_basis"), BENCH.CACHE_SHARED)  # rows_for saves no nonce
             self.assertEqual(printed, STATS.analyse(rows, seed=3, resamples=400))
             out = io.StringIO()
             with redirect_stdout(out):

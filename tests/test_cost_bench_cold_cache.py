@@ -94,5 +94,27 @@ class CacheBasisTests(unittest.TestCase):
         self.assertEqual(json.loads(self.summarise(old, True))["cache_basis"], "shared")
 
 
+    def test_pair_ablation_and_design_reports_state_their_basis_too(self):
+        """Each format returns before the two-arm report, so each must stamp the basis itself."""
+        formats = {"pair": (BENCH.replay_pair, "is_pair", "render"),
+                   "ablation": (BENCH.ablations, "is_ablation", "render"),
+                   "design": (BENCH.unit_economy, "is_design", "render")}
+        cold = [{"arm": "a", "rep": 1, "cache_nonce": "x"}, {"arm": "b", "rep": 1, "cache_nonce": "y"}]
+        old = [{"arm": "a", "rep": 1}, {"arm": "b", "rep": 1}]
+        for name, (module, detect, render) in formats.items():
+            for rows, basis in ((cold, "cold"), (old, "shared")):
+                for as_json in (False, True):
+                    with self.subTest(format=name, basis=basis, json=as_json):
+                        with mock.patch.object(module, detect, return_value=True), \
+                                mock.patch.object(module, "summarise", return_value={"parity": {"ok": True}}), \
+                                mock.patch.object(module, render, return_value="%s report\n" % name), \
+                                mock.patch.object(BENCH.replay_pair, "read_decisions", return_value=[]):
+                            out = self.summarise(rows, as_json)
+                        if as_json:
+                            self.assertEqual(json.loads(out)["cache_basis"], basis)
+                        else:
+                            self.assertTrue(out.startswith("cache basis: %s," % basis), out)
+                            self.assertIn("%s report" % name, out)
+
 if __name__ == "__main__":
     unittest.main()

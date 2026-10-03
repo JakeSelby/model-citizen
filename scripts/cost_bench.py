@@ -1776,7 +1776,7 @@ def summarise(rows, field="cost_usd"):
 
 
 def cache_basis(rows):
-    """The cache basis the rows' costs stand on, stated in every two-arm report.
+    """The cache basis the rows' costs stand on, stated in every summary format (`write_report`).
 
     `cold` only when every row carries its own nonce and no two share one (`trial_memory`);
     otherwise `shared`, because some trial may have read another's session segment from cache, so
@@ -1994,11 +1994,15 @@ def cmd_summarise(args):
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
     delegation = delegation_verdict.report(rows, args.break_even)
-    basis = cache_basis(rows)
-    sys.stdout.write(json.dumps(dict(result, delegation=delegation, cache_basis=basis), indent=2, sort_keys=True)
-                     + "\n" if args.json
-                     else CACHE_BASIS_TEXT[basis] + replay_stats.render(result) + delegation_verdict.render(delegation))
+    write_report(dict(result, delegation=delegation), cache_basis(rows), args.json,
+                 replay_stats.render(result) + delegation_verdict.render(delegation))
     return 0
+
+
+def write_report(result, basis, as_json, text):
+    """Print one summary, in any format, with the cache basis its costs stand on (`cache_basis`)."""
+    sys.stdout.write(json.dumps(dict(result, cache_basis=basis), indent=2, sort_keys=True) + "\n" if as_json
+                     else CACHE_BASIS_TEXT[basis] + text)
 
 
 def summarise_ablation(rows, path, args):
@@ -2011,7 +2015,7 @@ def summarise_ablation(rows, path, args):
                                      surface=surface_of)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot summarise the ablation run in %s: %s" % (path, exc))
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else ablations.render(result))
+    write_report(result, cache_basis(rows), args.json, "" if args.json else ablations.render(result))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2025,7 +2029,7 @@ def summarise_design(rows, path, args):
         result = unit_economy.summarise(rows, None, args.seed, args.resamples, surface=surface_of)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot summarise the grid in %s: %s" % (path, exc))
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else unit_economy.render(result))
+    write_report(result, cache_basis(rows), args.json, "" if args.json else unit_economy.render(result))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2044,10 +2048,10 @@ def summarise_pair(rows, path, args):
     stamped = {r.get("prices_sha256") for r in rows} - {None}
     result["prices_sha256"] = replay_pair.sha256(prices_path)
     result["price_table_changed"] = bool(stamped) and stamped != {result["prices_sha256"]}
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
-                     else replay_pair.render(result) + ("price table: changed since the run; decision calls "
-                                                        "are priced at today's rates\n"
-                                                        if result["price_table_changed"] else ""))
+    write_report(result, cache_basis(rows), args.json,
+                 "" if args.json else replay_pair.render(result) + ("price table: changed since the run; decision "
+                                                                    "calls are priced at today's rates\n"
+                                                                    if result["price_table_changed"] else ""))
     return 0 if result["parity"]["ok"] else 1
 
 
