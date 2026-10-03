@@ -2,18 +2,56 @@
 
 Draft branches live in the shared repository, whose refs every worktree sees, so a draft a
 test leaves behind makes a later ``draft create`` with the same name fail.
+
+The same sharing means a suite running in another worktree sees this suite's in-flight drafts.
+Each test process therefore carries a run token, and a draft named through :func:`draft_name`
+embeds it, so a leak check counts only the drafts of its own run (:func:`leaked_drafts`). A child
+test process inherits the token through ``RUN_TOKEN_ENV``.
 """
 from __future__ import annotations
 
+import os
+import re
+import secrets
 import subprocess
 import sys
 import time
 import unittest
 from pathlib import Path
-from typing import Callable, Dict, Optional, Set
+from typing import Callable, Dict, Iterable, List, Optional, Set
 
 ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "bin" / "harness"
+# Not a HARNESS_ variable: the tests strip those from every environment they build.
+RUN_TOKEN_ENV = "DRAFT_SUPPORT_RUN_TOKEN"
+_TOKEN = re.compile(r"^[a-z0-9]+$")
+
+
+def new_run_token() -> str:
+    return "run" + secrets.token_hex(4)
+
+
+def _inherited_token() -> str:
+    token = os.environ.get(RUN_TOKEN_ENV, "")
+    return token if _TOKEN.match(token) else new_run_token()
+
+
+RUN_TOKEN = _inherited_token()
+
+
+def draft_name(prefix: str, token: Optional[str] = None) -> str:
+    """A unique draft name ``<prefix><token>-<random>`` stamped with this run's token."""
+    return f"{prefix}{token or RUN_TOKEN}-{secrets.token_hex(4)}"
+
+
+def leaked_drafts(prefixes: Iterable[str], token: Optional[str] = None,
+                  repo: Path = ROOT) -> List[str]:
+    """The ``draft/*`` branches in ``repo`` that one of ``prefixes`` names for ``token``'s run.
+
+    A sibling suite's drafts carry another token and are not counted.
+    """
+    owned = tuple(prefix + (token or RUN_TOKEN) + "-" for prefix in prefixes)
+    return sorted(name for name in draft_branches(repo) if name.startswith(owned))
 
 
 def draft_branch_exists(name: str, repo: Path = ROOT) -> bool:

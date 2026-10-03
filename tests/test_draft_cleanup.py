@@ -4,7 +4,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import secrets
 import subprocess
 import sys
 import tempfile
@@ -26,7 +25,6 @@ with drafts._locked(Path(sys.argv[2])):
     sys.stdin.read()
 """
 GUARDS = {"register_draft_cleanup", "discard_draft"}
-# Draft names the guarded Studio tests create, so a sibling run's drafts never count here.
 GUARDED_RUN = (
     "test_studio_selection_editing.SelectionEditingTests"
     ".test_saved_checkpoint_equals_sequential_real_config_set_output",
@@ -86,14 +84,8 @@ def unguarded_creates(source: str, filename: str = "<source>") -> List[str]:
     return found
 
 
-def setUpModule():
-    global BEFORE
-    BEFORE = draft_support.draft_branches()
-
-
 def tearDownModule():
-    leaked = sorted(name for name in draft_support.draft_branches() - BEFORE
-                    if name.startswith("cleanup-guard-"))
+    leaked = draft_support.leaked_drafts(("cleanup-guard-",))
     if leaked:
         raise AssertionError("draft branches survived the cleanup tests: " + ", ".join(leaked))
 
@@ -113,7 +105,7 @@ class DraftCleanupTests(unittest.TestCase):
             "HARNESS_HOME": str(home),
             "HARNESS_WORKTREE_ROOT": str(Path(temporary.name) / "worktrees"),
         })
-        self.name = "cleanup-guard-" + secrets.token_hex(4)
+        self.name = draft_support.draft_name("cleanup-guard-")
         created = subprocess.run(
             [sys.executable, str(draft_support.CLI), "draft", "create", self.name, "--json"],
             cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=30,
@@ -168,17 +160,17 @@ class DraftCleanupTests(unittest.TestCase):
         self.assertFalse(draft_support.draft_worktree_registered(self.name))
 
     def test_guarded_studio_tests_leave_no_draft_branch(self):
-        before = draft_support.draft_branches()
+        # A token of its own, so only the drafts this child run creates can count as leaks.
+        token = draft_support.new_run_token()
         env = {key: value for key, value in os.environ.items() if not key.startswith("HARNESS_")}
+        env[draft_support.RUN_TOKEN_ENV] = token
         run = subprocess.run(
             [sys.executable, "-m", "unittest", *GUARDED_RUN],
             cwd=ROOT / "tests", env=env, capture_output=True, text=True, timeout=300,
         )
         self.assertEqual(run.returncode, 0, run.stderr[-2000:])
         self.assertIn("Ran 2 tests", run.stderr)
-        leaked = sorted(name for name in draft_support.draft_branches() - before
-                        if name.startswith(GUARDED_PREFIXES))
-        self.assertEqual(leaked, [])
+        self.assertEqual(draft_support.leaked_drafts(GUARDED_PREFIXES, token), [])
 
 
 class GuardScanTests(unittest.TestCase):
