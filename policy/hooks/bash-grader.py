@@ -12,7 +12,10 @@ import json
 import os
 import re
 import shlex
+import signal
+import subprocess
 import sys
+import threading
 from pathlib import Path
 
 HOOK = "grade-bash hook"
@@ -1317,11 +1320,14 @@ def _inner_tokens(tokens, cwd, depth):
     return 1, None, None, None
 
 
-def _git(args, cwd):
-    i = 0
+def _git_sub(args, cwd=""):
+    """(the subcommand, its arguments, the directory `-C` moves to) of `git` given `args`."""
+    i, where = 0, cwd
     while i < len(args):
         a = args[i]
         if a in GIT_VALUE_GLOBALS and i + 1 < len(args):
+            if a == "-C":
+                where = os.path.join(where or "", _expand(args[i + 1]))
             i += 2
             continue
         if a.startswith("-"):
@@ -1329,9 +1335,32 @@ def _git(args, cwd):
             continue
         break
     rest = args[i:]
-    if not rest:
+    return (rest[0], rest[1:], where) if rest else ("", [], where)
+
+
+# A `git checkout` operand that can only be a pathspec, never a branch: a ref name holds none of
+# these characters, so `git checkout '*.py'` restores files, as `git checkout -- '*.py'` does.
+PATHSPEC_RE = re.compile(r"[*?\[]|^:")
+
+
+def _checkout_paths(sargs, ops, where):
+    """Whether `git checkout` given `sargs` overwrites files rather than only switching branch:
+    a tree-ish followed by paths, a pathspec only a path can be, or an operand that exists in
+    the working tree. One that creates a branch (`-b`, `-B`, `--orphan`) takes a start point,
+    not paths."""
+    if has(sargs, "--orphan") or short(sargs, "bB"):
+        return False
+    if len(ops) > 1 or any(PATHSPEC_RE.search(op) for op in ops):
+        return True
+    if not ops or not where or not os.path.isabs(where):
+        return False
+    return os.path.lexists(os.path.join(where, _expand(ops[0])))
+
+
+def _git(args, cwd):
+    sub, sargs, where = _git_sub(args, cwd)
+    if not sub:
         return 1, "git", "", None
-    sub, sargs = rest[0], rest[1:]
     ops = operands(sargs)
     dry_run = has(sargs, "--dry-run") or short(sargs, "n")
     if sub == "push":
@@ -1348,8 +1377,14 @@ def _git(args, cwd):
         if any(o.startswith("+") for o in ops):
             return 3, "git push", " ".join(ops), "git-history"
         return 2, "git push", " ".join(ops), "remote"
+    # Every route that overwrites the working tree or the index grades alike: what was changed
+    # and not committed is gone, whichever command replaced it. A reset that keeps the index
+    # (`--soft`) or refuses over local changes (`--keep`) is not one.
     if sub == "reset" and has(sargs, "--hard"):
         return 3, "git reset --hard", _joined(sargs, 1), "git-discard"
+    if sub == "reset" and not has(sargs, "--soft", "--keep"):
+        verb = "git reset --merge" if has(sargs, "--merge") else "git reset"
+        return 3, verb, _joined(sargs, 1), "git-discard"
     if sub == "clean" and (has(sargs, "--force") or short(sargs, "f")) and not dry_run:
         return 3, "git clean -f", _joined(sargs, 1), "git-discard"
     if sub == "checkout":
@@ -1359,10 +1394,23 @@ def _git(args, cwd):
             return 3, "git checkout -f", _joined(sargs, 1), "git-discard"
         if ops[:1] in (["."], ["./"]):
             return 3, "git checkout", ops[0], "git-discard"
+        if has(sargs, "--ours", "--theirs", "--patch") or short(sargs, "p"):
+            return 3, "git checkout", _joined(sargs, 1), "git-discard"
+        if _checkout_paths(sargs, ops, where):
+            return 3, "git checkout", _joined(sargs, 1), "git-discard"
     if sub == "switch" and (has(sargs, "--discard-changes", "--force") or short(sargs, "f")):
         return 3, "git switch --discard-changes", _joined(sargs, 1), "git-discard"
-    if sub == "restore" and not (has(sargs, "--staged") or short(sargs, "S")):
-        return 3, "git restore", _joined(sargs, 1), "git-discard"
+    if sub == "restore":
+        staged = has(sargs, "--staged") or short(sargs, "S")
+        return 3, "git restore --staged" if staged else "git restore", _joined(sargs, 1), "git-discard"
+    if sub == "read-tree" and not dry_run:
+        return 3, "git read-tree", _joined(sargs, 1), "git-discard"
+    if sub == "checkout-index" and (has(sargs, "--force") or short(sargs, "f")):
+        return 3, "git checkout-index -f", _joined(sargs, 1), "git-discard"
+    if sub == "rm" and (has(sargs, "--force") or short(sargs, "f")) and not dry_run:
+        return 3, "git rm -f", _joined(sargs, 1), "git-discard"
+    if sub == "worktree" and ops[:1] == ["remove"] and (has(sargs, "--force") or short(sargs, "f")):
+        return 3, "git worktree remove --force", " ".join(ops[1:2]), "git-discard"
     if sub == "branch" and (has(sargs, "-D", "--delete") or short(sargs, "D")):
         return 3, "git branch -D", _joined(sargs, 1), "git-discard"
     if sub == "stash" and ops and ops[0] in ("drop", "clear"):
@@ -1520,13 +1568,129 @@ def _rm_risky(op, cwd):
 
 
 def _rm(args, cwd):
-    if not (short(args, "rRf") or has(args, "--recursive", "--force")):
-        return 1, "rm", _joined(args, 1), None
-    verb = "rm -rf" if short(args, "rR") or has(args, "--recursive") else "rm -f"
-    for op in operands(args):
-        if _rm_risky(op, cwd):
-            return 3, verb, op, "delete"
-    return 1, verb, _joined(args, 1), None
+    flagged = short(args, "rRf") or has(args, "--recursive", "--force")
+    verb = ("rm -rf" if short(args, "rR") or has(args, "--recursive") else "rm -f") if flagged else "rm"
+    if flagged:
+        for op in operands(args):
+            if _rm_risky(op, cwd):
+                return 3, verb, op, "delete"
+    return _discards(verb, operands(args), cwd) or (1, verb, _joined(args, 1), None)
+
+
+# How long the grader waits for `git status` to say whether a file holds uncommitted work, and
+# how many times one command line may ask; `grade_text` clears the answers for each line. Past
+# either the answer is "it may": a destructive verb the grader cannot check fails closed.
+GIT_STATUS_SECONDS = 2.0
+GIT_STATUS_CALLS = 16
+_DIRTY = {}
+UNCHECKED = "which git status did not answer for in time"
+
+
+def _dirty_tracked(paths, cwd):
+    """The first of `paths` (pathspecs, relative to `cwd`) that git tracks with working-tree
+    changes not in the index: deleting or emptying it loses work no git command restores. ""
+    when there is none, or no repository or `git` to ask; None when `git status` did not answer
+    within `GIT_STATUS_SECONDS`, or this command line has asked `GIT_STATUS_CALLS` times already.
+    A word holding a variable or a substitution is not asked about: it names no path here."""
+    specs = [p for p in paths if p and "$" not in p and "`" not in p and PLACEHOLDER not in p]
+    if not specs or not cwd or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        return ""
+    key = (cwd, tuple(specs))
+    if key not in _DIRTY:
+        if len(_DIRTY) >= GIT_STATUS_CALLS:
+            return None
+        env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+        try:
+            done = subprocess.run(
+                ["git", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=no",
+                 "--ignore-submodules", "--"] + [_expand(p) for p in specs],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                timeout=GIT_STATUS_SECONDS, env=env)
+        except subprocess.TimeoutExpired:
+            _DIRTY[key] = None
+            return None
+        except OSError:
+            _DIRTY[key] = ""
+            return ""
+        found = ""
+        if done.returncode == 0:
+            entries = done.stdout.decode("utf-8", "replace").split("\0")
+            i = 0
+            while i < len(entries):
+                entry = entries[i]
+                i += 1
+                if len(entry) < 4:
+                    continue
+                if entry[0] in "RC":
+                    i += 1  # a rename's or a copy's source path follows as its own field
+                if entry[1] in "MT":
+                    found = entry[3:]
+                    break
+        _DIRTY[key] = found
+    return _DIRTY[key]
+
+
+def _discards(verb, paths, cwd):
+    """Grade 3 when `verb` deletes or empties a file of `paths` that holds uncommitted work, as
+    `git checkout -- <path>` grades for the same loss; None when none does."""
+    found = _dirty_tracked(paths, cwd)
+    if found is None:
+        return 3, verb, " ".join(paths[:2]) + ", " + UNCHECKED, "git-discard"
+    if found:
+        return 3, verb, found, "git-discard"
+    return None
+
+
+def _overwrites(tokens):
+    """The files the redirects of `tokens` truncate (`>`, `>|`, `&>`), not those they append to."""
+    out = []
+    for i, token in enumerate(tokens[:-1]):
+        if re.match(r"^\d*&?>[!|]?$", token):
+            out.append(tokens[i + 1])
+    return out
+
+
+# Commands whose whole output is nothing, so a `>` from one of them empties its target.
+EMPTY_OUTPUT = ([], [":"], ["true"], ["false"], ["cat", "/dev/null"], ["printf", ""], ["echo", "-n"])
+
+
+def _emptying(tokens, clean, cwd):
+    """The grade of a simple command that empties or restores a file in place: a `>` with no
+    output, `cp /dev/null`, `truncate`, or a blob written over a path from `git show <rev>:path`
+    or `git cat-file`. The last is `git checkout <rev> -- path` by another route and grades 3
+    whatever the file holds; the others grade 3 when the file holds uncommitted work. None when
+    the command is none of these."""
+    targets = [t for t in _overwrites(tokens) if t and not t.startswith("/dev/")]
+    prog = clean[0].rpartition("/")[2] if clean else ""
+    if targets and clean in EMPTY_OUTPUT:
+        return _discards("empty write to", targets, cwd)
+    if prog == "cp" and operands(clean[1:])[:1] == ["/dev/null"]:
+        return _discards("cp /dev/null", operands(clean[1:])[1:], cwd)
+    if prog == "truncate":
+        files, i, args = [], 0, clean[1:]
+        while i < len(args):
+            if args[i] in ("-s", "-r", "-o", "--size", "--reference"):
+                i += 2
+                continue
+            if not args[i].startswith("-"):
+                files.append(args[i])
+            i += 1
+        return _discards("truncate", files, cwd)
+    if prog == "git" and targets:
+        sub, sargs, _where = _git_sub(clean[1:])
+        blobs = [os.path.normpath(op.partition(":")[2]) for op in operands(sargs)
+                 if ":" in op and op.partition(":")[2]]
+        if sub in ("show", "cat-file") and blobs:
+            for target in targets:
+                path = os.path.normpath(_expand(target))
+                root = os.path.normpath(cwd) if cwd else ""
+                if path.startswith("/") and not (root and path.startswith(root + "/")):
+                    continue  # outside the working tree, as a copy to a scratch file is
+                path = os.path.relpath(path, root) if path.startswith("/") else path
+                if any(path == b or path.endswith("/" + b) or b.endswith("/" + path) for b in blobs):
+                    return 3, "git " + sub + " >", target, "git-discard"
+            return _discards("git " + sub + " >", targets, cwd)
+    return None
 
 
 G3_SUBCOMMANDS = {
@@ -1632,6 +1796,7 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
     its redirects write are appended to `recorded`, the steps before it included, and what a
     wrapper it looks through leaves unread, takes or writes to `wrapped`; `budget` is how many
     more prefixes may be looked through."""
+    raw = tokens
     tokens, written = _redirects(tokens)
     recorded.extend(t for t in written if t and t != "/dev/null")
     wrote = ""
@@ -1642,6 +1807,9 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
             wrote = target
     while tokens and ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
+    emptied = _emptying(raw, tokens, cwd)
+    if emptied is not None:
+        return emptied
     read_only = ro.segment_verdict(list(tokens), budget) if tokens else True
     if read_only is None:  # the shorter chain a later step sees must not pass as read-only
         return _prefix_chain(recorded, wrapped)
@@ -1823,21 +1991,185 @@ def _runner_words(prog, args, ops):
     return rest
 
 
+# The grader's own deadline, inside the 10-second PreToolUse timeout `lifecycle.registration`
+# gives the dispatcher: a hook the runtime kills lets the command run ungraded and unlogged.
+GRADE_SECONDS = 5.0
+DEADLINE_NOTE = "(the grader ran past its deadline, so this is refused rather than run ungraded)"
+DEADLINE_VERB = "command the grader ran past its deadline on"
+
+
+class _Expired(BaseException):
+    """The deadline's alarm. A BaseException, so no `except Exception` in the grader takes it."""
+
+
+def timed_out(cmd):
+    """The grade of `cmd` once grading ran past its deadline: the raw text scanned for the verb
+    families (`_scan_text`, linear at any length). A destructive verb fails closed at 3; any
+    other text keeps what the scan finds, at least 1, so a read-only command stays open."""
+    hit = _scan_text(cmd)
+    if hit[0] == 3:
+        return 3, hit[1], DEADLINE_NOTE, hit[3]
+    if hit[0] == 2:
+        return hit
+    return 1, DEADLINE_VERB, "", None
+
+
+def grade_within(cmd, cwd="", seconds=None, grade=None):
+    """(the grade `grade`, `grade_text` by default, gives `cmd`, whether the deadline cut it
+    short), bounded by `seconds`, `GRADE_SECONDS` by default; past it the grade is
+    `timed_out`'s. The deadline is a SIGALRM timer, so it holds on the main thread of a platform
+    that has one; elsewhere grading is unbounded, as it was."""
+    seconds = GRADE_SECONDS if seconds is None else seconds
+    grade = grade or grade_text
+    if not (seconds and seconds > 0 and hasattr(signal, "setitimer")
+            and threading.current_thread() is threading.main_thread()):
+        return grade(cmd, cwd), False
+
+    def expire(_signum, _frame):
+        raise _Expired()
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    try:
+        signal.setitimer(signal.ITIMER_REAL, seconds)
+        try:
+            return grade(cmd, cwd), False
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+    except _Expired:
+        return timed_out(cmd), True
+    finally:
+        signal.signal(signal.SIGALRM, previous)
+
+
 def grade_text(cmd, cwd="", depth=0):
     """(grade, verb, target, family) for a whole command line: the maximum over its parts.
 
     A command that is not read-only and names the approvals store grades 3, whatever else it
     does: an approval must come from the user's prompt, never from a write the agent makes.
     Text whose reading raises, as a parser bug would, grades 3: it is never passed unread."""
+    if depth == 0:
+        _DIRTY.clear()  # what `git status` said holds for one command line, never the next
     try:
         best = _grade_text(cmd, cwd, depth)
     except Exception:
         if depth:
             raise
         return UNREADABLE
-    if depth == 0 and 0 < best[0] < 3 and approvals is not None and approvals.mentions_store(cmd):
+    if depth == 0 and 0 < best[0] < 3 and approvals is not None and _store_write(cmd):
         return 3, "write to", "the approvals store", "approvals"
     return best
+
+
+# The harness's state directory, where the approvals store lives: a `cd` into it, or a variable
+# holding it, carries the store to the commands after it.
+STATE_RE = re.compile(r"\.local[/\\]+state[/\\]+agent-harness|agent-harness[/\\]+approvals")
+DECLARING = {"export", "declare", "typeset", "local", "readonly"}
+
+
+def _store_write(cmd):
+    """Whether `cmd`, which is not read-only as a whole, may write to the approvals store.
+
+    A simple command reaches the store when it names the state directory, uses a variable
+    assigned from it, follows a `cd` into it, or reads a pipe from one that does; the line may
+    write the store when one of those is not read-only. Reading the store beside commands that
+    write elsewhere is not a write to it. Text this cannot decompose surely, a here-document or
+    a substitution naming the store, or a variable whose name is not literal, is read as before:
+    any mention of the store is a write."""
+    if not approvals.mentions_store(cmd):
+        return False
+    texts, bodies = _readings(cmd)
+    if texts is None or len(texts) != 1:
+        return True
+    stripped, inners = _extract_subs(texts[0])
+    linked = _linked_segments(stripped) if stripped is not None else None
+    if linked is None:
+        return True
+    tainted, moved, reached = set(), False, []
+
+    def names_store(text):
+        return bool(STATE_RE.search(text) or approvals.mentions_store(text)
+                    or any(re.search(r"\$\{?" + re.escape(v) + r"(?![A-Za-z0-9_])", text)
+                           for v in tainted))
+
+    for tokens, fed in linked:
+        text = " ".join(tokens)
+        here = moved or names_store(text) or (isinstance(fed, int) and reached[fed])
+        reached.append(here)
+        words = list(tokens)
+        while words and words[0] in COMMAND_OPENERS:
+            words = words[1:]
+        while words and ASSIGN_RE.match(words[0]):
+            name, _eq, value = words.pop(0).partition("=")
+            if names_store(value):
+                tainted.add(name)
+        if words and words[0] in DECLARING:
+            for word in words[1:]:
+                name, eq, value = word.partition("=")
+                if eq and names_store(value):
+                    tainted.add(name)
+        if not here:
+            continue
+        head = words[0].rpartition("/")[2] if words else ""
+        if head in ("for", "select", "read") and len(words) > 1:
+            tainted.update(w for w in words[1:] if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", w))
+        if head in ("cd", "pushd"):
+            moved = True
+            continue
+        if not words or head in DECLARING and all("=" in w for w in words[1:]):
+            continue
+        # A redirect writes where it names, so `ls <store> > /tmp/list` writes no store file;
+        # after a `cd` into the state directory every target may be in it.
+        clean, targets = _redirects(words)
+        if targets and (moved or any(names_store(t) for t in targets)):
+            return True
+        if clean and not ro.segment_verdict(clean) and not _reads_only(clean):
+            return True
+    if any(names_store(inner) for inner in inners):
+        return True
+
+    def mentions(text):
+        return len(STATE_RE.findall(text)) + sum(
+            len(re.findall(r"\$\{?" + re.escape(v) + r"(?![A-Za-z0-9_])", text)) for v in tainted)
+
+    # A loop's or a `case`'s header is no simple command, so a store it names, as `for f in
+    # <store>/*` does, reaches commands this walk never saw reach it.
+    if mentions(stripped) > sum(mentions(" ".join(tokens)) for tokens, _fed in linked):
+        return True
+    reaching = [b for b in bodies if names_store(b)]
+    if not reaching:
+        return False
+    # A body naming the store is data unless something runs it: a shell, a reader this hook
+    # cannot name, or a program that can run a command or write a file.
+    parts = [tokens for tokens, _fed in linked]
+    families = _input_families(parts, inners)
+    if families is None or any(_runs_input(tokens) for tokens in parts):
+        return True
+    return any(not _inert_program(b, families) or bool(STORE_WRITES_RE.search(b))
+               for b in reaching) if families else False
+
+
+# What lets a program write a file, for a program run where the approvals store is reached.
+STORE_WRITES_RE = re.compile(
+    r"\bopen\s*\([^)]*,|\.write|\bwrite\w*\s*\(|\bdump\w*\s*\(|\bshutil\b|\bfs\b|\bFile\b|>|"
+    r"\b(?:remove|unlink|rename|replace|rmtree|copy\w*|move|touch|mkdir|makedirs|chmod|chown|"
+    r"symlink|link|truncate|utime)\s*\(")
+
+
+def _reads_only(words):
+    """Whether the simple command `words` is an interpreter of a `TEXT_FAMILIES` family running an
+    inline program that can neither run a command nor write a file, as `python3 -c
+    "json.load(open(p))"` can only read."""
+    family = _program_family(words[0]) if words else None
+    if family not in TEXT_FAMILIES:
+        return False
+    evals = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)[0] - {"-m"}
+    for i in range(1, len(words) - 1):
+        if words[i] in evals:
+            program = words[i + 1]
+            return _inert_program(program, {family}) and not STORE_WRITES_RE.search(program)
+        if not words[i].startswith("-"):
+            return False
+    return False
 
 
 def _grade_text(cmd, cwd, depth):
@@ -1866,12 +2198,20 @@ def _grade_reading(text, bodies, cwd, depth):
     parts = None if linked is None else [tokens for tokens, _fed in linked]
     executed = False
     if linked is not None:
-        hit, executed = _grade_streams(linked, stripped, cwd, depth)
+        hit, executed = _grade_streams(linked, stripped, cwd, depth, bodies)
         best = max(best, hit, key=lambda h: h[0])
     if bodies:
-        runs = executed or _feeds_shell(text, parts, inners, depth)
-        programs = executed or _feeds_program(text, parts, inners, depth)
-        best = max(best, _grade_bodies(bodies, runs, cwd, depth, programs), key=lambda h: h[0])
+        # A file this line wrote and an interpreter then runs is that interpreter's program,
+        # not a script: only a shell, or a reader this hook cannot name, makes every body one.
+        runs = executed is True or _feeds_shell(text, parts, inners, depth)
+        programs = bool(executed) or _feeds_program(text, parts, inners, depth)
+        families = _input_families(parts, inners) if programs else None
+        if families is not None and isinstance(executed, frozenset):
+            families = families | executed
+        elif executed is True:
+            families = None
+        best = max(best, _grade_bodies(bodies, runs, cwd, depth, programs, families or None),
+                   key=lambda h: h[0])
     if parts is None:
         return max(best, _scan(text), key=lambda h: h[0])
     # A SQL client named anywhere, a substitution included, since a body inside `$(…)` is
@@ -1985,6 +2325,22 @@ def _feeds_shell(text, parts, inners, depth, reads=None, words=SHELL_WORD_RE):
     return False
 
 
+def _input_families(parts, inners):
+    """The families of the interpreters among `parts` that read their program on standard
+    input, possibly none; None when one may whose family this hook cannot name, the line does
+    not decompose, or a substitution names an interpreter of its own."""
+    if parts is None or any(INTERPRETER_WORD_RE.search(inner) for inner in inners or ()):
+        return None
+    found = set()
+    for tokens in parts:
+        family = _interprets_input(tokens)
+        if family is True:
+            return None
+        if family:
+            found.add(family)
+    return frozenset(found)
+
+
 def _feeds_program(text, parts, inners, depth):
     """Whether an interpreter other than a shell may read a here-document body of `text` as its
     program (`_interprets_input`), in the way `_feeds_shell` answers it for a shell."""
@@ -2087,7 +2443,7 @@ def _nested_texts(text, levels):
     return out
 
 
-def _grade_bodies(bodies, runs, cwd, depth, programs=False):
+def _grade_bodies(bodies, runs, cwd, depth, programs=False, families=None):
     """The worst grade the here-document bodies can carry. An unquoted body's substitutions run
     as the shell expands it, a body a shell may read runs as a script, and each is graded as the
     commands it holds; a body neither applies to is data, graded 0. A shell reads an unquoted
@@ -2097,7 +2453,7 @@ def _grade_bodies(bodies, runs, cwd, depth, programs=False):
     graded unknown, or as `_scan` finds it, never lower."""
     best = (0, None, None, None)
     for body in bodies:
-        hits = [_grade_program(body, cwd, depth)] if programs else []
+        hits = [_grade_program(body, cwd, depth, families=families)] if programs else []
         if runs:
             hits.append(grade_text(body, cwd, depth + 1))
             if not getattr(body, "quoted", True):
@@ -2301,7 +2657,7 @@ def _run_files(tokens, depth=0):
     if family:
         kind, words = _program_source(family, tokens[1:])
         if kind == "file":
-            out += words
+            out += [_Program(w, family) for w in words]
         elif kind == "module":
             out.append(_Searched(words[0].rpartition(".")[2] + ".py"))
     return out
@@ -2310,6 +2666,15 @@ def _run_files(tokens, depth=0):
 class _Searched(str):
     """A file name a shell looks up on `PATH`, or a module Python looks up on its path: any file
     of that base name the line wrote may be the one run (`_written_names`)."""
+
+
+class _Program(str):
+    """A file an interpreter of `family` reads as its program, not a shell (`_grade_streams`)."""
+
+    def __new__(cls, word, family):
+        made = super().__new__(cls, word)
+        made.family = family
+        return made
 
 
 def _searched(word):
@@ -2321,7 +2686,8 @@ def _searched(word):
 def _interprets_input(tokens):
     """Whether the simple command `tokens` may read its standard input as the program of an
     interpreter other than a shell (`_reads_program`), past assignments, wrappers, runners such
-    as `uv run` and `xargs`. A command word from a variable or substitution may name one."""
+    as `uv run` and `xargs`. A command word from a variable or substitution may name one.
+    Truthy as the interpreter's family when it is known, True when it is not."""
     tokens, _written = _redirects(list(tokens))
     for _ in range(MAX_DEPTH):
         while tokens and ASSIGN_RE.match(tokens[0]):
@@ -2333,7 +2699,8 @@ def _interprets_input(tokens):
             return True
         family = _program_family(head)
         if family:
-            return _reads_program(family, tokens[1:])
+            # The family itself, truthy, so `_input_families` can say which interpreter reads.
+            return family if _reads_program(family, tokens[1:]) else False
         prog = head.rpartition("/")[2]
         if len(tokens) > 1 and (prog, tokens[1]) in RUNNERS:
             tokens = strip_options(tokens[2:], ())
@@ -2353,15 +2720,56 @@ def _interprets_input(tokens):
     return True
 
 
-def _grade_program(text, cwd, depth, skip=None):
+# What lets a program in another language run a command line or reach a database: a process,
+# shell or dynamic-code call, or a destructive database method. A program of a family in
+# `TEXT_FAMILIES` that names none of these cannot run what its strings spell out, so they are
+# text: an edit script that replaces "git push --force" in a document is not a push.
+CALLS_RE = re.compile(
+    r"\b(?:system|popen\w*|spawn\w*|posix_spawn\w*|exec|exec[lv]p?e?|execute\w*|eval|fork|"
+    r"run|call|check_output|check_call|getoutput|getstatusoutput|startfile|shell_exec|"
+    r"passthru|proc_open|pcntl_exec|execSync|execFile\w*|import_module|__import__|getattr|"
+    r"setattr|vars|globals|Command|ProcessBuilder|drop\w*|delete_many|deleteMany|remove|"
+    r"truncate)\s*\("
+    r"|\b(?:subprocess|Popen|child_process|Open3|pexpect|ctypes|cffi|__builtins__|__dict__)\b"
+    r"|\b(?:import|require|use)\b[^\n]*\b(?:sh|commands|plumbum|sarge|pty|invoke|fabric|system|"
+    r"popen|exec\w*|spawn\w*|run|call|check_output|getoutput|startfile)\b"
+    r"|Deno\.run|Bun\.spawn|io\.popen|os\.execute")
+# The same in the families whose syntax runs a command with no call: Perl's and Ruby's
+# backticks, `qx` and `%x`, a paren-less `system "…"`, a piped `open`, awk's `getline` and
+# `print | "cmd"`.
+SHELL_SYNTAX_RE = re.compile(
+    r"`|\bqx\b|%x|\b(?:system|exec|spawn)\b\s*[\"'\[\w$@]|\bgetline\b|\|\s*[\"']|[\"']\s*\|")
+# Families whose strings are text unless the program calls something above; `NO_BACKTICKS`
+# among them read a backtick as a string, not a command. Every other family, make's recipes
+# and sed's `e` included, and a program whose interpreter is not known, is read as before.
+NO_BACKTICKS = {"python", "node", "deno", "bun", "lua", "julia", "Rscript", "R"}
+TEXT_FAMILIES = NO_BACKTICKS | {"perl", "ruby", "php", "awk", "gawk", "mawk", "nawk"}
+INERT = (1, "", "", "opaque")
+
+
+def _inert_program(text, families):
+    """Whether `text`, read as its program by an interpreter of each of `families`, can run none
+    of the commands its strings name. False when a family is unknown (None) or outside
+    `TEXT_FAMILIES`."""
+    if not families or not all(f in TEXT_FAMILIES for f in families):
+        return False
+    if CALLS_RE.search(text):
+        return False
+    return all(f in NO_BACKTICKS for f in families) or not SHELL_SYNTAX_RE.search(text)
+
+
+def _grade_program(text, cwd, depth, skip=None, families=None):
     """The grade of `text` read as its program by an interpreter this hook cannot parse, such as
     Python, awk or make: unknown, graded 1, and higher when the text names a command that grades
-    higher, since the program may run it. Each line, each quoted string on it and a line's
+    higher, since the program may run it. A program `families` reads that calls nothing that
+    runs a command is text, graded 1 (`_inert_program`). Each line, each quoted string on it and a line's
     strings joined by spaces (`["git", "push"]`), or a statement's when an open bracket carries
     it over several lines (`_statement`), is graded as shell text when it names a program the
     grader knows, `PROGRAM_CHECKS` of them at most, `skip` never, as its caller grades it; the
     whole text is scanned for grade-3 families and a push, which covers what any one line or
     string of it would show a scan. Linear in the length of the text."""
+    if _inert_program(text, families):
+        return INERT
     best = max(_scan_text(text), (1, "", "", "opaque"), key=lambda h: h[0])
     checks, line_end = 0, -1
     for match in _named(text):
@@ -2618,9 +3026,15 @@ def _written_names(written, word):
     """The paths of the files in `written` the word `word` may name: every one when it is
     `_wild`; each of its base name when it is `_Searched`, the line is `loose()`, or one of the
     two paths starts at `~` or `/` and the other does not; else the same path, `./x` and `x`
-    being one."""
+    being one. A `_wild` word whose base name is literal, as `$dir/run.py` is, names only a file
+    of that base name or of a `_wild` one: whatever `$dir` holds, it is not `$dir/notes.txt`."""
     if _wild(word):
-        return list(written)
+        base = word.rpartition("/")[2]
+        if not base or _wild(base) or "{" in base:
+            return list(written)
+        return [k for k in written
+                if k.rpartition("/")[2] == base or _wild(k.rpartition("/")[2])
+                or "{" in k.rpartition("/")[2]]
     key = os.path.normpath(word)
     same = written.names.get(key.rpartition("/")[2], [])
     if not same or isinstance(word, _Searched) or written.loose():
@@ -2647,10 +3061,12 @@ def _grade_input(tokens, incoming, unread, cwd, depth):
     a `printf` directive then reshapes (`RESHAPED`) is graded that way and at least 2, as the
     hook cannot vouch for what it becomes."""
     shell = _runs_input(tokens)
-    if shell or _interprets_input(tokens):
+    family = False if shell else _interprets_input(tokens)
+    if shell or family:
         if isinstance(incoming, str):
             return (grade_text(incoming, cwd, depth + 1) if shell
-                    else _grade_program(incoming, cwd, depth))
+                    else _grade_program(incoming, cwd, depth,
+                                        families=None if family is True else {family}))
         hit = unread()
         if incoming is RESHAPED and hit[0] < 2:
             clean = _redirects(list(tokens))[0]
@@ -2665,7 +3081,20 @@ def _grade_input(tokens, incoming, unread, cwd, depth):
     return 0, None, None, None
 
 
-def _grade_streams(linked, whole, cwd, depth):
+def _heredoc_inputs(linked, bodies):
+    """{(command index, token index): text} for each here-document operator in `linked` whose
+    body is known text: quoted, or holding nothing the shell expands. Bodies are matched to the
+    operators in order, and only when they pair one to one, as they do unless a substitution
+    holds a here-document of its own."""
+    ops = [(n, i) for n, (tokens, _fed) in enumerate(linked)
+           for i, token in enumerate(tokens[:-1]) if token in ("<<", "<<-")]
+    if not bodies or len(ops) != len(bodies):
+        return {}
+    return {op: str(body) + "\n" for op, body in zip(ops, bodies)
+            if getattr(body, "quoted", False) or not re.search(r"[$`\\]", body)}
+
+
+def _grade_streams(linked, whole, cwd, depth, bodies=None):
     """(the worst grade of the text the simple commands `linked` hand one another, whether a file
     this line writes is then run). Text reaches a command's standard input from a here-string, a
     `<` or a pipe, and `_grade_input` grades it; what flows through a pipe is known from an
@@ -2679,6 +3108,8 @@ def _grade_streams(linked, whole, cwd, depth):
     modelled."""
     best, outputs, sourced_out, runs = (0, None, None, None), [], [], []
     unread_hit, executed, memo = [], False, {}
+    readers, unknown_reader = set(), False
+    fed_bodies = _heredoc_inputs(linked, bodies)
 
     def run_lists():
         if "runs" not in memo:
@@ -2701,14 +3132,16 @@ def _grade_streams(linked, whole, cwd, depth):
             unread_hit.append(hit if hit[0] > 1 else (0, None, None, None))
         return unread_hit[0]
 
-    for tokens, fed in linked:
+    for n, (tokens, fed) in enumerate(linked):
         incoming, sourced, redirected = None, False, []
         if fed is not None:
             known = fed != COMPOUND and outputs[fed] is not None
             incoming = outputs[fed] if known else UNKNOWN
             sourced = fed != COMPOUND and sourced_out[fed]
         for i, token in enumerate(tokens[:-1]):
-            if HERE_STRING_RE.match(token):
+            if (n, i) in fed_bodies:
+                incoming, sourced = fed_bodies[(n, i)], False
+            elif HERE_STRING_RE.match(token):
                 incoming, sourced = tokens[i + 1] + "\n", False
             elif token == "<" and not (i and tokens[i - 1].isdigit() and tokens[i - 1] != "0"):
                 text = _file_text(written, tokens[i + 1]) if written else None
@@ -2721,8 +3154,13 @@ def _grade_streams(linked, whole, cwd, depth):
             hit = _grade_input(tokens, incoming, unread, cwd, depth)
             if hit[0] > best[0]:
                 best = hit
-            if sourced and (_runs_input(tokens) or _interprets_input(tokens)):
+            reader = _runs_input(tokens) or _interprets_input(tokens) if sourced else False
+            if reader:
                 executed = True
+                if reader is True:
+                    unknown_reader = True
+                else:
+                    readers.add(reader)
                 runs += redirected
             if isinstance(incoming, str) and prog in ("xargs", "parallel"):
                 runs += _run_files(clean + incoming.split())
@@ -2752,21 +3190,40 @@ def _grade_streams(linked, whole, cwd, depth):
                 else:
                     for name in _written_names(written, word):
                         copy.update(written[name])
+    def ran():
+        """`executed` as `_grade_reading` reads it: False, True when a shell or an interpreter
+        this hook cannot name may run what the line wrote, else the interpreters' families."""
+        if not executed:
+            return False
+        return True if unknown_reader or not readers else frozenset(readers)
+
     if not written:
-        return best, executed
+        return best, ran()
     if any(w.rpartition("/")[2] in RELOCATORS for w in runs):
         memo["loose"] = True
-    names = set()
+    # Each file run, with who runs it: an interpreter's family when it reads the file as its
+    # script (`_Program`), None for a shell, a command word or a file fed to standard input.
+    names = {}
     for word in runs + [w for words in run_lists() for w in words]:
-        names.update(_written_names(written, word))
-    texts = {t: None for name in names for t in written[name]}
+        for name in _written_names(written, word):
+            names.setdefault(name, set()).add(getattr(word, "family", None))
+    texts = {}
+    for name, families in names.items():
+        for t in written[name]:
+            texts.setdefault(t, set()).update(families)
     if ANY_FILE in texts:
-        texts = {t: None for each in written.values() for t in each}
-    for text in texts:
+        texts = {t: {None} for each in written.values() for t in each}
+    for text, families in texts.items():
         executed = True
+        if None in families:
+            unknown_reader = True
+        else:
+            readers.update(families)
         if text is ANY_FILE:
             continue
-        if isinstance(text, str):
+        if isinstance(text, str) and None not in families:
+            hits = (_grade_program(text, cwd, depth, families=families),)
+        elif isinstance(text, str):
             hits = (grade_text(text, cwd, depth + 1), _grade_program(text, cwd, depth))
         elif text is RESHAPED:
             hits = ((2, "a reshaped script", "", "opaque"), unread())
@@ -2775,7 +3232,7 @@ def _grade_streams(linked, whole, cwd, depth):
         for hit in hits:
             if hit[0] > best[0]:
                 best = hit
-    return best, executed
+    return best, ran()
 
 
 def reason(grade, verb, target, family, variant):

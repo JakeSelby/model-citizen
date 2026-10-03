@@ -523,6 +523,7 @@ development_status:
   ah-b157-fix-benchmarks-size-the-micro-tier-s-caps-to-the: ready-for-dev
   ah-b158-fix-benchmarks-a-pre-registration-that-fails-the: ready-for-dev
   ah-b159-fix-hooks-the-stop-gate-ignores-a-stated-reason: ready-for-dev
+  ah-b164-fix-security-grade-bash-flags-quoted-text-misses: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done

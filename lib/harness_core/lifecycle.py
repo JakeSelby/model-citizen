@@ -1096,10 +1096,13 @@ def evasion_deny(runtime, session_id, prompt):
     return None
 
 
-def log_bash_decision(runtime, event, results, command=None, confirmed=False):
+def log_bash_decision(runtime, event, results, command=None, confirmed=False, note=None):
     """Record the permission answer the harness gave this command, when it gave one.
 
-    Only `ask` and `deny` are graded rows. An approval is the harness declining to interrupt,
+    Every `ask` and `deny` is a graded row, the one that offers an approval code included, and
+    so is every command let through on a consumed approval or graded past the grader's
+    deadline: `note` carries those facts (`approval`, `timed_out`) onto the row. Otherwise an
+    approval is the harness declining to interrupt,
     and "it ran" says nothing about whether declining was right; a refusal or a prompt is the
     judgment a later label can grade. The row is written here rather than in `grade-bash.py`
     because this is where the answer is composed: the grader's threshold, the permission mode
@@ -1113,19 +1116,42 @@ def log_bash_decision(runtime, event, results, command=None, confirmed=False):
     command is not one either: it reached here because the user answered a prompt the harness
     raised, so it belongs to the earlier `ask` row.
     """
+    _BASH_LOGGED.append(True)
     module = decisions()
     if module is None:
         return
+    note = note or {}
     answers = [r.get("hookSpecificOutput", {}).get("permissionDecision") for r in results]
     answer = next((choice for choice in ("deny", "ask", "allow") if choice in answers), None)
-    if answer not in ("deny", "ask"):
+    if answer not in ("deny", "ask") and not note:
         if answer == "allow" and not confirmed and runtime != "codex":
             module.record_allowed(command if command is not None
                                   else event["tool_input"]["command"], event, runtime)
         return
     command = event["tool_input"]["command"]
-    module.record("grade-bash", answer, command, event, runtime,
-                  key=module.match_key(event, command))
+    module.record("grade-bash", answer or "allow", command, event, runtime,
+                  key=module.match_key(event, command), fields=note)
+
+
+# Whether this dispatch logged its Bash decision, so `main` logs the refusal an error turns
+# into exactly when nothing else did.
+_BASH_LOGGED = []
+
+
+def log_bash_error(runtime, payload, exc):
+    """Record the refusal an error in the dispatcher gives a Bash command, once per event."""
+    try:
+        if _BASH_LOGGED or not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
+            return
+        command = (payload.get("tool_input") or {}).get("command")
+        module = decisions()
+        if module is None or not isinstance(command, str) or not command:
+            return
+        module.record("grade-bash", "deny", command, payload, runtime,
+                      key=module.match_key(payload, command),
+                      fields={"error": type(exc).__name__})
+    except Exception:
+        pass
 
 
 def log_bash_outcome(runtime, event):
@@ -1319,9 +1345,13 @@ def _dispatch(runtime, payload):
             raw = command = event["tool_input"]["command"]
             confirmed = False
             grade = verb = target = family = None
+            note = {}
             if classifier is not None:
                 command, confirmed = classifier.strip_marker(command)
-                grade, verb, target, family = classifier.grade_text(command, event.get("cwd", ""))
+                (grade, verb, target, family), timed = classifier.grade_within(
+                    command, event.get("cwd", ""), grade=classifier.grade_text)
+                if timed:
+                    note["timed_out"] = True
             asked = grading and bool(grade) and not confirmed and grade >= grader.THRESHOLDS.get(variant, 1)
             # The decision provider, when one is configured, is asked only about what the stance
             # lets through, so it can add a prompt and never remove one.
@@ -1341,11 +1371,14 @@ def _dispatch(runtime, payload):
                 channel = runtime == "claude-code" and decision == "deny"
                 if channel and grader.approved(mode, session, raw):
                     asked, confirmed = False, True
+                    note["approval"] = "consumed"
                 else:
                     why = grader.reason(grade, verb, target, family, variant)
                     if governed is not None:
                         why += " " + governed[1]
                     code = grader.approval_code(mode, session, raw) if channel else None
+                    if code:
+                        note["approval"] = "offered"
                     results.append({"hookSpecificOutput": {"permissionDecision": decision,
                         "permissionDecisionReason": why + (grader.APPROVAL_TAIL % code if code else "")}})
             # Grade 0 is proved read-only, so it is approved in every mode. Grades 1 and 2 are the
@@ -1363,9 +1396,13 @@ def _dispatch(runtime, payload):
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "
                     + classifier.reason(grade, verb, target, family, variant)}})
-            results.append(invoke("filter-output", event))
-            if grading:
-                log_bash_decision(runtime, event, results, command, confirmed)
+            # The answer is logged even when the output filter fails after it: a refusal the log
+            # does not hold is one no later label can grade.
+            try:
+                results.append(invoke("filter-output", event))
+            finally:
+                if grading:
+                    log_bash_decision(runtime, event, results, command, confirmed, note)
         elif tool == "Agent":
             delegation = selected("delegation", "tiered")
             inputs = event["tool_input"]
@@ -1521,7 +1558,8 @@ def main(runtime, argv=None):
             result = {}
         print(json.dumps(result or {}))
         return
-    kind = ""
+    kind, payload = "", None
+    del _BASH_LOGGED[:]
     try:
         payload = json.load(sys.stdin)
         kind = payload.get("hook_event_name", "")
@@ -1529,6 +1567,7 @@ def main(runtime, argv=None):
     except Exception as exc:
         message = "Harness policy is unverified: " + type(exc).__name__ + ": " + str(exc)
         if kind == "PreToolUse":
+            log_bash_error(runtime, payload, exc)
             result = {"hookSpecificOutput": {"hookEventName": kind, "permissionDecision": "deny", "permissionDecisionReason": message}}
         elif kind == "Stop":
             result = {"decision": "block", "reason": message}
