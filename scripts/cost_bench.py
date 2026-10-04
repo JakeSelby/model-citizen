@@ -1552,14 +1552,17 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind="effort: observed %s, pinned %s"
                                % (parsed["observed_effort"], effort)))
-        if task.get("first_wave") and row["ended_by"] in (replay_spawns.MAX_TURNS, replay_spawns.RUN_CAP,
-                                                          replay_spawns.FINISHED):
-            return finish(row)  # a first-wave trial measures its spawns and is not scored
+        if task.get("first_wave") and row["ended_by"] in (replay_spawns.MAX_TURNS, replay_spawns.RUN_CAP):
+            # The bound a first-wave trial is designed to end on: unscored, not an error, and
+            # `ended_by` names the bound. A miss ratio describes only a finished run.
+            return finish(dict(row, cache_miss_ratio=None))
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind=parsed["subtype"] or "exit %s" % done.returncode))
+        if task.get("first_wave"):
+            return finish(row)  # a first-wave trial that finished cleanly measures its spawns, unscored
         try:
             scored = _scorer(opts, launch)(task, workdir, opts["repo"])
             row["passed"] = bool(scored[0])

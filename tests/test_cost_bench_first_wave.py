@@ -1,6 +1,7 @@
 """A first-wave trial (#1216): the replay stops it once its first spawns are out, leaves it
 unscored, and its row names the bound that ended it along with each spawn's brief budget. Docker
 is a fake replaying recorded streams from tests/fixtures/first-wave; no model is called."""
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -78,6 +79,63 @@ class FirstWaveTrialTests(unittest.TestCase):
         self.assertEqual(row["ended_by"], "first-wave")
         self.assertEqual([(s["brief_source"], s["brief_budget"]) for s in row["spawn_briefs"]], [("written", False)])
         self.assertIsNone(row["required_skills_loaded"])  # its init event lists no skills
+
+
+class ExitCode(FakePopen):
+    """A `docker run` that ends with the given exit code when nothing stops it."""
+    def __init__(self, source, code):
+        super().__init__(source)
+        self.code = code
+
+    def wait(self):
+        self.returncode = 137 if self.killed else self.code
+        return self.returncode
+
+
+class FirstWaveEndingTests(unittest.TestCase):
+    """How a first-wave trial nothing stopped is recorded, by the way its CLI run ended."""
+
+    def run_ending(self, subtype, is_error, code=0):
+        result = json.dumps({"type": "result", "subtype": subtype, "is_error": is_error, "num_turns": 4,
+                             "total_cost_usd": 0.42, "usage": {}, "session_id": "s1"}) + "\n"
+        source = [line for line in lines("fanout-harness.jsonl")
+                  if '"tool_use"' not in line and '"type":"result"' not in line] + [result]
+        scored = []
+        with tempfile.TemporaryDirectory() as tmp:
+            pack, task = first_wave(tmp)
+            self.addCleanup(PACK.close_pack, pack)
+            real = SPAWNS.first_wave_launch
+            with mock.patch.object(BENCH.replay_spawns, "first_wave_launch",
+                                   side_effect=lambda base: real(base, ExitCode(source, code))):
+                row = BENCH.run_one(task, 1, "harness", options(tmp, scorer=lambda *a: scored.append(1)),
+                                    Launch([]))
+        self.assertEqual(scored, [])  # never scored, however it ended
+        self.assertIsNone(row["passed"])
+        return row
+
+    def test_its_turn_bound_is_not_an_error_and_has_no_miss_ratio(self):
+        row = self.run_ending("error_max_turns", True)
+        self.assertEqual((row["ended_by"], row["error"], row["error_kind"], row["cache_miss_ratio"]),
+                         ("max-turns", False, "", None))
+
+    def test_its_spend_bound_is_not_an_error_either(self):
+        row = self.run_ending("error_max_budget_usd", True)
+        self.assertEqual((row["ended_by"], row["error"], row["cache_miss_ratio"]), ("run-cap", False, None))
+
+    def test_any_other_cli_error_is_an_error(self):
+        row = self.run_ending("error_during_execution", True)
+        self.assertEqual((row["ended_by"], row["error"], row["error_kind"], row["cache_miss_ratio"]),
+                         ("error_during_execution", True, "error_during_execution", None))
+
+    def test_a_finished_run_with_a_nonzero_exit_is_an_error(self):
+        row = self.run_ending("success", False, code=1)
+        self.assertEqual((row["ended_by"], row["error"], row["error_kind"], row["cache_miss_ratio"]),
+                         ("finished", True, "success", None))
+
+    def test_a_clean_finish_stays_unscored_with_its_miss_ratio(self):
+        row = self.run_ending("success", False)
+        self.assertEqual((row["ended_by"], row["error"], row["error_kind"]), ("finished", False, ""))
+        self.assertIsNotNone(row["cache_miss_ratio"])
 
 
 class OrdinaryTrialTests(unittest.TestCase):
