@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
 import { EvalResultView, EvalTiersPanel, TestThisRuleView } from "../src/experiments/evals/EvalTiersPanel.tsx";
+import { pollEvalRun, previewPaidTier, startPaidTier, type EvalRunState } from "../src/experiments/evals/api.ts";
 import {
   paidAnalysisLines, paidInput, unitFor,
   type EvalCatalog, type EvalRunResult, type EvalTier, type HookMatrixResult, type PaidAnalysis,
@@ -83,17 +84,82 @@ test("a result the server refused is shown, not polled for ever", () => {
   assert.ok(html.includes("eval_result_invalid"));
 });
 
-test("the unit eval's result shows on the rule's page", () => {
-  const run = { result: { schema_version: 1, run: { run_id: "u1", status: "succeeded", suite: "unit-eval" as const }, result: analysis(unitAnalysis), analysis_error: null }, error: "" };
-  const html = renderToStaticMarkup(h(MantineProvider, {}, h(TestThisRuleView, {
-    unit: "rules.secrets", catalog: catalog([tier("unit-eval", "spends_usage")]), open: false,
-    onToggle: () => {}, onStarted: () => {}, run,
-  })));
-  assert.ok(html.includes("Test this rule"));
-  assert.ok(html.includes("Unit eval (cost_bench.py summarise)"));
-  for (const [label, value] of paidAnalysisLines(analysis(unitAnalysis)).slice(0, 25)) {
-    assert.ok(html.includes(label), label);
-    assert.ok(html.includes(value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;")), value);
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+}
+
+/** A stand-in Studio server: the real API functions and poll loop run against it. */
+function fakeServer(results: Array<{ status: number; body: unknown }>) {
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const path = String(input);
+    calls.push(path);
+    const reply = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    if (path === "/api/session") return reply(200, { csrf_token: "csrf" });
+    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+    if (path === "/api/evals/preview") {
+      return reply(200, { estimate: { amount_usd: null }, caps: { max_budget_usd: "1", spend_cap_usd: "5" }, pricing: { source: "api_credit" }, confirmation_required: true, confirmation_token: "token", cost_class: "spends_usage", case_identities: ["unit-eval"], request: { ...(body.request as object), revision: "c".repeat(40) }, evidence: "exploratory", command: "python3 scripts/cost_bench.py replay" });
+    }
+    if (path === "/api/evals/start") {
+      assert.equal(body.confirmation_token, "token");
+      return reply(200, { run_id: "u1", status: "queued", suite: "unit-eval", request: body.request });
+    }
+    const next = results.shift() ?? { status: 500, body: { error: "unexpected" } };
+    return reply(next.status, next.body);
+  }) as typeof fetch;
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+
+async function settle(): Promise<void> {
+  for (let i = 0; i < 20; i += 1) await new Promise((resolve) => setImmediate(resolve));
+}
+
+test("Test this rule runs from start through polling to the result on the rule's page, every leaf shown", async () => {
+  const running = { schema_version: 1, run: { run_id: "u1", status: "running", suite: "unit-eval" }, result: null, analysis_error: null };
+  const done = { ...running, run: { ...running.run, status: "succeeded" }, result: analysis(unitAnalysis) };
+  const server = fakeServer([{ status: 200, body: running }, { status: 200, body: done }]);
+  try {
+    const preview = await previewPaidTier(paidInput("unit-eval", { kind: "branch", ref: "main", unit: "rules.secrets", maxBudget: "1", spendCap: "5" }));
+    const started = await startPaidTier(preview.request, preview.confirmation_token);
+    const pending: Array<() => void> = [];
+    let state: EvalRunState = { result: null, error: "" };
+    const stop = pollEvalRun(started.run_id, (value) => { state = value; }, { wait: (next) => pending.push(next) });
+    await settle();
+    assert.equal(state.result?.run.status, "running");
+    pending.shift()?.();
+    await settle();
+    stop();
+    assert.equal(state.result?.run.status, "succeeded");
+    assert.equal(pending.length, 0);
+    assert.deepEqual(server.calls.filter((path) => path.startsWith("/api/evals/")), ["/api/evals/preview", "/api/evals/start", "/api/evals/result", "/api/evals/result"]);
+    const html = renderToStaticMarkup(h(MantineProvider, {}, h(TestThisRuleView, {
+      unit: "rules.secrets", catalog: catalog([tier("unit-eval", "spends_usage")]), open: false,
+      onToggle: () => {}, onStarted: () => {}, run: state,
+    })));
+    assert.ok(html.includes("Unit eval (cost_bench.py summarise)"));
+    const lines = paidAnalysisLines(analysis(unitAnalysis));
+    assert.ok(lines.length > 50);
+    for (const [label, value] of lines) {
+      assert.ok(html.includes(`>${escapeHtml(label)}</code>`), label);
+      assert.ok(html.includes(escapeHtml(value)), `${label}: ${value}`);
+    }
+  } finally {
+    server.restore();
+  }
+});
+
+test("a result the server refuses stops the poll and is shown", async () => {
+  const server = fakeServer([{ status: 409, body: { error: "eval_result_invalid" } }]);
+  try {
+    const pending: Array<() => void> = [];
+    let state: EvalRunState = { result: null, error: "" };
+    pollEvalRun("u1", (value) => { state = value; }, { wait: (next) => pending.push(next) });
+    await settle();
+    assert.equal(state.error, "eval_result_invalid");
+    assert.equal(pending.length, 0);
+  } finally {
+    server.restore();
   }
 });
 

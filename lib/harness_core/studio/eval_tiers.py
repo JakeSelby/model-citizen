@@ -45,9 +45,10 @@ MAX_STDOUT_BYTES = runs.MAX_REPORT_BYTES
 MAX_ANALYSIS_BYTES = 8 * 1024 * 1024
 PRICING_SOURCE = "api_credit"
 # The model a unit eval runs: the engine requires one and has no default, so the Studio pins the
-# live replay's default rather than offering a choice the story leaves to the engine.
-DEFAULT_MODEL = "claude-haiku-4-5"
-RAW_RUN = re.compile(r"^.+-[A-Za-z0-9]+-[0-9]+\.json$")  # `replay_detect.parse_name`'s shape
+# replay's dated default rather than offering a choice the story leaves to the engine.
+DEFAULT_MODEL = replay.DEFAULT_MODEL
+# The arms `cost_bench.py detect` passes to `replay_detect.parse_name` (`DETECT_ARMS`).
+DETECT_ARMS = ("bare", "harness", "reference", "treatment")
 MAX_RAW_FILES = 5000
 MAX_RAW_BYTES = 512 * 1024 * 1024
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -326,7 +327,9 @@ class EvalAdmission:
                     "kind": request.target_kind, "ref": request.target_ref,
                     "revision": request.revision})
         except runs.RunError as exc:
-            raise EvalTierError(str(exc)) from exc
+            # The supervisor names a target that built differently from the confirmed one.
+            moved = "target changed" in str(exc)
+            raise EvalTierError(str(exc), "eval_target_changed" if moved else "eval_refused") from exc
         return {"run_id": started["run_id"], "status": started["status"],
                 "suite": request.suite_id, "request": request.as_dict()}
 
@@ -419,7 +422,7 @@ def run_rule_detection(root: Path, raw: Path) -> Dict[str, Any]:
     engine = _load_file_module(root / "scripts" / "replay_detect.py", "studio_replay_detect")
     with tempfile.TemporaryDirectory(prefix="studio-detect-") as scratch:
         copy = Path(scratch) / "raw"
-        copied = copy_run_files(raw, copy)
+        copied = copy_run_files(raw, copy, engine.parse_name)
         if not copied:
             raise EvalTierError("the directory holds no saved run file (<task>-<arm>-<rep>.json)")
         done = subprocess.run([sys.executable, str(root / "scripts" / "cost_bench.py"), "detect",
@@ -433,23 +436,33 @@ def run_rule_detection(root: Path, raw: Path) -> Dict[str, Any]:
     return {"raw": str(raw), "summary": done.stdout.strip(), "detections": rows}
 
 
-def copy_run_files(raw: Path, copy: Path) -> int:
-    """Copy only the top-level regular run files the engine reads, within count and byte limits."""
+def copy_run_files(raw: Path, copy: Path, parse_name: Any) -> int:
+    """Copy only the top-level regular files the engine reads (`replay_detect.parse_name`).
+
+    Both limits count what is copied, so a stream still growing cannot pass the byte cap."""
     copy.mkdir(mode=0o700)
-    files = []
-    total = 0
+    names = []
     with os.scandir(str(raw)) as entries:
         for entry in entries:
-            if not RAW_RUN.fullmatch(entry.name) or not entry.is_file(follow_symlinks=False):
-                continue
-            files.append(entry)
-            total += entry.stat(follow_symlinks=False).st_size
-            if len(files) > MAX_RAW_FILES or total > MAX_RAW_BYTES:
-                raise EvalTierError("the raw directory holds more than %d run files or %d bytes"
-                                    % (MAX_RAW_FILES, MAX_RAW_BYTES))
-    for entry in files:
-        shutil.copyfile(entry.path, str(copy / entry.name), follow_symlinks=False)
-    return len(files)
+            if parse_name(entry.name, DETECT_ARMS) and entry.is_file(follow_symlinks=False):
+                names.append(entry.name)
+                if len(names) > MAX_RAW_FILES:
+                    raise EvalTierError("the raw directory holds more than %d run files"
+                                        % MAX_RAW_FILES)
+    total = 0
+    for name in sorted(names):
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(os.path.join(str(raw), name), flags), "rb") as source, \
+                open(str(copy / name), "xb") as target:
+            while True:
+                chunk = source.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_RAW_BYTES:
+                    raise EvalTierError("the raw run files exceed %d bytes" % MAX_RAW_BYTES)
+                target.write(chunk)
+    return len(names)
 
 
 def _terminate_cleanly(_signum, _frame):
@@ -480,6 +493,9 @@ def settle_spend(results: Path, revision: str, run_cap: str, spend_cap: str,
     No output folder after a non-zero exit means cost_bench refused before any spend. Otherwise
     the sidecar is read and reconciled against the rows by `replay._read_spend`; one that is
     missing, malformed or disagrees with the rows charges the whole cap, since spend is unknown."""
+    if returncode not in replay.SETTLED_EXITS:
+        return (round(float(Decimal(spend_cap)), 6), True,
+                "the replay exited %s, so its spend is unknown" % returncode)
     if not results.exists() and returncode != 0:
         return 0.0, False, None
     try:
@@ -527,10 +543,13 @@ def run_paid(suite: str, repository: Path, revision: str, run_cap: str, spend_ca
     native_out, raw = output / "out", output / "raw"
     command = paid_command(suite, repository, revision, native_out, raw, run_cap, spend_cap,
                            **unit_args)
+    interrupted: Optional[BaseException] = None
     try:
         returncode = getattr(launch(command, cwd=str(repository)), "returncode", 2)
     except Exception:  # the spend is settled from what the engine left behind
         returncode = 2
+    except BaseException as exc:  # cancelled or timed out: the run in flight is unaccounted
+        interrupted, returncode = exc, -signal.SIGTERM
     results = native_out / revision
     spend, stopped, failure = settle_spend(results, revision, run_cap, spend_cap, returncode)
     stop_reason = ("runner_failure" if failure else "spend_cap" if stopped else
@@ -542,7 +561,9 @@ def run_paid(suite: str, repository: Path, revision: str, run_cap: str, spend_ca
                                 "replay_command": command[2:], "replay_exit": done.returncode,
                                 "spend_usd": spend, "stopped_at_cap": stopped,
                                 "evidence": replay.EXPLORATORY, "result": None, "error": None}
-    if (results / replay.RESULTS_NAME).is_file():
+    if interrupted is not None:
+        analysis["error"] = "the run was stopped before the engine could summarise it"
+    elif (results / replay.RESULTS_NAME).is_file():
         summary = launch([sys.executable, str(Path(repository) / "scripts" / "cost_bench.py"),
                           "summarise", "--results", str(results), "--json"],
                          cwd=str(repository), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -559,6 +580,8 @@ def run_paid(suite: str, repository: Path, revision: str, run_cap: str, spend_ca
         analysis["spend_error"] = "spend unknown, the whole cap was charged: " + failure
     (output / ANALYSIS_NAME).write_text(json.dumps(analysis, indent=2, sort_keys=True) + "\n",
                                         encoding="utf-8")
+    if interrupted is not None:
+        raise interrupted
     return 0 if done.returncode == 0 and not failure else (1 if stopped and not failure else 2)
 
 
@@ -598,8 +621,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             return run_paid(args.suite, Path(args.repository).resolve(), args.revision,
                             args.max_budget_usd, args.spend_cap, Path(result), run_id, **extra)
-        except Exception:
-            # Always leave a spend result: unknown spend is charged at the whole cap.
+        except BaseException:
+            # Always leave a spend result, on a cancel too: unknown spend is charged at the cap.
             if not Path(result).exists():
                 write_spend_result(Path(result), run_id, args.suite,
                                    round(float(Decimal(args.spend_cap)), 6), "runner_failure",

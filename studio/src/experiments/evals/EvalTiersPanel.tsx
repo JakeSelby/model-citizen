@@ -2,44 +2,18 @@ import { Alert, Badge, Button, Code, Group, Paper, Select, Stack, Table, Text, T
 import { useEffect, useState } from "react";
 
 import { StatusBadge } from "../../components/StudioKit";
-import { EvalApiError, loadEvalResult, previewPaidTier, startFreeTier, startPaidTier } from "./api";
+import { pollEvalRun, previewPaidTier, startFreeTier, startPaidTier, type EvalRunState } from "./api";
 import {
-  isHookMatrix, isPaidAnalysis, isTerminal, paidAnalysisLines, paidInput, tierById,
+  isHookMatrix, isPaidAnalysis, paidAnalysisLines, paidInput, tierById,
   type EvalCatalog, type EvalPreview, type EvalRunResult, type HookMatrixResult, type PaidAnalysis, type PaidTierInput,
 } from "./model";
 
-const POLL_MS = 1500;
+export type { EvalRunState } from "./api";
 
-export type EvalRunState = { result: EvalRunResult | null; error: string };
-
-/**
- * Poll one tier run until it ends; the engine's result arrives with the terminal status. A refusal
- * the server answered (4xx, such as an unreadable result) is final: polling stops and it is shown.
- */
+/** The run's state for a component: `pollEvalRun`, started and stopped with the run id. */
 export function useEvalRun(runId: string): EvalRunState {
   const [state, setState] = useState<EvalRunState>({ result: null, error: "" });
-  useEffect(() => {
-    if (!runId) return undefined;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const tick = () => {
-      void loadEvalResult(runId).then((value) => {
-        if (stopped) return;
-        setState({ result: value, error: "" });
-        if (!isTerminal(value.run.status)) timer = setTimeout(tick, POLL_MS);
-      }).catch((caught: unknown) => {
-        if (stopped) return;
-        if (caught instanceof EvalApiError && caught.status >= 400 && caught.status < 500) {
-          setState((current) => ({ ...current, error: caught.message }));
-          return;
-        }
-        timer = setTimeout(tick, POLL_MS * 2);
-      });
-    };
-    setState({ result: null, error: "" });
-    tick();
-    return () => { stopped = true; if (timer) clearTimeout(timer); };
-  }, [runId]);
+  useEffect(() => (runId ? pollEvalRun(runId, setState) : undefined), [runId]);
   return state;
 }
 

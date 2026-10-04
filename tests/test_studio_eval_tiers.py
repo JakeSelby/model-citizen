@@ -149,6 +149,10 @@ def partial_repository(root, omit):
     return Path(root)
 
 
+def hook_engine_detect():
+    return eval_tiers._load_file_module(REPO / "scripts" / "replay_detect.py", "detect_test")
+
+
 def hook_engine(name="hook_matrix_test"):
     return eval_tiers._load_file_module(
         REPO / "tests" / "fixtures" / "hook-calls" / "hook_matrix.py", name)
@@ -178,6 +182,15 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = partial_repository(tmp, "scripts/unit_economy.py")
             self.assertEqual(eval_tiers.catalog(root)["units"], [])
+
+    def test_one_dated_model_is_shared_with_the_replay_and_read_from_the_micro_manifest(self):
+        pinned = json.loads((REPO / "benchmarks" / "micro" / "tasks.json").read_text())["model"]
+        self.assertRegex(pinned, r"-[0-9]{8}$")
+        self.assertEqual((replay.DEFAULT_MODEL, eval_tiers.DEFAULT_MODEL), (pinned, pinned))
+        self.assertEqual(replay.task_catalog(REPO)["default_model"], pinned)
+        self.assertEqual(eval_tiers.catalog(REPO)["unit_model"], pinned)
+        with mock.patch.object(replay.Path, "read_text", side_effect=OSError):
+            self.assertEqual(replay._pinned_model(), "claude-haiku-4-5-20251001")
 
     def test_the_paid_suites_render_with_the_guards_flags_appended_once(self):
         catalog = runs.SuiteCatalog.load(runs.default_catalog_path(REPO))
@@ -292,6 +305,50 @@ class PaidRunnerTests(unittest.TestCase):
                 self.assertEqual(spent["cases"][0]["status"], "completed")
                 self.assertIn("whole cap was charged", analysis["spend_error"])
 
+    def test_an_exit_cost_bench_never_gives_charges_the_whole_cap(self):
+        for code in (-9, 3, 137):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as tmp:
+                exit_code, run_dir, _calls = run_unit_eval(tmp, returncode=code)
+                spent = self.spent(run_dir)
+                self.assertEqual((exit_code, spent["spend_usd"], spent["stop_reason"]),
+                                 (2, 50.0, "runner_failure"))
+        target = replay.ReplayTarget.parse({"kind": "branch", "ref": "main", "revision": REVISION})
+        with tempfile.TemporaryDirectory() as tmp, self.assertRaises(replay.ReplayError) as caught:
+            replay._verify_target_output(None, target, Path(tmp) / "absent", -9, "5")
+        self.assertNotIsInstance(caught.exception, replay._NothingSpent)
+
+    def test_a_cancel_mid_launch_still_writes_a_whole_cap_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / RUN_ID
+            run_dir.mkdir()
+            launch, _ = fake_replay()
+
+            def cancelled(command, **kwargs):
+                if command[2] == "replay":
+                    launch(command, **kwargs)
+                    eval_tiers._terminate_cleanly(15, None)
+                return subprocess.run(command, **kwargs)
+            with self.assertRaises(SystemExit):
+                eval_tiers.run_paid("unit-eval", REPO, REVISION, "2", "50",
+                                    run_dir / spend_guard.RESULT_NAME, RUN_ID, cancelled,
+                                    unit="rules.secrets", model="claude-test")
+            spent = self.spent(run_dir)
+            analysis = json.loads((run_dir / "eval" / eval_tiers.ANALYSIS_NAME).read_text())
+        self.assertEqual((spent["spend_usd"], spent["stop_reason"]), (50.0, "runner_failure"))
+        self.assertIn("stopped", analysis["error"])
+
+    def test_the_runner_writes_a_result_when_a_cancel_interrupts_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = Path(tmp) / spend_guard.RESULT_NAME
+            env = {"CITIZEN_STUDIO_RESULT": str(result), "CITIZEN_STUDIO_RUN_ID": RUN_ID}
+            with mock.patch.dict(os.environ, env), \
+                    mock.patch.object(eval_tiers, "run_paid", side_effect=SystemExit(143)), \
+                    self.assertRaises(SystemExit):
+                eval_tiers.main(["unit-eval", "--repository", str(REPO), "--revision",
+                                 REVISION, "--unit", "rules.secrets", "--model", "m",
+                                 "--max-budget-usd", "2", "--spend-cap", "50"])
+            self.assertEqual(json.loads(result.read_text())["spend_usd"], 50.0)
+
     def test_a_launch_that_raises_is_settled_from_what_it_left(self):
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp) / RUN_ID
@@ -346,15 +403,37 @@ class FreeRunnerTests(unittest.TestCase):
             (raw / "notes.txt").write_text("x")
             (raw / "linked-bare-2.json").symlink_to(RAW / "gate-run-harness-1.json")
             copy = Path(tmp) / "copy"
-            self.assertEqual(eval_tiers.copy_run_files(raw, copy), 1)
+            parse_name = hook_engine_detect().parse_name
+            self.assertEqual(eval_tiers.copy_run_files(raw, copy, parse_name), 1)
             self.assertEqual(sorted(p.name for p in copy.iterdir()), ["gate-run-bare-1.json"])
             with mock.patch.object(eval_tiers, "MAX_RAW_BYTES", 1), \
                     self.assertRaises(eval_tiers.EvalTierError):
-                eval_tiers.copy_run_files(raw, Path(tmp) / "copy-2")
+                eval_tiers.copy_run_files(raw, Path(tmp) / "copy-2", parse_name)
             empty = Path(tmp) / "empty"
             (empty / "nested").mkdir(parents=True)
             with self.assertRaises(eval_tiers.EvalTierError):
                 eval_tiers.run_rule_detection(REPO, empty)
+
+    def test_the_copy_filter_uses_the_detect_commands_arms(self):
+        bench = eval_tiers._load_file_module(REPO / "scripts" / "cost_bench.py", "bench_test")
+        self.assertEqual(eval_tiers.DETECT_ARMS, bench.DETECT_ARMS)
+
+    def test_the_byte_cap_counts_what_is_actually_copied(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = Path(tmp) / "raw"
+            raw.mkdir()
+            (raw / "a-bare-1.json").write_bytes(b"x" * 10)
+            real_open = os.open
+
+            def grows(path, flags, *args):
+                # The file grows between the scan and the copy.
+                if str(path).endswith("a-bare-1.json") and not flags & os.O_WRONLY:
+                    (raw / "a-bare-1.json").write_bytes(b"x" * 40)
+                return real_open(path, flags, *args)
+            with mock.patch.object(eval_tiers, "MAX_RAW_BYTES", 20), \
+                    mock.patch.object(eval_tiers.os, "open", side_effect=grows), \
+                    self.assertRaises(eval_tiers.EvalTierError):
+                eval_tiers.copy_run_files(raw, Path(tmp) / "copy", hook_engine_detect().parse_name)
 
     def test_a_terminated_detection_removes_its_copy(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -578,6 +657,42 @@ class RealSupervisorTokenTests(unittest.TestCase):
         self.assertEqual(self.start(unit["request"], unit["confirmation_token"]),
                          (400, {"error": "eval_refused"}))
         self.assertEqual(len(self.runs_recorded()), 1)
+
+
+class MovingTargetService(FixtureTargetService):
+    """Builds the confirmed revision until `moved`, then another, as a branch that moved would."""
+
+    def __init__(self):
+        self.moved = False
+
+    def build(self, kind, ref, destination):
+        built = super().build(kind, ref, destination)
+        if self.moved:
+            built["revision"] = "b" * 40
+        return built
+
+
+class MovedTargetTests(RealSupervisorTokenTests):
+    def setUp(self):
+        super().setUp()
+        self.service = MovingTargetService()
+        self.supervisor.target_service = self.service
+        self.server.target_service = self.service
+
+    def test_missing_forged_reused_and_other_suite_tokens_are_refused(self):
+        pass  # run by the parent class; this class tests only a target that moved
+
+    def test_a_target_that_moves_after_confirm_is_refused_as_changed(self):
+        unit = self.preview(paid_request())
+        gate = eval_tiers.EvalAdmission(REPO, self.server.store.path, self.supervisor, self.service)
+        confirmed = gate.confirm(unit["request"])
+        self.service.moved = True
+        with self.assertRaises(eval_tiers.EvalTierError) as caught:
+            gate.start_confirmed(confirmed, unit["confirmation_token"])
+        self.assertEqual(caught.exception.code, "eval_target_changed")
+        self.assertEqual(self.runs_recorded(), [])
+        status, payload = self.start(unit["request"], unit["confirmation_token"])
+        self.assertEqual((status, payload), (409, {"error": "eval_target_changed"}))
 
 
 class EvalRouteSecurityTests(studio_security.StudioSecurityFixture):
