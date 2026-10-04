@@ -191,6 +191,15 @@ class FanOutTests(Fixture):
         self.assertNotEqual(decision(result), "deny")
         self.assertEqual(self.rows()[-1]["deterministic_answer"], "allow")
 
+    def test_a_stop_after_a_blocked_stop_leaves_the_slot_released(self):
+        self.started(6)
+        self.event("SubagentStop", "a0")
+        lifecycle.dispatch("claude-code", {"hook_event_name": "SubagentStop", "session_id": SESSION,
+                                           "agent_id": "a0", "agent_type": "worker-a",
+                                           "stop_hook_active": True})
+        self.assertEqual(CAPS.tally(CAPS.records(self.journal))["live"], 5)
+        self.assertNotEqual(decision(self.spawn()), "deny")
+
     def test_a_spawn_another_policy_denies_takes_no_slot(self):
         os.environ["HARNESS_STANCE_DELEGATION"] = "off"
         self.assertEqual(decision(self.spawn()), "deny")
@@ -255,6 +264,15 @@ class HeadlessTests(Fixture):
         searched = self.search()
         self.assertNotEqual(decision(searched), "deny")
         self.assertEqual(self.rows()[-1]["deterministic_answer"], "would-deny")
+
+    def test_a_let_through_spawn_reserves_its_slot(self):
+        os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"
+        self.started(5)
+        self.spawn()
+        self.assertEqual(context(self.spawn()).count("let through"), 1)
+        self.event("SubagentStart", "late")
+        counts = CAPS.tally(CAPS.records(self.journal))
+        self.assertEqual((counts["live"], counts["running"], counts["reserved"]), (7, 6, 1))
 
     def test_a_test_can_switch_enforcement_on(self):
         os.environ["CLAUDE_CODE_ENTRYPOINT"] = "sdk-cli"

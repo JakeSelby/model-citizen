@@ -303,6 +303,8 @@ def on_spawn(payload, env, path, workflow=False):
                            "refused once the launch is through.")
             log("would-deny" if held else "deny", text, payload, env, fields)
             if held:
+                if not workflow:
+                    append(path, {"t": "spawn", "at": time.time()})
                 return warn("a headless run is past the fan-out cap (%d live, cap %d); this %s "
                             "was let through" % (live, cap, what))
             return deny(reason)
