@@ -1,4 +1,5 @@
 import {
+  Anchor,
   Badge,
   Code,
   Group,
@@ -11,7 +12,7 @@ import {
   Title,
 } from "@mantine/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { NavLink, useSearchParams } from "react-router-dom";
 
 import { CodeView, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { useLiveUpdates } from "../live/LiveUpdates";
@@ -201,7 +202,10 @@ export function LibraryPage() {
           <Title order={1}>Every module, from source to runtime.</Title>
           <Text c="dimmed" mt="xs">Inspect ownership, selection provenance, projections, and static context cost.</Text>
         </div>
-        {payload ? <Text c="dimmed" size="sm">{payload.summary.modules} modules · {payload.summary.roots} roots</Text> : null}
+        <Group gap="sm">
+          {payload ? <Text c="dimmed" size="sm">{payload.summary.modules} modules · {payload.summary.roots} roots</Text> : null}
+          <Anchor component={NavLink} size="sm" to="/reports/rules">Rule health</Anchor>
+        </Group>
       </Group>
 
       <Paper p="lg" withBorder>
