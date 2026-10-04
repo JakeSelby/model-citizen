@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "note": "The pinned diff-quality judge: the model, effort and rubric every verdict is asked with, and the calibration protocol it is admitted under. scripts/replay_judge.py refuses a rubric whose digest differs from rubric_sha256; docs/benchmarks.md#diff-quality-judge says how it is used.",
+  "model": "claude-sonnet-5-5",
+  "effort": "medium",
+  "rubric": "rubric.md",
+  "rubric_sha256": "5f8a55d219e3716d3a90e0a45a5d72101973d8d83ec1f2159f353a671c0726de",
+  "dimensions": ["scope_discipline", "design_quality", "reply_quality"],
+  "kappa_floor": 0.6,
+  "calibration_pairs": 40,
+  "max_chars": 20000,
+  "run_cap_usd": 0.5
+}
