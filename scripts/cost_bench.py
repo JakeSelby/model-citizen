@@ -2362,6 +2362,8 @@ def cmd_replay(args):
 def _cmd_replay(args, pack):
     # Named in the cost lines, so a figure built on the default cap never reads as a chosen one.
     args.run_cap_source = "--run-cap" if getattr(args, "run_cap", None) is not None else "default run cap"
+    # Read before `resolve_tier`, which fills the micro tier's two-arm default.
+    spend_cap_given = getattr(args, "spend_cap", None) is not None
     resolve_tier(args, pack)
     tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
     args.set_size = len(tasks)
@@ -2388,6 +2390,8 @@ def _cmd_replay(args, pack):
     pair = pair_manifest(args)
     if not pair and not configs and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
+    if configs and not spend_cap_given:
+        args.spend_cap = None  # every tier's default is sized for two arms; the operator names this one
     tags = args.tag or []
     refuse_candidate(tags)
     if not args.model:
@@ -2860,10 +2864,13 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if pair or common.get("ablation") or design or common.get("config_records"):
+    if common.get("config_records"):
+        # `summarise` knows no config arm, so it is not offered here.
+        print("cost-bench: a run with config arms writes no history row; its rows are in %s" % (out / RESULTS),
+              file=sys.stderr)
+    elif pair or common.get("ablation") or design:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
-              % ("a pair" if pair else "a grid" if design else "an ablation run" if common.get("ablation")
-                 else "a run with config arms", out), file=sys.stderr)
+              % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == full_set_size(args) and not stopped:

@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -175,6 +176,52 @@ class RunTests(unittest.TestCase):
         self.assertIn("claude_code_version", str(caught.exception))
 
 
+class ReplayTagTests(unittest.TestCase):
+    """`replay_tag` over a full, pre-registered, unstopped set: only the config arms keep the history row out."""
+
+    def run_tag(self, tmp, config_records):
+        tmp = Path(tmp)
+        args = types.SimpleNamespace(
+            tasks=str(FIXTURE_TASKS), model="claude-test", tier=None, series_source=b"set", tmp=str(tmp),
+            reps=1, run_cap=1.0, spend_cap=10.0, stance_cost=None, raw=False, change_note=None,
+            skip_preflight=True, bucket=None, predicted_ratio=None, allow_surface_drift=False,
+            history_dir=str(tmp / "history"), set_size=1)
+        common = {"tasks": [TASK], "plan": [(TASK, 1, "bare"), (TASK, 1, "harness")], "bare": {}, "out": tmp / "out",
+                  "prices": {}, "network": "n", "proxy": "p", "cli_version": "2.0", "client_env": {},
+                  "protocol": {"evidence": "pre-registered"}}
+        if config_records:
+            common.update(config_records=config_records, arm_configs={}, config_selections={})
+        rows = [{"arm": arm, "evidence": BENCH.experiment_protocol.PREREGISTERED} for arm in ("bare", "harness")]
+        err = io.StringIO()
+        with mock.patch.object(BENCH, "snapshot", lambda repo, sha, dest: dest), \
+                mock.patch.object(BENCH, "tag_version", lambda repo, commit, ref: "9.9.9"), \
+                mock.patch.object(BENCH, "replay", lambda tasks, opts, out=None: (rows, False)), \
+                mock.patch.object(BENCH, "history_row", lambda *a, **k: {"version": "9.9.9"}), \
+                mock.patch.object(BENCH, "render_history", lambda kept: "table\n"), \
+                redirect_stdout(io.StringIO()), redirect_stderr(err):
+            status = BENCH.replay_tag("v9.9.9", args, common, {"harness_commit": "0" * 40})
+        return status, err.getvalue(), sorted(p.name for p in (tmp / "history").glob("*"))
+
+    def test_a_run_with_config_arms_writes_no_history_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status, err, written = self.run_tag(tmp, {"maintainer": {}})
+        self.assertEqual(status, 0)
+        self.assertEqual(written, [])
+        self.assertIn("a run with config arms writes no history row", err)
+
+    def test_the_same_set_without_config_arms_writes_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            status, _err, written = self.run_tag(tmp, None)
+        self.assertEqual(status, 0)
+        self.assertEqual(written, [BENCH.HISTORY.name, BENCH.HISTORY_MD.name])
+
+    def test_the_config_arm_message_names_the_rows_and_offers_no_summarise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _status, err, _written = self.run_tag(tmp, {"maintainer": {}})
+        self.assertIn(str(Path(tmp) / "out" / "v9.9.9" / BENCH.RESULTS), err)
+        self.assertNotIn("summarise", err)
+
+
 class DryRunTests(unittest.TestCase):
     def run_main(self, *extra):
         out, err = io.StringIO(), io.StringIO()
@@ -219,6 +266,20 @@ class DryRunTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
                 self.run_main(*extra)
             self.assertIn(expected, str(caught.exception))
+
+    def test_a_micro_run_with_config_arms_needs_an_explicit_spend_cap(self):
+        head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
+        argv = ["replay", "--tier", "micro", "--raw", "unused-raw-dir", "--tag", head, "--exploratory", "--reps", "1",
+                "--arm-config", "maintainer=%s" % (SHIPPED / "maintainer.json")]
+        with mock.patch.object(BENCH, "snapshot", lambda repo, sha, dest: REPO), \
+                redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.main(argv)
+            self.assertIn("a run with config arms needs --spend-cap", str(caught.exception))
+            # Named, the cap passes the guard and the run stops at the next one, the credential.
+            with mock.patch.dict("os.environ", {ARMS.CREDENTIAL: ""}), self.assertRaises(SystemExit) as caught:
+                BENCH.main(argv + ["--spend-cap", "12"])
+            self.assertIn("%s is not set" % ARMS.CREDENTIAL, str(caught.exception))
 
     def test_each_flag_is_read_in_the_order_given(self):
         args = mock.Mock(arm_config=["m=%s" % (SHIPPED / "maintainer.json"), "f=%s" % (SHIPPED / "frugal.json")],
