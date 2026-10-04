@@ -55,6 +55,12 @@ WORKSPACE_GIT_ENV = {"GIT_AUTHOR_NAME": "workspace", "GIT_AUTHOR_EMAIL": "worksp
                      "GIT_AUTHOR_DATE": "2026-01-01T00:00:00+0000",
                      "GIT_COMMITTER_DATE": "2026-01-01T00:00:00+0000"}
 KEPT_ENV = ("HOME", "PATH", "TMPDIR", "LANG")
+# Upstream material a workspace may name to be fetched at a pinned commit (`vendor_errors`): only
+# licences that permit commercial use, modification and redistribution with no further terms.
+VENDOR_LICENCES = ("MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_VENDOR_CACHE = {}
 
 
 class PackError(SystemExit):
@@ -212,6 +218,7 @@ def document_errors(document):
             if not isinstance(gate, list) or not gate or not all(
                     isinstance(c, list) and c and all(isinstance(a, str) for a in c) for c in gate):
                 errors.append("workspace %s has no gate of argv lists" % name)
+            errors.extend(vendor_errors(name, (spec or {}).get("vendor", [])))
     sets = document.get("sets")
     if not isinstance(sets, dict) or not sets:
         errors.append("sets is not a non-empty object")
@@ -228,6 +235,103 @@ def document_errors(document):
             elif tier == "micro" and (not isinstance((spec or {}).get("model"), str) or not spec["model"]):
                 errors.append("set %s is a micro set and names no model to run on" % name)
     return errors
+
+
+def _relative(path):
+    return isinstance(path, str) and path and not path.startswith("/") and "\\" not in path \
+        and all(part not in ("", ".", "..") for part in path.split("/"))
+
+
+def vendor_errors(workspace, entries):
+    """Why a workspace's `vendor` list cannot be used, or [].
+
+    Each entry fetches upstream files at one pinned commit into the workspace as it is
+    materialized, so a pack can carry a third-party skill without redistributing it: `name`,
+    `source` (a git URL or path), `commit` (a full sha), `license` (one of `VENDOR_LICENCES`),
+    `paths` (`[upstream path, workspace path]` pairs, both relative and plain) and `digest`,
+    the `tree_digest` of the placed files, so the pack's own digest pins the bytes too."""
+    errors, where = [], "workspace %s vendor" % workspace
+    if not isinstance(entries, list):
+        return ["%s is not a list" % where]
+    targets = []
+    for index, entry in enumerate(entries):
+        at = "%s %d" % (where, index)
+        if not isinstance(entry, dict):
+            errors.append("%s is not an object" % at)
+            continue
+        for key in ("name", "source"):
+            if not isinstance(entry.get(key), str) or not entry[key]:
+                errors.append("%s: %s is not a non-empty string" % (at, key))
+        if not isinstance(entry.get("commit"), str) or not COMMIT.match(entry["commit"]):
+            errors.append("%s: commit is not a full 40-character sha" % at)
+        if entry.get("license") not in VENDOR_LICENCES:
+            errors.append("%s: license %r is not one of %s" % (at, entry.get("license"), ", ".join(VENDOR_LICENCES)))
+        if not isinstance(entry.get("digest"), str) or not DIGEST.match(entry["digest"]):
+            errors.append("%s: digest is not a sha256 hex digest" % at)
+        paths = entry.get("paths")
+        if not isinstance(paths, list) or not paths or not all(
+                isinstance(p, list) and len(p) == 2 and _relative(p[0]) and _relative(p[1]) for p in paths):
+            errors.append("%s: paths is not a list of [upstream, workspace] relative path pairs" % at)
+            continue
+        targets.extend(p[1] for p in paths)
+    for first in targets:
+        if any(other != first and other.startswith(first + "/") for other in targets) or targets.count(first) > 1:
+            errors.append("%s: workspace path %s is named twice or nests another" % (where, first))
+    return errors
+
+
+def _vendor_archive(entry, tmp=None):
+    """The tar bytes of the entry's upstream paths at its commit, fetched once per process."""
+    key = (entry["source"], entry["commit"], tuple(p[0] for p in entry["paths"]))
+    if key not in _VENDOR_CACHE:
+        repo = Path(tempfile.mkdtemp(prefix="model-citizen-vendor-", dir=tmp))
+        try:
+            for args in (("init", "-q"), ("fetch", "-q", "--depth", "1", entry["source"], entry["commit"])):
+                done = _git(repo, *args)
+                if done.returncode:
+                    raise PackError("fetching %s at %s failed: %s"
+                                    % (entry["name"], entry["commit"], done.stderr.decode().strip()))
+            done = _git(repo, "archive", "--format=tar", entry["commit"], "--", *key[2])
+            if done.returncode:
+                raise PackError("%s at %s has no %s: %s" % (entry["name"], entry["commit"],
+                                                            ", ".join(key[2]), done.stderr.decode().strip()))
+            _VENDOR_CACHE[key] = done.stdout
+        finally:
+            shutil.rmtree(str(repo), ignore_errors=True)
+    return _VENDOR_CACHE[key]
+
+
+def place_vendored(entries, dest, tmp=None):
+    """Fetch each vendor entry and place its paths under `dest`, refusing before writing anything
+    into `dest` when a placed file would replace a workspace file or the placed files' digest is
+    not the one the pack pinned. Returns `{name: digest}`."""
+    placed = {}
+    for entry in entries or ():
+        root = Path(tempfile.mkdtemp(prefix="model-citizen-vendor-", dir=tmp))
+        try:
+            upstream, staged = root / "upstream", root / "staged"
+            upstream.mkdir()
+            staged.mkdir()
+            extract(_vendor_archive(entry, tmp), upstream)
+            for source, target in entry["paths"]:
+                origin, goal = upstream / source, staged / target
+                if not origin.exists():
+                    raise PackError("%s at %s has no %s" % (entry["name"], entry["commit"], source))
+                goal.parent.mkdir(parents=True, exist_ok=True)
+                (shutil.copytree if origin.is_dir() else shutil.copyfile)(str(origin), str(goal))
+            digest = tree_digest(staged)
+            if digest != entry["digest"]:
+                raise PackError("%s at %s placed digest %s, not the %s the pack pins"
+                                % (entry["name"], entry["commit"], digest, entry["digest"]))
+            for path in sorted(p for p in staged.rglob("*") if p.is_file()):
+                if (Path(dest) / path.relative_to(staged)).exists():
+                    raise PackError("%s would replace the workspace's %s"
+                                    % (entry["name"], path.relative_to(staged).as_posix()))
+            shutil.copytree(str(staged), str(dest), dirs_exist_ok=True)
+            placed[entry["name"]] = digest
+        finally:
+            shutil.rmtree(str(root), ignore_errors=True)
+    return placed
 
 
 def set_tier(name, spec):
@@ -262,6 +366,12 @@ def task_errors(spec, task_dir, document):
                       % (where, str(spec["long"]).lower(), calls,
                          "above" if calls > document["break_even_calls"] else "at or below",
                          document["break_even_calls"]))
+    for flag in ("first_wave", "allow_web_search"):
+        if not isinstance(spec.get(flag, False), bool):
+            errors.append("%s: %s must be true or false" % (where, flag))
+    skills = spec.get("requires_skills", [])
+    if not isinstance(skills, list) or not all(isinstance(n, str) and NAME.match(n) for n in skills):
+        errors.append("%s: requires_skills is not a list of skill names" % where)
     if "metrics" in spec:
         errors.extend(oracle_metrics.declaration_errors(spec["metrics"], where))
     for name in (CHECK_FILE, SOLUTION_FILE):
@@ -316,6 +426,12 @@ def load_set(pack, set_name, tier):
                          "canary": document["canary"], "name": pack["name"], "source": pack["source"]}}
         if "mechanism" in task_spec:
             task["mechanism"] = task_spec["mechanism"]
+        for key in ("first_wave", "requires_skills", "allow_web_search"):
+            if key in task_spec:
+                task[key] = task_spec[key]
+        vendor = document["workspaces"][task_spec["workspace"]].get("vendor")
+        if vendor:
+            task["pack"]["vendor"] = vendor
         if "metrics" in task_spec:
             task["metrics"] = task_spec["metrics"]
         tasks.append(task)
@@ -340,6 +456,7 @@ def materialize(task, dest):
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(task["pack"]["workspace"], str(dest), symlinks=True)
+    place_vendored(task["pack"].get("vendor"), dest)
     env = dict(WORKSPACE_GIT_ENV)
     for args in (("init", "-q"), ("config", "maintenance.auto", "false"), ("config", "gc.auto", "0"),
                  ("symbolic-ref", "HEAD", "refs/heads/main"), ("add", "-A"),
