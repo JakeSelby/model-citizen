@@ -24,7 +24,7 @@ const reportCards = [
   { label: "System health", measure: "Doctor evidence", detail: "Every check keeps the CLI message and repair command.", href: "/reports#system-health" },
   { label: "Hook performance", measure: "No timing window", detail: "Invocation counts and latency stay linked to their source window.", href: "/reports#hook-performance" },
   { label: "Efficacy", measure: "No comparison yet", detail: "Run a paired experiment before judging a draft.", href: "/reports#efficacy" },
-  { label: "Usage", measure: "No local total", detail: "Estimated and unpriced usage are reported separately.", href: "/reports#usage" },
+  { label: "Usage", measure: "No local total", detail: "Estimated and unpriced usage are reported separately.", href: "/reports/usage" },
 ] as const;
 
 function ReportCard({ label, measure, detail, href }: (typeof reportCards)[number]) {

@@ -8,7 +8,9 @@ import json
 import os
 import re
 import secrets
+import selectors
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -29,6 +31,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
 from . import eval_tiers, first_run, rule_health
+from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
@@ -541,6 +544,54 @@ def _activity(handler: Handler, route: Route) -> None:
         payload = activity.query(handler.server.store.path.parent, request)
     except activity.ActivityError:
         handler._error(400, "invalid_activity_query")
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _client_gone(connection) -> bool:
+    """Whether the peer has closed its end: readable with nothing left to read.
+
+    A selector rather than `select.select`, which refuses descriptors at or above FD_SETSIZE and
+    would read a live client on a busy server as gone. Only a closed socket or a failed read
+    counts as gone; a check that cannot be made keeps the request.
+    """
+    if connection.fileno() < 0:
+        return True
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(connection, selectors.EVENT_READ)
+            if not selector.select(0):
+                return False
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except BlockingIOError:
+        return False
+    except (ConnectionError, OSError):
+        return True
+
+
+def _spend(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("by", "days"))
+    if request is None:
+        return
+    try:
+        by, days = spend_report.parse(request)
+    except spend_report.SpendError:
+        handler._error(400, "invalid_request")
+        return
+    # A read in a child process, off the serial mutation executor: the CLI takes no lock to
+    # report and a queued mutation would otherwise hold the page past its budget.
+    try:
+        payload = spend_report.report(handler.server.repo_root, by, days,
+                                      cancelled=lambda: _client_gone(handler.connection))
+    except spend_report.SpendCancelled:
+        handler.close_connection = True
+        return
+    except spend_report.SpendBusy:
+        handler._error(429, "spend_busy")
+        return
+    except spend_report.SpendUnavailable:
+        handler._error(503, "spend_unavailable")
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -2008,6 +2059,9 @@ ACTIVITY = ResponseSchema("json-object", (("schema_version", "integer"),
                                            ("sources", "array"),
                                            ("filters", "object"),
                                            ("command", "string")))
+SPEND = ResponseSchema("json-object", (("schema_version", "integer"), ("by", "string"),
+                                        ("days", "integer"), ("command", "string"),
+                                        ("basis", "object"), ("ledger", "object")))
 RUN_CATALOG = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("target", "object"), ("suites", "array"),
                                               ("unit_tests", "object"),
@@ -2241,6 +2295,8 @@ ROUTES = RouteRegistry((
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,
           _activity, None, "application/json", ("citizen", "activity", "--json")),
+    Route("POST", "/api/reports/spend", "application/json", SPEND,
+          _spend, None, "application/json", ("citizen", "usage", "--json")),
     Route("GET", "/api/runs/catalog", "application/json", RUN_CATALOG,
           _runs_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
     Route("POST", "/api/runs/start", "application/json", RUN_RECORD,
