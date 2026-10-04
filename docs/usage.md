@@ -420,6 +420,12 @@ found for agent a1b2c3` — and is fed once a session for that agent. It carries
 nothing will ever reconcile it, so repeating it turn after turn, which a session whose reader
 state was rebuilt used to do, only spends the orchestrator's context on a fact it has read.
 
+Claude Code also fires a `SubagentStop` for its own end-of-turn agent, seconds after most
+main-session `Stop`s, with no `SubagentStart` before it, no agent type and no transcript written
+anywhere. The feed journals that stop as `internal` and neither reports nor counts it; before it
+did, such stops were most of the `spend unknown` lines. A stop with no type and no transcript whose
+start was journalled is still a spawned agent, and still says `spend unknown`.
+
 A synchronous return can also arrive before the agent's last response is on disk: one API
 response is written as several records, the early ones carrying a partial streaming count and
 the last one a `stop_reason`. So the return polls the transcript's tail for up to a second,

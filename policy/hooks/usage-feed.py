@@ -207,7 +207,7 @@ def new_state():
             "turn": {"output": 0, "tool_calls": 0},
             "previous_turn": {"output": 0, "tool_calls": 0},
             "subagents": {"output": 0, "tool_calls": 0, "count": 0, "unknown": 0},
-            "journal_offset": 0, "running": {}, "pending": [], "counted": [],
+            "journal_offset": 0, "running": {}, "started": [], "pending": [], "counted": [],
             "figures": {}, "unsummed": {}, "open": [], "pruned": 0, "said_turn": None,
             "rounds": {}, "said_unknown": [], "said_measure": False,
             "context": None, "said_nudge": [], "turns": 0}
@@ -254,9 +254,10 @@ def load_state(path):
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             del state["rounds"][agent]
     state["said_measure"] = bool(state.get("said_measure"))
-    for key in ("pending", "counted", "open", "said_unknown", "said_nudge"):
+    for key in ("started", "pending", "counted", "open", "said_unknown", "said_nudge"):
         if not isinstance(state.get(key), list):
             state[key] = []
+    state["started"] = [v for v in state["started"] if isinstance(v, str)]
     state["said_unknown"] = [v for v in state["said_unknown"] if isinstance(v, str)]
     state["said_nudge"] = [v for v in state["said_nudge"]
                            if isinstance(v, int) and not isinstance(v, bool) and v > 0]
@@ -271,6 +272,7 @@ def save_state(path, state):
     state["pending"] = state.get("pending", [])[-MAX_PENDING:]
     state["counted"] = state.get("counted", [])[-MAX_COUNTED:]
     state["said_unknown"] = state.get("said_unknown", [])[-MAX_COUNTED:]
+    state["started"] = state.get("started", [])[-MAX_COUNTED:]
     for stale in list(state.get("rounds", {}))[:max(0, len(state.get("rounds", {}))
                                                     - MAX_COUNTED)]:
         del state["rounds"][stale]
@@ -531,7 +533,7 @@ def advance(state, transcript, save=None, budget=READ_BUDGET):
             # session nudge through the size itself, not by forgetting the line was fed.
             seen = state.get("inode") is not None
             kept = {key: state[key] for key in
-                    ("journal_offset", "running", "pending", "counted", "figures", "unsummed",
+                    ("journal_offset", "running", "started", "pending", "counted", "figures", "unsummed",
                      "subagents", "pruned", "rounds", "said_unknown", "said_nudge", "turns")}
             state = dict(new_state(), **kept)
             state["inode"], state["head"] = inode, head
@@ -813,6 +815,22 @@ def journal_records(journal_file, offset):
     return out
 
 
+def internal(state, record):
+    """Whether a stop is Claude Code's own end-of-turn agent rather than a subagent anyone spawned.
+
+    Such a stop fires within seconds of the main session's `Stop`, with no `SubagentStart` before
+    it, no agent type and no transcript written anywhere, so no lookup can ever give it a figure.
+    Reported, it read `unknown finished, spend unknown` once a turn and was most of the feed's
+    unknown lines. The stop journals the first two facts as `internal`; the third is that no start
+    was seen for it, which keeps a spawned agent whose transcript went missing reported. The start
+    is looked for in `started` as well as `running`, because `running_now` forgets a start after
+    `RUNNING_TTL` and an agent that outlives it is still one somebody spawned.
+    """
+    agent_id = record.get("id")
+    return (bool(record.get("internal")) and agent_id not in state["running"]
+            and agent_id not in (state.get("started") or []))
+
+
 def needs_sum(record):
     """Whether a journalled stop's figure is one to take as final.
 
@@ -856,8 +874,14 @@ def to_settle(state, journal_file, payload, env, first=None):
         items.append((agent_id, expand(entry[0], env, agent_id) or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)))
     rounds = dict(state.get("rounds") or {})
+    seen_running = {"running": dict(state.get("running") or {}),
+                    "started": list(state.get("started") or [])}
     for record in journal_records(journal_file, state.get("journal_offset", 0)):
         agent_id = record["id"]
+        if record.get("t") == "start":
+            seen_running["started"].append(agent_id)
+        if internal(seen_running, record):
+            continue
         repeat = False
         if record.get("t") == "stop":
             rounds[agent_id] = rounds.get(agent_id, 0) + 1
@@ -928,10 +952,14 @@ def ingest(state, journal_file, resolved=None):
             agent_id = record["id"]
             if record.get("t") == "start":
                 state["running"][agent_id] = int(record.get("at") or 0)
+                if agent_id not in state["started"]:
+                    state["started"].append(agent_id)
                 continue
-            if record.get("t") != "stop":
+            if record.get("t") != "stop" or internal(state, record):
                 continue
             state["running"].pop(agent_id, None)
+            if agent_id in state["started"]:
+                state["started"].remove(agent_id)
             round_number = bump_round(state, agent_id)
             # A later round's stop is never taken at the figure it was journalled with. The
             # transcript it was read from still ends on the previous round's finished response,
@@ -1433,6 +1461,8 @@ def on_subagent_event(payload, env, kind):
         path = payload.get("agent_transcript_path") or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)
         record["path"] = redact(path, env)
+        if not payload.get("agent_type") and not readable(path):
+            record["internal"] = True
         if workflow_agent(path):
             record["workflow"] = True
         totals = agent_totals(path)
@@ -1541,6 +1571,8 @@ def on_agent_return(payload, env):
                     if fresh.get("not_yet"):
                         remember_unsummed(state, agent_id, redact(first[1], env))
                     state["running"].pop(agent_id, None)
+                    if agent_id in state["started"]:
+                        state["started"].remove(agent_id)
                     figured = emit(state, lines, fresh, line)
         note = width_line(running_now(state), width)
         if note:
