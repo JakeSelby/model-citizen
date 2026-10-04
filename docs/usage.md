@@ -612,15 +612,17 @@ after which no row, no file and no directory is written. See
 ### Rows the test suite wrote
 
 Before 0.15.0 some of this repository's tests ran hooks against the real home, so a machine that
-ran the suite may hold rows no session produced. Claude Code and Codex name a session by a UUID;
-the test rows carry short made-up ids such as `s`, `x`, `probe` or `pid-862`, and their outcome
-rows carry the same id. Count the ids first, then keep only UUID-named and session-less rows in a
-copy, and replace the log with it once the counts look right:
+ran the suite may hold rows no session produced. The test rows carry short made-up ids, and
+their outcome rows carry the same id. Count the ids first and note which ones the suite wrote;
+in the rows seen so far they were `s`, `x`, `probe` and ids starting `pid-`. Then drop only those
+in a copy, and replace the log with it once the counts look right. A runtime may name a session
+with an id that is not a UUID, so filter on the test ids you found, never on an id's shape:
 
 ```sh
 log=~/.local/state/agent-harness/decisions.jsonl
-jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head
-jq -c 'select((.session_id // "") | test("^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"))' \
+jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head -20
+jq -c 'select((.session_id // "") as $id
+  | ($id == "s" or $id == "x" or $id == "probe" or ($id | startswith("pid-"))) | not)' \
   "$log" > "$log.clean"
 ```
 
