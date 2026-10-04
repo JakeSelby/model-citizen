@@ -3,18 +3,21 @@
 
 The end-to-end flows and the performance budgets share it. Three things keep a run sealed:
 
-- The Studio runs from a clone of this checkout's commit (uncommitted edits are not in it), so
-  its drafts, including the first-run guide's fixed ``first-run`` draft, live in that copy's
-  refs and never in the shared repository a sibling suite or the developer works in.
+- Each test class serves a full-history clone of this checkout's commit (uncommitted edits are
+  not in it), so its drafts, including the first-run guide's fixed ``first-run`` draft, live in
+  the clone's refs and never in the shared repository a sibling suite or the developer works in.
 - ``claude`` and ``codex`` on the Studio's PATH are stubs that let the offline probes through
-  and record and fail any other call, so
-  :meth:`StudioE2E.assert_no_model_calls` proves no flow reached a model client.
-- :meth:`StudioE2E.assert_no_network` reads every resource the page fetched and refuses any that
-  left the Studio's loopback origin.
+  and record and fail any other call, so :meth:`StudioE2E.assert_no_model_calls` proves no flow
+  reached a model client.
+- :meth:`StudioE2E.assert_no_network` reads the DevTools ``Network`` events of every document
+  the tab loaded, WebSockets included, and refuses any request that left the Studio's loopback
+  origin. It sees the browser only: the Studio's own subprocesses (lint, the hook matrix, git)
+  are not watched for network use.
 
-Chrome is found as the browser tests find it. Where it is missing the test skips, unless
-``STUDIO_E2E_REQUIRE_BROWSER=1`` (set in CI), which turns the skip into a failure so a runner
-image without Chrome cannot pass the job by skipping every flow.
+These classes are opt-in: they skip unless ``STUDIO_E2E=1``, which only the ``studio-e2e``
+workflow sets, so the plain ``discover -s tests`` runs in ``ci.yml`` and ``release.yml`` neither
+repeat the flows nor gate on wall-clock budgets. With the flag set, a missing Chrome fails the
+test instead of skipping it, so a runner image without Chrome cannot pass the job.
 """
 from __future__ import annotations
 
@@ -37,7 +40,9 @@ import test_studio_browser as browser_support
 from test_replay_pack import make_pack
 
 REPO = browser_support.REPO
-REQUIRE_BROWSER_ENV = "STUDIO_E2E_REQUIRE_BROWSER"
+OPT_IN_ENV = "STUDIO_E2E"
+# Requests that never leave the browser.
+LOCAL_SCHEMES = ("data:", "blob:")
 MODEL_CLIENTS = ("claude", "codex")
 
 sys.path.insert(0, str(REPO / "lib"))
@@ -77,18 +82,49 @@ globalThis.__has = (text) => document.body.textContent.includes(text);
 """
 
 
-def require_browser() -> bool:
-    return os.environ.get(REQUIRE_BROWSER_ENV) == "1"
+def opted_in() -> bool:
+    return os.environ.get(OPT_IN_ENV) == "1"
 
 
-def chrome_or_skip(test: unittest.TestCase) -> str:
+def chrome_or_fail(test: unittest.TestCase) -> str:
     chrome = browser_support._chrome()
     if chrome is None:
-        if require_browser():
-            test.fail("%s=1 and no Chrome or Chromium was found" % REQUIRE_BROWSER_ENV)
-        test.skipTest("Chrome or Chromium is required for the Studio end-to-end flows")
+        test.fail("%s=1 and no Chrome or Chromium was found" % OPT_IN_ENV)
     assert chrome is not None
     return chrome
+
+
+class RecordingDevTools(browser_support.DevTools):
+    """The browser tests' DevTools client, keeping every event it reads instead of dropping it."""
+
+    def __init__(self, url: str):
+        super().__init__(url)
+        self.events: List[dict] = []
+
+    def call(self, method: str, params=None) -> dict:
+        request_id = self.next_id
+        self.next_id += 1
+        payload = json.dumps({"id": request_id, "method": method, "params": params or {}})
+        self._send(payload.encode("utf-8"))
+        while True:
+            response = self._receive()
+            if response.get("id") == request_id:
+                if "error" in response:
+                    raise RuntimeError(response["error"])
+                return response["result"]
+            if "method" in response:
+                self.events.append(response)
+
+    def requested_urls(self) -> List[str]:
+        """Every URL a document or WebSocket of this tab asked for, read up to now."""
+        self.call("Runtime.evaluate", {"expression": "0"})  # drains events queued before it
+        urls = []
+        for event in self.events:
+            if event["method"] == "Network.requestWillBeSent":
+                urls.append(event["params"]["request"]["url"])
+            elif event["method"] == "Network.webSocketCreated":
+                urls.append(event["params"]["url"])
+        return urls
 
 
 def clone_checkout(destination: Path) -> Path:
@@ -103,7 +139,8 @@ def clone_checkout(destination: Path) -> Path:
 
 
 class FixtureCheckout:
-    """A one-commit copy of this checkout and a stub bin directory, shared by one test class."""
+    """A full-history clone of this checkout's commit, an evaluator pack beside it and a stub
+    bin directory, shared by one test class."""
 
     def __init__(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="studio-e2e-")
@@ -156,6 +193,8 @@ class StudioE2E(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if not opted_in():
+            raise unittest.SkipTest("set %s=1 to run the Studio end-to-end checks" % OPT_IN_ENV)
         super().setUpClass()
         cls.checkout = FixtureCheckout()
 
@@ -174,7 +213,7 @@ class StudioE2E(unittest.TestCase):
         """Seed ``self.home`` before the Studio starts; the default seeds nothing."""
 
     def setUp(self):
-        chrome = chrome_or_skip(self)
+        chrome = chrome_or_fail(self)
         if self.checkout.calls.exists():
             self.checkout.calls.unlink()
         self.temporary = tempfile.TemporaryDirectory(prefix="studio-e2e-home-")
@@ -218,8 +257,10 @@ class StudioE2E(unittest.TestCase):
              "--remote-debugging-port=0", "--user-data-dir=" + str(self.profile), "about:blank"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.addCleanup(self._stop_browser)
-        self.devtools = browser_support.DevTools(self._target())
+        self.devtools = RecordingDevTools(self._target())
         self.addCleanup(self._close_devtools)
+        # Recording starts before the first navigation, so every document of the tab is seen.
+        self.devtools.call("Network.enable")
 
     def _target(self) -> str:
         active = self.profile / "DevToolsActivePort"
@@ -328,9 +369,12 @@ class StudioE2E(unittest.TestCase):
     # Seals.
     def assert_no_network(self) -> None:
         origin = self.started["url"].rstrip("/")
-        names = self.js("performance.getEntriesByType('resource').map(item => item.name)") or []
-        foreign = [name for name in names if not name.startswith(origin + "/")]
-        self.assertEqual(foreign, [], "the page fetched outside the Studio's loopback origin")
+        local = (origin + "/", "ws" + origin[len("http"):] + "/") + LOCAL_SCHEMES
+        urls = self.devtools.requested_urls()
+        self.assertTrue(any(url.startswith(origin + "/") for url in urls),
+                        "no request was recorded at all, so the seal saw nothing")
+        foreign = sorted({url for url in urls if not url.startswith(local)})
+        self.assertEqual(foreign, [], "the tab requested outside the Studio's loopback origin")
 
     def assert_no_model_calls(self) -> None:
         calls = (self.checkout.calls.read_text(encoding="utf-8")

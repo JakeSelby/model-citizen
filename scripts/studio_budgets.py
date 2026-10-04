@@ -6,20 +6,19 @@ Three budgets, each failing by name:
 
 - **Bundle size**: the committed bundle's script and style assets, gzip-compressed as a browser
   receives them, and the raw total. Checked here from ``studio/dist`` with no browser.
-- **First load**: navigation to the rendered Studio shell, the median of several cold-cache
-  loads in headless Chrome, under 1.5 seconds.
-- **API latency**: the p95 of the library route over a fixture library of at least 500
-  modules, under 100 ms. It is measured in three rounds and the quietest round's p95 is judged
-  (:func:`settled_p95`): load from other processes on the runner only ever adds latency, so the
-  quietest round is the route's own cost, and a route that is slow every round still fails.
+- **First load**: navigation to the rendered Studio shell in headless Chrome with the cache
+  disabled, under 1.5 seconds for every one of five loads (the slowest is judged).
+- **API latency**: the p95 of the library route over 120 requests, with a fixture library of
+  500 modules on top of the core ones, under 100 ms. Each sample is the route's own time, from
+  request to the last body byte on an already-open connection; the client's connect and JSON
+  parsing are outside it.
 
 The first-load and API budgets need a served Studio and Chrome, so they are measured by
-``tests/test_e2e_studio_budgets.py`` and judged by :func:`over_budget` here. Each wall-clock
-figure is a median or a p95 over repeated samples after a warm-up, never one sample, so one slow
-scheduler tick on a shared runner does not fail the build.
+``tests/test_e2e_studio_budgets.py`` and judged by :func:`over_budget` here. They run only in
+the ``studio-e2e`` workflow, a job of their own, never inside the full unit suite.
 
 The bundle figures were set at about 25% above the bundle as built when the budgets were
-introduced (script 285 KiB gzip, style 38 KiB gzip, 1.17 MiB raw); a deliberate growth past
+introduced (script 284 KiB gzip, style 38 KiB gzip, 1.17 MiB raw); a deliberate growth past
 them raises the budget in the same pull request, with its reason.
 
     python3 scripts/studio_budgets.py bundle [--dist studio/dist] [--json]
@@ -42,7 +41,7 @@ BUDGETS: Dict[str, float] = {
     "bundle.script_gzip_bytes": 360 * KIB,
     "bundle.style_gzip_bytes": 48 * KIB,
     "bundle.total_raw_bytes": 1500 * KIB,
-    "first_load.median_ms": 1500.0,
+    "first_load.slowest_ms": 1500.0,
     "api.library_p95_ms": 100.0,
 }
 UNITS = {"bytes": "bytes", "ms": "ms"}
@@ -71,13 +70,6 @@ def p95(samples: Sequence[float]) -> float:
         raise ValueError("no samples")
     ordered = sorted(samples)
     return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
-
-
-def settled_p95(rounds: Sequence[Sequence[float]]) -> float:
-    """The lowest per-round p95 of several rounds of samples."""
-    if not rounds:
-        raise ValueError("no rounds")
-    return min(p95(samples) for samples in rounds)
 
 
 def median(samples: Sequence[float]) -> float:

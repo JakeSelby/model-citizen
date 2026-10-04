@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or pull request supersedes a run still in progress.
+concurrency:
+  group: studio-e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The Studio's six main flows end to end in headless Chrome, and its performance budgets,
   # against a fixture home with no network and no model calls (AH-S316). Whether it blocks a
@@ -31,6 +36,7 @@ jobs:
       - name: End-to-end flows and live budgets
         working-directory: tests
         env:
-          # A missing Chrome fails every flow instead of skipping it.
-          STUDIO_E2E_REQUIRE_BROWSER: "1"
+          # Opts in to the checks the plain unit-suite runs skip, and makes a missing Chrome
+          # fail every check instead of skipping it.
+          STUDIO_E2E: "1"
         run: python3 -m unittest -v test_e2e_studio_flows test_e2e_studio_budgets

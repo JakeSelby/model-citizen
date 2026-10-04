@@ -4,9 +4,10 @@
 Each test drives the shipped bundle through the served Studio of a fixture checkout, as a user
 would: open the Studio, follow the first-run guide, tune a draft and plan its test, run the free
 suites, compare two finished replays, and apply a draft and roll it back. Every test ends by
-proving the page fetched nothing outside the Studio's loopback origin and no model client ran.
-The fixture and its seals are described in ``studio_e2e_support``; CI runs this module with
-``STUDIO_E2E_REQUIRE_BROWSER=1`` (``.github/workflows/studio-e2e.yml``).
+proving the tab requested nothing outside the Studio's loopback origin and no model client ran;
+:class:`SealTests` proves each seal fails when it is breached. The fixture and its seals are
+described in ``studio_e2e_support``; the module runs only with ``STUDIO_E2E=1``, which
+``.github/workflows/studio-e2e.yml`` sets.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ import datetime
 import json
 import os
 import secrets
+import subprocess
 import time
 import unittest
 from unittest import mock
@@ -108,7 +110,7 @@ class StudioEndToEndFlows(support.StudioE2E):
         super().tearDown()
 
     def prepare_home(self):
-        if self._testMethodName == "test_compare_reads_two_finished_replays_paired_by_task":
+        if self._testMethodName == "test_compare_two_finished_replays_from_the_compare_panel":
             self.run_ids = seed_finished_replays(self.home, self.checkout.root)
 
     def test_open_the_studio_and_reach_every_area(self):
@@ -232,8 +234,12 @@ class StudioEndToEndFlows(support.StudioE2E):
         self.choose_option("Suite", lint)
         self.click("Run " + lint)
         self.wait("__has('Run detail')", "the run detail did not open")
-        self.wait("/succeeded/.test(document.querySelector('.experiment-launch')"
-                  ".parentElement.textContent)", "the free suite did not succeed", seconds=180)
+        lint_run = self._await_run("lint")
+        self.assertEqual(lint_run["status"], "succeeded", lint_run)
+        self.wait("/succeeded/.test([...document.querySelectorAll('h2')].find(heading =>"
+                  " heading.textContent === 'lint')?.closest('.mantine-Group-root')"
+                  "?.textContent || '')",
+                  "the run detail did not show the run succeeded")
 
         self.click("Run the hook matrix")
         self.wait("[...document.querySelectorAll('h2')].some(h => h.textContent ==="
@@ -255,30 +261,34 @@ class StudioEndToEndFlows(support.StudioE2E):
             time.sleep(1)
         self.fail("%s did not finish: %s" % (suite_id, latest))
 
-    # Found by this flow: the compare route reads the run supervisor off the mutation thread
-    # (server._runs_compare), and the supervisor's run index refuses a second thread, so the
-    # served Studio answers 404 compare_not_found for any real run. The route's unit tests use
-    # a stand-in supervisor and pass. Remove this marker with the fix; an unexpected success
-    # fails the suite until then.
-    @unittest.expectedFailure
-    def test_compare_reads_two_finished_replays_paired_by_task(self):
-        """Flow 5 (#990): two finished replays compared by the engine, from the Compare panel."""
-        first, _second = self.run_ids
+    def test_compare_two_finished_replays_from_the_compare_panel(self):
+        """Flow 5 (#990): two finished replays, compared from the Compare panel.
+
+        Today the served route answers 404 ``compare_not_found`` for any real run: it reads the
+        run supervisor off the mutation thread (``server._runs_compare``), and the run index
+        refuses a second thread. This test pins exactly that defect. When the #990 route fix
+        lands, flip both checks to the success path: a 200 with the engine's paired result, and
+        the panel's "Compared by the engine." with its "paired by task" caption.
+        """
+        first, second = self.run_ids
+        sides = {"base": {"run_id": first, "target": 1},
+                 "candidate": {"run_id": second, "target": 1}}
+        self.assertEqual(self.api("POST", "/api/runs/compare", sides),
+                         (404, {"error": "compare_not_found"}))
+        self.assertEqual(self.cli_json("runs", "compare", first + ":1", second + ":1")["base"]
+                         ["run_id"], first, "the seeded runs are not finished replays")
         self.open("#/experiments")
         self.wait("__has('Compare two runs, paired by task.')", "the compare panel did not render",
                   seconds=60)
         # One field at a time: each edit re-renders the form from the last one's state.
-        for label in ("Base run id", "Candidate run id"):
-            self.js("__setLabelValue(%s, %s)" % (json.dumps(label), json.dumps(first)))
-            self.wait("__labelled(%s).value === %s" % (json.dumps(label), json.dumps(first)),
+        for label, run_id in (("Base run id", first), ("Candidate run id", second)):
+            self.js("__setLabelValue(%s, %s)" % (json.dumps(label), json.dumps(run_id)))
+            self.wait("__labelled(%s).value === %s" % (json.dumps(label), json.dumps(run_id)),
                       label + " did not take the run id")
-        self.choose_option("Candidate target", "2")
         self.click("Compare")
-        self.wait("__has('Compared by the engine.')", "the engine did not compare the runs",
-                  seconds=60, section="Compare two runs")
-        caption = self.js("document.querySelector('caption')?.textContent || ''")
-        self.assertIn("paired by task", caption)
-        self.assertTrue(self.js("__has('Base') && __has('Candidate')"))
+        self.wait("__has('One of the runs is not known to this Studio.')",
+                  "the panel did not show the route's answer", seconds=60,
+                  section="Compare two runs")
 
     def test_apply_a_draft_then_roll_it_back_from_activity(self):
         """Flow 3 (#978/#979): review, confirm and apply; then preview and roll back."""
@@ -303,6 +313,46 @@ class StudioEndToEndFlows(support.StudioE2E):
                   seconds=180)
         self.assertEqual(self.config_path.read_bytes(), live_before,
                          "rollback did not restore the live configuration byte for byte")
+
+
+class SealTests(support.StudioE2E):
+    """Each seal fails when it is breached; a seal that always passes would hide a breach."""
+
+    def test_the_network_seal_fails_on_a_request_outside_the_loopback_origin(self):
+        self.open()
+        self.wait("document.querySelector('.system-summary') !== null", "Hub did not load")
+        self.assert_no_network()
+        # The browser blocks the foreign navigation itself, so nothing leaves this machine, yet
+        # the request is still announced, as a real one would be.
+        self.devtools.call("Network.setBlockedURLs", {"urls": ["*example.invalid*"]})
+        self.devtools.call("Page.navigate", {"url": "http://example.invalid/seal-probe"})
+        with self.assertRaises(AssertionError) as caught:
+            self.assert_no_network()
+        self.assertIn("example.invalid/seal-probe", str(caught.exception))
+
+    def test_the_network_seal_counts_websockets(self):
+        self.open()
+        self.devtools.call("Network.setBlockedURLs", {"urls": ["*example.invalid*"]})
+        self.devtools.call("Page.navigate", {"url": "about:blank"})
+        self.wait("location.href === 'about:blank'", "the blank page did not load")
+        self.js("try { new WebSocket('ws://example.invalid/seal-probe') } catch (error) {}")
+        with self.assertRaises(AssertionError) as caught:
+            for _ in range(40):
+                self.assert_no_network()
+                time.sleep(0.05)
+        self.assertIn("ws://example.invalid/seal-probe", str(caught.exception))
+
+    def test_the_model_seal_fails_on_a_model_call_and_ignores_the_offline_probes(self):
+        for argv in (["claude", "--version"], ["codex", "--version"],
+                     ["codex", "app-server", "generate-json-schema", "--out", "/nonexistent"]):
+            subprocess.run(argv, env=self.env, capture_output=True, timeout=10)
+        self.assert_no_model_calls()
+        called = subprocess.run(["claude", "-p", "hello"], env=self.env, capture_output=True,
+                                timeout=10)
+        self.assertEqual(called.returncode, 97)
+        with self.assertRaises(AssertionError) as caught:
+            self.assert_no_model_calls()
+        self.assertIn("claude -p hello", str(caught.exception))
 
 
 if __name__ == "__main__":

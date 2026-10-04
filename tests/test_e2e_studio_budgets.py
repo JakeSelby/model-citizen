@@ -3,11 +3,13 @@
 
 The budgets and how each is judged are in ``scripts/studio_budgets.py``. The live tests here
 serve a fixture checkout to a fixture home (``studio_e2e_support``) and measure the first load
-in headless Chrome and the library route's p95 over a library of at least 500 modules.
+in headless Chrome and the library route's p95 with 500 fixture modules beside the core ones.
+They run only with ``STUDIO_E2E=1``; the judging tests run everywhere.
 """
 from __future__ import annotations
 
 import contextlib
+import http.client
 import importlib.util
 import io
 import json
@@ -28,8 +30,7 @@ spec.loader.exec_module(budgets)
 FIXTURE_MODULES = 500
 LOADS = 5
 WARM_UP = 5
-SAMPLES = 40
-ROUNDS = 3
+SAMPLES = 120
 
 
 class BudgetJudgingTests(unittest.TestCase):
@@ -42,21 +43,14 @@ class BudgetJudgingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             budgets.p95([])
 
-    def test_the_settled_p95_is_the_quietest_round_so_contention_alone_cannot_fail_it(self):
-        quiet, contended = [10.0] * 37 + [20.0] * 3, [10.0] * 30 + [150.0] * 10
-        self.assertEqual(budgets.settled_p95([contended, quiet]), 20.0)
-        self.assertEqual(budgets.settled_p95([contended]), 150.0)
-        with self.assertRaises(ValueError):
-            budgets.settled_p95([])
-
     def test_a_figure_over_its_budget_fails_naming_the_budget(self):
-        within = {"first_load.median_ms": 1500.0, "api.library_p95_ms": 99.0}
+        within = {"first_load.slowest_ms": 1500.0, "api.library_p95_ms": 99.0}
         self.assertEqual(budgets.over_budget(within), [])
-        failures = budgets.over_budget({"first_load.median_ms": 1500.1,
+        failures = budgets.over_budget({"first_load.slowest_ms": 1500.1,
                                         "api.library_p95_ms": 100.5})
         self.assertEqual(len(failures), 2)
         self.assertIn("budget api.library_p95_ms: measured 100.5 ms", failures[0])
-        self.assertIn("budget first_load.median_ms", failures[1])
+        self.assertIn("budget first_load.slowest_ms", failures[1])
         with self.assertRaises(KeyError):
             budgets.over_budget({"no.such_budget_ms": 1.0})
 
@@ -102,7 +96,8 @@ class LiveBudgetTests(support.StudioE2E):
         self.config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
 
     def test_first_load_renders_the_shell_within_budget(self):
-        """Navigation start to the rendered shell, cache disabled, median of several loads."""
+        """Navigation start to the rendered shell, cache disabled; every one of five loads must
+        fit the budget, so the slowest is judged."""
         self.open()
         self.devtools.call("Network.setCacheDisabled", {"cacheDisabled": True})
         self.devtools.call("Page.addScriptToEvaluateOnNewDocument", {"source": """
@@ -116,16 +111,36 @@ class LiveBudgetTests(support.StudioE2E):
         """})
         loads = []
         for _ in range(LOADS):
+            # Each document has its own time origin; reading __shellAt only once the origin has
+            # changed keeps a poll from reading the previous document's figure.
+            before = self.js("performance.timeOrigin")
             # A reload, not a navigation: a same-URL navigation with a fragment loads nothing.
             self.devtools.call("Page.reload", {"ignoreCache": True})
-            loads.append(self.wait("globalThis.__shellAt", "the shell did not render",
-                                   seconds=30))
-        measured = {"first_load.median_ms": budgets.median(loads)}
-        print("\nfirst load (ms): %s; median %.1f" % (
-            ", ".join("%.0f" % value for value in loads), measured["first_load.median_ms"]))
+            loads.append(self.wait("performance.timeOrigin !== %r && globalThis.__shellAt"
+                                   % before, "the shell did not render", seconds=30))
+        measured = {"first_load.slowest_ms": max(loads)}
+        print("\nfirst load (ms): %s; slowest %.1f" % (
+            ", ".join("%.0f" % value for value in loads), measured["first_load.slowest_ms"]))
         self.assertEqual(budgets.over_budget(measured), [], loads)
         self.assert_no_network()
         self.assert_no_model_calls()
+
+    def _served_ms(self, path: str) -> float:
+        """The route's time from request to the last body byte, on an open connection: the
+        TCP connect and the client's JSON parsing are outside the timer."""
+        connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=30)
+        try:
+            connection.connect()
+            started = time.perf_counter()
+            connection.request("GET", path, headers={"Host": self.record["host"],
+                                                     "Cookie": self.cookie})
+            response = connection.getresponse()
+            body = response.read()
+            elapsed = (time.perf_counter() - started) * 1000
+        finally:
+            connection.close()
+        self.assertEqual(response.status, 200, body[:200])
+        return elapsed
 
     def test_library_api_p95_over_five_hundred_modules_is_within_budget(self):
         status, library = self.api("GET", "/api/library")
@@ -135,19 +150,10 @@ class LiveBudgetTests(support.StudioE2E):
         self.assertGreaterEqual(modules, FIXTURE_MODULES)
         for _ in range(WARM_UP):
             self.api("GET", "/api/library")
-        rounds = []
-        for _ in range(ROUNDS):
-            samples = []
-            for _ in range(SAMPLES):
-                started = time.perf_counter()
-                status, _body = self.api("GET", "/api/library")
-                samples.append((time.perf_counter() - started) * 1000)
-                self.assertEqual(status, 200)
-            rounds.append(samples)
-        measured = {"api.library_p95_ms": budgets.settled_p95(rounds)}
-        print("\nlibrary p95 by round: %s ms; judged %.1f ms over %d modules" % (
-            ", ".join("%.1f" % budgets.p95(item) for item in rounds),
-            measured["api.library_p95_ms"], modules))
+        samples = [self._served_ms("/api/library") for _ in range(SAMPLES)]
+        measured = {"api.library_p95_ms": budgets.p95(samples)}
+        print("\nlibrary p95 %.1f ms, median %.1f ms over %d samples and %d modules" % (
+            measured["api.library_p95_ms"], budgets.median(samples), len(samples), modules))
         self.assertEqual(budgets.over_budget(measured), [])
         self.assert_no_model_calls()
 
