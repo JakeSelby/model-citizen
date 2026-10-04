@@ -535,6 +535,7 @@ development_status:
   ah-b168-fix-usage-feed-finished-subagent-spend-reads: ready-for-dev
   ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
   ah-b170-fix-security-grade-bash-grades-a-read-of-the: ready-for-dev
+  ah-b171-fix-cost-sleep-and-poll-loops-instead-of: ready-for-dev
   ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
