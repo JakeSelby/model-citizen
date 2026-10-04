@@ -23,6 +23,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import experiment_protocol  # noqa: E402
 import replay_arms  # noqa: E402
+import replay_reliability  # noqa: E402
 import replay_stats  # noqa: E402
 
 SCHEMA_VERSION = 1
@@ -882,6 +883,11 @@ def _verify_loaded(bundle, git):
                              for arm, cost, rate, status in replay_stats.pareto(derived["sm2"])]
     except (KeyError, TypeError, ValueError, StrictJSONError) as exc:
         _error(errors, 5, "SM-2 derivation failed: %s" % exc)
+    try:
+        # The bundle carries no detections artifact, so the all-rules-at-once reading stays None.
+        derived["reliability"] = replay_reliability.reliability_section(priced_rows)[0]
+    except ValueError as exc:
+        _error(errors, 5, "reliability derivation failed: %s" % exc)
     derived["icc"] = {arm: {field: _icc(priced_rows, arm, field) for field in ("pass", "cost")}
                       for arm in ARMS}
     planned = {arm: len(tasks) * trials_per_task for arm in ARMS}
