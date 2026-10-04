@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from test_harness import REPO
+from test_replay_pack import make_pack  # noqa: E402
 from harness_core.studio import replay, replay_runner, run_store, runs, server, spend_guard
 from studio_target_support import FixtureTargetService
 
@@ -981,8 +982,13 @@ class ReplayReviewFixTests(unittest.TestCase):
                      if item.path == "/api/runs/replay/catalog")
         self.assertEqual(route.cli_command, ("citizen", "runs", "replay", "catalog", "--json"))
         self.assertTrue((REPO / replay.NATIVE_COMMAND[1]).is_file())
-        self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
-                         "python3 scripts/cost_bench.py replay")
+        # Real discovery, pointed at a fixture packs folder rather than beside this checkout.
+        with tempfile.TemporaryDirectory() as folder:
+            make_pack(Path(folder) / "fixture-pack")
+            with mock.patch.dict(os.environ, {replay.packs.PACKS_ENV: folder}):
+                catalog = replay.task_catalog(REPO)
+        self.assertEqual(catalog["commands"]["run"], "python3 scripts/cost_bench.py replay")
+        self.assertEqual([item["name"] for item in catalog["packs"]], ["test-pack"])
         parsed = replay.ReplayRequest.parse(dict(request(), evidence="pre-registered"))
         text = replay.preview_payload([], parsed)["command"]
         self.assertNotIn("citizen", text)
