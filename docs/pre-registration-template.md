@@ -37,6 +37,11 @@ an appended entry in the deviation log, never an edit above it.
   prints them
 - **Arms:** <harness at tag or commit, bare>
 - **Model, CLI and effort:** `<exact model ID>`, `<CLI version>`, `<effort>`
+- **Strata:** <"none", or every model the run takes as its own stratum, in the order `--model` names
+  them; each stratum has its own schedule, caps and preflight, and is reported on its own>
+- **Pooled analysis:** <"none", so every stratum is reported apart; or the pooled analysis and why it
+  answers the question. Only a value here lets `summarise --pool` report the strata pooled, with each
+  task-and-model pair as its own cluster>
 
 ## Hypotheses
 
