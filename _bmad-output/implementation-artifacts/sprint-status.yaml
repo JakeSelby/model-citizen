@@ -527,6 +527,7 @@ development_status:
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: ready-for-dev
   ah-b161-fix-benchmarks-the-delegation-verdict-ignores: ready-for-dev
   ah-b162-fix-cost-the-price-table-has-no-entry-for-claude: ready-for-dev
+  ah-b164-fix-security-grade-bash-flags-quoted-text-misses: ready-for-dev
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done

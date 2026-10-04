@@ -8893,6 +8893,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B164",
+      "github_number": 1203,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1203",
+      "title": "fix(security): grade-bash flags quoted text, misses equivalent discards, and drops log rows",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B164.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S347",
       "github_number": 1212,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1212",

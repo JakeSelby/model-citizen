@@ -12,6 +12,15 @@ does not manufacture native hook trust. Native permission restrictions always ta
 Hosted search and continuation through an already running shell are not universally intercepted.
 Hooks assist workflow policy; they are not a substitute for the runtime sandbox.
 
+`grade-bash` is an accident guard, not a security boundary. It reads each command against a list
+of what it knows destroys work or shared state, so it stops the mistake an agent makes on the way
+to something else. A determined agent can rephrase a command around any list, so treat a grade
+below 3 as "nothing known to be destructive", never as "safe". The boundary is OS sandboxing: the
+runtime's sandbox, a container or a separate account. The git processes the grader starts to
+check a file run without hooks, the fsmonitor hook, filter drivers, or inherited `GIT_*`
+variables and global configuration, so a configuration planted in the repository cannot run code
+while a command is graded.
+
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.
