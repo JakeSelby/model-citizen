@@ -13,7 +13,9 @@ Schema version 1 has these top-level fields:
   dated prices, audits, report, the two arm records, and every full redacted trajectory. The task
   and plan references also name their repository paths; the plan names its registration commit.
 - `design`: pinned model, client version, effort, tasks, trials, arms, seeds, resample count, per-run
-  cap, and saved replay and verification commands.
+  cap, and saved replay and verification commands. A bundle from a multi-model run holds one
+  stratum and adds `strata`, every model of the run, its own among them; each row's `stratum` must
+  then be the pinned model, and a row naming a stratum the design omits fails item 3.
 - `statistics`: the bootstrap seed and resample count.
 - `published_figures`: `{name, pointer, value, estimand}` entries. `pointer` is a JSON pointer into
   the verifier's derived result; `value` must equal the re-derived value exactly.
