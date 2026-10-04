@@ -404,7 +404,7 @@ development_status:
   ah-s339-multi-model-arms-as-separate-strata-in-a: backlog
   ah-s340-a-third-arm-the-maintainer-s-real-configuration: ready-for-dev
   ah-s341-extended-layer-sweep-with-a-justification-rule: backlog
-  ah-s342-diff-quality-judge-where-deterministic-graders: backlog
+  ah-s342-diff-quality-judge-where-deterministic-graders: ready-for-dev
   ah-s343-layer-scorecard-generated-from-registered-rows: backlog
   ah-s347-protect-the-record-block-agent-writes-to: backlog
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
