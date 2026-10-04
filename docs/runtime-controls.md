@@ -105,6 +105,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `intent-overlap` | PreToolUse on Edit, Write, MultiEdit and NotebookEdit: a live sibling's claim on the path |
 | `neutralize-tool-output` (core) | PostToolUse |
 | `stage-user-files` | PreToolUse on SendUserFile, Claude Code only |
+| `steer-polling` | PreToolUse on Bash, Claude Code only: a foreground sleep or polling loop gets a note naming background notifications and Monitor; a foreground sleep past five minutes is denied |
 | `stop-gate` (core) | Stop |
 | `tier-agent-spawns` | band routing of a spawn, and the integration descriptor notice |
 | `usage-feed` | UserPromptSubmit, SubagentStart, SubagentStop and PostToolUse on a spawn, Claude Code only |

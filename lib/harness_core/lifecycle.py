@@ -1408,6 +1408,10 @@ def _dispatch(runtime, payload):
             # does not hold is one no later label can grade. `main` answers that failure with
             # its own refusal, so the row records the refusal, not the answer composed above,
             # and no approval code it never showed.
+            # A foreground sleep or poll: a note, or a denial past the cache's five minutes. Only
+            # Claude Code has the background notification and Monitor the note names.
+            if runtime == "claude-code":
+                results.append(invoke("steer-polling", event))
             try:
                 results.append(invoke("filter-output", event))
             except Exception as exc:
