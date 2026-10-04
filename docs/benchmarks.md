@@ -827,6 +827,81 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   anything about what the harness costs or saves. A small model's behaviour is not the production
   model's; the production set stays the release calibration.
 
+### Long-session tier
+
+`replay --tier long-session` runs a pack's scripted multi-turn scenarios, where the harness's cost
+case lives: context that grows over twenty to sixty turns, gathering that piles up, repeated test
+runs. A fixed script of user turns stands in for the user, never a model, so runs are comparable.
+The scenario format is in the pack's README; `scripts/replay_session.py` drives a session.
+
+```sh
+python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --tag <full commit> \
+    --exploratory --dry-run                                         # every planned session and the ceiling
+python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --pack-digest <digest> \
+    --tag <full commit> --ablations <manifest> --spend-cap <usd> --pre-registration <plan>
+python3 scripts/cost_bench.py summarise --results <results dir>
+```
+
+- **A set lists `scenarios`, not `tasks`, at tier `long-session`.** Loading validates each
+  `scenario.json` (caps, turns, branches only on an earlier checkpoint, each declared checkpoint run
+  by exactly one turn, its metrics) and refuses a check or solution without the canary, as for a
+  task. Only the workspace is copied for an arm; the contamination control checks every
+  checkpoint's check and solution. `--verify-tasks` does not read scenarios: the pack's
+  `tools/verify_scenarios.py` proves them. The set's pinned model is the model, reps default to 3,
+  and `--pair` and `--design` are refused.
+- **One session per scenario, arm and rep, resumed turn by turn.** Each user turn is a fresh
+  container of the arm on the same tree. Turn 1 starts the CLI session with `--session-id`, and
+  every later turn continues it with `--resume`, its transcript kept in a host directory created
+  for that session and mounted as the image user's CLI projects folder (`replay_arms.SESSION_STORE`).
+  One cold-cache nonce (#1174) opens the session and is mounted unchanged on every turn, so later
+  turns read the session's own cache as a real session does.
+- **Branches, caps and the spend stop.** A `branch` turn sends its `pass` or `fail` prompt by that
+  earlier checkpoint's verdict. At most `max_user_turns` turns are sent; each turn is launched with
+  `--max-turns` set to `max_agent_turns_per_user_turn`, and a turn that reaches it ends while the
+  session goes on. The session cap is the scenario's `max_cost_usd_hint`, or `--run-cap` when that
+  is lower; each turn gets the rest of the cap as `--max-budget-usd`, and the session stops before
+  a turn once its reported spend reaches the cap. A checkpoint never reached is not passed and its
+  metrics are null. A turn that times out counts at the rest of the cap and errors the session.
+- **Each checkpoint is scored on the tree and its segment.** The check runs as a pack task's does,
+  in a fresh container with no network, with the stream of every turn since the previous checkpoint
+  mounted read-only at `/session-stream.jsonl`.
+- **The dry run prices the tier:** each scenario's turns, checkpoints and session cap, the ceiling
+  if every session and preflight reaches its cap, then every planned session. Three scenarios,
+  three arms and three reps on `claude-sonnet-5` at the 1.3.0 pack's caps is 378.75 USD.
+
+**Rows.** A long-session set writes two kinds of row to `results.jsonl`, and no history row. Every
+row carries the run's stamp, `tier: long-session`, `scenario` (also as `task`), `arm`, `rep`,
+`session_id` (the CLI session's id) and `row_kind`. A row of the other tiers is identified by
+`(task, arm, rep)`; a long-session row by `(scenario, arm, rep, row_kind, checkpoint_index)`, so a
+reader of these rows, the Studio included, must key on `row_kind` before reading one as a run.
+
+- `row_kind: checkpoint`, one per checkpoint in turn order: `checkpoint`, `checkpoint_index`
+  (from 1), `reached`, `turn`, `passed`, `outcome`, the check's `metrics`, `metric_directions`,
+  `metric_errors` and `metric_stream`, `segment_turns` (first and last turn of the segment), and
+  over the segment `cost_usd`, `input_tokens`, `cache_creation_input_tokens`,
+  `cache_read_input_tokens`, `output_tokens`, `main_peak_context_tokens` (the largest main-thread
+  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from each
+  result's per-model cost), with `cumulative_cost_usd` at the checkpoint.
+- `row_kind: session`, one per session, `checkpoint` and `checkpoint_index` null: the session's
+  totals of the same cost, token, context and tier fields, `main_mean_context_tokens`,
+  `user_turns_planned`, `user_turns_run`, `stopped` (`cap`, `max_user_turns`, `error` or null),
+  `error`, `error_kind`, `session_cap_usd`, `agent_turn_cap_hits`, `checkpoints_passed` of
+  `checkpoints_total`, and the curves as arrays, one entry per turn run: `cost_per_turn`,
+  `cumulative_cost_usd`, `main_peak_context_per_turn`, `agent_turns_per_turn`, with
+  `cost_per_turn_slope` (least squares on turn number) and the `branches` taken.
+
+The per-turn cost is the turn's own `total_cost_usd`; that a resumed `-p` run reports its own spend,
+not the session's to date, is how the pack's segment metrics read it too, and the first paid pilot
+should confirm it.
+
+**`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
+session, the cost-per-turn slope, the main thread's peak context and the share of cost on model
+classes cheaper than the main model's, each with a percentile interval that resamples scenarios as
+clusters; the pass rate per checkpoint and the mean cost-per-turn curve per scenario; and each
+other arm against `bare` on the cost-per-session ratio and the pass-rate difference, paired by
+scenario. With three scenarios the intervals are wide by construction: a session gives many
+per-turn observations, but the clusters are the scenarios.
+
 ### Diff-quality judge
 
 The oracles say whether a task passed and the detectors which rules fired. Neither can say which of
