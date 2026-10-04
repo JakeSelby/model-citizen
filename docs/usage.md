@@ -463,8 +463,8 @@ number of its own:
   that the fresh-session line is said at. `frugal` ships 80,000 and 120,000, `balanced` 120,000 and 160,000, and `max` an empty list, which
   means never. Those figures are starting points chosen against a 200,000-token window, not
   measured ones: the follow-up to #321 replaces them with sizes read out of the ledger.
-- `max_parallel` — the width the running-agent note measures against. `null`, which `max` ships,
-  means the note never appears.
+- `max_parallel` — the width the running-agent note measures against, and the fan-out cap the
+  `session-caps` hook denies a spawn at. `null`, which `max` ships, means neither applies.
 
 ### State, and why it is two files
 
@@ -722,6 +722,16 @@ that happened to be labelled is not evidence about the point.
 
 A `steer-polling` row is a foreground wait the Bash hook noted (`note`) or refused (`deny`), or one
 it left alone because it ran in the background (`background`); its `input` is the command.
+
+A `session-caps` row is a spawn, a `Workflow` launch or a web search held to the session's caps:
+`allow`, `warn` past 80% of a cap, `deny` at it, or `would-deny` in a headless `claude -p` run,
+which is never refused unless `HARNESS_SESSION_CAPS_HEADLESS=enforce` is set. `cap` says which one
+(`fan-out`, the cost variant's `max_parallel`, or `web-search`, the research rule's per-session
+figure), with `limit` and the `count` before the call. Live subagents are counted from
+`SubagentStart` to `SubagentStop`, and searches by every agent in the session, subagents included.
+A `Workflow` launch is refused at the fan-out cap, but its script's `agent()` calls are not tool
+calls, so none can be refused once the launch is through, and they count toward the cap only if
+the runtime raises `SubagentStart` for them, which has not been measured. Claude Code only.
 
 An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
