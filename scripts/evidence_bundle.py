@@ -627,10 +627,20 @@ def _verify_loaded(bundle, git):
     design_keys = ("model", "cli_version", "effort", "tasks", "trials_per_task", "arms",
                    "task_order_seed", "bootstrap_seed", "resamples", "model_sampling_seedable",
                    "replay_command", "verify_command", "run_cap_usd")
+    # A bundle holds one stratum of a multi-model run; `strata` names them all, so the bundle
+    # records that its model is one of several and its figures speak for that model alone.
+    stratified = "strata" in design
     try:
-        _keys(design, design_keys, "design")
+        _keys(design, design_keys + (("strata",) if stratified else ()), "design")
     except StrictJSONError as exc:
         _error(errors, 3, str(exc))
+    if stratified:
+        listed = design["strata"]
+        if not isinstance(listed, list) or len(listed) < 2 \
+                or any(not isinstance(model, str) or not model for model in listed) \
+                or len(set(listed)) != len(listed) or design.get("model") not in listed:
+            _error(errors, 3, "design.strata must be two or more unique models, the design's model among them")
+        derived["strata"] = {"strata": listed, "stratum": design.get("model")}
     for field in ("model", "cli_version", "effort", "replay_command", "verify_command"):
         if not isinstance(design.get(field), str) or not design.get(field):
             _error(errors, 3 if field not in ("replay_command", "verify_command") else 7,
@@ -685,6 +695,10 @@ def _verify_loaded(bundle, git):
                               ("bootstrap_seed", design.get("bootstrap_seed"))):
             if row.get(field) != wanted:
                 _error(errors, 3, "row %d %s differs from the design" % (number, field))
+        if stratified and row.get("stratum") != design.get("model"):
+            _error(errors, 3, "row %d stratum is not the design's model" % number)
+        elif not stratified and row.get("stratum") is not None:
+            _error(errors, 3, "row %d names a stratum the design does not record" % number)
         # `model` is the request; `observed_model` is what the trial's own transcript reports,
         # and only it can reveal a fallback.
         if not isinstance(row.get("observed_model"), str) or not row["observed_model"]:

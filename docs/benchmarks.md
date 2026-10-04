@@ -742,6 +742,34 @@ python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [-
   factor levels contradict its arm, or a cell loaded a surface that differs from `base`'s beyond
   its factors' entries. A grid writes no history row.
 
+### Strata: several models in one run
+
+```sh
+python3 scripts/cost_bench.py replay --model <id-a>,<id-b> --tag <full commit> --pre-registration <plan> --dry-run
+python3 scripts/cost_bench.py summarise --results benchmarks/<version>/<tag> [--json] [--pool]
+```
+
+- **Each model is its own stratum.** `--model` takes a comma list or repeats. The run goes through
+  once per model, in the order named, and each stratum gets its own schedule, run and spend caps,
+  preflight, arm builds, series and history row. Its rows carry `stratum` (the model id) and
+  `strata`, and land in `<tag>/<model>/results.jsonl`. One model writes no stratum, as before.
+  The micro tier pins its model and takes no strata.
+- **A failed stratum stops the run.** A refusal, an error or a stop at its spend cap ends the run at
+  that stratum with its exit status: the strata after it never start, the ones before it keep their
+  results, and the run prints what it has spent so far. A dry run spends nothing, so it lists every
+  stratum and exits with the worst status.
+- **The dry run lists and prices each stratum:** its schedule, and its worst case if every run and
+  preflight reaches its cap.
+- **`summarise` reports every section per stratum**, given a results file or the tag folder that
+  holds the strata. With `--json` the reports nest under `strata`. SM-2 refuses rows from two strata,
+  so a verdict is always one model's.
+- **Pooling is pre-registered or refused.** `--pool` adds a pooled report only when the plan every
+  row names fills **Pooled analysis** under Run with something other than "none"
+  ([template](pre-registration-template.md)); exploratory rows are refused. The pooled rows keep each
+  task-and-model pair as its own cluster, so no task is paired across models.
+- **An evidence bundle holds one stratum.** Its `design.strata` names every model of the run, and
+  every row's `stratum` must be the design's model ([evidence bundles](evidence-bundles.md)).
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
