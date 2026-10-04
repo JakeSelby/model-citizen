@@ -2733,7 +2733,7 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
     contaminated = [error for _, task_errors in contamination for error in task_errors]
     seed = args.schedule_seed if getattr(args, "schedule_seed", None) is not None else ablations.default_seed(manifest)
     names = ablations.arm_names(manifest)
-    plan = ablations.schedule(tasks, args.reps, names, seed)
+    plan = ablations.schedule(tasks, args.reps, names, seed, ablations.arm_task_filter(manifest))
     inputs = arms.qualification_inputs()
     selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
                                          control_decl["claude_code_version"], args.effort, selection=selection))
@@ -2745,8 +2745,10 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
           % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
              cap_source, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
              else "a real run must name its --spend-cap", seed))
+    # An arm runs only the named tasks it maps (`ablations.arm_task_filter`), so the plan's own
+    # length, not tasks x arms, is what every run reaching its cap would cost.
     print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
-          "reach %g USD" % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, preflight_cap),
+          "reach %g USD" % (len(plan) * args.run_cap + len(names) * preflight_cap,
                             len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
                             preflight_cap))
     print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
@@ -2757,9 +2759,11 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
         print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), commit,
                                                         arms.image_name(control_decl)))
         for spec, (ident, decl) in zip(manifest["arms"], selected):
-            change = "removes %s" % spec["removes"] if "removes" in spec else \
+            change = "removes %s" % ablations.entry_of(spec) if "removes" in spec else \
                 "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
-            print("  arm %s %s: %s" % (ident, change, arms.image_name(decl)))
+            runs = [task["id"] for task in tasks if any(t is task and a == ident for t, _, a in plan)]
+            print("  arm %s %s: %s; runs %s" % (ident, change, arms.image_name(decl),
+                                               ", ".join(runs) or "no loaded task"))
         for task_id, task_errors in contamination:
             print("  contamination %s at %s: %s" % (task_id, commit, "; ".join(task_errors) if task_errors
                                                      else "clean"))
