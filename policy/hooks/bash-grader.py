@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 HOOK = "grade-bash hook"
@@ -1343,12 +1344,12 @@ def _git_sub(args, cwd=""):
 PATHSPEC_RE = re.compile(r"[*?\[]|^:")
 
 
-def _checkout_paths(sargs, ops, where):
-    """Whether `git checkout` given `sargs` overwrites files rather than only switching branch:
+def _checkout_paths(flags, ops, where):
+    """Whether `git checkout` given `flags` overwrites files rather than only switching branch:
     a tree-ish followed by paths, a pathspec only a path can be, or an operand that exists in
-    the working tree. One that creates a branch (`-b`, `-B`, `--orphan`) takes a start point,
-    not paths."""
-    if has(sargs, "--orphan") or short(sargs, "bB"):
+    the working tree. One that creates a branch (`-b`, `--orphan`) takes a start point, not
+    paths; `-B` is graded before this, since it resets a branch that exists."""
+    if "--orphan" in flags or "-b" in flags or "-B" in flags:
         return False
     if len(ops) > 1 or any(PATHSPEC_RE.search(op) for op in ops):
         return True
@@ -1357,69 +1358,282 @@ def _checkout_paths(sargs, ops, where):
     return os.path.lexists(os.path.join(where, _expand(ops[0])))
 
 
-def _git(args, cwd):
+# Git's own commands. Any other word is an alias or a `git-<name>` program on PATH.
+GIT_COMMANDS = frozenset((
+    "add am annotate apply archive bisect blame branch bundle cat-file check-attr check-ignore "
+    "check-mailmap check-ref-format checkout checkout-index cherry cherry-pick citool clean clone "
+    "column commit commit-graph commit-tree config count-objects credential daemon describe diff "
+    "diff-files diff-index diff-tree difftool fast-export fast-import fetch fetch-pack "
+    "filter-branch fmt-merge-msg for-each-ref for-each-repo format-patch fsck gc "
+    "get-tar-commit-id grep gui hash-object help hook http-backend index-pack init instaweb "
+    "interpret-trailers log ls-files ls-remote ls-tree mailinfo mailsplit maintenance merge "
+    "merge-base merge-file merge-index merge-tree mktag mktree multi-pack-index mv name-rev notes "
+    "pack-objects pack-redundant pack-refs patch-id prune prune-packed pull push range-diff "
+    "read-tree rebase reflog refs remote repack replace rerere reset restore rev-list rev-parse "
+    "revert rm send-email send-pack shortlog show show-branch show-index show-ref sparse-checkout "
+    "stash status stripspace submodule switch symbolic-ref tag unpack-file unpack-objects "
+    "update-index update-ref update-server-info var verify-commit verify-pack verify-tag version "
+    "whatchanged worktree write-tree lfs filter-repo").split())
+# Per subcommand, the short letters and the long options whose value is the next word unless it
+# is joined: `git push -o -n` hands `-n` to `-o`, and `git clean -e -n` to `-e`, so neither is a
+# dry run. A long option abbreviated to a prefix of one of these takes a value as well.
+GIT_VALUE_OPTIONS = {
+    "push": ("o", ("--push-option", "--repo", "--receive-pack", "--exec")),
+    "clean": ("e", ("--exclude",)),
+    "checkout": ("bB", ("--conflict", "--pathspec-from-file")),
+    "switch": ("cC", ("--create", "--force-create", "--conflict")),
+    "branch": ("u", ("--set-upstream-to", "--contains", "--no-contains", "--merged",
+                     "--no-merged", "--points-at", "--sort", "--format")),
+    "restore": ("s", ("--source", "--pathspec-from-file", "--conflict")),
+    "reset": ("", ("--pathspec-from-file",)),
+    "rm": ("", ("--pathspec-from-file",)),
+    "stash": ("m", ("--message", "--pathspec-from-file")),
+    "update-ref": ("m", ()),
+    "read-tree": ("", ("--prefix", "--index-output")),
+    "worktree": ("bB", ("--reason",)),
+    "apply": ("pC", ("--exclude", "--include", "--directory", "--whitespace",
+                     "--build-fake-ancestor")),
+    "config": ("f", ("--file", "--blob", "--type", "--default", "--comment", "--value")),
+}
+# Configuration that makes git run a program, reach another working tree, or change what a
+# command it governs destroys: set with `-c` on a command, or written with `git config`, the
+# command it governs can no longer be graded by its words. Matched on the lower-cased key.
+GIT_RISKY_CONFIG_RE = re.compile(
+    r"^(?:core\.(?:fsmonitor|hookspath|sshcommand|pager|editor|askpass|gitproxy|worktree|bare|"
+    r"alternaterefscommand)|sequence\.editor|diff\.external|diff\..+\.(?:textconv|command)|"
+    r"filter\..+|merge\..+\.driver|credential\..*|gpg\..*|pager\..+|include\..+|includeif\..+|"
+    r"uploadpack\..+|remote\..+\.(?:mirror|push|uploadpack|receivepack|vcs)|"
+    r"clean\.requireforce|interactive\.difffilter|init\.templatedir|ssh\.variant)$")
+# Configuration put in from the environment, which `_git` cannot read from the words.
+GIT_CONFIG_ENV_RE = re.compile(
+    r"(?<![A-Za-z0-9_])GIT_CONFIG(?:_PARAMETERS|_COUNT|_KEY_\d+|_VALUE_\d+|_GLOBAL|_SYSTEM)?=")
+GIT_ALIASES = 4
+# Whole option names that are also the start of longer ones: git reads each as itself.
+GIT_WHOLE_OPTIONS = frozenset(("--force", "--get", "--unset", "--delete", "--merge", "--patch"))
+# The command line `grade_text` is grading, for what one command of it must see of the others.
+_LINE = [""]
+
+
+def _git_options(sub, sargs):
+    """(the options of `git <sub>` given `sargs`, its operands), read as git's option parser
+    reads them: a short cluster splits into its letters, an option that takes a value takes the
+    rest of its cluster or the next word, and a long option is kept by its name without the
+    value. Everything after `--` is an operand, and `--` itself is kept among the options."""
+    shorts, longs = GIT_VALUE_OPTIONS.get(sub, ("", ()))
+    flags, ops, i, done = set(), [], 0, False
+    while i < len(sargs):
+        a = sargs[i]
+        i += 1
+        if done or a == "-" or not a.startswith("-"):
+            ops.append(a)
+            continue
+        if a == "--":
+            done = True
+            flags.add("--")
+            continue
+        if a.startswith("--"):
+            name, eq, _value = a.partition("=")
+            flags.add(name)
+            if not eq and any(n == name or (len(name) > 3 and n.startswith(name)) for n in longs):
+                i += 1
+            continue
+        for k in range(1, len(a)):
+            flags.add("-" + a[k])
+            if a[k] in shorts:
+                if k == len(a) - 1:
+                    i += 1
+                break
+    return flags, ops
+
+
+def _on(flags, *names):
+    """Whether `flags` hold any of `names`, a long one under any prefix git may expand to it:
+    `--for` is `--force` and `--mirr` is `--mirror`. Only for an option that destroys, since
+    reading a prefix as it errs toward grading higher; a safe option must be written whole."""
+    for flag in flags:
+        for name in names:
+            if flag == name or (name.startswith("--") and flag.startswith("--") and len(flag) > 3
+                                and name.startswith(flag) and flag not in GIT_WHOLE_OPTIONS):
+                return True
+    return False
+
+
+def _git_configs(args):
+    """The `(key, value)` pairs `-c` and `--config-env` set before git's subcommand; the value of
+    one taken from the environment is None."""
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "-c" and i + 1 < len(args):
+            key, eq, value = args[i + 1].partition("=")
+            out.append((key, value if eq else "true"))
+            i += 2
+            continue
+        if a == "--config-env" and i + 1 < len(args):
+            out.append((args[i + 1].partition("=")[0], None))
+            i += 2
+            continue
+        if a.startswith("--config-env="):
+            out.append((a[len("--config-env="):].partition("=")[0], None))
+            i += 1
+            continue
+        if a in GIT_VALUE_GLOBALS:
+            i += 2
+            continue
+        if not a.startswith("-"):
+            break
+        i += 1
+    return out
+
+
+def _git_alias(args, sub, sargs, configs, where, cwd, aliases):
+    """The grade of `git <sub>` when `sub` is no command of git's own: the command its alias
+    expands to, set by `-c alias.<sub>` or found in git's configuration, graded in its place; a
+    `!` alias graded as the shell line it runs. 3 when the alias cannot be known: one this line
+    sets or may set, a lookup that did not answer, or a chain of aliases deeper than
+    `GIT_ALIASES`. None when `sub` is no alias, and so a `git-<sub>` program."""
+    unknowable = (3, "git " + sub, "an alias the grader cannot read", "opaque")
+    name = "alias." + sub.lower()
+    value = next((v for k, v in reversed(configs) if k.lower() == name), False)
+    if value is False:
+        if re.search(r"alias\.", _LINE[0], re.I) or GIT_CONFIG_ENV_RE.search(_LINE[0]):
+            return unknowable  # this line may define the alias before it runs
+        done = _git_call(["config", "--get", name], where if where and os.path.isdir(where)
+                         else "")
+        if done is None or done.returncode not in (0, 1):
+            return unknowable
+        if done.returncode == 1:
+            return None
+        value = done.stdout.decode("utf-8", "replace").strip()
+    if value is None or aliases >= GIT_ALIASES:
+        return unknowable
+    if value.startswith("!"):
+        line = value[1:] + "".join(" " + shlex.quote(a) for a in sargs)
+        hit = grade_text(line, where or cwd, 1)
+        return hit if hit[0] > 1 else (1, "git " + sub, value[1:], None)
+    try:
+        words = shlex.split(value)
+    except ValueError:
+        return unknowable
+    if not words:
+        return unknowable
+    at = len(args) - len(sargs) - 1
+    return _git(args[:at] + words + list(sargs), cwd, aliases + 1)
+
+
+def _config_write(flags, ops):
+    """The key `git config` given `flags` and `ops` sets, or None when it only reads, unsets or
+    edits a file the user opens."""
+    if _on(flags, "--get", "--get-all", "--get-regexp", "--get-urlmatch", "--get-color",
+           "--get-colorbool", "--list", "--unset", "--unset-all", "--remove-section",
+           "--rename-section", "--edit") or {"-l", "-e"} & flags:
+        return None
+    if ops[:1] == ["set"]:
+        return ops[1] if len(ops) > 1 else None
+    if ops[:1] and ops[0] in ("get", "list", "unset", "remove-section", "rename-section", "edit"):
+        return None
+    return ops[0] if len(ops) > 1 else None
+
+
+def _git(args, cwd, aliases=0):
     sub, sargs, where = _git_sub(args, cwd)
     if not sub:
         return 1, "git", "", None
-    ops = operands(sargs)
-    dry_run = has(sargs, "--dry-run") or short(sargs, "n")
+    configs = _git_configs(args)
+    for key, _value in configs:
+        if GIT_RISKY_CONFIG_RE.match(key.lower()):
+            return 3, "git -c " + key, sub, "opaque"
+    if GIT_CONFIG_ENV_RE.search(_LINE[0]):
+        return 3, "git with configuration from the environment", sub, "opaque"
+    if sub.lower() not in GIT_COMMANDS:
+        hit = _git_alias(args, sub, sargs, configs, where, cwd, aliases)
+        if hit is not None:
+            return hit
+        return 1, "git " + sub, _joined(sargs, 1), None
+    flags, ops = _git_options(sub, sargs)
+    # Only a dry-run option in position counts: a value an option took is no option.
+    dry_run = "--dry-run" in flags or "-n" in flags
+    target = " ".join(ops[:1])
     if sub == "push":
         if dry_run:
             return 1, "git push --dry-run", " ".join(ops), None
-        if has(sargs, "--force-with-lease"):
+        if _on(flags, "--force-with-lease"):
             return 3, "git push --force-with-lease", " ".join(ops), "git-history"
-        if has(sargs, "--force") or has(sargs, "--mirror") or short(sargs, "f"):
-            verb = "git push --force" if has(sargs, "--force") else (
-                "git push --mirror" if has(sargs, "--mirror") else "git push -f")
+        if _on(flags, "--force", "--mirror") or "-f" in flags:
+            verb = "git push --force" if _on(flags, "--force") else (
+                "git push --mirror" if _on(flags, "--mirror") else "git push -f")
             return 3, verb, " ".join(ops), "git-history"
-        if has(sargs, "--delete") or short(sargs, "d") or any(o.startswith(":") for o in ops):
-            return 3, "git push --delete", " ".join(ops), "git-history"
+        if _on(flags, "--delete", "--prune") or "-d" in flags or any(
+                o.startswith(":") for o in ops):
+            verb = "git push --prune" if _on(flags, "--prune") else "git push --delete"
+            return 3, verb, " ".join(ops), "git-history"
         if any(o.startswith("+") for o in ops):
             return 3, "git push", " ".join(ops), "git-history"
         return 2, "git push", " ".join(ops), "remote"
     # Every route that overwrites the working tree or the index grades alike: what was changed
     # and not committed is gone, whichever command replaced it. A reset that keeps the index
     # (`--soft`) or refuses over local changes (`--keep`) is not one.
-    if sub == "reset" and has(sargs, "--hard"):
-        return 3, "git reset --hard", _joined(sargs, 1), "git-discard"
-    if sub == "reset" and not has(sargs, "--soft", "--keep"):
-        verb = "git reset --merge" if has(sargs, "--merge") else "git reset"
-        return 3, verb, _joined(sargs, 1), "git-discard"
-    if sub == "clean" and (has(sargs, "--force") or short(sargs, "f")) and not dry_run:
-        return 3, "git clean -f", _joined(sargs, 1), "git-discard"
+    if sub == "reset" and _on(flags, "--hard"):
+        return 3, "git reset --hard", target, "git-discard"
+    if sub == "reset" and not ({"--soft", "--keep"} & flags):
+        verb = "git reset --merge" if _on(flags, "--merge") else "git reset"
+        return 3, verb, target, "git-discard"
+    # `clean.requireForce` set false, in a file or with `-c`, lets a bare `git clean` delete, so
+    # any `git clean` but a dry run grades as the forced one does.
+    if sub == "clean" and not dry_run:
+        return 3, "git clean -f", target, "git-discard"
     if sub == "checkout":
-        if "--" in sargs:
-            return 3, "git checkout --", _joined(sargs, 1), "git-discard"
-        if has(sargs, "--force") or short(sargs, "f"):
-            return 3, "git checkout -f", _joined(sargs, 1), "git-discard"
+        if "--" in flags:
+            return 3, "git checkout --", target, "git-discard"
+        if _on(flags, "--force") or "-f" in flags:
+            return 3, "git checkout -f", target, "git-discard"
+        if "-B" in flags:
+            return 3, "git checkout -B", target, "git-discard"
+        if _on(flags, "--pathspec-from-file"):
+            return 3, "git checkout --pathspec-from-file", target, "git-discard"
         if ops[:1] in (["."], ["./"]):
             return 3, "git checkout", ops[0], "git-discard"
-        if has(sargs, "--ours", "--theirs", "--patch") or short(sargs, "p"):
-            return 3, "git checkout", _joined(sargs, 1), "git-discard"
-        if _checkout_paths(sargs, ops, where):
-            return 3, "git checkout", _joined(sargs, 1), "git-discard"
-    if sub == "switch" and (has(sargs, "--discard-changes", "--force") or short(sargs, "f")):
-        return 3, "git switch --discard-changes", _joined(sargs, 1), "git-discard"
+        if _on(flags, "--ours", "--theirs", "--patch") or "-p" in flags:
+            return 3, "git checkout", target, "git-discard"
+        if _checkout_paths(flags, ops, where):
+            return 3, "git checkout", target, "git-discard"
+    if sub == "switch":
+        if _on(flags, "--discard-changes", "--force") or "-f" in flags:
+            return 3, "git switch --discard-changes", target, "git-discard"
+        if "-C" in flags or _on(flags, "--force-create"):
+            return 3, "git switch -C", target, "git-discard"
     if sub == "restore":
-        staged = has(sargs, "--staged") or short(sargs, "S")
-        return 3, "git restore --staged" if staged else "git restore", _joined(sargs, 1), "git-discard"
+        staged = _on(flags, "--staged") or "-S" in flags
+        return 3, "git restore --staged" if staged else "git restore", target, "git-discard"
     if sub == "read-tree" and not dry_run:
-        return 3, "git read-tree", _joined(sargs, 1), "git-discard"
-    if sub == "checkout-index" and (has(sargs, "--force") or short(sargs, "f")):
-        return 3, "git checkout-index -f", _joined(sargs, 1), "git-discard"
-    if sub == "rm" and (has(sargs, "--force") or short(sargs, "f")) and not dry_run:
-        return 3, "git rm -f", _joined(sargs, 1), "git-discard"
-    if sub == "worktree" and ops[:1] == ["remove"] and (has(sargs, "--force") or short(sargs, "f")):
+        return 3, "git read-tree", target, "git-discard"
+    if sub == "checkout-index" and (_on(flags, "--force") or "-f" in flags):
+        return 3, "git checkout-index -f", target, "git-discard"
+    if sub == "rm" and (_on(flags, "--force") or "-f" in flags) and not dry_run:
+        return 3, "git rm -f", target, "git-discard"
+    if sub == "worktree" and ops[:1] == ["remove"] and (_on(flags, "--force") or "-f" in flags):
         return 3, "git worktree remove --force", " ".join(ops[1:2]), "git-discard"
-    if sub == "branch" and (has(sargs, "-D", "--delete") or short(sargs, "D")):
-        return 3, "git branch -D", _joined(sargs, 1), "git-discard"
+    if sub == "branch":
+        if _on(flags, "--delete") or "-D" in flags:
+            return 3, "git branch -D", target, "git-discard"
+        if "-f" in flags or _on(flags, "--force") or "-M" in flags or "-C" in flags:
+            return 3, "git branch -f", target, "git-discard"
+    if sub == "update-ref":
+        verb = "git update-ref -d" if "-d" in flags else "git update-ref"
+        return 3, verb, target, "git-discard"
+    if sub == "apply" and ("-R" in flags or _on(flags, "--reverse")):
+        return 3, "git apply -R", target, "git-discard"
     if sub == "stash" and ops and ops[0] in ("drop", "clear"):
         return 3, "git stash " + ops[0], " ".join(ops[1:2]), "git-discard"
     if sub == "reflog" and ops and ops[0] in ("expire", "delete"):
         return 3, "git reflog " + ops[0], " ".join(ops[1:2]), "git-history"
     if sub in ("filter-branch", "filter-repo"):
-        return 3, "git " + sub, _joined(sargs, 1), "git-history"
-    return 1, "git " + sub, _joined(sargs, 1), None
+        return 3, "git " + sub, target, "git-history"
+    if sub == "config":
+        key = _config_write(flags, ops)
+        if key and GIT_RISKY_CONFIG_RE.match(key.lower()):
+            return 3, "git config " + key, "", "opaque"
+    return 1, "git " + sub, target, None
 
 
 def _gh(args):
@@ -1574,68 +1788,161 @@ def _rm(args, cwd):
         for op in operands(args):
             if _rm_risky(op, cwd):
                 return 3, verb, op, "delete"
-    return _discards(verb, operands(args), cwd) or (1, verb, _joined(args, 1), None)
+    return (_discards(verb, operands(args), cwd, deletes=True)
+            or (1, verb, _joined(args, 1), None))
 
 
-# How long the grader waits for `git status` to say whether a file holds uncommitted work, and
-# how many times one command line may ask; `grade_text` clears the answers for each line. Past
-# either the answer is "it may": a destructive verb the grader cannot check fails closed.
-GIT_STATUS_SECONDS = 2.0
+# How long the grader waits for one `git status` to say whether a file holds uncommitted work,
+# how long all of a command line's calls to git may take together, and how many it may make;
+# `grade_text` clears the answers for each line. Past any of them the answer is "it may": a
+# destructive verb the grader cannot check fails closed. The total stays well inside
+# `GRADE_SECONDS`, so the deadline is never what stops a check.
+GIT_STATUS_SECONDS = 1.5
+GIT_STATUS_TOTAL = 2.0
 GIT_STATUS_CALLS = 16
 _DIRTY = {}
+# [seconds spent, calls made] asking git on this command line.
+_GIT_SPENT = [0.0, 0]
+# The directories a `cd` earlier on the line may have moved to, and whether one went where
+# the grader cannot say; `grade_text` clears both for each line.
+_CDS = []
+_CD_LOST = [False]
 UNCHECKED = "which git status did not answer for in time"
+UNKNOWN_PATH = "a path the grader cannot know"
+HIDDEN = "which git is told not to check (assume-unchanged or skip-worktree)"
 
 
-def _dirty_tracked(paths, cwd):
-    """The first of `paths` (pathspecs, relative to `cwd`) that git tracks with working-tree
-    changes not in the index: deleting or emptying it loses work no git command restores. ""
-    when there is none, or no repository or `git` to ask; None when `git status` did not answer
-    within `GIT_STATUS_SECONDS`, or this command line has asked `GIT_STATUS_CALLS` times already.
-    A word holding a variable or a substitution is not asked about: it names no path here."""
-    specs = [p for p in paths if p and "$" not in p and "`" not in p and PLACEHOLDER not in p]
-    if not specs or not cwd or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+class _Unknown(str):
+    """The answer of `_dirty_tracked` when it cannot say: the text says why."""
+
+
+def _git_call(argv, where):
+    """The finished `git` run of `argv` in `where` (the process's own directory when ""), or
+    None when this line's budget of calls or seconds is spent or the run did not finish in time.
+    No `git` to run reads as a repository-less answer, exit 128."""
+    remaining = GIT_STATUS_TOTAL - _GIT_SPENT[0]
+    if _GIT_SPENT[1] >= GIT_STATUS_CALLS or remaining <= 0.05:
+        return None
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+    started = time.monotonic()
+    try:
+        return subprocess.run(["git"] + (["-C", where] if where else []) + argv,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              stdin=subprocess.DEVNULL, timeout=min(GIT_STATUS_SECONDS, remaining),
+                              env=env)
+    except subprocess.TimeoutExpired:
+        return None
+    except OSError:
+        return subprocess.CompletedProcess(argv, 128, b"", b"not a git repository")
+    finally:
+        _GIT_SPENT[0] += time.monotonic() - started
+        _GIT_SPENT[1] += 1
+
+
+def _unknowable(path):
+    """Whether the word `path` names a file the grader cannot know: a variable, a substitution
+    or a backtick, but not `$HOME` or `$TMPDIR`, which `_expand` resolves."""
+    path = re.sub(r"\$(?:\{(?:HOME|TMPDIR)\}|(?:HOME|TMPDIR)(?![A-Za-z0-9_]))", "", path)
+    return "$" in path or "`" in path or PLACEHOLDER in path
+
+
+def _dirty_tracked(paths, cwd, deletes=False):
+    """The first of `paths` (pathspecs, relative to `cwd`) whose loss git cannot undo: a tracked
+    file with working-tree changes not in the index, and when `deletes`, an untracked file that
+    is not ignored, as `git clean -f` would take. "" when there is none or no repository to ask.
+
+    Each path is asked about in its own directory, so a path outside the repository costs
+    nothing for the paths inside it, and relative to every directory a `cd` earlier on the line
+    may have moved to. Unknown, an `_Unknown` naming why, when a `cd` went where the grader
+    cannot say; when git is told not to check a file (assume-unchanged, skip-worktree); and,
+    for a delete, when the path itself is a variable or a substitution. None when `git` did not
+    answer in time or this line's budget (`_git_call`) is spent."""
+    words = [p for p in paths if p]
+    # A variable may hold `../`, so even `/tmp/$x` can name any file.
+    if deletes and any(_unknowable(p) for p in words):
+        return _Unknown(UNKNOWN_PATH)
+    specs = [p for p in words if not _unknowable(p)]
+    if not specs:
         return ""
-    key = (cwd, tuple(specs))
-    if key not in _DIRTY:
-        if len(_DIRTY) >= GIT_STATUS_CALLS:
-            return None
-        env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
-        try:
-            done = subprocess.run(
-                ["git", "-C", cwd, "status", "--porcelain=v1", "-z", "--untracked-files=no",
-                 "--ignore-submodules", "--"] + [_expand(p) for p in specs],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                timeout=GIT_STATUS_SECONDS, env=env)
-        except subprocess.TimeoutExpired:
-            _DIRTY[key] = None
-            return None
-        except OSError:
-            _DIRTY[key] = ""
-            return ""
-        found = ""
-        if done.returncode == 0:
-            entries = done.stdout.decode("utf-8", "replace").split("\0")
-            i = 0
-            while i < len(entries):
-                entry = entries[i]
-                i += 1
-                if len(entry) < 4:
-                    continue
-                if entry[0] in "RC":
-                    i += 1  # a rename's or a copy's source path follows as its own field
-                if entry[1] in "MT":
-                    found = entry[3:]
+    bases = [d for d in [cwd] + _CDS if d and os.path.isabs(d)]
+    if deletes and _CD_LOST[0] and any(not _expand(p).startswith("/") for p in specs):
+        return _Unknown(UNKNOWN_PATH)
+    groups = {}
+    for spec in specs:
+        path = _expand(spec)
+        for base in ([""] if path.startswith("/") else bases):
+            full = os.path.normpath(os.path.join(base, path)) if base else path
+            parent, name = os.path.split(full)
+            if PATHSPEC_RE.search(parent) or not name:
+                parent, name = base or "/", os.path.relpath(full, base or "/")
+            groups.setdefault(parent, []).append(name)
+    for parent, names in groups.items():
+        found = _dirty_in(parent, tuple(names), deletes)
+        if found is None or found:
+            return found
+    return ""
+
+
+def _dirty_in(parent, names, deletes):
+    """`_dirty_tracked` for `names`, each relative to the directory `parent`."""
+    key = (parent, names, deletes)
+    if key in _DIRTY:
+        return _DIRTY[key]
+    if not os.path.isdir(parent):
+        _DIRTY[key] = ""  # no such directory holds a file to lose
+        return ""
+    done = _git_call(["status", "--porcelain=v1", "-z",
+                      "--untracked-files=" + ("all" if deletes else "no"),
+                      "--ignore-submodules", "--"] + list(names), parent)
+    if done is None:
+        _DIRTY[key] = None
+        return None
+    found = ""
+    if done.returncode == 128 and b"not a git repository" in done.stderr:
+        _DIRTY[key] = ""
+        return ""
+    if done.returncode != 0:
+        _DIRTY[key] = _Unknown(UNCHECKED)
+        return _DIRTY[key]
+    entries = done.stdout.decode("utf-8", "replace").split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        if entry[0] in "RC":
+            i += 1  # a rename's or a copy's source path follows as its own field
+        if entry[1] in "MT" or (deletes and entry[:2] == "??"):
+            found = entry[3:]
+            break
+    if not found:
+        # git status does not look at a file it is told is unchanged, so such a file may hold
+        # any change: its loss is unknown, never clean.
+        listed = _git_call(["ls-files", "-v", "-z", "--"] + list(names), parent)
+        if listed is None:
+            found = None
+        elif listed.returncode != 0:
+            found = _Unknown(UNCHECKED)
+        else:
+            for entry in listed.stdout.decode("utf-8", "replace").split("\0"):
+                if len(entry) > 2 and (entry[0].islower() or entry[0] == "S"):
+                    found = _Unknown(HIDDEN + ": " + entry[2:])
                     break
-        _DIRTY[key] = found
-    return _DIRTY[key]
+    _DIRTY[key] = found
+    return found
 
 
-def _discards(verb, paths, cwd):
-    """Grade 3 when `verb` deletes or empties a file of `paths` that holds uncommitted work, as
-    `git checkout -- <path>` grades for the same loss; None when none does."""
-    found = _dirty_tracked(paths, cwd)
+def _discards(verb, paths, cwd, deletes=False):
+    """Grade 3 when `verb` deletes, empties or overwrites a file of `paths` that holds
+    uncommitted work, as `git checkout -- <path>` grades for the same loss, or when that cannot
+    be known (`_dirty_tracked`); None when none does."""
+    found = _dirty_tracked(paths, cwd, deletes)
     if found is None:
         return 3, verb, " ".join(paths[:2]) + ", " + UNCHECKED, "git-discard"
+    if isinstance(found, _Unknown):
+        named = " ".join(paths[:2]).replace(PLACEHOLDER, "$(…)")
+        return 3, verb, named + ", " + found, "git-discard"
     if found:
         return 3, verb, found, "git-discard"
     return None
@@ -1666,6 +1973,18 @@ def _emptying(tokens, clean, cwd):
         return _discards("empty write to", targets, cwd)
     if prog == "cp" and operands(clean[1:])[:1] == ["/dev/null"]:
         return _discards("cp /dev/null", operands(clean[1:])[1:], cwd)
+    if prog != "git":
+        # Any other `>` replaces what the file held, whatever the command writes into it.
+        hit = _discards("overwrite of", targets, cwd) if targets else None
+        if hit is None and prog in ("cp", "mv", "install"):
+            hit = _discards(prog + " over", _copy_targets(clean[1:], cwd), cwd)
+        if hit is None and prog == "tee" and not (short(clean[1:], "a") or has(clean[1:],
+                                                                             "--append")):
+            hit = _discards("tee over", operands(clean[1:]), cwd)
+        if hit is None and prog in ("sed", "gsed"):
+            hit = _sed_empties(clean[1:], cwd)
+        if hit is not None:
+            return hit
     if prog == "truncate":
         files, i, args = [], 0, clean[1:]
         while i < len(args):
@@ -1691,6 +2010,104 @@ def _emptying(tokens, clean, cwd):
                     return 3, "git " + sub + " >", target, "git-discard"
             return _discards("git " + sub + " >", targets, cwd)
     return None
+
+
+# Programs that delete or empty the files they are named, for `xargs` and `find -exec`, which
+# name them from what the grader cannot read.
+DELETERS = {"rm", "unlink", "shred", "truncate"}
+COPY_VALUE_FLAGS = ("-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group")
+# A `sed` script whose every command deletes lines: run in place, it empties the file.
+SED_DELETE_RE = re.compile(r"^(?:\d+|\$|/(?:[^/\\]|\\.)*/)?(?:\s*,\s*(?:\d+|\$|/(?:[^/\\]|\\.)*/))?"
+                           r"\s*!?\s*d$")
+
+
+FIND_UNBOUNDED = {"!", "-not", "-o", "-or", "-regex", "-iregex", "-path", "-ipath", "-wholename",
+                  "-iwholename", "-iname", "-lname", "-ilname", "-samefile", "-inum"}
+
+
+def _find_discards(verb, args, cwd):
+    """The grade of a `find` given `args` (its words before the action) that deletes what it
+    finds: when only `-name` patterns bound what it matches, each is asked about under each
+    start path, as a delete (`_discards`); otherwise which files it reaches is unknown, and
+    it grades 3."""
+    starts, names, i = [], [], 0
+    while i < len(args) and not args[i].startswith("-") and args[i] not in ("!", "(", ")"):
+        starts.append(args[i])
+        i += 1
+    rest = args[i:]
+    for k, word in enumerate(rest):
+        if word in FIND_UNBOUNDED:
+            names = []
+            break
+        if word == "-name" and k + 1 < len(rest):
+            names.append(rest[k + 1])
+    if not names:
+        return 3, verb, ", ".join(filter(None, [" ".join(starts[:1]), UNKNOWN_PATH])), "delete"
+    # `find` matches a name at any depth; a pathspec's `*` crosses `/`, so `*/name` reaches the
+    # ones below the start path.
+    paths = [os.path.join(start, *parts) for start in starts or ["."] for name in names
+             for parts in ((name,), ("*", name))]
+    return _discards(verb, paths, cwd, deletes=True)
+
+
+def _copy_targets(args, cwd):
+    """The files `cp`, `mv` or `install` given `args` writes over: the last operand, each
+    source's name inside it when it is a directory, and inside a `-t` directory."""
+    ops, directory, i = [], None, 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-t", "--target-directory") and i + 1 < len(args):
+            directory = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--target-directory="):
+            directory = a.partition("=")[2]
+        elif a in COPY_VALUE_FLAGS:
+            i += 1
+        elif a == "--":
+            ops.extend(args[i + 1:])
+            break
+        elif not a.startswith("-") or a == "-":
+            ops.append(a)
+        i += 1
+    if directory is None:
+        if len(ops) < 2:
+            return []
+        directory, sources = ops[-1], ops[:-1]
+        out = [directory]
+        where = os.path.join(cwd or "", _expand(directory))
+        if not os.path.isdir(where):
+            return out
+    else:
+        sources, out = ops, []
+    return out + [os.path.join(directory, os.path.basename(s.rstrip("/"))) for s in sources]
+
+
+def _sed_empties(args, cwd):
+    """The grade of an in-place `sed` (`-i`, `-i.bak`, `-i ''`, `--in-place`) whose script only
+    deletes lines, as `sed -i d f` empties `f`: graded as an empty write of each file. None for
+    any other `sed`."""
+    if not (short(args, "i") or has(args, "--in-place")):
+        return None
+    scripts, files, i = [], [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-e", "--expression") and i + 1 < len(args):
+            scripts.append(args[i + 1])
+            i += 2
+            continue
+        if a == "-i" and i + 1 < len(args) and args[i + 1] == "":
+            i += 2  # BSD's suffix, here none
+            continue
+        if not a.startswith("-") or a == "-":
+            files.append(a)
+        i += 1
+    if not scripts and files:
+        scripts = [files.pop(0)]
+    pieces = [p.strip() for s in scripts for p in re.split(r"[;\n]", s) if p.strip()]
+    if not pieces or not all(SED_DELETE_RE.match(p) for p in pieces):
+        return None
+    return _discards("sed -i over", files, cwd)
 
 
 G3_SUBCOMMANDS = {
@@ -1859,10 +2276,26 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
                 return _inner(args[i + 1], cwd, depth)
     if prog in ("eval",):
         return _inner(" ".join(args), cwd, depth)
+    family = _program_family(head)
+    if family:
+        programs = _inline_programs(family, args)
+        if programs:
+            hit = max((_grade_program(p, cwd, depth, families={family}) for p in programs),
+                      key=lambda h: h[0])
+            if hit[0] < 3 and not all(_inert_program(p, {family}) for p in programs):
+                # A program that can run a command may run one its arguments spell out.
+                for word in args:
+                    if word not in programs and next(_named(word), None) is not None:
+                        hit = max(hit, grade_text(word, cwd, depth + 1), key=lambda h: h[0])
+            if hit[0] > 1:
+                return hit
     if prog in ("xargs", "parallel"):
         rest = strip_options(args, XARGS_VALUE_FLAGS)
         if _rm_flagged(rest):  # the operands arrive on stdin, so any rm -rf here is grade 3
             return 3, "xargs rm -rf", "", "delete"
+        if rest and rest[0].rpartition("/")[2] in DELETERS:
+            # Which files stdin names is not known, so whether one holds work is not either.
+            return 3, prog + " " + rest[0].rpartition("/")[2], UNKNOWN_PATH, "delete"
         return _inner_tokens(rest, cwd, depth)
     if prog in WRAPPERS:
         rest, unread, _moved, files = _unwrap(prog, args, keyword_time and head == "time")
@@ -1881,6 +2314,9 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
         return _cloud(prog, args)
     if prog == "rm":
         return _rm(args, cwd)
+    if prog == "unlink":
+        return (_discards("unlink", operands(args), cwd, deletes=True)
+                or (1, "unlink", _joined(args, 1), None))
     if prog == "find":
         if "-delete" in args:
             return 3, "find -delete", _joined(args, 1), "delete"
@@ -1890,6 +2326,10 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
                 inner = [t for t in inner if t not in (";", "+", "\\;", "{}")]
                 if _rm_flagged(inner):
                     return 3, "find " + flag + " rm -rf", _joined(args, 1), "delete"
+                if inner and inner[0].rpartition("/")[2] in DELETERS:
+                    verb = "find " + flag + " " + inner[0].rpartition("/")[2]
+                    return (_find_discards(verb, args[:args.index(flag)], cwd)
+                            or (1, verb, _joined(args, 1), None))
                 return _inner_tokens(inner, cwd, depth)
     if prog in SQL_CLIENTS:
         hit = _sql(text)
@@ -1972,6 +2412,35 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
     return 1, prog, _joined(args, 1), None
 
 
+def _inline_programs(family, args):
+    """The programs an interpreter of `family` is handed inline by `args`, as `python3 -c`,
+    `node -e`, `perl -e` or `ruby -e` take one, each graded as `_grade_program` reads a program:
+    `perl -ne 'x'`, `perl -e'x'` and `node --eval=x` included. Reading stops at the first operand,
+    the script whose own arguments follow."""
+    evals, values = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)
+    evals = evals - {"-m"}
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "--" or not a.startswith("-") or a == "-":
+            break
+        long_name, eq, value = a.partition("=")
+        if a in evals or (family in CLUSTERED and re.match(r"^-[A-Za-z]+$", a)
+                          and "-" + a[-1] in evals):
+            if i + 1 < len(args):
+                out.append(args[i + 1])
+            i += 2
+            continue
+        if eq and long_name in evals:
+            out.append(value)
+        elif len(a) > 2 and a[:2] in evals and not a.startswith("--"):
+            out.append(a[2:])
+        elif a in values:
+            i += 1
+        i += 1
+    return out
+
+
 def _names_push(words):
     """Whether `words` hold a `git` word with a `push` word after it."""
     for i, word in enumerate(words):
@@ -2009,9 +2478,55 @@ def timed_out(cmd):
     hit = _scan_text(cmd)
     if hit[0] == 3:
         return 3, hit[1], DEADLINE_NOTE, hit[3]
+    lowered = cmd.lower()
+    entries = [entry for entry in DEADLINE_SCAN if all(n in lowered for n in entry[0])]
+    if entries:
+        for chunk in SCAN_SPLIT.split(lowered):
+            for needles, verb, family in entries:
+                if all(needle in chunk for needle in needles):
+                    return 3, verb, DEADLINE_NOTE, family
     if hit[0] == 2:
         return hit
     return 1, DEADLINE_VERB, "", None
+
+
+# What `timed_out` refuses beyond `SCAN`: each route that discards work, and each command whose
+# grade waits on `git status` (`_discards`) or an alias lookup, which a deadline may have cut
+# short. Substring needles within one chunk, as `SCAN`'s are, so the check stays linear.
+DEADLINE_SCAN = [
+    (("checkout",), "git checkout", "git-discard"),
+    (("restore",), "git restore", "git-discard"),
+    (("switch",), "git switch", "git-discard"),
+    (("reset",), "git reset", "git-discard"),
+    (("clean",), "git clean", "git-discard"),
+    (("read-tree",), "git read-tree", "git-discard"),
+    (("stash", "drop"), "git stash drop", "git-discard"),
+    (("stash", "clear"), "git stash clear", "git-discard"),
+    (("branch", "-d"), "git branch -D", "git-discard"),
+    (("branch", "-f"), "git branch -f", "git-discard"),
+    (("branch", "-m"), "git branch -M", "git-discard"),
+    (("branch", "--"), "git branch", "git-discard"),
+    (("update-ref",), "git update-ref", "git-discard"),
+    (("apply", "-r"), "git apply -R", "git-discard"),
+    (("git", "-c"), "git -c", "opaque"),
+    (("alias",), "git alias", "opaque"),
+    (("-delete",), "find -delete", "delete"),
+    (("-exec",), "find -exec", "delete"),
+    (("-ok",), "find -ok", "delete"),
+    (("xargs",), "xargs", "delete"),
+    (("rm ",), "rm", "git-discard"),
+    (("unlink",), "unlink", "git-discard"),
+    (("truncate",), "truncate", "git-discard"),
+    (("shred",), "shred", "delete"),
+    ((">",), "overwrite of", "git-discard"),
+    (("cp ",), "cp over", "git-discard"),
+    (("mv ",), "mv over", "git-discard"),
+    (("install ",), "install over", "git-discard"),
+    (("tee ",), "tee over", "git-discard"),
+    (("sed", "-i"), "sed -i over", "git-discard"),
+    (("sed", "--in-place"), "sed -i over", "git-discard"),
+    (("of=",), "dd", "system"),
+]
 
 
 def grade_within(cmd, cwd="", seconds=None, grade=None):
@@ -2048,14 +2563,21 @@ def grade_text(cmd, cwd="", depth=0):
     does: an approval must come from the user's prompt, never from a write the agent makes.
     Text whose reading raises, as a parser bug would, grades 3: it is never passed unread."""
     if depth == 0:
-        _DIRTY.clear()  # what `git status` said holds for one command line, never the next
+        # What `git status` said, the time spent asking it and where a `cd` went hold for one
+        # command line, never the next.
+        _DIRTY.clear()
+        _GIT_SPENT[:] = [0.0, 0]
+        del _CDS[:]
+        _CD_LOST[0] = False
+        _LINE[0] = cmd
     try:
         best = _grade_text(cmd, cwd, depth)
     except Exception:
         if depth:
             raise
         return UNREADABLE
-    if depth == 0 and 0 < best[0] < 3 and approvals is not None and _store_write(cmd):
+    if depth == 0 and best[0] > 0 and best[3] != "approvals" and approvals is not None \
+            and _store_write(cmd):
         return 3, "write to", "the approvals store", "approvals"
     return best
 
@@ -2144,7 +2666,7 @@ def _store_write(cmd):
     families = _input_families(parts, inners)
     if families is None or any(_runs_input(tokens) for tokens in parts):
         return True
-    return any(not _inert_program(b, families) or bool(STORE_WRITES_RE.search(b))
+    return any(not _inert_program(b, families) or _program_writes(b)
                for b in reaching) if families else False
 
 
@@ -2166,7 +2688,7 @@ def _reads_only(words):
     for i in range(1, len(words) - 1):
         if words[i] in evals:
             program = words[i + 1]
-            return _inert_program(program, {family}) and not STORE_WRITES_RE.search(program)
+            return _inert_program(program, {family}) and not _program_writes(program)
         if not words[i].startswith("-"):
             return False
     return False
@@ -2223,12 +2745,43 @@ def _grade_reading(text, bodies, cwd, depth):
                 best = hit
     bare = _bare_times(stripped, parts)
     for tokens in parts:
+        _track_cd(tokens, cwd)
         hit = grade_tokens(tokens, cwd, depth, bare)
         if hit[0] > best[0]:
             best = hit
         if best[0] == 3:
             break
     return best
+
+
+def _track_cd(tokens, cwd):
+    """Record where a `cd`, `pushd` or `chdir` in `tokens` may move the commands after it, so a
+    file they name is asked about there as well as in `cwd` (`_dirty_tracked`). A subshell's
+    `cd` is kept too, which can only ask about more places. One to a directory the grader
+    cannot know marks the line lost; `popd` and `cd -` return to a directory already kept."""
+    words = [t for t in tokens if t not in COMMAND_OPENERS]
+    while words and ASSIGN_RE.match(words[0]):
+        words = words[1:]
+    if not words or words[0].rpartition("/")[2] not in ("cd", "pushd", "chdir"):
+        return
+    ops = [w for w in words[1:] if not (w.startswith("-") and w != "-")]
+    target = ops[0] if ops else "~"
+    if target == "-":
+        return
+    if _unknowable(target) or "*" in target or "?" in target:
+        _CD_LOST[0] = True
+        return
+    path = _expand(target)
+    bases = [path] if path.startswith("/") else [
+        os.path.normpath(os.path.join(base, path)) for base in [cwd] + _CDS
+        if base and os.path.isabs(base)]
+    if not bases:
+        _CD_LOST[0] = True
+    for base in bases:
+        if base not in _CDS and len(_CDS) < GIT_STATUS_CALLS:
+            _CDS.append(base)
+        elif base not in _CDS:
+            _CD_LOST[0] = True
 
 
 def _runs_input(tokens):
@@ -2745,17 +3298,131 @@ SHELL_SYNTAX_RE = re.compile(
 NO_BACKTICKS = {"python", "node", "deno", "bun", "lua", "julia", "Rscript", "R"}
 TEXT_FAMILIES = NO_BACKTICKS | {"perl", "ruby", "php", "awk", "gawk", "mawk", "nawk"}
 INERT = (1, "", "", "opaque")
+# A reference, called or not, to what runs a command or deletes a file: a program can hand a
+# function on without calling it where it is named (`map(os.system, …)`, `f = os.system`,
+# `getattr(os, …)`), so any mention of one makes the program more than text.
+REFERENCES_RE = re.compile(
+    r"\b(?:os|posix|nt)\s*\.\s*(?:system|popen\w*|exec\w*|spawn\w*|posix_spawn\w*|fork\w*|"
+    r"remove|unlink|rmdir|removedirs|truncate|replace|rename\w*|kill\w*)\b"
+    r"|\b(?:subprocess|pty|pexpect|child_process|rmtree|commands|plumbum|sarge|importlib|"
+    r"execSync|execFileSync|spawnSync|shell_exec|passthru|proc_open|getattr|attrgetter|"
+    r"methodcaller|__getattribute__|__import__|import_module|__builtins__|builtins|__dict__|"
+    r"eval|exec|dlopen)\b"
+    r"|\bsys\s*\.\s*modules\b|\bprocess\s*\.\s*binding\b"
+    r"|\.\s*(?:unlink\w*|rmdir\w*|rmtree|rm|rmSync|system|popen|exec\w*|spawn\w*|kill)\b"
+    r"|\bimport\s+(?:os|posix|shutil)\s+as\b|\bfrom\s+(?:os|posix|nt|shutil|subprocess|pty)\s+import\b"
+    r"|=\s*(?:os|posix|shutil)\s*(?:$|[;,)\]\n])"
+    r"|\brequire\s*\(\s*(?![\"'][\w./@:-]+[\"']\s*\))")
+# A reference to what writes a file, for a program run where the approvals store is reached:
+# what `STORE_WRITES_RE` and `_open_writes` read too.
+WRITE_REFERENCES_RE = re.compile(
+    r"\b(?:FileIO|fdopen|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND|write_text|write_bytes|"
+    r"writelines|writeFile\w*|appendFile\w*|createWriteStream|copyFile\w*|symlink\w*|"
+    r"rename\w*|touch|mkdir\w*|makedirs|chmod|chown|truncate|unlink\w*|rmdir\w*|rmtree|"
+    r"savetxt|to_csv|to_json|dump\w*)\b|\b(?:os|io|codecs|gzip|bz2|lzma)\s*\.\s*open\b")
+OPEN_RE = re.compile(r"\bopen\b")
+# A mode string `open` reads without writing: only these letters, and none of `w`, `a`, `x`, `+`.
+READ_MODE_RE = re.compile(r"^[rbtU]*$")
+MODE_LIKE_RE = re.compile(r"^[rwabxtU+]+$")
 
 
 def _inert_program(text, families):
     """Whether `text`, read as its program by an interpreter of each of `families`, can run none
     of the commands its strings name. False when a family is unknown (None) or outside
-    `TEXT_FAMILIES`."""
+    `TEXT_FAMILIES`, or when the program calls or names anything that runs a command or deletes
+    a file (`CALLS_RE`, `REFERENCES_RE`)."""
     if not families or not all(f in TEXT_FAMILIES for f in families):
         return False
-    if CALLS_RE.search(text):
+    if CALLS_RE.search(text) or REFERENCES_RE.search(text):
         return False
     return all(f in NO_BACKTICKS for f in families) or not SHELL_SYNTAX_RE.search(text)
+
+
+def _call_args(text, start):
+    """The top-level arguments of the call whose `(` is at `text[start]`, or None when it does
+    not close within `STATEMENT_CHARS` characters. Strings are passed over, so a comma or a
+    bracket in one splits nothing."""
+    args, depth, quote, current, i = [], 0, None, [], start + 1
+    end = min(len(text), start + 1 + STATEMENT_CHARS)
+    while i < end:
+        c = text[i]
+        if quote:
+            current.append(c)
+            if c == "\\" and i + 1 < end:
+                current.append(text[i + 1])
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c
+            current.append(c)
+        elif c in "([{":
+            depth += 1
+            current.append(c)
+        elif c in ")]}":
+            if not depth:
+                args.append("".join(current).strip())
+                return [a for a in args if a]
+            depth -= 1
+            current.append(c)
+        elif c == "," and not depth:
+            args.append("".join(current).strip())
+            current = []
+        else:
+            current.append(c)
+        i += 1
+    return None
+
+
+def _string_value(arg):
+    """The text of `arg` when it is one plain string literal, else None."""
+    match = re.match(r"^[rRbBuU]?([\"'])([^\"'\\]*)\1$", arg)
+    return match.group(2) if match else None
+
+
+def _open_writes(text):
+    """Whether any `open` in `text` may write: one handed on rather than called, one whose
+    arguments are spread, or one given a mode that is not a plain read-only string. The path is
+    the first argument of a bare `open(…)`; a method such as `Path(p).open('w')` takes the mode
+    first. A string that is no mode, as a path is, is passed over wherever it sits."""
+    for match in OPEN_RE.finditer(text):
+        rest = text[match.end():]
+        paren = re.match(r"\s*\(", rest)
+        if not paren:
+            return True  # `f = open`, `map(open, …)`: called where this cannot see
+        args = _call_args(text, match.end() + paren.end() - 1)
+        if args is None:
+            return True
+        method = text[:match.start()].rstrip().endswith(".")
+        positional = 0
+        for arg in args:
+            if arg.startswith("*"):
+                return True
+            keyword = re.match(r"^([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$", arg, re.S)
+            if keyword:
+                name, value = keyword.groups()
+                if name == "opener" or name in ("mode", "flags") and not READ_MODE_RE.match(
+                        _string_value(value) or "w"):
+                    return True
+                continue
+            positional += 1
+            if positional == 1 and not method:
+                continue  # the file
+            value = _string_value(arg)
+            if value is None:
+                if re.match(r"^-?\d+$", arg):
+                    continue  # buffering
+                return True
+            if MODE_LIKE_RE.match(value) and not READ_MODE_RE.match(value):
+                return True
+    return False
+
+
+def _program_writes(text):
+    """Whether the program `text` may write a file, as a program reaching the approvals store
+    must not."""
+    return bool(STORE_WRITES_RE.search(text) or WRITE_REFERENCES_RE.search(text)
+                or _open_writes(text))
 
 
 def _grade_program(text, cwd, depth, skip=None, families=None):

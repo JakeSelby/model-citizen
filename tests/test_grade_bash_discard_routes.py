@@ -54,6 +54,8 @@ DISCARDS = [
     ("rm dirty.py", "rm"),
     ("rm -f dirty.py", "rm -f"),
     ("rm -rf sub", "rm -rf"),
+    # An untracked file is work no git command restores, as `git clean -f new.txt` grades.
+    ("rm new.txt", "rm"),
     ("> dirty.py", "empty write to"),
     (": > dirty.py", "empty write to"),
     ("true > dirty.py", "empty write to"),
@@ -82,7 +84,6 @@ KEEPS = [
     "git worktree remove ../other",
     "rm clean.py",
     "rm staged.py",
-    "rm new.txt",
     "> clean.py",
     "> new.txt",
     "cat /dev/null >> dirty.py",
@@ -157,7 +158,7 @@ class DiscardRoutes(unittest.TestCase):
         self.write("clean.py", "changed\n")
         self.assertEqual(self.grade("rm clean.py")[0], 3)
         for _ in range(library.GIT_STATUS_CALLS + 1):
-            self.assertEqual(self.grade("rm new.txt")[0], 1)
+            self.assertEqual(self.grade(": > new.txt")[0], 1)
 
     def test_outside_a_repository_nothing_is_asked_and_nothing_is_a_discard(self):
         with tempfile.TemporaryDirectory() as plain:

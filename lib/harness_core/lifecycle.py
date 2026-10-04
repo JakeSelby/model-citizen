@@ -1100,8 +1100,9 @@ def log_bash_decision(runtime, event, results, command=None, confirmed=False, no
     """Record the permission answer the harness gave this command, when it gave one.
 
     Every `ask` and `deny` is a graded row, the one that offers an approval code included, and
-    so is every command let through on a consumed approval or graded past the grader's
-    deadline: `note` carries those facts (`approval`, `timed_out`) onto the row. Otherwise an
+    so is every command let through on a consumed approval, graded past the grader's deadline,
+    or graded 3 at all, the one a `HARNESS_CONFIRMED=1` marker lets through included: `note`
+    carries those facts (`approval`, `timed_out`, `grade`, `confirmed`) onto the row. Otherwise an
     approval is the harness declining to interrupt,
     and "it ran" says nothing about whether declining was right; a refusal or a prompt is the
     judgment a later label can grade. The row is written here rather than in `grade-bash.py`
@@ -1113,8 +1114,8 @@ def log_bash_decision(runtime, event, results, command=None, confirmed=False, no
     A command the harness said nothing about is the runtime's own to answer and may still be
     prompted on or refused, and on Codex a plain approval is dropped from the output for the
     reason `_encode_pre` gives, so neither is evidence that anything was allowed. A confirmed
-    command is not one either: it reached here because the user answered a prompt the harness
-    raised, so it belongs to the earlier `ask` row.
+    command below grade 3 is not one either: it reached here because the user answered a prompt
+    the harness raised, so it belongs to the earlier `ask` row.
     """
     _BASH_LOGGED.append(True)
     module = decisions()
@@ -1352,6 +1353,13 @@ def _dispatch(runtime, payload):
                     command, event.get("cwd", ""), grade=classifier.grade_text)
                 if timed:
                     note["timed_out"] = True
+                if grade == 3:
+                    # Every irreversible grade is a row, the one the marker lets through
+                    # included, in every permission mode: the marker is the agent's claim of
+                    # consent, which only a row lets a later label check.
+                    note["grade"] = 3
+                    if confirmed:
+                        note["confirmed"] = "marker"
             asked = grading and bool(grade) and not confirmed and grade >= grader.THRESHOLDS.get(variant, 1)
             # The decision provider, when one is configured, is asked only about what the stance
             # lets through, so it can add a prompt and never remove one.
