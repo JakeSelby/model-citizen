@@ -28,7 +28,7 @@ from . import (activity, auth, compare, draft_tests, drafts, free_suites, live_u
                module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import eval_tiers, first_run
+from . import eval_tiers, first_run, rule_health
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
@@ -1757,6 +1757,43 @@ def _first_run_start(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _rule_health(handler: Handler, route: Route) -> None:
+    # A read of five engine commands, run off the serial mutation executor like the run catalog.
+    if _required_request(handler, ()) is None:
+        return
+    payload = rule_health.report(handler.server.repo_root)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _rule_try_without(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("rule",))
+    if request is None:
+        return
+    if not isinstance(request["rule"], str) or not rule_health.UNIT.fullmatch(request["rule"]):
+        handler._error(400, "invalid_request")
+        return
+
+    def create(repo_root: Path, name: str) -> str:
+        failure = _run_draft_create(repo_root, name)
+        if failure:
+            # A create killed partway leaves a branch with no draft state; never one that holds work.
+            first_run.clear_partial(repo_root, name)
+        return failure
+
+    try:
+        payload = handler.server.mutations.call(
+            lambda: rule_health.try_without(handler.server.repo_root, request["rule"], create))
+    except rule_health.RuleHealthError as exc:
+        handler._error(409, exc.code)
+        return
+    except drafts.DraftError as exc:
+        handler._error(409, exc.code)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _stop(handler: Handler, route: Route) -> None:
     if not handler._control_authorized():
         handler._error(401, "unauthorized")
@@ -1996,6 +2033,23 @@ EVAL_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
 REPLAY_RUN = ResponseSchema("json-object", (("run_id", "string"),
                                               ("status", "string"),
                                               ("targets", "array")))
+RULE_HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
+                                              ("generated_at", "string"),
+                                              ("status", "string"),
+                                              ("summary", "object"),
+                                              ("windows", "array"),
+                                              ("precision_floor", "number-or-null"),
+                                              ("exploratory_note", "string"),
+                                              ("sources", "object"),
+                                              ("commands", "object"),
+                                              ("findings", "array"),
+                                              ("rows", "array")))
+RULE_TRY_WITHOUT = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("rule", "string"),
+                                                   ("draft", "object"),
+                                                   ("changes", "object"),
+                                                   ("commands", "array"),
+                                                   ("message", "string")))
 FIRST_RUN = ResponseSchema("json-object", (("schema_version", "integer"),
                                             ("state", "string"),
                                             ("fresh", "boolean"),
@@ -2183,6 +2237,10 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/configure/test/verdicts", "application/json",
           DRAFT_TEST_VERDICTS, _draft_test_verdicts, None, "application/json",
           ("citizen", "draft", "test")),
+    Route("POST", "/api/rules/health", "application/json", RULE_HEALTH, _rule_health, None,
+          "application/json", rule_health.CLI_COMMANDS["status"]),
+    Route("POST", "/api/rules/try-without", "application/json", RULE_TRY_WITHOUT,
+          _rule_try_without, None, "application/json", rule_health.CLI_COMMANDS["try_without"]),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

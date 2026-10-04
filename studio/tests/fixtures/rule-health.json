@@ -1,0 +1,437 @@
+{
+  "commands": {
+    "advice": "citizen usage --by adherence --json --days 30",
+    "cost": "citizen scorecard --json",
+    "hits": "citizen usage --rules --json --days {days}",
+    "precision": "python3 scripts/detector_corpus.py --json",
+    "status": "citizen usage --rules"
+  },
+  "exploratory_note": "Detector hits come from this machine's own sessions, which are exploratory under docs/evidence-standard.md item 11 and cannot be cited as evidence.",
+  "findings": [
+    {
+      "line": 4,
+      "path": ".ruleprobe/detectors.yaml",
+      "reason": "unknown command key 'x'"
+    }
+  ],
+  "generated_at": "2026-10-03T00:00:00Z",
+  "precision_floor": 0.9,
+  "rows": [
+    {
+      "advice": {
+        "groups": [],
+        "reason": "no recommendation in the adherence ledger names this rule",
+        "status": "not measured"
+      },
+      "detectors": [
+        {
+          "below_floor": false,
+          "id": "secrets/git-add-secret-file",
+          "precision": 1.0,
+          "reason": "",
+          "recall": 1.0,
+          "status": "measured"
+        },
+        {
+          "below_floor": false,
+          "id": "secrets/secret-in-write",
+          "precision": 1.0,
+          "reason": "",
+          "recall": 1.0,
+          "status": "measured"
+        }
+      ],
+      "effect": {
+        "arm": "no-secrets",
+        "effect": -0.04,
+        "estimand": "measured",
+        "exploratory": false,
+        "interval": [
+          -0.09,
+          0.01
+        ],
+        "measure": "cost",
+        "n": 6,
+        "reading": "inconclusive",
+        "reason": "",
+        "status": "measured"
+      },
+      "hits": {
+        "label": "exploratory",
+        "last_fired_within_days": 30,
+        "reason": "",
+        "reliable": true,
+        "status": "measured",
+        "windows": {
+          "30": {
+            "detectors": {
+              "secrets/git-add-secret-file": {
+                "hits": 1,
+                "note": "",
+                "of": 40,
+                "sessions": 1,
+                "share": 0.025
+              },
+              "secrets/secret-in-write": {
+                "hits": 0,
+                "note": "",
+                "of": 40,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 40,
+            "reason": "",
+            "status": "measured"
+          },
+          "7": {
+            "detectors": {
+              "secrets/git-add-secret-file": {
+                "hits": 0,
+                "note": "",
+                "of": 10,
+                "sessions": 0,
+                "share": 0.0
+              },
+              "secrets/secret-in-write": {
+                "hits": 0,
+                "note": "",
+                "of": 10,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 10,
+            "reason": "",
+            "status": "measured"
+          },
+          "90": {
+            "detectors": {
+              "secrets/git-add-secret-file": {
+                "hits": 1,
+                "note": "",
+                "of": 60,
+                "sessions": 1,
+                "share": 0.016666666666666666
+              },
+              "secrets/secret-in-write": {
+                "hits": 0,
+                "note": "",
+                "of": 60,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 60,
+            "reason": "",
+            "status": "measured"
+          }
+        }
+      },
+      "kind": "rules",
+      "module": "rules/secrets",
+      "path": "primitives/rules/secrets.md",
+      "reason": "",
+      "rule": "secrets",
+      "selection_state": "on",
+      "state": "measured",
+      "tokens": {
+        "estimand": "soft estimate",
+        "reason": "",
+        "status": "measured",
+        "tokens": 210
+      },
+      "try_without": {
+        "available": true,
+        "reason": ""
+      },
+      "unit": "secrets"
+    },
+    {
+      "advice": {
+        "groups": [],
+        "reason": "no recommendation in the adherence ledger names this rule",
+        "status": "not measured"
+      },
+      "detectors": [
+        {
+          "below_floor": true,
+          "id": "voice/banned-opener",
+          "precision": 0.75,
+          "reason": "",
+          "recall": 1.0,
+          "status": "measured"
+        }
+      ],
+      "effect": {
+        "reason": "no ablation run has removed this module",
+        "status": "not measured"
+      },
+      "hits": {
+        "label": "exploratory",
+        "last_fired_within_days": 7,
+        "reason": "voice/banned-opener precision 0.75 is under the 0.90 floor",
+        "reliable": false,
+        "status": "measured",
+        "windows": {
+          "30": {
+            "detectors": {
+              "voice/banned-opener": {
+                "hits": 9,
+                "note": "",
+                "of": 40,
+                "sessions": 6,
+                "share": 0.15
+              }
+            },
+            "measured_sessions": 40,
+            "reason": "",
+            "status": "measured"
+          },
+          "7": {
+            "detectors": {
+              "voice/banned-opener": {
+                "hits": 2,
+                "note": "",
+                "of": 10,
+                "sessions": 1,
+                "share": 0.1
+              }
+            },
+            "measured_sessions": 10,
+            "reason": "",
+            "status": "measured"
+          },
+          "90": {
+            "detectors": {
+              "voice/banned-opener": {
+                "hits": 12,
+                "note": "",
+                "of": 60,
+                "sessions": 8,
+                "share": 0.13333333333333333
+              }
+            },
+            "measured_sessions": 60,
+            "reason": "",
+            "status": "measured"
+          }
+        }
+      },
+      "kind": "rules",
+      "module": "rules/voice-and-format",
+      "path": "primitives/rules/voice-and-format.md",
+      "reason": "",
+      "rule": "voice-and-format",
+      "selection_state": "on",
+      "state": "measured",
+      "tokens": {
+        "estimand": "soft estimate",
+        "reason": "",
+        "status": "measured",
+        "tokens": 95
+      },
+      "try_without": {
+        "available": true,
+        "reason": ""
+      },
+      "unit": "voice-and-format"
+    },
+    {
+      "advice": {
+        "groups": [],
+        "reason": "no recommendation in the adherence ledger names this rule",
+        "status": "not measured"
+      },
+      "detectors": [],
+      "effect": {
+        "reason": "no ablation run has removed this module",
+        "status": "not measured"
+      },
+      "hits": {
+        "label": "exploratory",
+        "last_fired_within_days": null,
+        "reason": "a comment's redundancy is a judgment over the codebase, not a transcript pattern",
+        "reliable": null,
+        "status": "not measured",
+        "windows": {}
+      },
+      "kind": "rules",
+      "module": "rules/conciseness",
+      "path": "primitives/rules/conciseness.md",
+      "reason": "a comment's redundancy is a judgment over the codebase, not a transcript pattern",
+      "rule": "conciseness",
+      "selection_state": "on",
+      "state": "dark",
+      "tokens": {
+        "estimand": "soft estimate",
+        "reason": "",
+        "status": "measured",
+        "tokens": 218
+      },
+      "try_without": {
+        "available": true,
+        "reason": ""
+      },
+      "unit": "conciseness"
+    },
+    {
+      "advice": {
+        "groups": [],
+        "reason": "no recommendation in the adherence ledger names this rule",
+        "status": "not measured"
+      },
+      "detectors": [],
+      "effect": {
+        "reason": "no ablation run has removed this module",
+        "status": "not measured"
+      },
+      "hits": {
+        "label": "exploratory",
+        "last_fired_within_days": null,
+        "reason": "no detector names it and it has no opt-out",
+        "reliable": null,
+        "status": "not measured",
+        "windows": {}
+      },
+      "kind": "rules",
+      "module": "rules/working-style",
+      "path": "primitives/rules/working-style.md",
+      "reason": "no detector names it and it has no opt-out",
+      "rule": "working-style",
+      "selection_state": "off",
+      "state": "unmeasured",
+      "tokens": {
+        "reason": "the scorecard reads not loaded",
+        "status": "not measured"
+      },
+      "try_without": {
+        "available": false,
+        "reason": "it is not switched on in the selection in force"
+      },
+      "unit": "working-style"
+    },
+    {
+      "advice": {
+        "groups": [],
+        "reason": "no recommendation in the adherence ledger names this rule",
+        "status": "not measured"
+      },
+      "detectors": [
+        {
+          "below_floor": null,
+          "id": "autonomy/denied-by-grade",
+          "precision": null,
+          "reason": "no labelled example scores this detector",
+          "recall": null,
+          "status": "not measured"
+        }
+      ],
+      "effect": {
+        "reason": "no ablation run has removed this module",
+        "status": "not measured"
+      },
+      "hits": {
+        "label": "exploratory",
+        "last_fired_within_days": null,
+        "reason": "autonomy/denied-by-grade has no measured precision",
+        "reliable": false,
+        "status": "measured",
+        "windows": {
+          "30": {
+            "detectors": {
+              "autonomy/denied-by-grade": {
+                "hits": 0,
+                "note": "",
+                "of": 40,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 40,
+            "reason": "",
+            "status": "measured"
+          },
+          "7": {
+            "detectors": {
+              "autonomy/denied-by-grade": {
+                "hits": 0,
+                "note": "",
+                "of": 10,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 10,
+            "reason": "",
+            "status": "measured"
+          },
+          "90": {
+            "detectors": {
+              "autonomy/denied-by-grade": {
+                "hits": 0,
+                "note": "",
+                "of": 60,
+                "sessions": 0,
+                "share": 0.0
+              }
+            },
+            "measured_sessions": 60,
+            "reason": "",
+            "status": "measured"
+          }
+        }
+      },
+      "kind": "stances",
+      "module": "stances/autonomy",
+      "path": "primitives/stances/autonomy/execute.md",
+      "reason": "",
+      "rule": "autonomy",
+      "selection_state": "execute",
+      "state": "measured",
+      "tokens": {
+        "estimand": "soft estimate",
+        "reason": "",
+        "status": "measured",
+        "tokens": 120
+      },
+      "try_without": {
+        "available": false,
+        "reason": "a stance is changed by choosing another variant, not switched off"
+      },
+      "unit": "execute"
+    }
+  ],
+  "schema_version": 1,
+  "sources": {
+    "cost": {
+      "message": "",
+      "status": "ready"
+    },
+    "hits": {
+      "message": "",
+      "status": "ready"
+    },
+    "precision": {
+      "message": "",
+      "status": "ready"
+    },
+    "status": {
+      "message": "",
+      "status": "ready"
+    }
+  },
+  "status": "ready",
+  "summary": {
+    "dark": 1,
+    "measured": 3,
+    "measured_text": "(60% measured)",
+    "rules": 5,
+    "unmeasured": 1
+  },
+  "windows": [
+    7,
+    30,
+    90
+  ]
+}

@@ -22,6 +22,7 @@ import { OverviewPage } from "./overview/OverviewPage";
 import { ExperimentsPage } from "./experiments/ExperimentsPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
+import { RuleHealthPage } from "./reports/rules/RuleHealthPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
 import { FirstRunPage } from "./firstrun/FirstRunPage";
 import { version } from "../package.json";
@@ -134,6 +135,7 @@ function StudioFrame() {
           <Route path="/experiments" element={<ExperimentsPage />} />
           <Route path="/experiments/runs/:runId" element={<RunDetailPage />} />
           <Route path="/activity" element={<ActivityPage />} />
+          <Route path="/reports/rules" element={<RuleHealthPage />} />
           {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
             <Route
               element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
