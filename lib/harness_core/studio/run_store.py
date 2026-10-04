@@ -11,6 +11,7 @@ import math
 import os
 import sqlite3
 import stat
+import subprocess
 import uuid
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -33,6 +34,8 @@ DATABASE_NAME = "run-index.sqlite3"
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 4 * 1024 * 1024
 MAX_RESULTS_FILES = 4096
+MAX_STATIC_REVISIONS = 200
+STATIC_PATH = "benchmarks/static.json"
 COST_BASIS = "list_price_equivalent"
 HISTORY_LIMIT = 200
 TERMINAL_STATUSES = frozenset(("succeeded", "failed", "cancelled", "timed_out", "orphaned",
@@ -1175,6 +1178,38 @@ def _benchmark_static(relative: str, value: Any) -> Dict[str, Any]:
     }
 
 
+def _git(root: Path, *args: str) -> Optional[bytes]:
+    """`git` read in the repository with its hooks and filesystem monitor off; None on failure."""
+    try:
+        done = subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull,
+             "-C", str(root)] + list(args),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def static_revisions(root: Path, limit: int = MAX_STATIC_REVISIONS) -> List[Tuple[str, bytes]]:
+    """Each committed `benchmarks/static.json`, newest first, as `(commit, bytes)`.
+
+    The working file holds one version only, so the earlier versions a trend needs are read back
+    from the repository's own history; a checkout that is not a repository has none."""
+    toplevel = _git(root, "rev-parse", "--show-toplevel")
+    if toplevel is None or Path(toplevel.decode("utf-8", "replace").strip()).resolve() != Path(root).resolve():
+        return []
+    listed = _git(root, "log", "--format=%H", "-n", str(limit), "--", STATIC_PATH)
+    out = []
+    for commit in (listed or b"").decode("ascii", "replace").split():
+        size = _git(root, "cat-file", "-s", commit + ":" + STATIC_PATH)
+        if size is None or not size.strip().isdigit() or int(size) > MAX_SOURCE_BYTES:
+            continue
+        body = _git(root, "cat-file", "blob", commit + ":" + STATIC_PATH)
+        if body is not None:
+            out.append((commit, body))
+    return out
+
+
 def _evidence_bundle(relative: str, result: Mapping[str, Any]) -> Dict[str, Any]:
     """One proof bundle as `evidence_bundle.verify` judged it; the status is the verifier's own."""
     proof = evaluation.proof_status(result)
@@ -1676,6 +1711,7 @@ class RunStore:
         if len(candidates) + len(bundles) > MAX_RESULTS_FILES:
             raise RunStoreError("too many run source files")
         candidates.extend((root / bundle, "bundle") for bundle in bundles)
+        static_versions = set()
         for path, kind in candidates:
             relative = path.relative_to(root).as_posix()
             try:
@@ -1687,6 +1723,7 @@ class RunStore:
                                for number, row in _read_jsonl(path)]
                 elif kind == "static":
                     records = [_benchmark_static(relative, _read_json(path))]
+                    static_versions.add(records[0]["source"]["record_identity"])
                 elif kind == "bundle":
                     try:
                         result = evaluation.verify_bundle(path)
@@ -1703,6 +1740,25 @@ class RunStore:
                     for record in records:
                         self._upsert(record)
                 imported += len(records)
+            except (RunStoreError, sqlite3.Error, AttributeError, TypeError) as exc:
+                skipped.append({"path": relative, "reason": str(exc)})
+        # Earlier versions' static figures, one per version; the working file's wins.
+        for commit, body in static_revisions(root):
+            relative = STATIC_PATH + "@" + commit[:12]
+            try:
+                try:
+                    value = _loads(body.decode("utf-8"))
+                except (UnicodeError, ValueError, RecursionError) as exc:
+                    raise RunStoreError("run source is not valid JSON: " + relative) from exc
+                record = _benchmark_static(relative, value)
+                version = record["source"]["record_identity"]
+                if version in static_versions:
+                    continue
+                static_versions.add(version)
+                record["source"]["commit"] = commit
+                with self.connection:
+                    self._upsert(record)
+                imported += 1
             except (RunStoreError, sqlite3.Error, AttributeError, TypeError) as exc:
                 skipped.append({"path": relative, "reason": str(exc)})
         # Imported here because the plugin eval parser is built on this module's helpers.

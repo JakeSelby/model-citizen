@@ -2,13 +2,14 @@
 """The trends route refuses anonymous, cross-site and malformed requests (AH-S309, #992)."""
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_studio_security as studio_security  # noqa: E402
-from harness_core.studio import run_store, server, trends  # noqa: E402
+from harness_core.studio import evaluation, run_store, server, trends  # noqa: E402
 
 TRENDS = "/api/reports/trends"
 
@@ -65,7 +66,14 @@ class TrendsRouteSecurityTests(studio_security.StudioSecurityFixture):
 class FailingStoreHandlerTests(unittest.TestCase):
     """The handler itself, in process: a run store that fails answers 200 with the proof set."""
 
-    def test_a_failing_run_store_leaves_the_proof_set_and_answers_200(self):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repository = Path(self.tmp.name).resolve()
+        (self.repository / "product.json").write_text(json.dumps({"evidence_cards": [
+            {"field": "/headline", "text": "x", "bundle": "proof", "card": "ratio"}]}))
+
+    def call(self, history):
         sent = {}
 
         class Mutations:
@@ -74,24 +82,40 @@ class FailingStoreHandlerTests(unittest.TestCase):
                 return action()
 
         class Supervisor:
-            @property
-            def history(self):
-                raise run_store.RunStoreError("run index read failed")
-
+            pass
+        supervisor = Supervisor()
+        supervisor.history = history
         handler = mock.Mock()
         handler.request_json = {}
         handler.server.mutations = Mutations()
-        handler.server.run_supervisor = Supervisor()
-        handler.server.repo_root = Path(__file__).resolve().parents[1]
+        handler.server.run_supervisor = supervisor
+        handler.server.repo_root = self.repository
         handler._json.side_effect = lambda status, payload: sent.update(status=status, payload=payload)
+        verified = {"ok": True, "bundle_id": "b", "errors": [], "unknown": [], "checks": {},
+                    "cards": [{"id": "ratio", "claim": "c", "estimand": "intention-to-treat",
+                               "figure": {"value": 1}, "interval": {"value": [0, 2]},
+                               "verify_status": True}]}
         route = {item.path: item for item in server.ROUTES.entries}[TRENDS]
-        server._trends(handler, route)
+        with mock.patch.object(evaluation, "verify_bundle", return_value=verified) as verify:
+            server._trends(handler, route)
+        verify.assert_called_once_with(self.repository / "proof")
+        return sent
+
+    def test_a_failing_run_store_leaves_the_proof_set_and_answers_200(self):
+        store = mock.Mock()
+        store.history.side_effect = run_store.RunStoreError("run index read failed")
+        sent = self.call(store)
         self.assertEqual(sent["status"], 200)
         document = sent["payload"]
         self.assertEqual(document["sections"]["history"]["status"], "unavailable")
         self.assertIn("run index read failed", document["sections"]["static"]["reason"])
         self.assertEqual(document["lines"], [])
-        self.assertIn("statement", document["proof"])
+        self.assertEqual(document["proof"]["claims"][0]["status"], "verified")
+        self.assertEqual(document["proof"]["bundles"][0]["bundle_id"], "b")
+
+    def test_a_coding_error_in_the_read_is_not_reported_as_an_unreadable_index(self):
+        with self.assertRaises(AttributeError):
+            self.call(object())
 
 
 if __name__ == "__main__":

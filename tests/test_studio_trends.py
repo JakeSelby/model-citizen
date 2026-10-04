@@ -187,6 +187,20 @@ class TrendLineTests(Fixture):
         registered = by_line(self.report())["replay-v2"]["points"][0]
         self.assertIn("(adherence, descriptive, not causal; registered)", registered["delegation"]["heading"])
 
+    def test_the_delegation_heading_and_the_label_read_the_same_verdict(self):
+        row = history_row("2026-10-02", "0.16.0", 0.9, 0.9, evidence="pre-registered")
+        row["delegation"]["registered"] = True  # the block says registered, the label fails the rule
+        point = trends.history_point({"raw": row})
+        self.assertEqual(point["evidence"]["label"], "exploratory")
+        self.assertIn("exploratory, not from a registered run", point["delegation"]["heading"])
+        self.assertIn("(exploratory, not from a registered run)", point["sm2"]["text"])
+
+    def test_an_eligibility_the_row_did_not_store_is_said_so(self):
+        row = history_row("2026-10-02", "0.16.0", 0.9, 0.9)
+        del row["sm2"]["sm2_eligible"]
+        self.assertTrue(trends.history_point({"raw": row})["sm2"]["text"].startswith(
+            "SM-2 eligibility: not stored in the row."))
+
     def test_an_undefined_ratio_shows_sm2s_stored_reason(self):
         figure = by_line(self.report())["replay-v2"]["points"][1]["measures"]["ratio_sm2"]
         self.assertEqual((figure["value"], figure["interval"], figure["undefined"]),
@@ -238,30 +252,54 @@ class TrendLineTests(Fixture):
         self.assertEqual(static["points"][0]["value"], 3000)
 
     def test_versions_sort_as_releases_not_as_text(self):
-        for version in ("0.9.0", "0.10.0", "0.9.1"):
-            self.store.upsert(run_store._benchmark_static("benchmarks/static.json",
-                                                          dict(STATIC, harness_version=version)))
-        versions = [p["harness_version"] for p in self.report()["static"]["points"]]
-        self.assertEqual(versions, ["0.9.0", "0.9.1", "0.10.0", "0.15.0"])
         self.assertLess(trends.version_key("v0.9.0"), trends.version_key("0.10.0"))
+        self.assertEqual(sorted(["0.10.0", "0.9.1", "0.9.0"], key=trends.version_key), ["0.9.0", "0.9.1", "0.10.0"])
         points = [{"date": "2026-01-01", "harness_version": v, "harness_sha": "", "series": "s",
                    "bucket": "", "evidence": {"label": "exploratory"}} for v in ("0.10.0", "0.9.0")]
         self.assertEqual([p["harness_version"] for p in trends.lines(points)[0]["points"]],
                          ["0.9.0", "0.10.0"])
 
-    def test_a_reindex_drops_a_static_record_whose_file_moved_on(self):
+    def git(self, *args):
+        environment = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t",
+                           GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t")
+        subprocess.run(["git", "-C", str(self.repository)] + list(args), check=True,
+                       capture_output=True, env=environment)
+
+    def test_every_committed_static_version_survives_a_reindex_and_a_rebuild(self):
+        """The index holds each version's figure from the repository's history, in release order."""
         root = Path(self.tmp.name).resolve()
         (self.repository / "benchmarks").mkdir()
+        self.git("init", "-q")
+        static = self.repository / "benchmarks" / "static.json"
+        for version, tokens in (("0.9.0", 2000), ("0.10.0", 2500)):
+            value = dict(STATIC, harness_version=version, total=dict(STATIC["total"], est_tokens=tokens))
+            static.write_text(json.dumps(value))
+            self.git("add", "-A")
+            self.git("commit", "-qm", version)
+        # An older schema in history is skipped with its reason, never a crash.
+        static.write_text(json.dumps({"schema_version": 1, "harness_version": "0.8.0"}))
+        self.git("commit", "-qam", "old schema")
+        static.write_text(json.dumps(dict(STATIC, harness_version="0.11.0")))
         catalog = root / "suites.json"
         catalog.write_text(json.dumps({"schema_version": 1, "suites": []}))
         supervisor = runs.RunSupervisor(root / "supervisor", catalog)
         self.addCleanup(supervisor.close)
-        static = self.repository / "benchmarks" / "static.json"
-        for version in ("0.9.0", "0.10.0"):
-            static.write_text(json.dumps(dict(STATIC, harness_version=version)))
-            supervisor.reindex(self.repository)
+        report = supervisor.reindex(self.repository)
+        self.assertEqual([item["path"][:len("benchmarks/static.json@")] for item in report["skipped"]],
+                         ["benchmarks/static.json@"])
+        expected = [("0.9.0", 2000), ("0.10.0", 2500), ("0.11.0", 3000)]
         document = trends.report(self.repository, trends.collect(supervisor.history), fake_verify(VERIFIED))
-        self.assertEqual([p["harness_version"] for p in document["static"]["points"]], ["0.10.0"])
+        self.assertEqual([(p["harness_version"], p["value"]) for p in document["static"]["points"]], expected)
+        supervisor.history.close()
+        (root / "supervisor" / run_store.DATABASE_NAME).unlink()
+        supervisor.history = run_store.RunStore(root / "supervisor")
+        supervisor.reindex(self.repository)
+        supervisor.reindex(self.repository)
+        document = trends.report(self.repository, trends.collect(supervisor.history), fake_verify(VERIFIED))
+        self.assertEqual([(p["harness_version"], p["value"]) for p in document["static"]["points"]], expected)
+
+    def test_a_directory_that_is_not_its_own_repository_reads_no_history(self):
+        self.assertEqual(run_store.static_revisions(self.repository), [])
 
     def test_measures_with_no_history_say_so_rather_than_show_a_line(self):
         names = [item["measure"] for item in self.report()["not_tracked"]]
@@ -292,6 +330,43 @@ class TrendLineTests(Fixture):
         document = self.report()
         self.assertEqual(document["sections"]["history"]["unreadable"], 1)
         self.assertEqual(sum(len(line["points"]) for line in document["lines"]), 3)
+
+    def test_a_paging_failure_draws_no_line_from_the_records_read_before_it(self):
+        real = self.store.history
+        calls = []
+
+        def history(**filters):
+            calls.append(filters)
+            if len(calls) > 1:
+                raise run_store.RunStoreError("run history read failed")
+            return real(**filters)
+        self.store.history = history
+        original = trends.PAGE
+        try:
+            trends.PAGE = 1
+            document = self.report()
+        finally:
+            trends.PAGE = original
+        self.assertEqual(document["sections"]["history"]["status"], "unavailable")
+        self.assertEqual(document["lines"], [])
+
+    def test_an_engine_that_will_not_load_leaves_static_and_proof_standing(self):
+        self.bind([{"field": "/a", "text": "t", "bundle": "proof/one", "card": "ratio"}])
+
+        def broken():
+            raise trends.EngineUnavailable("scripts/delegation_verdict.py could not be loaded: boom")
+        original = trends._delegation_engine
+        trends._delegation_engine = broken
+        try:
+            document = self.report()
+        finally:
+            trends._delegation_engine = original
+        self.assertEqual(document["sections"]["history"]["status"], "unavailable")
+        self.assertIn("could not be loaded: boom", document["sections"]["history"]["reason"])
+        self.assertEqual(document["lines"], [])
+        self.assertEqual(document["sections"]["static"]["status"], "ready")
+        self.assertEqual(document["static"]["points"][0]["harness_version"], "0.15.0")
+        self.assertEqual(document["proof"]["claims"][0]["status"], "verified")
 
     def test_a_run_store_that_fails_leaves_the_proof_set_standing(self):
         def broken(**_filters):
@@ -362,6 +437,8 @@ class ProofSetTests(Fixture):
         cards = [{"field": "/f%d" % n, "text": "t", "bundle": "proof/b%d" % n, "card": "ratio"}
                  for n in range(trends.MAX_BUNDLES + 1)]
         cards.append({"field": "/outside", "text": "t", "bundle": "../elsewhere", "card": "ratio"})
+        cards.append({"field": "/slash", "text": "t", "bundle": "proof\\b", "card": "ratio"})
+        cards.append({"field": "/root", "text": "t", "bundle": "/tmp/proof", "card": "ratio"})
         self.bind(cards)
         verify = fake_verify(VERIFIED)
         proof = self.report(verify)["proof"]
@@ -371,7 +448,9 @@ class ProofSetTests(Fixture):
         by_field = {claim["field"]: claim for claim in proof["claims"]}
         self.assertEqual(by_field["/f16"]["status"], "not checked")
         self.assertEqual(by_field["/outside"]["status"], "not checked")
-        self.assertIn("leaves the repository", by_field["/outside"]["reason"])
+        self.assertEqual(by_field["/outside"]["reason"], "the bundle path leaves the repository")
+        self.assertEqual(by_field["/slash"]["reason"], "the bundle path contains a backslash")
+        self.assertEqual(by_field["/root"]["reason"], "the bundle path is absolute")
 
     def test_no_bundle_starts_once_the_verification_budget_is_spent(self):
         self.bind([{"field": "/f%d" % n, "text": "t", "bundle": "proof/b%d" % n, "card": "ratio"} for n in range(3)])

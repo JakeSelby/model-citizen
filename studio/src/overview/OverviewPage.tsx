@@ -20,7 +20,7 @@ import { loadOverview } from "./api";
 import { releaseSummary, systemSummary, type DoctorCheck, type Overview } from "./model";
 import "./overview.css";
 
-const reportCards = [
+export const reportCards = [
   { label: "System health", measure: "Doctor evidence", detail: "Every check keeps the CLI message and repair command.", href: "/reports#system-health" },
   { label: "Hook performance", measure: "No timing window", detail: "Invocation counts and latency stay linked to their source window.", href: "/reports#hook-performance" },
   { label: "Efficacy", measure: "No comparison yet", detail: "Run a paired experiment before judging a draft.", href: "/reports#efficacy" },
@@ -35,6 +35,11 @@ function ReportCard({ label, measure, detail, href }: (typeof reportCards)[numbe
     <Text c="dimmed" size="sm">{detail}</Text>
     <Text className="card-link" fw={600} size="sm">Open report <span aria-hidden="true">↗</span></Text>
   </Card>;
+}
+
+/** Every report the Hub links to, one card each. */
+export function ReportCards() {
+  return <SimpleGrid className="report-grid" cols={{ base: 1, xs: 2 }} spacing="md">{reportCards.map((card) => <ReportCard key={card.label} {...card} />)}</SimpleGrid>;
 }
 
 function DoctorRow({ check }: { check: DoctorCheck }) {
@@ -153,6 +158,6 @@ function OverviewInsights() {
         <Text c="dimmed" mt="sm">Studio makes no model calls until you opt in. Provider, model, evidence scope, refresh policy, and daily cap stay visible.</Text>
         <Group mt="xl"><Button component={NavLink} to="/configure#ai-overview" variant="light">Review AI settings</Button><Anchor component={NavLink} to="/reports">Browse deterministic reports</Anchor></Group>
       </Paper>
-      <SimpleGrid className="report-grid" cols={{ base: 1, xs: 2 }} spacing="md">{reportCards.map((card) => <ReportCard key={card.label} {...card} />)}</SimpleGrid>
+      <ReportCards />
     </section>;
 }

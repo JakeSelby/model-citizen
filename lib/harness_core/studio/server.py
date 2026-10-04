@@ -1889,15 +1889,16 @@ def _rule_health(handler: Handler, route: Route) -> None:
 
 def _trends(handler: Handler, route: Route) -> None:
     # The run store reads run on the thread that owns its SQLite connection. The bundle verifier
-    # runs git subprocesses, bounded by `trends.VERIFY_BUDGET_SECONDS`, so it runs here, off the
-    # serial mutation executor. A run store that fails leaves its sections unavailable, never
-    # the proof set.
+    # runs git subprocesses, so it runs here, off the serial mutation executor. No bundle starts
+    # once `trends.VERIFY_BUDGET_SECONDS` is spent, but one already started can still run each of
+    # its git calls to their 30-second timeout on this thread. A run store that fails leaves its
+    # sections unavailable, never the proof set.
     if _required_request(handler, ()) is None:
         return
     try:
         collected = handler.server.mutations.call(
             lambda: trends.collect(handler.server.run_supervisor.history))
-    except (run_store.RunStoreError, AttributeError) as exc:
+    except run_store.RunStoreError as exc:
         collected = trends.unavailable("the run index could not be read: %s" % exc)
     payload = trends.report(handler.server.repo_root, collected)
     route.response_schema.validate(payload)

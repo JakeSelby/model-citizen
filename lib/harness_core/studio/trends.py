@@ -30,7 +30,7 @@ import re
 import sys
 import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import evaluation, replay
@@ -87,26 +87,37 @@ _ENGINE_LOCK = threading.Lock()
 _DELEGATION = None
 
 
+class EngineUnavailable(RuntimeError):
+    """The delegation engine could not be loaded; the history section says so."""
+
+
 def _delegation_engine():
     """`scripts/delegation_verdict.py`, loaded once; it imports its sibling `experiment_protocol`."""
     global _DELEGATION
     with _ENGINE_LOCK:
         if _DELEGATION is None:
-            protocol = replay._engine_module("experiment_protocol")
-            prior = sys.modules.get("experiment_protocol")
-            sys.modules["experiment_protocol"] = protocol
             try:
-                spec = importlib.util.spec_from_file_location(
-                    "studio_delegation_verdict", str(replay._SCRIPTS / "delegation_verdict.py"))
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-            finally:
-                if prior is None:
-                    sys.modules.pop("experiment_protocol", None)
-                else:
-                    sys.modules["experiment_protocol"] = prior
-            _DELEGATION = module
+                _DELEGATION = _load_delegation()
+            except Exception as exc:  # any load failure leaves only the history section unavailable
+                raise EngineUnavailable("scripts/delegation_verdict.py could not be loaded: %s" % exc) from exc
         return _DELEGATION
+
+
+def _load_delegation():
+    protocol = replay._engine_module("experiment_protocol")
+    prior = sys.modules.get("experiment_protocol")
+    sys.modules["experiment_protocol"] = protocol
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "studio_delegation_verdict", str(replay._SCRIPTS / "delegation_verdict.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        if prior is None:
+            sys.modules.pop("experiment_protocol", None)
+        else:
+            sys.modules["experiment_protocol"] = prior
+    return module
 
 
 def version_key(version: Optional[str]) -> Tuple[Any, ...]:
@@ -166,7 +177,8 @@ def _section(maximum: int, store: Store, suite_id: str) -> Dict[str, Any]:
                 return {"records": out, "unreadable": unreadable, "truncated": False,
                         "error": None}
     except ValueError as exc:
-        return {"records": out, "unreadable": unreadable, "truncated": False,
+        # Records read before the failure are dropped, so no line is drawn from part of the index.
+        return {"records": [], "unreadable": 0, "truncated": False,
                 "error": "the run index could not be read: %s" % exc}
 
 
@@ -220,8 +232,9 @@ def _sm2(row: Mapping[str, Any], registered: bool) -> Dict[str, Any]:
         out["text"] = None
         return out
     verdict = out["verdict"] if registered else "%s (%s)" % (out["verdict"], NOT_FROM_REGISTERED)
+    eligible = {True: "eligible", False: "exploratory only"}.get(out["eligible"], "not stored in the row")
     eligibility = "SM-2 eligibility: %s%s" % (
-        "eligible" if out["eligible"] else "exploratory only",
+        eligible,
         "; %s" % out["limitation"] if out["limitation"] else "")
     out["text"] = "%s. verdict: %s, because %s%s" % (
         eligibility, verdict, out["reason"] or "no reason stored",
@@ -229,16 +242,17 @@ def _sm2(row: Mapping[str, Any], registered: bool) -> Dict[str, Any]:
     return out
 
 
-def _delegation(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-    """The tally, and the block's heading as `delegation_verdict.heading` prints it."""
+def _delegation(row: Mapping[str, Any], registered: bool) -> Optional[Dict[str, Any]]:
+    """The tally, and the block's heading as `delegation_verdict.heading` prints it, from the same
+    registration reading as the point's label so the two never disagree."""
     value = row.get("delegation")
     if not isinstance(value, dict) or not isinstance(value.get("verdicts"), dict):
         return None
     verdicts = {name: count for name, count in value["verdicts"].items()
                 if isinstance(name, str) and isinstance(count, int) and not isinstance(count, bool)}
     try:
-        heading = _delegation_engine().heading(value)
-    except (KeyError, TypeError, ValueError, AttributeError):
+        heading = _delegation_engine().heading(dict(value, registered=registered))
+    except (KeyError, TypeError, ValueError, AttributeError, OSError, ImportError):
         heading = None  # an older or partial block the engine's own printer cannot read
     return {"label": _text(value.get("label")), "verdicts": verdicts, "heading": heading}
 
@@ -277,7 +291,7 @@ def history_point(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
             "pass_rate_difference": _figure(sm2.get("difference"), sm2.get("difference_interval"), "SM-2"),
         },
         "sm2": _sm2(row, evidence["label"] == PREREGISTERED),
-        "delegation": _delegation(row),
+        "delegation": _delegation(row, evidence["label"] == PREREGISTERED),
         "source": {"path": _text(source.get("path")), "line": source.get("line")},
     }
 
@@ -335,6 +349,17 @@ def _not_checked(relative: str, reason: str) -> Dict[str, Any]:
     return {"bundle": relative, "status": "not checked", "reason": reason, "bundle_id": None,
             "errors": [], "unknown": [], "checks": {}, "cards": [],
             "command": "citizen evidence verify --json " + relative}
+
+
+def _refusal(bundle: str) -> str:
+    """Why `evaluation.bound_bundles` refused a bundle path, so no check ran on it."""
+    if "\\" in bundle:
+        return "the bundle path contains a backslash"
+    if PurePosixPath(bundle).is_absolute():
+        return "the bundle path is absolute"
+    if ".." in PurePosixPath(bundle).parts:
+        return "the bundle path leaves the repository"
+    return "the bundle path is not one product.json can bind"
 
 
 def _declarations(repository: Path) -> List[Dict[str, str]]:
@@ -410,7 +435,7 @@ def proof_set(repository: Path, verify: Optional[Verifier] = None,
         bundle = status.get(item["bundle"])
         card = next((c for c in bundle["cards"] if c["id"] == item["card"]), None) if bundle else None
         if bundle is None:
-            state, reason = "not checked", "the bundle path is absolute or leaves the repository"
+            state, reason = "not checked", _refusal(item["bundle"])
         elif bundle["status"] == "not checked":
             state, reason = "not checked", bundle["reason"]
         elif card is None:
@@ -434,8 +459,12 @@ def _state(section: Mapping[str, Any]) -> Dict[str, Any]:
 def report(repository: Path, collected: Mapping[str, Any],
            verify: Optional[Verifier] = None) -> Dict[str, Any]:
     """The trends page: lines, static context and the proof set, each as its source stated it."""
-    history, static = collected["history"], collected["static"]
-    points = [point for point in (history_point(r) for r in history["records"]) if point is not None]
+    history, static = dict(collected["history"]), collected["static"]
+    try:
+        points = [point for point in (history_point(r) for r in history["records"]) if point is not None]
+    except EngineUnavailable as exc:
+        points = []
+        history.update(records=[], error=str(exc))
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
