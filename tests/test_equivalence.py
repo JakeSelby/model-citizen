@@ -70,6 +70,13 @@ class VerdictTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be positive"):
             EQ.check_margin(EQ.RATIO, (-0.5, 1.2))
 
+    def test_a_behaviour_score_margin_must_contain_zero(self):
+        with self.assertRaisesRegex(ValueError, "rule_adherence margin must contain 0"):
+            EQ.check_margin("rule_adherence", (0.1, 0.2))
+        with self.assertRaisesRegex(ValueError, "must contain 0"):
+            EQ.margins_from_plan("## Equivalence margins\n\n- **rule_adherence:** -0.2 to -0.1\n")
+        self.assertEqual(EQ.check_margin("rule_adherence", (-0.1, 0.1)), (-0.1, 0.1))
+
     def test_a_metric_with_no_interval_is_inconclusive_not_dropped(self):
         assessed = EQ.assess({EQ.RATIO: [0.9, 1.1]}, {EQ.RATIO: (0.85, 1.1765), "Rule adherence": (-0.1, 0.1)})
         self.assertEqual(assessed[EQ.RATIO]["verdict"], EQ.EQUIVALENT)
@@ -136,6 +143,27 @@ class CommandTests(unittest.TestCase):
             self.assertIn("Pass-rate difference: equivalent", out)
             code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
             self.assertEqual(json.loads(out)[EQ.RATIO]["margin"], [0.85, 1.1765])
+
+    def test_a_behaviour_score_is_judged_from_the_rows_metrics(self):
+        def scored(row):
+            shift = 0.5 if row["arm"] == "harness" else 0.0
+            value = (0.8 if row["passed"] else 0.6) + 0.01 * (row["rep"] % 3)
+            return dict(row, metric_directions={"rule_adherence": "higher", "tool_errors": "lower"},
+                        metrics={"rule_adherence": value, "tool_errors": value + shift})
+        plan = ("## Equivalence margins\n\n- **Pass-rate difference:** -0.125 to 0.125\n"
+                "- **rule_adherence:** -0.05 to 0.05\n- **tool_errors:** -0.05 to 0.05\n"
+                "- **unreported_score:** -0.05 to 0.05\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(scored(r)) for r in rows(1.0, 5)) + "\n",
+                                                  encoding="utf-8")
+            Path(tmp, "plan.md").write_text(plan, encoding="utf-8")
+            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
+        self.assertEqual(code, 0)
+        assessed = json.loads(out)
+        self.assertEqual(assessed["rule_adherence"]["verdict"], EQ.EQUIVALENT)
+        self.assertEqual(assessed["tool_errors"]["verdict"], EQ.NOT_EQUIVALENT)
+        self.assertAlmostEqual(assessed["tool_errors"]["interval"][0], 0.5)
+        self.assertEqual(assessed["unreported_score"]["verdict"], EQ.INCONCLUSIVE)
 
     def test_a_plan_without_margins_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:

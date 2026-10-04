@@ -17,6 +17,10 @@ def ceiling_rows():
     return [dict(r, passed=True) for r in pilot_rows()]
 
 
+def floor_rows():
+    return [dict(r, passed=False) for r in pilot_rows()]
+
+
 class AssumedPassRateTests(unittest.TestCase):
     def main(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -77,6 +81,45 @@ class AssumedPassRateTests(unittest.TestCase):
         self.assertEqual(self.main(*STATED + ("--pass-rate", "0.8", "--mde", "0.12", "--json"))[1],
                          self.main(*STATED + ("--pass-rate", "0.8", "--effect", "0.12", "--json"))[1])
         self.assertEqual(self.main(*STATED + ("--pass-rate", "0.8", "--mde", "0.2"))[0], 2)
+
+
+class FloorPilotTests(unittest.TestCase):
+    main = AssumedPassRateTests.main
+
+    def pilot(self, tmp):
+        Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(r) for r in floor_rows()) + "\n",
+                                              encoding="utf-8")
+        return tmp
+
+    def test_a_floor_pilot_needs_a_stated_tau2_as_well(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, err = self.main("--pilot", self.pilot(tmp), "--assumed-pass-rate", "0.7")
+        self.assertEqual(code, 2)
+        self.assertIn("--tau2", err)
+
+    def test_a_floor_pilot_sizes_with_both_assumptions_printed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = ("--pilot", self.pilot(tmp), "--assumed-pass-rate", "0.7", "--tau2", "0.02",
+                    "--long-tau2", "0.02")
+            code, out, _ = self.main(*argv)
+            self.assertEqual(code, 0)
+            self.assertIn("the measured pass rate is 0.0000", out)
+            self.assertIn("assumption: tau2 0.0200 is the pre-registered assumption", out)
+            self.assertRegex(out, r"design: k = \d+ task\(s\)")
+            result = json.loads(self.main(*argv + ("--json",))[1])
+        self.assertTrue(result["inputs"]["tau2_assumed"])
+        self.assertEqual(result["inputs"]["tau2"], 0.02)
+        self.assertEqual(result["inputs"]["measured_pass_rate"], 0.0)
+
+    def test_a_stated_tau2_never_overrides_a_measured_one(self):
+        with self.assertRaisesRegex(ValueError, "the pilot measured tau2"):
+            POWER.estimate(pilot_rows(), assumed_tau2=0.02)
+        self.assertFalse(POWER.estimate(pilot_rows())["tau2_assumed"])
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(r) for r in pilot_rows()) + "\n",
+                                                  encoding="utf-8")
+            self.assertEqual(self.main("--pilot", tmp, "--tau2", "0.02")[0], 2)
+            self.assertEqual(self.main("--pilot", tmp, "--cv2", "0.1")[0], 2)
 
 
 if __name__ == "__main__":

@@ -13,8 +13,10 @@ A margin is `(lower, upper)` on the metric's own scale: a ratio's margin bracket
 positive, a difference's brackets 0. Margins come from the pre-registration's "Equivalence
 margins" section (`margins_from_plan`), one `- **<metric>:** <lower> to <upper>` field each; a
 field reading "none" registers no margin. `Cost-of-Pass ratio` and `Pass-rate difference` read
-`replay_stats.analyse`'s intervals; any other field is a behaviour score, judged from an interval
-the caller supplies. How a plan states them: docs/pre-registration-template.md.
+`replay_stats.analyse`'s intervals; any other field is a behaviour score, an oracle metric named
+as `oracle_metrics.summarise` reports it, judged from that metric's paired treatment-minus-reference
+difference interval, so its margin brackets 0 too. How a plan states them:
+docs/pre-registration-template.md.
 
 Standard library only, and no model call.
 """
@@ -26,6 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import experiment_protocol  # noqa: E402  the plan's section and field reader
+import oracle_metrics  # noqa: E402  behaviour scores' intervals
 import replay_stats  # noqa: E402
 
 EQUIVALENT, NOT_EQUIVALENT, INCONCLUSIVE = "equivalent", "not equivalent", "inconclusive"
@@ -41,12 +44,11 @@ def check_margin(metric, margin):
     lower, upper = float(margin[0]), float(margin[1])
     if not lower < upper:
         raise ValueError("the %s margin's lower bound must be below its upper bound" % metric)
-    if metric in ANALYSED:
-        null = ANALYSED[metric][1]
-        if not lower < null < upper:
-            raise ValueError("the %s margin must contain %g, no effect" % (metric, null))
-        if metric == RATIO and lower <= 0:
-            raise ValueError("the %s margin must be positive" % metric)
+    null = ANALYSED[metric][1] if metric in ANALYSED else 0.0  # a behaviour score is a difference
+    if not lower < null < upper:
+        raise ValueError("the %s margin must contain %g, no effect" % (metric, null))
+    if metric == RATIO and lower <= 0:
+        raise ValueError("the %s margin must be positive" % metric)
     return lower, upper
 
 
@@ -63,9 +65,13 @@ def verdict(interval, margin):
     return INCONCLUSIVE, "the interval crosses a bound of [%g, %g]" % (lower, upper)
 
 
-def intervals_of(result):
-    """`{metric: interval}` for the metrics `replay_stats.analyse` reports."""
-    return dict((metric, result.get(key)) for metric, (key, _) in ANALYSED.items())
+def intervals_of(result, metrics=None):
+    """`{metric: interval}` for the metrics `replay_stats.analyse` reports, and for each behaviour
+    score in `metrics`, an `oracle_metrics.summarise` result (None when no row carries one)."""
+    out = dict((metric, result.get(key)) for metric, (key, _) in ANALYSED.items())
+    for name, metric in ((metrics or {}).get("metrics") or {}).items():
+        out.setdefault(name, metric.get("difference_interval"))
+    return out
 
 
 def assess(intervals, margins):
@@ -136,7 +142,8 @@ def main(argv=None):
         if path.is_dir():
             path = path / "results.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        assessed = assess(intervals_of(replay_stats.analyse(rows, args.seed, args.resamples)), margins)
+        assessed = assess(intervals_of(replay_stats.analyse(rows, args.seed, args.resamples),
+                                       oracle_metrics.summarise(rows, args.seed, args.resamples)), margins)
     except (ValueError, OSError) as exc:
         print("equivalence: %s" % exc, file=sys.stderr)
         return 2

@@ -84,7 +84,8 @@ an appended entry in the deviation log, never an edit above it.
 - **Assumed pass rate:** <"none", or the pass rate the power calculation assumes and why. Required
   when the pilot passes everything or nothing, which leaves no pass-rate variance to size from; the
   command then refuses to size without `--assumed-pass-rate`, and prints the assumption beside the
-  measured rate>
+  measured rate. A pilot where fewer than two tasks pass in both arms, the floor included, has no
+  Cost-of-Pass variance either: state the assumed tau2 too, passed as `--tau2` beside `--pilot`>
 - **Variance source:** <the pilot rows or earlier run the power analysis used, with its
   intra-cluster correlation>
 - **Power calculation:** <the command that produced k, n and m for the decision rule and for the

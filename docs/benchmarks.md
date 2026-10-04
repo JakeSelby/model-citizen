@@ -419,8 +419,9 @@ python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalenc
   test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
   in its docstring. A pilot that passes everything or nothing is sized only with the
-  pre-registered `--assumed-pass-rate`, which the output names as an assumption; `--mde` sets the
-  minimum detectable effect.
+  pre-registered `--assumed-pass-rate`, which the output names as an assumption; a pilot with fewer
+  than two tasks passing in both arms, the floor included, also needs the pre-registered `--tau2`.
+  `--mde` sets the minimum detectable effect.
 - **A null has bounds.** `scripts/equivalence.py <results dir> --plan <plan>` reads each metric's
   task-clustered interval against the plan's Equivalence margins and prints equivalent, not
   equivalent or inconclusive; the rule is in the
