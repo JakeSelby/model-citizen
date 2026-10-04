@@ -2840,6 +2840,9 @@ def _store_write(cmd):
     linked = _linked_segments(stripped) if stripped is not None else None
     if linked is None:
         return True
+    marked = _linked_segments(_mark_expansions(stripped))
+    if marked is None or len(marked) != len(linked):
+        return True
     tainted, moved, reached = set(), False, []
 
     def names_store(text):
@@ -2847,7 +2850,7 @@ def _store_write(cmd):
                     or any(re.search(r"\$\{?" + re.escape(v) + r"(?![A-Za-z0-9_])", text)
                            for v in tainted))
 
-    for tokens, fed in linked:
+    for (tokens, fed), (marks, _same) in zip(linked, marked):
         text = " ".join(tokens)
         here = moved or names_store(text) or (isinstance(fed, int) and reached[fed])
         reached.append(here)
@@ -2878,7 +2881,10 @@ def _store_write(cmd):
         clean, targets = _redirects(words)
         if targets and (moved or any(names_store(t) for t in targets)):
             return True
-        if clean and not ro.segment_verdict(clean) and not _reads_only(clean):
+        # `words` is a suffix of `tokens`, so the marked words are the same suffix.
+        shown = list(marks)[len(tokens) - len(words):]
+        if clean and not ro.segment_verdict(clean) and not _reads_only(
+                clean, shown=_redirects(shown)[0]):
             return True
     if any(names_store(inner) for inner in inners):
         return True
@@ -2904,28 +2910,77 @@ def _store_write(cmd):
                for b in reaching) if families else False
 
 
-# What lets a program write a file, for a program run where the approvals store is reached.
-STORE_WRITES_RE = re.compile(
-    r"\bopen\s*\([^)]*,|\.write|\bwrite\w*\s*\(|\bdump\w*\s*\(|\bshutil\b|\bfs\b|\bFile\b|>|"
+# What lets a program write a file other than through `open`, whose mode `_open_writes` reads.
+WRITE_CALLS = (
+    r"\.write|\bwrite\w*\s*\(|\bdump\w*\s*\(|\bshutil\b|\bfs\b|\bFile\b|>|"
     r"\b(?:remove|unlink|rename|replace|rmtree|copy\w*|move|touch|mkdir|makedirs|chmod|chown|"
     r"symlink|link|truncate|utime)\s*\(")
+PROGRAM_WRITES_RE = re.compile(WRITE_CALLS)
+# For a program run where the approvals store is reached, any `open` given a second argument.
+STORE_WRITES_RE = re.compile(r"\bopen\s*\([^)]*,|" + WRITE_CALLS)
 
 
-def _reads_only(words):
+def _reads_only(words, modes=False, shown=None):
     """Whether the simple command `words` is an interpreter of a `TEXT_FAMILIES` family running an
     inline program that can neither run a command nor write a file, as `python3 -c
-    "json.load(open(p))"` can only read."""
+    "json.load(open(p))"` can only read. `modes` is `_program_writes`'s. `shown` is the same
+    command as `_mark_expansions` marks it; given, a program the shell may rewrite before the
+    interpreter runs it, as `"…${W}"` may append a write, is not read-only."""
     family = _program_family(words[0]) if words else None
     if family not in TEXT_FAMILIES:
         return False
-    evals = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)[0] - {"-m"}
-    for i in range(1, len(words) - 1):
+    evals, values = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)
+    evals = evals - {"-m"}
+    i = 1
+    while i < len(words) - 1:
         if words[i] in evals:
             program = words[i + 1]
-            return _inert_program(program, {family}) and not _program_writes(program)
+            if shown is not None and (len(shown) != len(words) or EXPANDS in shown[i + 1]):
+                return False
+            return (_inert_program(program, {family})
+                    and not _program_writes(program, modes))
         if not words[i].startswith("-"):
             return False
+        # An option's value, as `ignore` is in `python3 -W ignore -c …`, is no script operand.
+        i += 2 if words[i] in values else 1
     return False
+
+
+# What `_mark_expansions` puts in place of a shell expansion.
+EXPANDS = ""
+
+
+def _mark_expansions(text):
+    """`text` with every shell expansion outside single quotes, `$` and backquote included, and
+    each substitution's placeholder replaced by `EXPANDS`, splitting into the same words as
+    `text`. An ANSI-C `$'…'` string becomes one `EXPANDS`, so a word only single quotes or none
+    produce carries none."""
+    text = text.replace(PLACEHOLDER, EXPANDS)
+    out, i, n, dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "'" and not dq:
+            end = text.find("'", i + 1)
+            end = n if end < 0 else end + 1
+            out.append(text[i:end])
+            i = end
+            continue
+        if c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == "$" and not dq and text.startswith("$'", i):
+            end = ro._ansi_end(text, i)
+            out.append(EXPANDS)
+            i = n if end is None else end
+            continue
+        if c in "$`":
+            out.append(EXPANDS)
+        else:
+            out.append(c)
+            dq = dq != (c == '"')
+        i += 1
+    return "".join(out)
 
 
 def _grade_text(cmd, cwd, depth):
@@ -3667,11 +3722,11 @@ def _one_open_writes(text, match):
     return False
 
 
-def _program_writes(text):
+def _program_writes(text, modes=False):
     """Whether the program `text` may write a file, as a program reaching the approvals store
-    must not."""
-    return bool(STORE_WRITES_RE.search(text) or WRITE_REFERENCES_RE.search(text)
-                or _open_writes(text))
+    must not. With `modes`, an `open` given a read-only mode, as `open(p, 'rb')` is, reads."""
+    calls = PROGRAM_WRITES_RE if modes else STORE_WRITES_RE
+    return bool(calls.search(text) or WRITE_REFERENCES_RE.search(text) or _open_writes(text))
 
 
 # Calls in another language that delete a file or write over one: Python's `os`, `shutil` and
@@ -5671,6 +5726,84 @@ def literal_text_command(command):
     return not any(line.strip() for line in tail)
 
 
+# A user configuration named through a glob or brace, which `CONFIG_RE` does not match.
+CONFIG_GLOB_RE = re.compile(r"\.config[^\s]*[{}*?\[][^\s]*config\.json|"
+                            r"\.config[/\\]+agent-harness[/\\]+[^\s]*[{}*?\[]")
+
+
+def _protected_count(text):
+    return sum(len(r.findall(text)) for r in (POLICY_RE, CONFIG_RE, CONFIG_GLOB_RE))
+
+
+def _gh_text_values(words):
+    """The indexes of `words` holding a text flag's value when `words` is one of gh's issue or
+    pull request text subcommands (`GH_TEXT_SUBCOMMANDS`), else None."""
+    if len(words) < 3 or words[0] != "gh" or (words[1], words[2]) not in GH_TEXT_SUBCOMMANDS:
+        return None
+    return {k for k, w in enumerate(words)
+            if w.partition("=")[1] and w.partition("=")[0] in GH_TEXT_FLAGS
+            or k and words[k - 1] in GH_TEXT_FLAGS}
+
+
+def data_mentions_only(command):
+    """Whether every protected path `command` names is data that nothing in it writes.
+
+    A mention is data in two places: the inline program of an interpreter that only reads
+    (`_reads_only`, an `open` with a read-only mode included, the program free of any shell
+    expansion that could rewrite it), and a quoted text value of gh's
+    issue and pull request subcommands, a quoted here-document only `cat` or gh reads into one
+    included. Every mention must sit inside quotes, and no simple command, a substitution's
+    included, may run text as a shell (`_runs_input`, `_runs_unseen`, `_sources`) or redirect
+    onto a protected path. Any doubt is False, and the walk's written paths are judged anyway."""
+    texts, bodies = _readings(command)
+    if texts is None or len(texts) != 1:
+        return False
+    heads = []
+    if not _data_text(texts[0], heads, 0):
+        return False
+    reaching = [b for b in bodies if _protected_count(b)]
+    return all(getattr(b, "quoted", False) for b in reaching) and (
+        not reaching or all(heads))
+
+
+def _data_text(text, heads, depth):
+    """`data_mentions_only` for one reading with its bodies removed; `heads` collects, for every
+    simple command, whether it may read a body naming a path, so the caller can say."""
+    if depth >= MAX_DEPTH:
+        return False
+    stripped, inners = _extract_subs(text)
+    linked = _linked_segments(stripped) if stripped is not None else None
+    if linked is None or _protected_count(_mask_strings(stripped)):
+        return False
+    marked = _linked_segments(_mark_expansions(stripped))
+    if marked is None or len(marked) != len(linked):
+        return False
+    counted = 0
+    for (tokens, _fed), (shown, _same) in zip(linked, marked):
+        if _runs_input(tokens) or _runs_unseen(tokens) or _sources(tokens):
+            return False
+        words, targets = _redirects(list(tokens))
+        if any(_protected_count(t) for t in targets):
+            return False
+        # Only a bare `cat <<EOF` or gh's text command may read a body that names a path.
+        heads.append("cat" if list(tokens[:2]) == ["cat", "<<"] and len(tokens) == 3
+                     else "gh" if _gh_text_values(words) is not None else None)
+        named = _protected_count(" ".join(words))
+        counted += named
+        if not named:
+            continue
+        values = _gh_text_values(words)
+        if values is not None:
+            if any(_protected_count(w) for k, w in enumerate(words) if k not in values):
+                return False
+        elif not _reads_only(words, modes=True, shown=_redirects(list(shown))[0]):
+            return False
+    # A loop's header is no simple command, so a mention there reaches commands unread.
+    if _protected_count(stripped) > counted:
+        return False
+    return all(_data_text(inner, heads, depth + 1) for inner in inners)
+
+
 def _policy_hits(command, found, walked=True):
     """What a command changes that is a level-1 action: a policy file, the user configuration or
     a `governance` key set through `harness config set`.
@@ -5679,14 +5812,14 @@ def _policy_hits(command, found, walked=True):
     the operands of `tee`, `cp`, `mv`, `sed -i` and the like. The whole text, here-document
     bodies included, is then searched for a policy path by name unless the walk decomposed the
     line and it is `gh_text_only`: other commands may run code that writes a path they only
-    names, so the search fails closed. The search for `harness config set governance` takes the
-    same exemption. A literal data-only utility may additionally mention the user configuration
+    names, so the search fails closed. A line whose every mention `data_mentions_only` finds to
+    be data is exempt too. The search for `harness config set governance` takes the `gh` one. A literal data-only utility may additionally mention the user configuration
     path, but never exempts an actual write target."""
     paths = [p for entry in found for p in entry[3]]
     hits = sorted(set(filter(None, (guarded(p) if os.path.isabs(p) else unresolved(p)
                                     for p in paths))))
     try:
-        exempt = walked and gh_text_only(command)
+        exempt = walked and (gh_text_only(command) or data_mentions_only(command))
     except Exception:
         exempt = False
     if not hits and not exempt:
@@ -5696,8 +5829,7 @@ def _policy_hits(command, found, walked=True):
         else:
             match = CONFIG_RE.search(command)
             if match is None:
-                match = re.search(r"\.config[^\s]*[{}*?\[][^\s]*config\.json|"
-                                  r"\.config[/\\]+agent-harness[/\\]+[^\s]*[{}*?\[]", command)
+                match = CONFIG_GLOB_RE.search(command)
             if match and not (walked and literal_text_command(command)):
                 hits = ["the harness configuration " + match.group(0)
                         + ", which selects the decision provider"]

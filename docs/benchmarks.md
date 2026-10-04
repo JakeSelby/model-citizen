@@ -597,6 +597,51 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   only together read as two inconclusive results. A sweep over a profile of your own is a local
   diagnostic, not a publishable figure.
 
+#### The layer sweep and its justification rule
+
+`benchmarks/ablations.json` holds one removal arm for every layer that costs tokens or turns: each
+rule, each stance with an `off` variant, the hooks that act in a headless session (the delegation
+nudge's `tier-agent-spawns`, `filter-output`, `usage-feed`, `stop-gate`, `grade-bash` and five
+more) and the skill, agent and command listings, each as a whole.
+
+```sh
+python3 scripts/ablations.py plan --pack <pack repo> --model claude-haiku-4-5 --model claude-sonnet-5
+python3 scripts/ablations.py justify --manifest benchmarks/ablations.json --results <dir>/results.jsonl [...]
+```
+
+- **Each arm says what it removes, and the plan says how that is proven.** An arm names its
+  `layer` and `what` it removes in words. A listing's `removes` is a list: every unit of its kind,
+  plus any unit of another kind that the module manifest binds to it, such as the two design roles
+  that cannot stay on without the `design-loop` skill. `check_entries` refuses a listing that leaves
+  a unit on or carries an unbound one. A core hook's arm declares `core_switches_acknowledged` in
+  its selection, as a user must. The plan prints each arm's verification: its declared selection,
+  the admission check that its declaration differs from control's only there, the surface fields it
+  may move (none for a hook) and the entries its attribution may not hold.
+- **Each arm runs its own tasks and the outcome subset.** `tasks` are pack v1.3.0 `rules` tasks
+  that target the layer, `long_session` the long-session scenarios where the layer is a cost
+  control, and `outcome.tasks` the ten tasks every arm also runs: the seven production tasks and
+  three rule tasks. In a replay, a task the manifest names runs on bare, control and the arms that
+  map it; a task it does not name runs on every arm. The worst case is that plan's run count at the
+  run cap.
+- **The justification rule is pre-registered in the manifest.** Each arm's `scores` pair a metric,
+  either a pack metric or `Cost-of-Pass ratio`, with its equivalence margin, read on its own tasks
+  or on the outcome subset when it has none. `outcome` holds the pass-rate margin. `justify` reads
+  each interval as `scripts/equivalence.py` does, from the arm's paired rows against control. A layer
+  is **keep** when removing it worsens a score or the outcome beyond the margin. It is **trim** when
+  each is equivalent within its margin or better beyond it. Otherwise it is **no evidence**. Its
+  marginal cost, control's mean cost per attempt minus the arm's, is reported beside the verdict and
+  never decides it. Fewer than five paired trials per task label it exploratory.
+  `verdicts_by_entry` keys the verdicts as a scorecard row is.
+- **The price is a ceiling, not an estimate.** Each task run is its `max_turns` at the manifest's
+  per-turn token envelope, at the model's rates in `policy/prices.json`, never above the run cap.
+  Each long-session run is its scenario's own cost cap. The envelope is an assumption, labelled with
+  its source, until a sweep's rows replace it. The plan refuses a score that none of its tasks
+  declares.
+- **Not every layer is removable yet.** `unbuilt` names `CLAUDE.md`, which no selection switch
+  withholds, and the autonomy and plan-ceremony stances, which ship no `off` variant. `excluded`
+  names the hooks a headless replay never fires. The plan prints both, so a gap is never silent.
+  Long-session rows are planned and priced but `justify` does not read them yet.
+
 ### Arm configs
 
 The shipped default is not the only configuration worth measuring. `replay --arm-config
@@ -736,6 +781,54 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   tasks. **What it cannot:** that it fires on the production model, how often it would, or
   anything about what the harness costs or saves. A small model's behaviour is not the production
   model's; the production set stays the release calibration.
+
+### Diff-quality judge
+
+The oracles say whether a task passed and the detectors which rules fired. Neither can say which of
+two runs kept to its scope, made the better design, or ended on the clearer and more correct
+reply. `scripts/replay_judge.py` asks a pinned model those three questions, blind and pairwise, and
+a dimension's answers count only once they agree with the maintainer's hand labels.
+
+```sh
+python3 scripts/replay_judge.py export --results <set>/results.jsonl --tasks <manifest> --out <dir>
+python3 scripts/replay_judge.py run --pairs <dir>/pairs.json --image <built arm image> --out <dir>/verdicts.jsonl \
+    --pre-registration <plan>
+python3 scripts/replay_judge.py calibrate --verdicts <dir>/verdicts.jsonl --labels <labels.json> --out <dir>/calibration.json
+python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/pairs.key.json --calibration <calibration.json>
+```
+
+- **The judge is pinned.** `benchmarks/judge/judge.json` names the model, its effort, the rubric
+  prompt in `benchmarks/judge/rubric.md` and that file's sha256; a rubric that differs from its
+  digest is refused, so changing the question is a deliberate re-pin. The model is asked through
+  the replay's own path: a fresh container of a built arm image, nothing mounted, no tool allowed,
+  one turn, the credential passed by name and the egress proxy as its one way out. `run` needs
+  `--pre-registration` or `--exploratory`, as a replay does; `--dry-run` prints the command line.
+- **It is blind twice over.** `export` takes pairs of one task's runs, one per arm, matched by rep
+  and with neither errored, and writes each pair's two runs in a seeded random order as `first`
+  and `second`, with nothing naming the arm or the run. Which arm is which goes to
+  `pairs.key.json`, which neither the labeller nor the judge reads. The judge then sees each pair
+  twice, as response 1 and response 2, in a seeded random order and then swapped.
+- **An answer that changes with the order is a tie.** Each dimension whose two answers disagree is
+  counted as a tie and flagged inconsistent, and the share of such pairs is reported. An answer
+  that cannot be read is an error and left out, never a tie.
+- **What a run is judged on.** The final reply comes from the run's saved stream, so the set needs
+  `--raw`. The diff is a `<task>-<arm>-<rep>.diff` beside the stream when one exists; otherwise it
+  is the file edits the stream's Edit, MultiEdit and Write calls record, which miss any change a
+  shell command made. Each side is clipped at the pinned `max_chars`, with the remainder counted.
+- **Calibration.** `export` takes the pinned 40 pairs by default, spread round-robin over tasks
+  (`--all` takes every pair, for a judged evaluation), and writes `label.html`, a local form over
+  the same blind pairs whose **Save labels** button downloads `labels.json`. `calibrate` reports per
+  dimension Cohen's kappa between judge and labeller, their raw agreement and confusion, the
+  judge's position bias (how often a decided answer chose the response shown first, with a Wilson
+  interval, flagged when it excludes one half), its length bias (how often it preferred the longer
+  response, beside how often the labeller did on the same pairs) and the order-swap inconsistency.
+- **A dimension is admitted only when kappa reaches the floor,** 0.6 unless the pre-registration
+  sets another with `--kappa-floor`; an undefined kappa is never admitted.
+- **The summary section.** `judge_section(verdicts, key, calibration)` returns `(section, text)`:
+  per arm pair, the treatment's win rate over the reference on each admitted dimension, a tie
+  counting one half, with a task-clustered percentile bootstrap interval, and the dimensions left
+  out. `summarise` does not call it yet; the one line that adds it is
+  `out["judge"], text = replay_judge.judge_section(verdicts, key, calibration)`.
 
 ## Limits
 
