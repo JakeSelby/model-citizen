@@ -5743,6 +5743,19 @@ UNATTRIBUTED = "(unattributed)"
 USAGE_JSON_VERSION = 1
 
 
+# Every dollar a usage report prints is this, never an invoice: see docs/usage.md "What it cost".
+COST_BASIS = "list_price_equivalent"
+
+
+def price_basis(table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+    """The label and pricing date a JSON report's dollars carry, so a reader never re-derives them.
+
+    `price_as_of` is the newest `as_of` in the table that priced the report, or None when the
+    table has none; it is the same date `doctor` ages.
+    """
+    return {"cost_basis": COST_BASIS, "price_as_of": newest_as_of(table) or None}
+
+
 def json_safe(value: Any) -> Any:
     """JSON-compatible report values, with non-finite measurements left unknown."""
     if isinstance(value, float) and not math.isfinite(value):
@@ -5887,7 +5900,7 @@ def provider_report(rows: List[Dict[str, Any]], days: int,
         public = [{name: value for name, value in item.items() if not name.startswith("_")}
                   for item in groups]
         return usage_json("provider", "provider", days, public, unpriced=unpriced,
-                          price_table=bool(table), rescan=rescan)
+                          price_table=bool(table), rescan=rescan, **price_basis(table))
     if not groups:
         say(f"no decision-provider calls recorded in the last {days} day(s); "
             "`citizen doctor` says whether any point is configured to make one")
@@ -6002,7 +6015,7 @@ def role_report(rows: List[Dict[str, Any]], days: int,
                   for item in groups]
         return usage_json("roles", "role", days, public, unpriced=unpriced,
                           workflow_runs=len(grouped.get(WORKFLOW_BUCKET, [])),
-                          price_table=bool(table), rescan=rescan)
+                          price_table=bool(table), rescan=rescan, **price_basis(table))
     if not groups:
         say(f"no subagent or worker runs recorded in the last {days} day(s); "
             "run `citizen usage --rescan` to backfill them from transcripts")
@@ -6149,7 +6162,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
         print("usage --by stance needs --stance <dimension> for tokens, or --rules for hits",
               file=sys.stderr)
         return 2
-    if rules_mode and by in ("model", "role", "profile"):
+    if rules_mode and by in ("model", "role", "profile", "session"):
         # Reporting something else silently would be worse than refusing: a rule hit belongs
         # to a session, and a session's hits cannot be attributed to one of its models, nor to
         # a subagent whose conduct the session's detectors never measured.
@@ -6189,16 +6202,17 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if by == "rebuild":
         # This view reads the request stream itself, so each invocation is already a rescan.
         # It does not need or mutate the coarser session ledger.
+        rebuild_prices = load_prices(load_config())
         result = rebuilds.analyse(claude_projects_root(),
                                   time.time() - max(args.days, 0) * 86400,
-                                  args.days, load_prices(load_config()), pricing)
+                                  args.days, rebuild_prices, pricing)
         if json_output:
             groups = [dict({"scope": name}, **result["scopes"][name])
                       for name in ("long", "all")]
             return usage_json("rebuild", "rebuild", args.days, groups,
                               files=result["files"], shortfall_tokens=result["shortfall_tokens"],
                               long_session_calls=result["long_session_calls"],
-                              rescan="direct transcript scan")
+                              rescan="direct transcript scan", **price_basis(rebuild_prices))
         for line in rebuilds.render(result):
             say(line)
         return 0
@@ -6362,6 +6376,12 @@ def cmd_usage(args: argparse.Namespace) -> int:
             # value that is not a string is unattributed too, rather than an unhashable key.
             value = row.get("profile_fingerprint")
             key = value if isinstance(value, str) and value else UNATTRIBUTED
+        elif by == "session":
+            # A Codex subagent row carries its parent thread as `session_id`, so a Codex session
+            # groups with its children, which is its bill; a worker is its own session, and a
+            # Studio run, which has none, is grouped under its run id.
+            value = row.get("session_id") or row.get("run_id")
+            key = value if isinstance(value, str) and value else "(no session)"
         else:
             key = ended[:10]
         acc = groups.setdefault(key, usage_accumulator())
@@ -6430,7 +6450,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if json_output:
         return usage_json("usage", by, args.days, group_records, total_record,
                           unpriced=unpriced, unknown_metrics=sorted(unknown_metrics),
-                          raw_vs_deduped=dedup, price_table=bool(table), rescan=rescan_result)
+                          raw_vs_deduped=dedup, price_table=bool(table), rescan=rescan_result,
+                          **price_basis(table))
     if not groups:
         say(f"no sessions recorded in the last {args.days} day(s); looked in {path}")
         return 0
@@ -7071,7 +7092,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="with export, count what would be sent and open no connection")
     p.add_argument("--days", type=int, default=30)
     p.add_argument("--by", choices=["day", "repo", "model", "role", "rule", "stance", "decision",
-                                    "provider", "prefix", "rebuild", "adherence", "profile"],
+                                    "provider", "prefix", "rebuild", "adherence", "profile",
+                                    "session"],
                    default="day")
     p.add_argument("--stance", choices=STANCE_NAMES,
                    help="with --by stance, the dimension whose variants group the tokens")

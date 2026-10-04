@@ -1,0 +1,249 @@
+{
+  "role": {
+    "basis": {
+      "cost_basis": "list_price_equivalent",
+      "label": "list-price equivalent",
+      "price_as_of": "2026-09-21"
+    },
+    "by": "role",
+    "command": "citizen usage --json --by role --days 3660",
+    "days": 3660,
+    "ledger": {
+      "by": "role",
+      "cost_basis": "list_price_equivalent",
+      "days": 3660,
+      "groups": [
+        {
+          "name": "builder",
+          "output": {
+            "p50": 300,
+            "p75": 300,
+            "p90": 300
+          },
+          "return_over_budget_share": null,
+          "return_path_share": null,
+          "runs": 1,
+          "sample_sufficient": false,
+          "tools": {
+            "p50": null,
+            "p75": null,
+            "p90": null
+          },
+          "unknown_output_runs": 0,
+          "unmeasured_tool_calls": 1,
+          "unpriced_runs": 1,
+          "usd": {
+            "p50": null,
+            "p75": null
+          }
+        },
+        {
+          "name": "gatherer",
+          "output": {
+            "p50": 900,
+            "p75": 900,
+            "p90": 900
+          },
+          "return_over_budget_share": null,
+          "return_path_share": null,
+          "runs": 1,
+          "sample_sufficient": false,
+          "tools": {
+            "p50": 7,
+            "p75": 7,
+            "p90": 7
+          },
+          "unknown_output_runs": 0,
+          "unmeasured_tool_calls": 0,
+          "unpriced_runs": 0,
+          "usd": {
+            "p50": 0.01125,
+            "p75": 0.01125
+          }
+        },
+        {
+          "name": "reviewer",
+          "output": {
+            "p50": 1500,
+            "p75": 1500,
+            "p90": 1500
+          },
+          "return_over_budget_share": 0.0,
+          "return_path_share": 1.0,
+          "runs": 1,
+          "sample_sufficient": false,
+          "tools": {
+            "p50": 12,
+            "p75": 12,
+            "p90": 12
+          },
+          "unknown_output_runs": 0,
+          "unmeasured_tool_calls": 0,
+          "unpriced_runs": 0,
+          "usd": {
+            "p50": 0.01625,
+            "p75": 0.01625
+          }
+        }
+      ],
+      "price_as_of": "2026-09-21",
+      "price_table": true,
+      "report": "roles",
+      "rescan": null,
+      "schema_version": 1,
+      "unpriced": 1,
+      "workflow_runs": 0
+    },
+    "schema_version": 1
+  },
+  "session": {
+    "basis": {
+      "cost_basis": "list_price_equivalent",
+      "label": "list-price equivalent",
+      "price_as_of": "2026-09-21"
+    },
+    "by": "session",
+    "command": "citizen usage --json --by session --days 3660",
+    "days": 3660,
+    "ledger": {
+      "by": "session",
+      "cost_basis": "list_price_equivalent",
+      "days": 3660,
+      "groups": [
+        {
+          "cache_hit_denominator": 2100,
+          "cache_hit_rate": 0.7142857142857143,
+          "name": "codex-parent",
+          "runs": 2,
+          "tokens": {
+            "cache_read": 1500,
+            "cache_write": 0,
+            "input": 600,
+            "output": 900
+          },
+          "unknown_token_runs": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unpriced_runs": 2,
+          "usd": null
+        },
+        {
+          "cache_hit_denominator": 0,
+          "cache_hit_rate": null,
+          "name": "run-0001",
+          "runs": 1,
+          "tokens": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unknown_token_runs": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unpriced_runs": 0,
+          "usd": 0.42
+        },
+        {
+          "cache_hit_denominator": 65000,
+          "cache_hit_rate": 0.8615384615384616,
+          "name": "sess-alpha",
+          "runs": 1,
+          "tokens": {
+            "cache_read": 56000,
+            "cache_write": 7800,
+            "input": 1200,
+            "output": 3400
+          },
+          "unknown_token_runs": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unpriced_runs": 0,
+          "usd": 0.150875
+        },
+        {
+          "cache_hit_denominator": 34800,
+          "cache_hit_rate": 0.8620689655172413,
+          "name": "sess-beta",
+          "runs": 1,
+          "tokens": {
+            "cache_read": 30000,
+            "cache_write": 4000,
+            "input": 800,
+            "output": 2100
+          },
+          "unknown_token_runs": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unpriced_runs": 0,
+          "usd": 0.0386
+        },
+        {
+          "cache_hit_denominator": 2350,
+          "cache_hit_rate": 0.851063829787234,
+          "name": "worker-1",
+          "runs": 1,
+          "tokens": {
+            "cache_read": 2000,
+            "cache_write": 300,
+            "input": 50,
+            "output": 1500
+          },
+          "unknown_token_runs": {
+            "cache_read": 0,
+            "cache_write": 0,
+            "input": 0,
+            "output": 0
+          },
+          "unpriced_runs": 0,
+          "usd": 0.01625
+        }
+      ],
+      "price_as_of": "2026-09-21",
+      "price_table": true,
+      "raw_vs_deduped": {
+        "ratio": 1.1700854700854701,
+        "runs": 2,
+        "unknown_runs": 3
+      },
+      "report": "usage",
+      "rescan": null,
+      "schema_version": 1,
+      "totals": {
+        "cache_hit_denominator": 104250,
+        "cache_hit_rate": 0.8585131894484412,
+        "name": "TOTAL",
+        "runs": 6,
+        "tokens": {
+          "cache_read": 89500,
+          "cache_write": 12100,
+          "input": 2650,
+          "output": 7900
+        },
+        "unknown_token_runs": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 0,
+          "output": 0
+        },
+        "unpriced_runs": 2,
+        "usd": null
+      },
+      "unknown_metrics": [],
+      "unpriced": 2
+    },
+    "schema_version": 1
+  }
+}

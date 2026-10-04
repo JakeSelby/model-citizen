@@ -33,6 +33,12 @@ The JSON and text renderers share the aggregation that assigns Workflow-tool run
 stderr without printing a success document. `usage export` is a separate OTLP action and rejects
 `--json` rather than silently ignoring it.
 
+Every report that prices tokens (`usage` in each token grouping, `--by role`, `--by provider` and
+`--by rebuild`) also carries `cost_basis: "list_price_equivalent"` and `price_as_of`, the newest
+`as_of` date in the price table that priced it, or `null` when the table carries none. The Studio's
+spend report is these documents as `citizen usage --json` prints them, so a dollar figure there and
+here comes from one computation and one pricing date.
+
 ## The loaded instruction surface
 
 `bin/citizen usage --surface` lists every instruction source a Claude Code session in this
@@ -756,6 +762,7 @@ bin/citizen usage --by model           # a session using two models groups under
 bin/citizen usage --by role            # per agent type: runs, p50/p75/p90 output, p50/p75 usd
 bin/citizen usage --by stance --stance cost   # tokens per variant of one stance dimension
 bin/citizen usage --by profile         # tokens per profile fingerprint; older rows unattributed
+bin/citizen usage --by session         # tokens and dollars per session, a Codex session with its subagents
 bin/citizen usage --by decision        # hook decisions and their outcomes, above
 bin/citizen usage --by provider        # decision-provider calls, priced, above
 bin/citizen usage --by adherence       # advice followed, and a soft if-followed estimate, above
@@ -795,7 +802,12 @@ two different reports and guessing between them would be worse than asking.
 rows alone. A row that carries none groups under `(unattributed)` and is counted there. The
 fingerprint is 64 characters and the label column 34, which still tells profiles apart.
 
-The token groupings — `day`, `repo`, `model`, `stance`, `profile` — sum session and worker rows and never a
+`--by session` groups by `session_id`. A Codex subagent row carries its parent thread there, so a
+Codex session groups with its children, which together are its bill; a role-run worker is a
+session of its own, and a Studio run, which has no session, groups under its run id. `--rules`
+refuses it, as it refuses `model`, `role` and `profile`.
+
+The token groupings — `day`, `repo`, `model`, `stance`, `profile`, `session` — sum session and worker rows and never a
 subagent's. A subagent's tokens are already inside its session's total; a role-run worker has
 no session row at all, so leaving it out would hide its spend in every report there is.
 
