@@ -861,6 +861,8 @@ OBSERVATION_MOUNT = "/observations"
 # Claude Code's managed memory file on Linux, the first memory it loads: a file mounted here opens
 # the session segment, the first message after the system prompt (`cost_bench.trial_memory`).
 MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
+# Where a check container sees the scored run's saved stream-json, read-only (`check_command`).
+SESSION_STREAM = "/session-stream.jsonl"
 OBSERVATION_MARKER = ".model-citizen-benchmark-output"
 
 
@@ -882,7 +884,7 @@ def observation_mount(path):
 
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
-                observation_dir=None, keep=False, managed_memory=None):
+                observation_dir=None, keep=False, managed_memory=None, session_stream=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -893,8 +895,9 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
     it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
-    `MANAGED_MEMORY`, the per-trial cache nonce."""
-    sources = [str(p) for p in (workdir, managed_memory) if p is not None]
+    `MANAGED_MEMORY`, the per-trial cache nonce; `session_stream` a run's saved stream mounted
+    read-only as `SESSION_STREAM`, for the check that scores it."""
+    sources = [str(p) for p in (workdir, managed_memory, session_stream) if p is not None]
     reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
@@ -911,6 +914,8 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
     if managed_memory is not None:
         command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
+    if session_stream is not None:
+        command += ["-v", "%s:%s:ro" % (session_stream, SESSION_STREAM)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):
@@ -918,9 +923,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     return command + [image] + list(argv)
 
 
-def check_command(image, workdir, argv, env=None, name=None, stdin=False):
+def check_command(image, workdir, argv, env=None, name=None, stdin=False, session_stream=None):
     """A held-back check in a fresh container: no network and no credential."""
-    return run_command(image, workdir, argv, "none", env, name, credential=False, stdin=stdin)
+    return run_command(image, workdir, argv, "none", env, name, credential=False, stdin=stdin,
+                       session_stream=session_stream)
 
 
 def kill_command(name):
