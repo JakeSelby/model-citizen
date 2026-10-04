@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 170,
+    "bug": 172,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -8887,6 +8887,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B162.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B171",
+      "github_number": 1198,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1198",
+      "title": "fix(cost): sleep-and-poll loops instead of background notifications",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B171.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
