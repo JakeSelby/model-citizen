@@ -1858,11 +1858,16 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
 
     A saved result is created exclusively before probes or model calls, so an existing path can
     never mix attempts from two cohorts. A set that stops early records why beside it
-    (`write_stop`), which `summarise` weighs against the plan's `Partial set` permission."""
+    (`write_stop`), which `summarise` weighs against the plan's `Partial set` permission; a stop
+    record already beside a new result is refused the same way, since a complete rerun writes
+    none and `summarise` would read the earlier run's reason."""
     if not tasks:
         raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if out is None:
         return _replay(tasks, opts, launch, None)
+    stale = Path(out).parent / STOP
+    if stale.exists():
+        raise SystemExit("cost-bench: refusing to write results beside an existing stop record: %s" % stale)
     try:
         sink = open(str(out), "x", encoding="utf-8")
     except FileExistsError:

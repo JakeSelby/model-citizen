@@ -126,6 +126,18 @@ class StopRecordTests(unittest.TestCase):
             self.assertFalse((Path(tmp) / BENCH.STOP).exists())
             self.assertIsNone(BENCH.stop_beside(out))
 
+    def test_a_stale_stop_record_beside_new_results_is_refused_before_anything_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / BENCH.RESULTS
+            stale = Path(tmp) / BENCH.STOP
+            BENCH.write_stop(out, "spend-cap")
+            launch = Launch([])
+            with self.assertRaises(SystemExit) as caught:
+                BENCH.replay([TASK], options(tmp, reps=1), launch, out=out)
+            self.assertIn(str(stale), str(caught.exception))
+            self.assertFalse(out.exists())
+            self.assertEqual((launch.calls, launch.probes), ([], []))
+
 
 class AdmissionTests(unittest.TestCase):
     def test_replay_refuses_an_ungrammatical_permission_before_anything_runs(self):
