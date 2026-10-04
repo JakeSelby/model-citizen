@@ -49,6 +49,9 @@ class RuleHealthRouteSecurityTests(studio_security.StudioSecurityFixture):
         document = json.loads(body)
         self.assertEqual(document["schema_version"], 1)
         self.assertIn(document["status"], ("ready", "partial"))
+        # The corpus script's exit 1 on a failing detector is a result, so precision always reads.
+        self.assertEqual(document["sources"]["precision"]["status"], "ready", document["sources"])
+        self.assertTrue(document["working_directory"])
         self.assertEqual(document["summary"]["rules"], len(document["rows"]))
         self.assertTrue(document["rows"])
         for row in document["rows"]:

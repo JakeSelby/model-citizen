@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -92,9 +93,13 @@ def command_runner(root: Path, cwd: Optional[Path] = None) -> Runner:
                                   capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT)
         except subprocess.TimeoutExpired as exc:
             raise OSError("%s timed out" % " ".join(argv)) from exc
-        if done.returncode != 0:
-            tail = (done.stderr or done.stdout).strip().splitlines()
-            raise OSError(tail[-1] if tail else "%s exited %d" % (" ".join(argv), done.returncode))
+        # The corpus script exits 1 when a detector is under the floor, unscored or stale: that is
+        # a result carrying failures, printed in full. Only another exit, or no JSON, is a failure.
+        accepted = (0, 1) if argv[0] == "scripts/detector_corpus.py" else (0,)
+        if done.returncode not in accepted:
+            tail = done.stderr.strip().splitlines()
+            raise OSError("%s exited %d%s" % (" ".join(argv), done.returncode,
+                                              ": " + tail[-1] if tail else ""))
         try:
             document = json.loads(done.stdout)
         except ValueError as exc:
@@ -124,6 +129,15 @@ def _module_key(rule: Any) -> str:
 
 def _unit(rule: Any) -> str:
     return Path(str(rule.path)).stem
+
+
+def _root_of(rule: Any) -> Path:
+    """The primitive root a rule file belongs to: the directory holding `rules/` or `stances/`."""
+    path = Path(str(rule.path))
+    for parent in path.parents:
+        if parent.name in ("rules", "stances"):
+            return parent.parent
+    return path.parent
 
 
 def _advice_modules(root: Path) -> Dict[str, List[str]]:
@@ -165,31 +179,42 @@ def _gather(run: Runner, need_advice: bool) -> Dict[str, Any]:
     return results
 
 
+UNAVAILABLE = "unavailable"
+READ_FAILED = "precision unavailable (read failed)"
+
+
 def _detector_precision(precision: Any, detector_id: str) -> Dict[str, Any]:
+    """One detector's corpus score, and whether the engine's own `below_floor` verdict names it.
+
+    The verdict is the engine's (`ruleprobe.validity.below_floor`: precision or recall under the
+    floor), never a comparison made here."""
     if isinstance(precision, BaseException) or not isinstance(precision, dict):
-        return {"id": detector_id, "status": NOT_MEASURED, "precision": None, "recall": None,
-                "below_floor": None, "reason": "the detector corpus could not be read"}
-    floor = precision.get("floor")
+        return {"id": detector_id, "status": UNAVAILABLE, "precision": None, "recall": None,
+                "below_floor": None, "reason": READ_FAILED}
     score = (precision.get("detectors") or {}).get(detector_id)
     if not isinstance(score, dict) or not score.get("scored") or score.get("precision") is None:
         return {"id": detector_id, "status": NOT_MEASURED, "precision": None, "recall": None,
                 "below_floor": None, "reason": "no labelled example scores this detector"}
-    listed = set(precision.get("below_floor") or [])
-    below = detector_id in listed or (isinstance(floor, (int, float)) and score["precision"] < floor)
     return {"id": detector_id, "status": "measured", "precision": score["precision"],
-            "recall": score.get("recall"), "below_floor": bool(below), "reason": ""}
+            "recall": score.get("recall"), "reason": "",
+            "below_floor": detector_id in set(precision.get("below_floor") or [])}
 
 
 def _reliability(detectors: List[Dict[str, Any]], floor: Any) -> Dict[str, Any]:
+    """`reliable` False when a detector is below the floor or unscored; None when the corpus could
+    not be read, since whether the figures can be trusted is then unknown, not settled."""
     under = [d for d in detectors if d["below_floor"]]
-    unscored = [d for d in detectors if d["status"] != "measured"]
+    unscored = [d for d in detectors if d["status"] == NOT_MEASURED]
+    unread = [d for d in detectors if d["status"] == UNAVAILABLE]
     if under:
         return {"reliable": False, "reason": "; ".join(
-            "%s precision %.2f is under the %.2f floor" % (d["id"], d["precision"], floor)
-            for d in under)}
+            "%s is below the engine's %s floor (precision %s, recall %s)"
+            % (d["id"], floor, d["precision"], d["recall"]) for d in under)}
     if unscored:
         return {"reliable": False, "reason": "; ".join(
             "%s has no measured precision" % d["id"] for d in unscored)}
+    if unread:
+        return {"reliable": None, "reason": READ_FAILED}
     return {"reliable": True, "reason": ""}
 
 
@@ -199,8 +224,10 @@ def _hits(results: Dict[str, Any], detector_ids: List[str]) -> Dict[str, Any]:
     for days in WINDOWS:
         document = results.get("hits-%d" % days)
         if isinstance(document, BaseException) or not isinstance(document, dict):
-            windows[str(days)] = {"status": NOT_MEASURED, "reason": "citizen usage --rules could not be read",
-                                  "measured_sessions": None, "detectors": {}}
+            windows[str(days)] = {"status": UNAVAILABLE, "measured_sessions": None, "detectors": {},
+                                  "reason": "citizen usage --rules --days %d could not be read: %s"
+                                            % (days, _message(document) if isinstance(document, BaseException)
+                                               else "not a JSON object")}
             continue
         groups = dict((g.get("id"), g) for g in document.get("groups") or [] if isinstance(g, dict))
         sessions = document.get("measured_sessions")
@@ -216,6 +243,7 @@ def _hits(results: Dict[str, Any], detector_ids: List[str]) -> Dict[str, Any]:
                 (key, group.get(key)) for key in ("hits", "sessions", "of", "share", "note"))
         windows[str(days)] = {"status": "measured", "measured_sessions": sessions, "reason": "",
                               "detectors": found}
+    measured = [days for days in WINDOWS if windows[str(days)]["status"] == "measured"]
     last = None
     for days in WINDOWS:
         window = windows[str(days)]
@@ -223,7 +251,9 @@ def _hits(results: Dict[str, Any], detector_ids: List[str]) -> Dict[str, Any]:
                 (group or {}).get("sessions") for group in window["detectors"].values()):
             last = days
             break
-    return {"windows": windows, "last_fired_within_days": last}
+    # "Not in N days" may only name a window that was read.
+    return {"windows": windows, "last_fired_within_days": last,
+            "widest_measured_days": max(measured) if measured else None}
 
 
 def _advice(results: Dict[str, Any], kinds: List[str]) -> Dict[str, Any]:
@@ -289,24 +319,37 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
     precision = results.get("precision")
     floor = precision.get("floor") if isinstance(precision, dict) else None
     rows = []
+    owners: Dict[str, str] = {}
     for rule, key in zip(rules, keys):
         kind = key.split("/", 1)[0]
+        root_label = rule_coverage.short(str(_root_of(rule)), relative_to, home)
+        # A second file of one name is a row of its own: the module key alone would collide, and
+        # the cost, effect and switch the scorecard keys by name belong to the first, its owner.
+        owner = owners.setdefault(key, root_label)
+        shadowed = owner != root_label
         cost = _cost(results, key)
+        if shadowed:
+            reason = "a rule of the same name in %s holds this name" % owner
+            cost = {"selection_state": None, "tokens": {"status": NOT_MEASURED, "reason": reason},
+                    "effect": {"status": NOT_MEASURED, "reason": reason}}
         detectors = [_detector_precision(precision, did) for did in rule.detectors]
         if rule.state == "measured":
             hits = dict(_hits(results, list(rule.detectors)), status="measured", label=EXPLORATORY,
                         **_reliability(detectors, floor))
         else:
             hits = {"status": NOT_MEASURED, "reason": rule.reason, "label": EXPLORATORY, "windows": {},
-                    "last_fired_within_days": None, "reliable": None}
+                    "last_fired_within_days": None, "widest_measured_days": None, "reliable": None}
         unit = _unit(rule)
-        if kind != "rules":
+        if shadowed:
+            offer = {"available": False, "reason": cost["tokens"]["reason"]}
+        elif kind != "rules":
             offer = {"available": False, "reason": "a stance is changed by choosing another variant, not switched off"}
         elif cost["selection_state"] != "on":
             offer = {"available": False, "reason": "it is not switched on in the selection in force"}
         else:
             offer = {"available": True, "reason": ""}
         rows.append({
+            "id": "%s@%s" % (key, root_label), "root": root_label,
             "rule": rule.rule, "module": key, "kind": kind, "unit": unit,
             "path": rule_coverage.short(str(rule.path), relative_to, home),
             "state": rule.state, "reason": rule.reason, "detectors": detectors, "hits": hits,
@@ -323,6 +366,10 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
     failed = [days for days in WINDOWS if isinstance(results.get("hits-%d" % days), BaseException)]
     sources["hits"] = (_source("unavailable", _message(results["hits-%d" % failed[0]])) if failed
                        else _source("ready"))
+    if "advice" in results:
+        value = results["advice"]
+        sources["advice"] = (_source("unavailable", _message(value)) if isinstance(value, BaseException)
+                             else _source("ready"))
     partial = any(item["status"] != "ready" for item in sources.values())
     return {
         "schema_version": SCHEMA_VERSION,
@@ -333,12 +380,22 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
         "windows": list(WINDOWS),
         "precision_floor": floor,
         "exploratory_note": EXPLORATORY_NOTE,
+        # Statuses and hit windows read the `.ruleprobe/detectors.yaml` found from this directory,
+        # as `citizen usage --rules` run there would.
+        "working_directory": _home_short(relative_to, home),
         "sources": sources,
         "commands": dict(SOURCES),
         "findings": [{"path": rule_coverage.short(str(f.path), relative_to, home), "line": f.line,
                       "reason": f.reason} for f in findings],
         "rows": rows,
     }
+
+
+def _home_short(path: str, home: Optional[str]) -> str:
+    home = home or os.path.expanduser("~")
+    if home and (path == home or path.startswith(home.rstrip(os.sep) + os.sep)):
+        return "~" + path[len(home.rstrip(os.sep)):]
+    return path
 
 
 def _selected_rules(root: Path) -> Dict[str, Any]:
@@ -366,18 +423,34 @@ def try_without(root: Path, unit: str, create: Callable[[Path, str], str],
     failure = create(root, name)
     if failure:
         raise RuleHealthError(failure, "the draft could not be created")
-    worktree, state = drafts.find(root, name)
-    revision = drafts.describe(root, worktree, state)["revision"]
     change = {"rules.%s" % unit: "off"}
-    saved = selection_editing.save(root, name, revision, uuid.uuid4().hex, change)
+    commands = [" ".join(CLI_COMMANDS["try_without"]).replace("{draft}", name)]
+
+    def kept(status: str, why: str, revision: str = "") -> Dict[str, Any]:
+        # The draft exists from here on: every answer names it, so it can be found or discarded.
+        return {"schema_version": SCHEMA_VERSION, "rule": unit, "status": status,
+                "draft": {"name": name, "revision": revision}, "changes": change,
+                "commands": commands, "warning": why,
+                "message": "Draft %s was created but %s is not switched off in it: %s. Nothing live "
+                           "changed; open it in Configure, or discard it with citizen draft discard %s."
+                           % (name, unit, why, name)}
+
+    try:
+        worktree, state = drafts.find(root, name)
+        revision = drafts.describe(root, worktree, state)["revision"]
+    except drafts.DraftError as exc:
+        return kept("draft-unreadable", "the new draft could not be read (%s)" % exc.code)
+    key = uuid.uuid4().hex
+    commands += [
+        "printf '%%s\\n' %s > changes.json" % shlex.quote(json.dumps(change, sort_keys=True)),
+        " ".join(selection_editing.CLI_COMMANDS["save"]).replace("{draft}", name)
+        .replace("{revision}", revision).replace("KEY", key),
+    ]
+    saved = selection_editing.save(root, name, revision, key, change)
     if not saved.get("saved"):
-        raise RuleHealthError("switch-failed", saved.get("error") or "the switch could not be saved")
+        return kept("switch-failed", saved.get("error") or "the switch could not be saved", revision)
     result = saved.get("result") or {}
-    save_command = " ".join(selection_editing.CLI_COMMANDS["save"]).replace("{draft}", name)
-    commands = [" ".join(CLI_COMMANDS["try_without"]).replace("{draft}", name),
-                save_command.replace("{revision}", "REVISION")
-                + "  # changes.json: " + json.dumps(change, sort_keys=True)]
-    return {"schema_version": SCHEMA_VERSION, "rule": unit,
-            "draft": {"name": name, "revision": result.get("revision") or saved.get("base_revision") or revision},
-            "changes": change, "commands": commands,
+    return {"schema_version": SCHEMA_VERSION, "rule": unit, "status": "switched",
+            "draft": {"name": name, "revision": result.get("revision") or revision},
+            "changes": change, "commands": commands, "warning": "",
             "message": "Draft %s switches %s off. Nothing live changed." % (name, unit)}

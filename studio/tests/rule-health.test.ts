@@ -40,18 +40,20 @@ test("every rule shows the status and reason the engine reported", () => {
 test("a detector under the precision floor marks the rule's hit figures unreliable", () => {
   const voice = row("voice-and-format");
   const check = reliability(voice.hits);
-  assert.deepEqual(check, { label: "unreliable", tone: "danger", reason: "voice/banned-opener precision 0.75 is under the 0.90 floor" });
+  const reason = "voice/banned-opener is below the engine&#x27;s 0.9 floor (precision 0.95, recall 0.6)";
+  assert.deepEqual(check, { label: "unreliable", tone: "danger", reason: reason.replace("&#x27;", "'") });
   const html = render(fixture);
-  assert.ok(html.includes("Hit figures unreliable: voice/banned-opener precision 0.75 is under the 0.90 floor"));
-  assert.equal(reliability(row("secrets").hits)?.label, "precision at floor");
+  assert.ok(html.includes(`Hit figures unreliable: ${reason}`));
+  assert.equal(reliability(row("secrets").hits)?.label, "precision at or above floor");
 });
 
 test("hit figures are the engine's counts, labelled exploratory, never inverted into followed", () => {
   const voice = row("voice-and-format");
-  assert.equal(windowText(voice.hits, 30), "6/40 (15%)");
+  assert.equal(windowText(voice.hits, 30), "voice/banned-opener 6/40 (15%)");
+  assert.equal(windowText(row("secrets").hits, 7), "secrets/git-add-secret-file 0/10 (0%); secrets/secret-in-write 0/10 (0%)");
   assert.equal(hitLine("voice/banned-opener", voice.hits.windows["30"].detectors["voice/banned-opener"]),
     "voice/banned-opener: fired in 6 of 40 sessions (15%), 9 hits");
-  assert.equal(lastFiredText(voice.hits, fixture.windows), "within 7 days");
+  assert.equal(lastFiredText(voice.hits), "within 7 days");
   assert.equal(voice.hits.label, "exploratory");
   const html = render(fixture);
   assert.ok(html.includes(fixture.exploratory_note.replace(/'/g, "&#x27;")));
@@ -61,7 +63,7 @@ test("hit figures are the engine's counts, labelled exploratory, never inverted 
 test("a rule with no evidence says not measured with its reason, never zero", () => {
   const dark = row("conciseness");
   assert.equal(windowText(dark.hits, 7), "not measured");
-  assert.equal(lastFiredText(dark.hits, fixture.windows), "not measured");
+  assert.equal(lastFiredText(dark.hits), "not measured");
   assert.equal(effectText(dark.effect), "not measured: no ablation run has removed this module");
   assert.equal(tokensText(row("working-style").tokens), "not measured: the scorecard reads not loaded");
   assert.equal(tokensText(dark.tokens), "218 tokens (soft estimate)");
@@ -70,8 +72,9 @@ test("a rule with no evidence says not measured with its reason, never zero", ()
 
 test("Try without it is offered on a switched-on rule and explained elsewhere", () => {
   const html = render(fixture);
-  assert.ok(html.includes('aria-label="Try without conciseness"'));
-  assert.ok(!html.includes('aria-label="Try without working-style"'));
+  assert.ok(html.includes('aria-label="Try without it: conciseness"'));
+  assert.ok(html.includes('aria-label="Try without it: secrets"'), "a measured rule is offered too");
+  assert.ok(!html.includes('aria-label="Try without it: working-style"'));
   assert.ok(html.includes(row("autonomy").try_without.reason));
   assert.equal(sortRows(fixture.rows)[0].rule, "conciseness");
   assert.match(tryWithoutErrorMessage("rule-not-switchable"), /not switched on/);
@@ -79,7 +82,7 @@ test("Try without it is offered on a switched-on rule and explained elsewhere", 
 
 test("a tried draft shows its CLI steps and its draft test, ready to run", () => {
   const result: TryWithoutResult = {
-    schema_version: 1, rule: "conciseness", draft: { name: "without-conciseness-1a2b3c4d", revision: "a".repeat(40) },
+    schema_version: 1, rule: "conciseness", status: "switched", warning: "", draft: { name: "without-conciseness-1a2b3c4d", revision: "a".repeat(40) },
     changes: { "rules.conciseness": "off" },
     commands: ["citizen draft create without-conciseness-1a2b3c4d --json", "citizen draft selection save without-conciseness-1a2b3c4d"],
     message: "Draft without-conciseness-1a2b3c4d switches conciseness off. Nothing live changed.",
@@ -88,6 +91,41 @@ test("a tried draft shows its CLI steps and its draft test, ready to run", () =>
   assert.ok(html.includes("Nothing live changed."));
   for (const command of result.commands) assert.ok(html.includes(command));
   assert.ok(html.includes("Open drafts in Configure"));
+  assert.ok(html.includes("Choose tasks, trials and the change worth detecting."), "the draft test renders, ready to run");
+  assert.ok(html.includes('tabindex="-1"'));
+});
+
+test("a switch that could not be saved names the kept draft and offers no test", () => {
+  const result: TryWithoutResult = {
+    schema_version: 1, rule: "conciseness", status: "switch-failed", warning: "lint refused the change",
+    draft: { name: "without-conciseness-1a2b3c4d", revision: "a".repeat(40) }, changes: { "rules.conciseness": "off" },
+    commands: ["citizen draft create without-conciseness-1a2b3c4d --json"],
+    message: "Draft without-conciseness-1a2b3c4d was created but conciseness is not switched off in it: lint refused the change.",
+  };
+  const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {}, h(TriedDraft, { result }))));
+  assert.ok(html.includes("Draft without-conciseness-1a2b3c4d was created, but the rule is still on in it"));
+  assert.ok(html.includes("lint refused the change"));
+  assert.ok(!html.includes("Choose tasks, trials and the change worth detecting."));
+});
+
+test("each window shows its own state, and a failed widest window is never claimed as read", () => {
+  const hits = JSON.parse(JSON.stringify(row("secrets").hits)) as RuleRow["hits"];
+  hits.windows["90"] = { status: "unavailable", reason: "citizen usage --rules --days 90 could not be read: timed out", measured_sessions: null, detectors: {} };
+  hits.last_fired_within_days = null;
+  hits.widest_measured_days = 30;
+  assert.equal(windowText(hits, 90), "unavailable: citizen usage --rules --days 90 could not be read: timed out");
+  assert.equal(lastFiredText(hits), "not in 30 days");
+  hits.widest_measured_days = null;
+  assert.equal(lastFiredText(hits), "unavailable");
+});
+
+test("a corpus that could not be read says precision unavailable, not unmeasured", () => {
+  const hits = { ...row("secrets").hits, reliable: null, reason: "precision unavailable (read failed)" };
+  assert.deepEqual(reliability(hits), { label: "precision unavailable", tone: "warning", reason: "precision unavailable (read failed)" });
+});
+
+test("the page names the directory the statuses were read from", () => {
+  assert.ok(render(fixture).includes(`<code>${fixture.working_directory}</code>`));
 });
 
 test("an unreadable source is named and its column reads not measured", () => {

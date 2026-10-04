@@ -6,7 +6,7 @@ export type RuleState = "measured" | "dark" | "unmeasured";
 export type HitGroup = { hits: number; sessions: number; of: number; share: number; note: string };
 
 export type HitWindow = {
-  status: "measured" | "not measured";
+  status: "measured" | "not measured" | "unavailable";
   reason: string;
   measured_sessions: number | null;
   detectors: Record<string, HitGroup | null>;
@@ -19,11 +19,12 @@ export type RuleHits = {
   reliable: boolean | null;
   windows: Record<string, HitWindow>;
   last_fired_within_days: number | null;
+  widest_measured_days: number | null;
 };
 
 export type DetectorPrecision = {
   id: string;
-  status: "measured" | "not measured";
+  status: "measured" | "not measured" | "unavailable";
   precision: number | null;
   recall: number | null;
   below_floor: boolean | null;
@@ -33,6 +34,8 @@ export type DetectorPrecision = {
 export type Measured<T> = ({ status: "measured"; reason: string } & T) | { status: "not measured"; reason: string };
 
 export type RuleRow = {
+  id: string;
+  root: string;
   rule: string;
   module: string;
   kind: "rules" | "stances";
@@ -57,6 +60,7 @@ export type RuleHealth = {
   windows: number[];
   precision_floor: number | null;
   exploratory_note: string;
+  working_directory: string;
   sources: Record<string, { status: string; message: string }>;
   commands: Record<string, string>;
   findings: { path: string; line: number; reason: string }[];
@@ -66,13 +70,16 @@ export type RuleHealth = {
 export type TryWithoutResult = {
   schema_version: number;
   rule: string;
+  status: "switched" | "switch-failed" | "draft-unreadable";
   draft: { name: string; revision: string };
   changes: Record<string, string>;
   commands: string[];
+  warning: string;
   message: string;
 };
 
 export const NOT_MEASURED = "not measured";
+export const UNAVAILABLE = "unavailable";
 
 /** Tone per coverage state; the state's word is always printed beside it, never colour alone. */
 export function stateTone(state: RuleState): EvidenceTone {
@@ -89,34 +96,37 @@ export function hitLine(id: string, group: HitGroup | null | undefined): string 
   return `${id}: fired in ${group.sessions} of ${group.of} sessions (${percent(group.share)}), ${group.hits} hit${group.hits === 1 ? "" : "s"}${group.note ? `, ${group.note}` : ""}`;
 }
 
-/** A window's figure for the table cell: every detector's sessions, or why there is none. */
+/** A window's own figure for its cell: each detector's sessions by id, or that window's own state. */
 export function windowText(hits: RuleHits, days: number): string {
   if (hits.status !== "measured") return NOT_MEASURED;
   const window = hits.windows[String(days)];
-  if (!window || window.status !== "measured") return `${NOT_MEASURED}: ${window?.reason ?? "no report"}`;
+  if (!window) return `${UNAVAILABLE}: no report`;
+  if (window.status === "unavailable") return `${UNAVAILABLE}: ${window.reason}`;
+  if (window.status !== "measured") return `${NOT_MEASURED}: ${window.reason}`;
   return Object.entries(window.detectors).map(([id, group]) =>
-    group ? `${group.sessions}/${group.of} (${percent(group.share)})` : `${id}: none`).join("; ");
+    group ? `${id} ${group.sessions}/${group.of} (${percent(group.share)})` : `${id}: not in the report`).join("; ");
 }
 
-export function lastFiredText(hits: RuleHits, windows: number[]): string {
+/** "Not in N days" names only the widest window that was actually read. */
+export function lastFiredText(hits: RuleHits): string {
   if (hits.status !== "measured") return NOT_MEASURED;
   if (hits.last_fired_within_days !== null) return `within ${hits.last_fired_within_days} days`;
-  const widest = windows.length ? Math.max(...windows) : 0;
-  const measured = Object.values(hits.windows).some((window) => window.status === "measured");
-  return measured ? `not in ${widest} days` : NOT_MEASURED;
+  return hits.widest_measured_days !== null ? `not in ${hits.widest_measured_days} days` : UNAVAILABLE;
 }
 
 /** Whether the hit figures can be read at face value, with the engine's reason when not. */
 export function reliability(hits: RuleHits): { label: string; tone: EvidenceTone; reason: string } | null {
-  if (hits.status !== "measured" || hits.reliable === null) return null;
+  if (hits.status !== "measured") return null;
+  if (hits.reliable === null) return hits.reason ? { label: "precision unavailable", tone: "warning", reason: hits.reason } : null;
   return hits.reliable
-    ? { label: "precision at floor", tone: "success", reason: "" }
+    ? { label: "precision at or above floor", tone: "success", reason: "" }
     : { label: "unreliable", tone: "danger", reason: hits.reason };
 }
 
 export function precisionText(detector: DetectorPrecision, floor: number | null): string {
+  if (detector.status === "unavailable") return `${detector.id}: ${detector.reason}`;
   if (detector.status !== "measured" || detector.precision === null) return `${detector.id}: precision ${NOT_MEASURED} (${detector.reason})`;
-  const under = detector.below_floor ? `, under the ${floor ?? "?"} floor` : "";
+  const under = detector.below_floor ? `, below the engine's ${floor ?? "?"} floor` : "";
   return `${detector.id}: precision ${detector.precision}, recall ${detector.recall ?? NOT_MEASURED}${under}`;
 }
 
@@ -155,6 +165,5 @@ export function unavailableSources(health: RuleHealth): string[] {
 export function tryWithoutErrorMessage(code: string): string {
   if (code === "rule-not-switchable") return "This rule is not switched on in the selection, so there is nothing to switch off.";
   if (code === "invalid_request") return "The rule name was refused.";
-  if (code === "switch-failed") return "The draft was created but the switch could not be saved; open it in Configure.";
   return `The draft could not be created (${code}).`;
 }

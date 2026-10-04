@@ -62,6 +62,7 @@
         "reason": "",
         "reliable": true,
         "status": "measured",
+        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -128,10 +129,12 @@
           }
         }
       },
+      "id": "rules/secrets@primitives",
       "kind": "rules",
       "module": "rules/secrets",
       "path": "primitives/rules/secrets.md",
       "reason": "",
+      "root": "primitives",
       "rule": "secrets",
       "selection_state": "on",
       "state": "measured",
@@ -157,9 +160,9 @@
         {
           "below_floor": true,
           "id": "voice/banned-opener",
-          "precision": 0.75,
+          "precision": 0.95,
           "reason": "",
-          "recall": 1.0,
+          "recall": 0.6,
           "status": "measured"
         }
       ],
@@ -170,9 +173,10 @@
       "hits": {
         "label": "exploratory",
         "last_fired_within_days": 7,
-        "reason": "voice/banned-opener precision 0.75 is under the 0.90 floor",
+        "reason": "voice/banned-opener is below the engine's 0.9 floor (precision 0.95, recall 0.6)",
         "reliable": false,
         "status": "measured",
+        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -218,10 +222,12 @@
           }
         }
       },
+      "id": "rules/voice-and-format@primitives",
       "kind": "rules",
       "module": "rules/voice-and-format",
       "path": "primitives/rules/voice-and-format.md",
       "reason": "",
+      "root": "primitives",
       "rule": "voice-and-format",
       "selection_state": "on",
       "state": "measured",
@@ -254,12 +260,15 @@
         "reason": "a comment's redundancy is a judgment over the codebase, not a transcript pattern",
         "reliable": null,
         "status": "not measured",
+        "widest_measured_days": null,
         "windows": {}
       },
+      "id": "rules/conciseness@primitives",
       "kind": "rules",
       "module": "rules/conciseness",
       "path": "primitives/rules/conciseness.md",
       "reason": "a comment's redundancy is a judgment over the codebase, not a transcript pattern",
+      "root": "primitives",
       "rule": "conciseness",
       "selection_state": "on",
       "state": "dark",
@@ -292,12 +301,15 @@
         "reason": "no detector names it and it has no opt-out",
         "reliable": null,
         "status": "not measured",
+        "widest_measured_days": null,
         "windows": {}
       },
+      "id": "rules/working-style@primitives",
       "kind": "rules",
       "module": "rules/working-style",
       "path": "primitives/rules/working-style.md",
       "reason": "no detector names it and it has no opt-out",
+      "root": "primitives",
       "rule": "working-style",
       "selection_state": "off",
       "state": "unmeasured",
@@ -337,6 +349,7 @@
         "reason": "autonomy/denied-by-grade has no measured precision",
         "reliable": false,
         "status": "measured",
+        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -382,10 +395,12 @@
           }
         }
       },
+      "id": "stances/autonomy@primitives",
       "kind": "stances",
       "module": "stances/autonomy",
       "path": "primitives/stances/autonomy/execute.md",
       "reason": "",
+      "root": "primitives",
       "rule": "autonomy",
       "selection_state": "execute",
       "state": "measured",
@@ -433,5 +448,6 @@
     7,
     30,
     90
-  ]
+  ],
+  "working_directory": "/repo"
 }

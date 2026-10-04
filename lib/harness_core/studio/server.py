@@ -1766,6 +1766,15 @@ def _rule_health(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _create_rule_draft(repo_root: Path, name: str) -> str:
+    """`citizen draft create` for "Try without it"; "" or the failure code."""
+    failure = _run_draft_create(repo_root, name)
+    if failure:
+        # A create killed partway leaves a branch with no draft state; never one that holds work.
+        first_run.clear_partial(repo_root, name)
+    return failure
+
+
 def _rule_try_without(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("rule",))
     if request is None:
@@ -1773,17 +1782,9 @@ def _rule_try_without(handler: Handler, route: Route) -> None:
     if not isinstance(request["rule"], str) or not rule_health.UNIT.fullmatch(request["rule"]):
         handler._error(400, "invalid_request")
         return
-
-    def create(repo_root: Path, name: str) -> str:
-        failure = _run_draft_create(repo_root, name)
-        if failure:
-            # A create killed partway leaves a branch with no draft state; never one that holds work.
-            first_run.clear_partial(repo_root, name)
-        return failure
-
     try:
         payload = handler.server.mutations.call(
-            lambda: rule_health.try_without(handler.server.repo_root, request["rule"], create))
+            lambda: rule_health.try_without(handler.server.repo_root, request["rule"], _create_rule_draft))
     except rule_health.RuleHealthError as exc:
         handler._error(409, exc.code)
         return
@@ -2040,6 +2041,7 @@ RULE_HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("windows", "array"),
                                               ("precision_floor", "number-or-null"),
                                               ("exploratory_note", "string"),
+                                              ("working_directory", "string"),
                                               ("sources", "object"),
                                               ("commands", "object"),
                                               ("findings", "array"),
@@ -2049,6 +2051,8 @@ RULE_TRY_WITHOUT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("draft", "object"),
                                                    ("changes", "object"),
                                                    ("commands", "array"),
+                                                   ("status", "string"),
+                                                   ("warning", "string"),
                                                    ("message", "string")))
 FIRST_RUN = ResponseSchema("json-object", (("schema_version", "integer"),
                                             ("state", "string"),
