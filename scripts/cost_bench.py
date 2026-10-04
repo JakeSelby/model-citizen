@@ -2988,6 +2988,8 @@ def replay_tag(tag, args, common, harness):
             opts.update(arm_names=unit_economy.ARM_NAMES, design=design, schedule_seed=common["schedule_seed"],
                         ablation_selections=common["design_selections"],
                         arms=dict({"bare": common["bare"]}, **common["design_records"]))
+        # Resolved now, while the tag's checkout exists: which stance-gated detector applies to whom.
+        stances = dict((arm, arm_stances(arm, opts)) for arm in arm_names(opts))
         out.mkdir(parents=True, exist_ok=True)
         opts["observation_dir"] = prepare_observation_dir(out)
         rows, stopped = replay(tasks, opts, out=out / RESULTS)
@@ -2997,7 +2999,8 @@ def replay_tag(tag, args, common, harness):
     if args.raw and rows:
         # Now, before the next tag's runs overwrite these streams under the same names, and only
         # from the streams this tag's runs saved: a timeout saves none.
-        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
+        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors(),
+                                                lambda row: stances.get(row.get("arm")))
         write_jsonl(out / DETECTIONS, detections)
     design = common.get("design")
     if design and rows:
@@ -3042,9 +3045,60 @@ def replay_tag(tag, args, common, harness):
     return 1 if stopped else 0
 
 
+_RESOLVED_STANCES = {}  # (root, env, config): stances, so a backfill resolves each selection once
+
+
+def resolved_stances(root, env, config=None):
+    """The `{dimension: variant}` a selection resolves to under `root`'s own resolver, with an empty
+    home and no other user configuration, as an arm's image holds: `env` the session variables,
+    `config` a declared selection in the user-config shape. None when it cannot be resolved."""
+    key = (str(root), json.dumps(env, sort_keys=True), json.dumps(config, sort_keys=True))
+    if key not in _RESOLVED_STANCES:
+        try:
+            module = catalog.posture_module(Path(root))
+            with tempfile.TemporaryDirectory() as home:
+                selected = module.selection(dict(env, HOME=home), strict=False, config=config or {},
+                                            root=Path(root))
+            _RESOLVED_STANCES[key] = dict(selected["stances"])
+        except Exception:
+            _RESOLVED_STANCES[key] = None
+    found = _RESOLVED_STANCES[key]
+    return None if found is None else dict(found)
+
+
+def arm_stances(arm, opts):
+    """The stances a replay arm ran with, resolved over the tag's checkout as its image resolves
+    them: none for bare; for the others the tag's defaults under the arm's own session variables
+    and declared selection. What decides which stance-gated detector scores the arm's runs."""
+    if arm == "bare":
+        return {}
+    env = dict((k, v) for k, v in arm_env(arm, opts.get("stance_cost"), opts.get("proxy"),
+                                          selection_of(opts, arm)).items() if k.startswith("HARNESS_"))
+    return resolved_stances(opts.get("profile_root") or ROOT, env, declared_selection(opts, arm))
+
+
+def recorded_stances(row):
+    """The stances a saved run's arm ran with, from what its row records, for an offline `detect`:
+    none for bare, a config arm's `arm_config` or a pair arm's `selection` over this checkout's
+    defaults, the defaults alone for the harness arm. None for any other arm, whose selection the
+    row does not hold by value, so its stance-gated detectors are unknown rather than guessed."""
+    arm = row.get("arm")
+    if arm == "bare":
+        return {}
+    config = row.get("arm_config")
+    if isinstance(config, dict) and isinstance(config.get("stances"), dict):
+        return resolved_stances(ROOT, {}, {"stances": config["stances"]})
+    if arm in replay_pair.HARNESS_ARMS and isinstance(row.get("selection"), dict):
+        return resolved_stances(ROOT, dict((k, v) for k, v in row["selection"].items() if isinstance(v, str)))
+    if arm == "harness":
+        return resolved_stances(ROOT, {})
+    return None
+
+
 def cmd_detect(args):
     """Every rule detector over saved streams, calling no model: one `--raw` directory, or every
-    set under a `--backfill` root, whose `results.jsonl` files are read and never written."""
+    set under a `--backfill` root, whose `results.jsonl` files are read and never written. A
+    stance-gated detector scores only the runs whose arm selected its stance (`recorded_stances`)."""
     module = replay_detect.load_detectors()
     if args.raw:
         raw = Path(args.raw).expanduser()
@@ -3052,7 +3106,8 @@ def cmd_detect(args):
             raise SystemExit("cost-bench: %s is not a directory" % raw)
         if (raw / DETECTIONS).exists() and not args.overwrite:
             raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
-        rows, runs = replay_detect.detect_dir(raw, DETECT_ARMS, cli_messages, module)
+        rows, runs = replay_detect.detect_dir(raw, DETECT_ARMS, cli_messages, module,
+                                              lambda task, arm, rep: recorded_stances({"arm": arm}))
         write_jsonl(raw / DETECTIONS, rows)
         unread = replay_detect.unreadable(rows, lambda r: r["source"])
         print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))
@@ -3060,7 +3115,8 @@ def cmd_detect(args):
     root = Path(args.backfill).expanduser()
     if not root.is_dir():
         raise SystemExit("cost-bench: %s is not a directory" % root)
-    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite)
+    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite,
+                                    stances_of=recorded_stances)
     for target, runs, unread in report:
         if runs is None:
             print("cost-bench: %s exists, left alone; --overwrite replaces it" % target, file=sys.stderr)

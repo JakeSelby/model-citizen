@@ -81,6 +81,11 @@ KINDS = {
     # a turn or two each, so the session has three more prompts to end. `/clear` and an exit
     # both raise SessionEnd; a compaction does not, and continuing compacted is not following.
     "fresh-session": {"module": "hooks/usage-feed", "window": 3, "follow": ("SessionEnd",)},
+    # The stop blocked past the hard threshold: the handoff is written in the turn the block
+    # extends, so the session has two more prompts to end before it counts as not followed.
+    # A headless run can stop before any prompt is counted, so its emission may be turn 0.
+    "fresh-session-handoff": {"module": "hooks/usage-feed", "window": 2,
+                              "follow": ("SessionEnd",), "first_turn": 0},
 }
 
 _POSTURE = []
@@ -202,7 +207,7 @@ def emission(recommendation, session_id, turn, now=None):
     spec = KINDS.get(recommendation)
     if spec is None or not isinstance(session_id, str) or not session_id:
         return None
-    if not whole(turn) or turn < 1:
+    if not whole(turn) or turn < spec.get("first_turn", 1):
         return None
     return {"kind": "emitted", "adherence_id": uuid.uuid4().hex, "recommendation": recommendation,
             "module": spec["module"], "session_id": session_id, "turn": turn, "ts": now_ts(now),
@@ -268,13 +273,15 @@ def respond(row, observed):
     """
     spec = KINDS.get(row.get("recommendation"))
     turn, session = row.get("turn"), row.get("session_id")
-    if spec is None or not whole(turn) or turn < 1 or not isinstance(session, str):
+    if spec is None or not whole(turn) or turn < spec.get("first_turn", 1) \
+            or not isinstance(session, str):
         return "unknown", "unrecognised", 0
     turn = max(turn, prompts_by(row.get("ts"), session, observed))
-    prompts = 0
+    prompts, seen = 0, False
     for item in observed:
         if item.get("session_id") != session:
             continue
+        seen = True
         event = item.get("event")
         if event == PROMPT:
             prompts += 1
@@ -282,7 +289,7 @@ def respond(row, observed):
                 return "not_followed", PROMPT, spec["window"]
         elif prompts >= turn and event in spec["follow"]:
             return "followed", event, prompts - turn
-    if prompts < turn:
+    if prompts < turn or not seen:
         return "unknown", "unobserved", 0
     return "unknown", "window_open", prompts - turn
 

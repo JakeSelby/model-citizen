@@ -405,7 +405,7 @@ development_status:
   ah-s340-a-third-arm-the-maintainer-s-real-configuration: ready-for-dev
   ah-s341-extended-layer-sweep-with-a-justification-rule: ready-for-dev
   ah-s342-diff-quality-judge-where-deterministic-graders: ready-for-dev
-  ah-s343-layer-scorecard-generated-from-registered-rows: backlog
+  ah-s343-layer-scorecard-generated-from-registered-rows: ready-for-dev
   ah-s347-protect-the-record-block-agent-writes-to: backlog
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
 
@@ -535,6 +535,9 @@ development_status:
   ah-b168-fix-usage-feed-finished-subagent-spend-reads: ready-for-dev
   ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
   ah-b170-fix-security-grade-bash-grades-a-read-of-the: ready-for-dev
+  ah-b171-fix-cost-sleep-and-poll-loops-instead-of: ready-for-dev
+  ah-b173-fix-cost-the-fresh-session-thresholds-are: ready-for-dev
+  ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
   ah-b176-fix-observability-hook-decisions-that-cannot-be: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done

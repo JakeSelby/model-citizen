@@ -17,7 +17,9 @@ from the `detections.jsonl` the runner writes (`replay_detect`). A run is clean 
 detector read it and none fired, hit when any fired, and unknown when none fired but one could not
 read it, or when the run has no detection rows at all: an unread run is never counted as clean.
 The detectors expected of every run are those the set's detections name anywhere, so a run missing
-one of their rows was not read by it and is unknown unless another detector fired.
+one of their rows was not read by it and is unknown unless another detector fired. A row marked
+not applicable, a detector whose stance the run's arm did not select, is skipped: it makes a run
+neither hit, clean nor unknown, and is no rule's measurement.
 The rate is clean over clean plus hit, with a Wilson interval; each detector's own compliance rate
 sits beside it, over the runs that detector read. The joint rate can be no higher than the lowest
 per-rule rate, and the gap between them is what the per-rule view hides.
@@ -104,8 +106,9 @@ def _run_key(row):
 
 def classify_run(detections, roster=()):
     """One run's reading from its detection rows: `clean`, `hit` or `unknown`. A detector in
-    `roster` with no row for the run did not read it."""
-    counts = [row.get("count") for row in detections]
+    `roster` with no row for the run did not read it; a not-applicable row is skipped, and a run
+    with no applicable row is unknown."""
+    counts = [row.get("count") for row in detections if not replay_detect.is_not_applicable(row)]
     if any(type(count) is int and count > 0 for count in counts):
         return HIT
     if not counts or any(type(count) is not int for count in counts):
@@ -144,6 +147,9 @@ def joint_compliance(rows, detections):
             for det in found:
                 cell = rules.setdefault(det.get("detector"), {"rule": det.get("rule"), "measured": 0,
                                                               "fired": 0, "unknown": 0})
+                if replay_detect.is_not_applicable(det):
+                    cell["not_applicable"] = cell.get("not_applicable", 0) + 1
+                    continue
                 count = det.get("count")
                 if type(count) is not int:
                     cell["unknown"] += 1
@@ -248,8 +254,9 @@ def render(section):
             arm, _num(cell["rate"]), "undefined" if interval is None else "[%s, %s]" % (
                 _num(interval[0]), _num(interval[1])), cell["clean"], cell["hit"], cell["unknown"], cell["runs"]))
         for detector, rule in cell["per_rule"].items():
-            lines.append("    %s: %s (%d fired of %d measured, %d unknown)" % (
-                detector, _num(rule["rate"]), rule["fired"], rule["measured"], rule["unknown"]))
+            lines.append("    %s: %s (%d fired of %d measured, %d unknown%s)" % (
+                detector, _num(rule["rate"]), rule["fired"], rule["measured"], rule["unknown"],
+                ", %d not applicable" % rule["not_applicable"] if rule.get("not_applicable") else ""))
     if joint["unmatched_runs"]:
         lines.append("  %d detected run(s) match no saved row and are left out" % joint["unmatched_runs"])
     return lines
