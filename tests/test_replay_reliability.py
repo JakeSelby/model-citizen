@@ -129,11 +129,50 @@ class JointCompliance(unittest.TestCase):
         self.assertIsNone(result["arms"]["bare"]["rate"])
         self.assertIsNone(result["arms"]["bare"]["interval"])
 
+    def test_a_run_missing_one_detectors_row_is_unknown_never_clean(self):
+        detections = [det("a", "bare", 1, "x/one", 0),
+                      det("a", "bare", 2, "x/one", 0), det("a", "bare", 2, "y/two", 0)]
+        bare = REL.joint_compliance(self.ROWS, detections)["arms"]["bare"]
+        self.assertEqual((bare["clean"], bare["hit"], bare["unknown"]), (1, 0, 1))
+        self.assertEqual(bare["per_rule"]["y/two"], {"rule": "r", "measured": 1, "fired": 0,
+                                                     "unknown": 1, "rate": 1.0})
+        self.assertEqual(REL.classify_run([det("a", "bare", 1, "x/one", 0)], {"x/one", "y/two"}), REL.UNKNOWN)
+        self.assertEqual(REL.classify_run([det("a", "bare", 1, "x/one", 2)], {"x/one", "y/two"}), REL.HIT)
+
     def test_detections_for_no_saved_row_are_counted_and_left_out(self):
         detections = [det("a", "bare", 1, "x/one", 0), det("ghost", "bare", 1, "x/one", 5)]
         result = REL.joint_compliance(self.ROWS, detections)
         self.assertEqual(result["unmatched_runs"], 1)
         self.assertEqual(result["arms"]["bare"]["hit"], 0)
+
+
+class JointSummary(unittest.TestCase):
+    ROWS = rows_for({"a": {"bare": [True, True], "harness": [True, True]}})
+    DETECTIONS = [det("a", arm, rep, "x/one", 1 if (arm, rep) == ("harness", 2) else 0)
+                  for arm in ("bare", "harness") for rep in (1, 2)]
+
+    def summary(self):
+        return REL.joint_summary(REL.joint_compliance(self.ROWS, self.DETECTIONS))
+
+    def test_summary_carries_rate_and_interval_without_per_rule_cells(self):
+        summary = self.summary()
+        self.assertEqual(set(summary["arms"]["harness"]), set(REL.SUMMARY_KEYS))
+        self.assertEqual(summary["arms"]["harness"]["rate"], 0.5)
+        self.assertEqual(REL.summary_problems(self.ROWS, json.loads(json.dumps(summary))), [])
+
+    def test_summary_that_disagrees_with_the_rows_or_its_counts_is_refused(self):
+        def changed(arm, **fields):
+            summary = self.summary()
+            summary["arms"][arm].update(fields)
+            return REL.summary_problems(self.ROWS, summary)
+        self.assertTrue(changed("bare", runs=3, unknown=1))
+        self.assertTrue(changed("bare", rate=0.9))
+        self.assertTrue(changed("harness", interval=[0.0, 1.0]))
+        self.assertTrue(changed("harness", clean=-1, hit=3))
+        missing = self.summary()
+        del missing["arms"]["bare"]
+        self.assertTrue(REL.summary_problems(self.ROWS, missing))
+        self.assertTrue(REL.summary_problems(self.ROWS, {"arms": {}, "per_rule": {}}))
 
 
 class Section(unittest.TestCase):

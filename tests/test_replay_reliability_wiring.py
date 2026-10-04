@@ -67,6 +67,56 @@ class EvidenceBundleCarriesReliability(unittest.TestCase):
         self.assertEqual(reliability["pass_k"]["arms"]["bare"]["tasks"],
                          len(verified["derived"]["per_task"]))
 
+    def _bundle(self):
+        bundle = test_evidence_bundle.EvidenceBundleTest("test_valid_bundle_rederives_figures_cards_and_descriptive_statistics")
+        bundle.setUp()
+        self.addCleanup(bundle.tearDown)
+        return bundle
+
+    def _carry(self, bundle, summary):
+        path = bundle.root / "artifacts" / "joint.json"
+        bundle._write_json(path, summary)
+        index = bundle._index()
+        index["artifacts"]["joint_compliance"] = bundle._ref("artifacts/joint.json")
+        bundle._save_index(index)
+
+    def _summary(self, bundle):
+        rows = [json.loads(line) for line in (bundle.root / bundle._index()["artifacts"]["rows"]["path"])
+                .read_text().splitlines() if line.strip()]
+        detections = [det(row["task"], row["arm"], row["rep"], "d1",
+                          1 if (row["arm"], row["rep"]) == ("harness", 1) else 0) for row in rows]
+        return REL.joint_summary(REL.joint_compliance(rows, detections))
+
+    def test_a_carried_joint_summary_is_checked_and_reported(self):
+        bundle = self._bundle()
+        summary = self._summary(bundle)
+        self._carry(bundle, summary)
+        verified = test_evidence_bundle.EVIDENCE.verify(bundle.root)
+        self.assertTrue(verified["ok"], verified["errors"])
+        joint = verified["derived"]["reliability"]["joint"]
+        self.assertEqual(joint, summary)
+        self.assertEqual((joint["arms"]["harness"]["clean"], joint["arms"]["harness"]["hit"]), (8, 2))
+        self.assertEqual(joint["arms"]["harness"]["rate"], 0.8)
+
+    def test_a_carried_joint_summary_off_its_rows_fails_item_five(self):
+        bundle = self._bundle()
+        summary = self._summary(bundle)
+        summary["arms"]["bare"]["runs"] += 1
+        summary["arms"]["bare"]["unknown"] += 1
+        self._carry(bundle, summary)
+        verified = test_evidence_bundle.EVIDENCE.verify(bundle.root)
+        self.assertFalse(verified["ok"])
+        self.assertTrue(any("joint summary bare" in error for error in verified["errors"]), verified["errors"])
+        self.assertIsNone(verified["derived"]["reliability"]["joint"])
+
+    def test_a_tampered_joint_summary_fails_its_digest(self):
+        bundle = self._bundle()
+        self._carry(bundle, self._summary(bundle))
+        (bundle.root / "artifacts" / "joint.json").write_text("{}\n")
+        verified = test_evidence_bundle.EVIDENCE.verify(bundle.root)
+        self.assertFalse(verified["ok"])
+        self.assertIn("joint_compliance sha256 does not match", verified["errors"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

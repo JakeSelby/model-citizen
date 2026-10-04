@@ -16,6 +16,8 @@ The all-rules-at-once rate is the share of runs in which no rule-violation detec
 from the `detections.jsonl` the runner writes (`replay_detect`). A run is clean when every
 detector read it and none fired, hit when any fired, and unknown when none fired but one could not
 read it, or when the run has no detection rows at all: an unread run is never counted as clean.
+The detectors expected of every run are those the set's detections name anywhere, so a run missing
+one of their rows was not read by it and is unknown unless another detector fired.
 The rate is clean over clean plus hit, with a Wilson interval; each detector's own compliance rate
 sits beside it, over the runs that detector read. The joint rate can be no higher than the lowest
 per-rule rate, and the gap between them is what the per-rule view hides.
@@ -100,12 +102,15 @@ def _run_key(row):
     return (row.get("task"), row.get("arm"), row.get("rep", row.get("trial")))
 
 
-def classify_run(detections):
-    """One run's reading from its detection rows: `clean`, `hit` or `unknown`."""
+def classify_run(detections, roster=()):
+    """One run's reading from its detection rows: `clean`, `hit` or `unknown`. A detector in
+    `roster` with no row for the run did not read it."""
     counts = [row.get("count") for row in detections]
     if any(type(count) is int and count > 0 for count in counts):
         return HIT
     if not counts or any(type(count) is not int for count in counts):
+        return UNKNOWN
+    if set(roster) - set(row.get("detector") for row in detections):
         return UNKNOWN
     return CLEAN
 
@@ -115,8 +120,10 @@ def joint_compliance(rows, detections):
     runs `rows` hold, its Wilson interval, the clean, hit and unknown counts, and each detector's
     own compliance rate. `unmatched_runs` counts detected runs no row holds; they are left out."""
     by_run = {}
+    roster = {}
     for row in detections:
         by_run.setdefault(_run_key(row), []).append(row)
+        roster.setdefault(row.get("detector"), row.get("rule"))
     runs = []
     for row in rows:
         key = _run_key(row)
@@ -128,7 +135,12 @@ def joint_compliance(rows, detections):
         rules = {}
         for key in (k for k in runs if k[1] == arm):
             found = by_run.get(key, [])
-            tally[classify_run(found)] += 1
+            tally[classify_run(found, roster)] += 1
+            read = set(det.get("detector") for det in found)
+            for detector in roster:
+                if found and detector not in read:
+                    rules.setdefault(detector, {"rule": roster[detector], "measured": 0, "fired": 0,
+                                                "unknown": 0})["unknown"] += 1
             for det in found:
                 cell = rules.setdefault(det.get("detector"), {"rule": det.get("rule"), "measured": 0,
                                                               "fired": 0, "unknown": 0})
@@ -148,6 +160,52 @@ def joint_compliance(rows, detections):
                     "per_rule": dict(sorted(rules.items(), key=lambda item: str(item[0])))}
     known = set(runs)
     return {"arms": out, "unmatched_runs": len(set(by_run) - known)}
+
+
+def joint_summary(joint):
+    """The form an evidence bundle carries of a `joint_compliance` result: per arm the run counts,
+    the rate and its interval, without the per-rule cells or any raw detection."""
+    return {"arms": dict((arm, dict((key, cell[key]) for key in SUMMARY_KEYS))
+                         for arm, cell in joint["arms"].items())}
+
+
+SUMMARY_KEYS = ("runs", "clean", "hit", "unknown", "rate", "interval")
+
+
+def summary_problems(rows, summary):
+    """Every way a carried `joint_summary` disagrees with `rows` or with itself: the arms the rows
+    name, each arm's run count, and the rate and Wilson interval its counts give. Empty when it
+    holds. The split between clean, hit and unknown cannot be re-derived without detections."""
+    if not isinstance(summary, dict) or set(summary) != {"arms"} or not isinstance(summary["arms"], dict):
+        return ["joint summary must be an object holding only `arms`"]
+    problems = []
+    arms = _arms(rows)
+    if set(summary["arms"]) != set(arms):
+        problems.append("joint summary arms %s differ from the rows' %s" % (
+            sorted(summary["arms"], key=str), list(arms)))
+    runs = {}
+    for row in rows:
+        runs.setdefault(row.get("arm"), set()).add(_run_key(row))
+    for arm in sorted(summary["arms"], key=str):
+        cell = summary["arms"][arm]
+        if not isinstance(cell, dict) or set(cell) != set(SUMMARY_KEYS):
+            problems.append("joint summary %s must hold exactly %s" % (arm, ", ".join(SUMMARY_KEYS)))
+            continue
+        counts = [cell[key] for key in ("runs", "clean", "hit", "unknown")]
+        if any(type(count) is not int or count < 0 for count in counts):
+            problems.append("joint summary %s counts are not non-negative integers" % arm)
+            continue
+        if cell["runs"] != len(runs.get(arm, ())) or cell["runs"] != sum(counts[1:]):
+            problems.append("joint summary %s counts %d run(s) as %d clean, %d hit and %d unknown; "
+                            "the rows hold %d" % (arm, cell["runs"], cell["clean"], cell["hit"],
+                                                  cell["unknown"], len(runs.get(arm, ()))))
+            continue
+        measured = cell["clean"] + cell["hit"]
+        low, high = replay_stats.wilson(cell["clean"], measured)
+        if cell["rate"] != (cell["clean"] / measured if measured else None) \
+                or cell["interval"] != (None if low is None else [low, high]):
+            problems.append("joint summary %s rate or interval is not what its counts give" % arm)
+    return problems
 
 
 def detections_beside(results_path):
