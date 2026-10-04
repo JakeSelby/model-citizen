@@ -126,8 +126,8 @@ class LiveBudgetTests(support.StudioE2E):
         self.assert_no_model_calls()
 
     def _served_ms(self, path: str) -> float:
-        """The route's time from request to the last body byte, on an open connection: the
-        TCP connect and the client's JSON parsing are outside the timer."""
+        """Request to the last body byte. The client's TCP connect and JSON parsing are outside
+        the timer; the server's accept and its per-connection thread start are inside it."""
         connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=30)
         try:
             connection.connect()

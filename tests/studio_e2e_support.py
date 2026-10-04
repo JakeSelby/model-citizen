@@ -328,7 +328,11 @@ class StudioE2E(unittest.TestCase):
         whose heading starts with that string, or the end of the page."""
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
-            value = self.devtools.evaluate(expression)
+            try:
+                value = self.devtools.evaluate(expression)
+            except RuntimeError:
+                # A navigating tab briefly has no execution context; poll again.
+                value = None
             if value:
                 return value
             time.sleep(0.05)
@@ -367,7 +371,10 @@ class StudioE2E(unittest.TestCase):
                 ".click()" % (json.dumps(label), json.dumps(option)))
 
     # Seals.
-    def assert_no_network(self) -> None:
+    def assert_no_network(self, settle: float = 0.5) -> None:
+        """Refuse any request outside the loopback origin. ``settle`` lets a request fired by
+        the last render arrive before the events are drained."""
+        time.sleep(settle)
         origin = self.started["url"].rstrip("/")
         local = (origin + "/", "ws" + origin[len("http"):] + "/") + LOCAL_SCHEMES
         urls = self.devtools.requested_urls()

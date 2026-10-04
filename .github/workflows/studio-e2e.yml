@@ -9,10 +9,11 @@ on:
 permissions:
   contents: read
 
-# A newer push to the same branch or pull request supersedes a run still in progress.
+# A newer push to the same pull request supersedes a run still in progress. Pushes to a branch
+# queue instead, so every commit that lands on main keeps its own result.
 concurrency:
   group: studio-e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # The Studio's six main flows end to end in headless Chrome, and its performance budgets,

@@ -24,6 +24,7 @@ import studio_e2e_support as support
 from harness_core.studio import drafts, replay, runs, state_root
 
 FIRST_RUN_DRAFT = "first-run"
+FOREIGN = "http://127.0.0.1:1"
 SWITCHED_RULE = "cache-hygiene"
 
 
@@ -118,6 +119,11 @@ class StudioEndToEndFlows(support.StudioE2E):
         self.open()
         self.wait("document.querySelector('.system-summary') !== null", "Hub did not load")
         self.assertIn("Installed system", self.js("document.querySelector('main').textContent"))
+        # The detached Studio resolves the model clients to the stubs, so the model seal
+        # watches the processes the Studio itself starts.
+        status, overview = self.api("GET", "/api/overview")
+        self.assertEqual(status, 200)
+        self.assertIn("0.0.0-fixture", json.dumps(overview))
         areas = (("#/configure", "Configure", "document.querySelector('input') !== null"),
                  ("#/library", "Library", "document.querySelectorAll('.library-module').length > 0"),
                  ("#/experiments", "Experiments",
@@ -264,31 +270,46 @@ class StudioEndToEndFlows(support.StudioE2E):
     def test_compare_two_finished_replays_from_the_compare_panel(self):
         """Flow 5 (#990): two finished replays, compared from the Compare panel.
 
-        Today the served route answers 404 ``compare_not_found`` for any real run: it reads the
-        run supervisor off the mutation thread (``server._runs_compare``), and the run index
-        refuses a second thread. This test pins exactly that defect. When the #990 route fix
-        lands, flip both checks to the success path: a 200 with the engine's paired result, and
-        the panel's "Compared by the engine." with its "paired by task" caption.
+        The served route has a known defect: it reads the run supervisor off the mutation
+        thread (``server._runs_compare``) and the run index refuses a second thread, so it
+        answers 404 ``compare_not_found`` for any real run. Its fix is in review separately. A
+        capability probe asks the route to compare the seeded runs: a 200 means the fix is
+        present and the success path is asserted; exactly the known 404 means it is not, and
+        the panel must show that answer. Any other answer fails. The fallback goes once both
+        changes are merged.
         """
-        first, second = self.run_ids
-        sides = {"base": {"run_id": first, "target": 1},
-                 "candidate": {"run_id": second, "target": 1}}
-        self.assertEqual(self.api("POST", "/api/runs/compare", sides),
-                         (404, {"error": "compare_not_found"}))
-        self.assertEqual(self.cli_json("runs", "compare", first + ":1", second + ":1")["base"]
+        first, _second = self.run_ids
+        self.assertEqual(self.cli_json("runs", "compare", first + ":1", first + ":2")["base"]
                          ["run_id"], first, "the seeded runs are not finished replays")
+        probe = {"base": {"run_id": first, "target": 1},
+                 "candidate": {"run_id": first, "target": 2}}
+        status, answer = self.api("POST", "/api/runs/compare", probe)
+        fixed = status == 200
+        if not fixed:
+            self.assertEqual((status, answer), (404, {"error": "compare_not_found"}))
+        else:
+            self.assertTrue(answer["comparable"], answer)
+            self.assertEqual(answer["result"]["arms"][0]["measures"]["cost_per_passed"]
+                             ["reading"], "lower", "the cheaper target did not read lower")
         self.open("#/experiments")
         self.wait("__has('Compare two runs, paired by task.')", "the compare panel did not render",
                   seconds=60)
         # One field at a time: each edit re-renders the form from the last one's state.
-        for label, run_id in (("Base run id", first), ("Candidate run id", second)):
-            self.js("__setLabelValue(%s, %s)" % (json.dumps(label), json.dumps(run_id)))
-            self.wait("__labelled(%s).value === %s" % (json.dumps(label), json.dumps(run_id)),
+        for label in ("Base run id", "Candidate run id"):
+            self.js("__setLabelValue(%s, %s)" % (json.dumps(label), json.dumps(first)))
+            self.wait("__labelled(%s).value === %s" % (json.dumps(label), json.dumps(first)),
                       label + " did not take the run id")
+        self.choose_option("Candidate target", "2")
         self.click("Compare")
-        self.wait("__has('One of the runs is not known to this Studio.')",
-                  "the panel did not show the route's answer", seconds=60,
-                  section="Compare two runs")
+        if fixed:
+            self.wait("__has('Compared by the engine.')", "the engine did not compare the runs",
+                      seconds=60, section="Compare two runs")
+            self.assertIn("paired by task",
+                          self.js("document.querySelector('caption')?.textContent || ''"))
+        else:
+            self.wait("__has('One of the runs is not known to this Studio.')",
+                      "the panel did not show the route's answer", seconds=60,
+                      section="Compare two runs")
 
     def test_apply_a_draft_then_roll_it_back_from_activity(self):
         """Flow 3 (#978/#979): review, confirm and apply; then preview and roll back."""
@@ -324,23 +345,21 @@ class SealTests(support.StudioE2E):
         self.assert_no_network()
         # The browser blocks the foreign navigation itself, so nothing leaves this machine, yet
         # the request is still announced, as a real one would be.
-        self.devtools.call("Network.setBlockedURLs", {"urls": ["*example.invalid*"]})
-        self.devtools.call("Page.navigate", {"url": "http://example.invalid/seal-probe"})
+        # Port 1 on loopback is outside the Studio's origin yet never leaves this machine.
+        self.devtools.call("Page.navigate", {"url": FOREIGN + "/seal-probe"})
         with self.assertRaises(AssertionError) as caught:
             self.assert_no_network()
-        self.assertIn("example.invalid/seal-probe", str(caught.exception))
+        self.assertIn(FOREIGN + "/seal-probe", str(caught.exception))
 
     def test_the_network_seal_counts_websockets(self):
         self.open()
-        self.devtools.call("Network.setBlockedURLs", {"urls": ["*example.invalid*"]})
         self.devtools.call("Page.navigate", {"url": "about:blank"})
         self.wait("location.href === 'about:blank'", "the blank page did not load")
-        self.js("try { new WebSocket('ws://example.invalid/seal-probe') } catch (error) {}")
+        self.js("try { new WebSocket('ws://127.0.0.1:1/seal-probe') } catch (error) {}")
         with self.assertRaises(AssertionError) as caught:
-            for _ in range(40):
-                self.assert_no_network()
-                time.sleep(0.05)
-        self.assertIn("ws://example.invalid/seal-probe", str(caught.exception))
+            for _ in range(10):
+                self.assert_no_network(settle=0.2)
+        self.assertIn("ws://127.0.0.1:1/seal-probe", str(caught.exception))
 
     def test_the_model_seal_fails_on_a_model_call_and_ignores_the_offline_probes(self):
         for argv in (["claude", "--version"], ["codex", "--version"],

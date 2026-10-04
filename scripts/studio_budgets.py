@@ -9,9 +9,9 @@ Three budgets, each failing by name:
 - **First load**: navigation to the rendered Studio shell in headless Chrome with the cache
   disabled, under 1.5 seconds for every one of five loads (the slowest is judged).
 - **API latency**: the p95 of the library route over 120 requests, with a fixture library of
-  500 modules on top of the core ones, under 100 ms. Each sample is the route's own time, from
-  request to the last body byte on an already-open connection; the client's connect and JSON
-  parsing are outside it.
+  500 modules on top of the core ones, under 100 ms. Each sample is the served time, from
+  request to the last body byte; the client's TCP connect and JSON parsing are outside it, the
+  server's accept and per-connection thread start inside it.
 
 The first-load and API budgets need a served Studio and Chrome, so they are measured by
 ``tests/test_e2e_studio_budgets.py`` and judged by :func:`over_budget` here. They run only in
