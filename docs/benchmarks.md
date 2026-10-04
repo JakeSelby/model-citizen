@@ -858,6 +858,63 @@ python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/p
   out. `summarise` does not call it yet; the one line that adds it is
   `out["judge"], text = replay_judge.judge_section(verdicts, key, calibration)`.
 
+### Layer scorecard
+
+`scripts/layer_scorecard.py` builds one report from the result directories a definitive evaluation
+leaves, each passed by its role. It reruns nothing and calls no model, and it writes
+`scorecard.json` and `scorecard.md` when given `--out`.
+
+```sh
+python3 scripts/layer_scorecard.py --production <dir> [...] --rules <dir> --long-session <dir> \
+  --sweep <dir> --judge <judge dir> [--plan <pre-registration>] [--allow-exploratory] --out <dir>
+```
+
+Each role is optional. A result directory is searched for every `results.jsonl` under it. A judge
+directory holds the `verdicts.jsonl`, `pairs.key.json` and `calibration.json` that `replay_judge.py`
+writes.
+
+- **Registered rows only, unless you say otherwise.** A row, or a judge verdict, whose `evidence`
+  is not `pre-registered` with a plan named is refused, and the error names each source. With
+  `--allow-exploratory`, the scorecard scores them anyway. It sets `exploratory: true`, lists the
+  reasons, opens the Markdown with **Exploratory: not evidence**, and labels every equivalence
+  verdict exploratory. A set passed twice is refused, because its rows would count twice.
+- **The headline is harness against bare, per stratum.** A row's `stratum` decides its stratum.
+  Rows from before strata existed are grouped by `model`, and the report says so. For each stratum
+  it gives:
+  - the Cost-of-Pass ratio and pass-rate difference, from `replay_stats.analyse`
+  - pass^k and the all-rules-at-once rate from `replay_reliability`, each as the mean per-task
+    difference with a task-clustered interval
+  - the judge's win rate on each admitted dimension, read as its excess over one half
+  - the mean long-session cost, harness over bare, with scenarios as the clusters
+
+  Each reading carries an `equivalence` verdict. The margins are the pre-registration template's
+  defaults: 0.85 to 1.1765 for the ratio, and ±0.125 for each difference and for the win rate's
+  excess over one half. A `--plan`'s Equivalence margins field overrides any metric it names, under
+  the names `pass^k difference`, `All-rules rate difference` and `Judge win rate over one half`.
+- **One card per layer.** The layers are every sweep arm, every `unbuilt` and `excluded` entry, and
+  each output style in `benchmarks/static.json`. Each card holds:
+  - **Prefix tokens and USD per run, by model.** The tokens are the median over harness rows of the
+    layer's entries in `context_attribution`, or the static figure where no row records them. A hook
+    holds none. The USD is the static figure's split, one cache write and a cache read on every
+    later turn, at `policy/prices.json` rates and the rows' mean turns.
+  - **Behaviour against bare and against the layer's own removal.** Both use the score reader
+    `justify` uses, on the layer's own tasks, and both read as the removed arm minus the harness.
+    Bare is the whole harness removed.
+  - **The outcome effect.** The removal's pass-rate difference on the outcome subset.
+  - **The cost effect, for a cost-control layer.** A cost-control layer is one scored on the
+    Cost-of-Pass ratio or run on long-session scenarios. The card gives the sweep's marginal cost
+    and the removal's mean session cost over the harness's on the arm's scenarios.
+  - **The verdict.** `justify`'s keep, trim or no evidence, run per stratum. It names the deciding
+    score, with its margin and interval, every score it rested on, and the sources, arms, tasks and
+    row count it came from. A layer with no arm reads no evidence, with the manifest's reason.
+- **What is absent is said, never zeroed.** A role not supplied, a long-session set whose rows
+  carry no `row_kind`, a production set with no `detections.jsonl` beside it, and a stratum with no
+  judge result are each reported as `not measured`, with the reason. A stratum whose rows SM-2
+  refuses reports that refusal.
+- **Deterministic.** The same rows, manifest, static figure, prices and seed give byte-identical
+  files. Sources are named by role, position and path inside their directory, never by an absolute
+  path. An evidence bundle may carry the scorecard (docs/evidence-bundles.md).
+
 ## Limits
 
 - Claude Code only. Codex instructions are rendered at sync time and are not counted.
