@@ -429,8 +429,9 @@ every row says what the spawn hooks did to each spawn. `scripts/replay_spawns.py
 and defines each reading in its docstrings.
 
 - **A pack can carry a third-party skill without redistributing it.** A workspace's `vendor` list
-  names an upstream git `source`, a full `commit`, a permissive `license` (MIT, Apache-2.0, BSD or
-  ISC), `[upstream path, workspace path]` pairs and the `digest` of the placed files. Each trial's
+  names an upstream git `source` (an https URL or an absolute local path; an option, a transport
+  helper such as `ext::` or any other source is refused), a full `commit`, a permissive `license`
+  (MIT, Apache-2.0, BSD or ISC), `[upstream path, workspace path]` pairs and the `digest` of the placed files. Each trial's
   workspace fetches those paths at that commit, refuses any other bytes and any file that would
   replace the workspace's own, and commits them with the workspace. Both arms run one command
   line in that workspace, so a skill under `.claude/skills/` is offered to both; a task's

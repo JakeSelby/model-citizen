@@ -60,6 +60,13 @@ KEPT_ENV = ("HOME", "PATH", "TMPDIR", "LANG")
 VENDOR_LICENCES = ("MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
+# A vendor source is an https URL or an absolute local path, never an option, a transport helper
+# (`ext::`, `fd::`) or another scheme: a pack is untrusted, and git runs some of those as commands
+# on this machine before any container exists.
+HTTPS_SOURCE = re.compile(r"^https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._~/%+-]*$")
+# Defence in depth for the fetch itself: only the two transports a valid source can name.
+FETCH_PROTOCOLS = ("-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
+                   "-c", "protocol.file.allow=always")
 _VENDOR_CACHE = {}
 
 
@@ -242,12 +249,26 @@ def _relative(path):
         and all(part not in ("", ".", "..") for part in path.split("/"))
 
 
+def source_allowed(source):
+    """Whether a vendor `source` is an https URL or an absolute local path; anything starting with
+    `-`, holding `::` (a transport helper), a control character or whitespace is refused."""
+    if source.startswith("-") or "::" in source or any(c.isspace() or ord(c) < 32 for c in source):
+        return False
+    return bool(HTTPS_SOURCE.match(source)) or (source.startswith("/") and ":" not in source)
+
+
+def fetch_args(source, commit):
+    """The `git fetch` arguments for one vendor entry: the source after `--`, so it is never
+    parsed as an option, and only https and local transports allowed."""
+    return FETCH_PROTOCOLS + ("fetch", "-q", "--depth", "1", "--", source, commit)
+
+
 def vendor_errors(workspace, entries):
     """Why a workspace's `vendor` list cannot be used, or [].
 
     Each entry fetches upstream files at one pinned commit into the workspace as it is
     materialized, so a pack can carry a third-party skill without redistributing it: `name`,
-    `source` (a git URL or path), `commit` (a full sha), `license` (one of `VENDOR_LICENCES`),
+    `source` (an https URL or an absolute local path, `source_allowed`), `commit` (a full sha), `license` (one of `VENDOR_LICENCES`),
     `paths` (`[upstream path, workspace path]` pairs, both relative and plain) and `digest`,
     the `tree_digest` of the placed files, so the pack's own digest pins the bytes too."""
     errors, where = [], "workspace %s vendor" % workspace
@@ -262,6 +283,8 @@ def vendor_errors(workspace, entries):
         for key in ("name", "source"):
             if not isinstance(entry.get(key), str) or not entry[key]:
                 errors.append("%s: %s is not a non-empty string" % (at, key))
+        if isinstance(entry.get("source"), str) and entry["source"] and not source_allowed(entry["source"]):
+            errors.append("%s: source %r is neither an https URL nor an absolute local path" % (at, entry["source"]))
         if not isinstance(entry.get("commit"), str) or not COMMIT.match(entry["commit"]):
             errors.append("%s: commit is not a full 40-character sha" % at)
         if entry.get("license") not in VENDOR_LICENCES:
@@ -286,7 +309,10 @@ def _vendor_archive(entry, tmp=None):
     if key not in _VENDOR_CACHE:
         repo = Path(tempfile.mkdtemp(prefix="model-citizen-vendor-", dir=tmp))
         try:
-            for args in (("init", "-q"), ("fetch", "-q", "--depth", "1", entry["source"], entry["commit"])):
+            if not source_allowed(entry["source"]):
+                raise PackError("%s: source %r is neither an https URL nor an absolute local path"
+                                % (entry["name"], entry["source"]))
+            for args in (("init", "-q"), fetch_args(entry["source"], entry["commit"])):
                 done = _git(repo, *args)
                 if done.returncode:
                     raise PackError("fetching %s at %s failed: %s"
