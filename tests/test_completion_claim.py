@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import isolation  # noqa: F401 -- keeps git maintenance out of temporary repositories
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
