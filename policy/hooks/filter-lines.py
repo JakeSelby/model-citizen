@@ -76,7 +76,7 @@ def option(argv, name):
     return None
 
 
-def log_run(argv, text, out):
+def log_run(argv, text, out, size=None):
     """One `filter-output` decision row for this run, when the rewrite named a session."""
     session = option(argv, "--session")
     if not session:
@@ -93,26 +93,33 @@ def log_run(argv, text, out):
         module.record("filter-output", "filtered" if out != "\n".join(text.splitlines()) else "unchanged",
                       runner, {"session_id": session},
                       fields={"runner": runner,
-                              "bytes_in": len(text.encode("utf-8", "replace")),
+                              "bytes_in": len(text.encode("utf-8", "replace")) if size is None else size,
                               "bytes_out": len(written.encode("utf-8", "replace")),
                               "lines_in": lines_in, "lines_out": lines_out})
     except Exception:
         pass
 
 
+def read_input(stream):
+    """The input as `(text, bytes read)`. The count is of the raw bytes: a byte the decoder
+    replaces becomes a three-byte U+FFFD in the text, so measuring the text overcounts it."""
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        text = stream.read()
+        return text, len(text.encode("utf-8", "replace"))
+    data = raw.read()
+    return data.decode(getattr(stream, "encoding", None) or "utf-8", "replace"), len(data)
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     try:
-        try:
-            sys.stdin.reconfigure(errors="replace")
-        except Exception:
-            pass
-        text = sys.stdin.read()
+        text, size = read_input(sys.stdin)
         out = filter_text(text)
         if out:
             sys.stdout.write(out + "\n")
             sys.stdout.flush()
-        log_run(argv, text, out)
+        log_run(argv, text, out, size)
     except Exception:
         return
 

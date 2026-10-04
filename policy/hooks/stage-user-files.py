@@ -79,6 +79,7 @@ def outbox(root):
 
 
 def stage(source, info, box):
+    """Copy `source` into `box`, or reuse its earlier copy. Returns `(target, bytes copied)`."""
     key = "%s\0%d\0%d\0%d" % (source, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
     folder = box / hashlib.sha256(key.encode("utf-8", "surrogateescape")).hexdigest()[:16]
     target = folder / source.name
@@ -86,7 +87,7 @@ def stage(source, info, box):
         raise OSError("outbox entry is a link: " + folder.name)
     if target.is_file() and target.stat().st_size == info.st_size:
         os.utime(str(folder))
-        return target
+        return target, 0
     folder.mkdir(exist_ok=True)
     handle, partial = tempfile.mkstemp(dir=str(folder), prefix=".", suffix=".part")
     os.close(handle)
@@ -99,7 +100,7 @@ def stage(source, info, box):
         except OSError:
             pass
         raise
-    return target
+    return target, info.st_size
 
 
 def prune(box, now):
@@ -126,7 +127,7 @@ def decide(payload):
         return None
     root, inside = Path(cwd), real(cwd)
     deadline, budget = time.monotonic() + DEADLINE_SECONDS, MAX_BYTES
-    box, sent, staged, kept = None, [], 0, []
+    box, sent, staged, kept, copied = None, [], 0, [], 0
     for entry in files:
         sent.append(entry)
         if not isinstance(entry, str) or not entry.strip():
@@ -144,8 +145,10 @@ def decide(payload):
             if box is None:
                 kept.append(source.name)
                 continue
-            sent[-1] = str(stage(source, info, box))
+            target, wrote = stage(source, info, box)
+            sent[-1] = str(target)
             budget -= info.st_size
+            copied += wrote
             staged += 1
         except (OSError, ValueError):
             kept.append(os.path.basename(entry.rstrip("/")) or entry)
@@ -166,7 +169,7 @@ def decide(payload):
     answer = "+".join(name for name, count in (("staged", staged), ("kept", len(kept))) if count)
     log_decision(answer, ", ".join(os.path.basename(str(s)) for s in sent if isinstance(s, str)),
                  payload, {"staged": staged, "kept": len(kept), "files": len(files),
-                           "bytes_staged": MAX_BYTES - budget})
+                           "bytes_staged": copied})
     result = {"systemMessage": "stage-user-files: " + "; ".join(notes) + "."}
     if staged:
         result["hookSpecificOutput"] = {"hookEventName": "PreToolUse",

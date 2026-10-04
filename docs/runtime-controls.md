@@ -148,9 +148,9 @@ answer and the fields below are what each point adds, and what its evaluation re
   A sample of allowed commands is written as `allow` rows with `sampled` and `sample_rate`. Each
   question to a decision provider is a `governance` row.
 - **`allow-readonly-bash`**: one `summary` row per session, written at SessionEnd, rather than a row
-  per allow: `counts` by kind (`read-only`, `plan-read-only`, `plan-investigation`, `plan-ask`,
-  `plan-tool`) and their `total`. A session that never ended is summarised a day later with
-  `stale: true`.
+  per allow: `counts` of the answers returned, by kind (`read-only`, `plan-read-only`,
+  `plan-investigation`, `plan-ask`, `plan-tool`), and their `total`. A session that never ended is
+  summarised a day later with `stale: true`.
 - **`filter-output`**: one row per filtered run, written by the filter when the run ends:
   `filtered`, or `unchanged` when the whole run was kept, with `runner`, `bytes_in`, `bytes_out`,
   `lines_in` and `lines_out`. The input is the runner's name, never the output.
@@ -168,7 +168,8 @@ answer and the fields below are what each point adds, and what its evaluation re
   `separator`. The input is the file's name.
 - **`allow-plan-webfetch`**: `allow`, with `host`. The input is the URL without its query.
 - **`stage-user-files`**: `staged`, `kept` or `staged+kept`, with `staged`, `kept`, `files` and
-  `bytes_staged`. The input is the file names, never their paths.
+  `bytes_staged`, the bytes copied, so a reused copy adds none. The input is the file names,
+  never their paths.
 - **`harness-session`**: `context` or `silent` per start, with `sections` (lines from `drift`,
   `overrides`, `task`, `handoff` and `integrations`) and `context_chars`.
 - **`workspace-session`**: `silent`, `ambiguous`, `inline`, `bundle` or `list` per start, with

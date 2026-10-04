@@ -62,6 +62,8 @@ OBSERVATION = "observation.jsonl"
 EVENTS = "session-events.jsonl"
 # The events file holds a row per prompt, so it is capped: past this size it is moved to `.1`,
 # replacing the one before. A day of rows is all `settle` needs, and this is many days of them.
+# The rotation, each append and the two-file read share `events_lock`, on a `.lock` sibling: a
+# rotation replaces the file, so a lock on the file itself would not be held across it.
 EVENTS_MAX_BYTES = 2 * 1024 * 1024
 OUTCOMES = ("followed", "not_followed", "unknown")
 PROMPT = "UserPromptSubmit"
@@ -130,14 +132,19 @@ def note_event(event, session_id, runtime="", env=None, now=None):
         if event not in noted() or not isinstance(session_id, str) or not session_id:
             return
         target = events_path(env)
-        try:
-            if os.path.getsize(str(target)) >= EVENTS_MAX_BYTES:
-                os.replace(str(target), str(target) + ".1")
-        except OSError:
-            pass
-        _append({"ts": now_ts(now), "event": event, "session_id": session_id,
-                 "runtime": runtime or "", "source": "lifecycle", SCHEMA_KEY: SCHEMA_VERSION},
-                target)
+        row = {"ts": now_ts(now), "event": event, "session_id": session_id,
+               "runtime": runtime or "", "source": "lifecycle", SCHEMA_KEY: SCHEMA_VERSION}
+        with events_lock(env) as held:
+            # Without the lock the row is still appended, to the file as it stands, and the
+            # rotation is left to the next writer: two rotations of one full file would move the
+            # second over the first's `.1`, and the prompts in it would be gone.
+            if held:
+                try:
+                    if os.path.getsize(str(target)) >= EVENTS_MAX_BYTES:
+                        os.replace(str(target), str(target) + ".1")
+                except OSError:
+                    pass
+            _append(row, target)
     except Exception:
         pass
 
@@ -146,12 +153,17 @@ def observed_rows(env=None):
     """The rows a response is read from: the observation ledger, then the events file.
 
     A session with any row in the observation ledger is read from it alone, because there the
-    observation entry point saw every event; the events file answers for the rest.
+    observation entry point saw every event; the events file answers for the rest. The two
+    events files are read under `events_lock`, so no rotation lands between the reads; None when
+    it cannot be taken, because a reading with a rotated file missing would answer wrongly.
     """
     observed = read_rows(observation_path(env))
     covered = set(row.get("session_id") for row in observed)
     target = events_path(env)
-    events = read_rows(str(target) + ".1") + read_rows(target)
+    with events_lock(env) as held:
+        if not held:
+            return None
+        events = read_rows(str(target) + ".1") + read_rows(target)
     return observed + [row for row in events if row.get("session_id") not in covered]
 
 
@@ -314,12 +326,35 @@ def ledger_lock(target):
     risk a second row. A platform with no advisory locking yields False too: every supported one
     has it, and an answer never written beats one written twice.
     """
+    with _held(lambda: open(str(target), "rb")) as held:
+        yield held
+
+
+@contextlib.contextmanager
+def events_lock(env=None):
+    """Yield True while holding the lock the events file's writers and readers share, else False.
+
+    Taken on `session-events.jsonl.lock`, created when missing, with `ledger_lock`'s budget.
+    """
+    target = Path(str(events_path(env)) + ".lock")
+
+    def opener():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return os.fdopen(os.open(str(target), os.O_WRONLY | os.O_CREAT, 0o600), "wb")
+
+    with _held(opener) as held:
+        yield held
+
+
+@contextlib.contextmanager
+def _held(opener):
+    """Yield whether an exclusive lock on the stream `opener` returns was taken in the budget."""
     if fcntl is None:
         yield False
         return
     stream = None
     try:
-        stream = open(str(target), "rb")
+        stream = opener()
         deadline = time.monotonic() + LOCK_BUDGET
         while True:
             try:
@@ -357,6 +392,8 @@ def _settle(env, now):
     rows = read_rows(path(env))
     answered = responses(rows)
     observed = observed_rows(env)
+    if observed is None:
+        return []
     written = []
     for row in rows:
         ident = row.get("adherence_id")

@@ -109,6 +109,14 @@ def tally_readonly(event, kind):
         pass
 
 
+def tally_returned(event, results, tallied):
+    """Count `tallied`, a `(kind, answer)` pair or None, only when `answer` is the decision
+    `results` compose to: a later deny, such as a file-tool refusal or a steer, overrides an
+    allow composed earlier, and a count of answers never given measures nothing."""
+    if tallied is not None and strongest_decision(results) == tallied[1]:
+        tally_readonly(event, tallied[0])
+
+
 def normalize(payload):
     event = dict(payload)
     name = str(event.get("tool_name", "")).rsplit(".", 1)[-1]
@@ -1215,9 +1223,14 @@ def encode_pre(runtime, original, normalized, results):
     return encoded
 
 
-def _encode_pre(runtime, original, normalized, results):
+def strongest_decision(results):
+    """The permission decision `results` compose to: deny over ask over allow, else None."""
     decisions = [r.get("hookSpecificOutput", {}).get("permissionDecision") for r in results]
-    strongest = next((choice for choice in ("deny", "ask", "allow") if choice in decisions), None)
+    return next((choice for choice in ("deny", "ask", "allow") if choice in decisions), None)
+
+
+def _encode_pre(runtime, original, normalized, results):
+    strongest = strongest_decision(results)
     reasons = [r.get("hookSpecificOutput", {}).get("permissionDecisionReason", "") for r in results]
     reason = "\n".join(x for x in reasons if x)
     fields = {"hookEventName": "PreToolUse"}
@@ -1337,6 +1350,7 @@ def _dispatch(runtime, payload):
     kind, tool = event.get("hook_event_name"), event.get("tool_name")
     if kind == "PreToolUse":
         results = []
+        tallied = None
         # The store of approvals the user typed is the user's alone; `grade-bash` consumes it, so
         # it guards it too. A Bash write to it is graded, a file-tool write is refused here.
         if tool in FILE_TOOLS and enabled("grade-bash"):
@@ -1422,13 +1436,13 @@ def _dispatch(runtime, payload):
             plan = readonly and investigating(runtime, event)
             if readonly and grade == 0:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow"}})
-                tally_readonly(event, "plan-read-only" if plan else "read-only")
+                tallied = ("plan-read-only" if plan else "read-only", "allow")
             elif plan and not asked and grade == 1:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                     "permissionDecisionReason": "Plan-mode investigation, run at the permission posture you selected."}})
-                tally_readonly(event, "plan-investigation")
+                tallied = ("plan-investigation", "allow")
             elif plan and not asked and not confirmed and grade == 2:
-                tally_readonly(event, "plan-ask")
+                tallied = ("plan-ask", "ask")
                 results.append({"hookSpecificOutput": {"permissionDecision": "ask",
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "
@@ -1509,7 +1523,8 @@ def _dispatch(runtime, payload):
             results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                 "permissionDecisionReason": "Plan-mode research tool named by plan_allow_tools, "
                 "run at the permission posture you selected."}})
-            tally_readonly(event, "plan-tool")
+            tallied = ("plan-tool", "allow")
+        tally_returned(event, results, tallied)
         return encode_pre(runtime, payload, event, results)
     if kind == "PostToolUse":
         contexts = []

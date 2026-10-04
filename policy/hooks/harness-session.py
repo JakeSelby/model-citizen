@@ -327,7 +327,8 @@ def main():
     sections = {}
 
     def add(name, found):
-        sections[name] = len(found)
+        # Lines, not entries: the task section is one entry of many lines.
+        sections[name] = sum(len(str(entry).split("\n")) for entry in found)
         lines.extend(found)
 
     if manifest and manifest.get("repo"):
