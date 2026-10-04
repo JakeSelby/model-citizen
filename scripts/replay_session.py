@@ -37,6 +37,10 @@ TIER = "long-session"
 CHECKPOINT, SESSION = "checkpoint", "session"
 TOKEN_KINDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 MODEL_USAGE_KEYS = ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens", "outputTokens")
+# The `modelUsage` keys that are session running totals. The rest describe the model
+# (`contextWindow`, `maxOutputTokens`, `canonicalModel`, `costBasis`, `provider`) and may change or
+# vanish between turns.
+RUNNING_TOTAL_KEYS = MODEL_USAGE_KEYS + ("thinkingTokens", "webSearchRequests", "costUSD")
 UNRANKED = "unranked"
 BUDGET_STOP = "error_max_budget_usd"
 TURN_CAP_STOP = "error_max_turns"
@@ -124,14 +128,14 @@ def _number(value):
 
 
 def totals_fell(previous, current):
-    """Whether any running total in `current` is below `previous`: `total_cost_usd`, or any key
-    of any model's `modelUsage`, a model missing from `current` counting as zero."""
+    """Whether any running total in `current` is below `previous`: `total_cost_usd`, or any
+    `RUNNING_TOTAL_KEYS` entry of any model's `modelUsage`, a model missing from `current` counting
+    as zero."""
     if _number(current.get("total_cost_usd")) < _number(previous.get("total_cost_usd")):
         return True
     now = current.get("modelUsage") or {}
-    return any(_number((now.get(model) or {}).get(key)) < _number(value)
-               for model, usage in (previous.get("modelUsage") or {}).items()
-               for key, value in usage.items() if isinstance(value, (int, float)))
+    return any(_number((now.get(model) or {}).get(key)) < _number(usage.get(key))
+               for model, usage in (previous.get("modelUsage") or {}).items() for key in RUNNING_TOTAL_KEYS)
 
 
 def turn_usage(stdout, tiers, previous=None):

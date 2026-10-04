@@ -88,10 +88,11 @@ class ResumedTurnCostTests(unittest.TestCase):
         self.assertEqual(session["cost_per_turn"], [0.9, 0.3, 0.3, 0.7])
 
     def test_a_timeout_still_counts_at_the_rest_of_the_cap(self):
-        cli = FakeCli([resumed_stream(*TOTALS[0]), {"stdout": "", "timeout": True}])
+        # Summing totals would have counted 0.4 + 1.1 spent and the timeout at the 2.5 left.
+        cli = FakeCli([resumed_stream(*TOTALS[0]), resumed_stream(*TOTALS[1]), {"stdout": "", "timeout": True}])
         rows = SESSION.run_session(scenario(), {}, 4.0, cli, lambda *a: (True, ""), TIERS)
         self.assertEqual((rows[-1]["cost_per_turn"], rows[-1]["cost_usd"], rows[-1]["error_kind"]),
-                         ([0.4, 3.6], 4.0, "timeout"))
+                         ([0.4, 0.7, 2.9], 4.0, "timeout"))
 
     def test_a_checkpoint_row_carries_the_change_across_its_segment(self):
         cp1, cp2, _ = run()[0]
@@ -133,6 +134,31 @@ class ResumeLostTests(unittest.TestCase):
         self.assert_lost(*self.run_lost(resumed_stream(TOTALS[2][0], fell)))
         dropped = {MAIN: TOTALS[2][1][MAIN]}  # a model the session had used is gone
         self.assert_lost(*self.run_lost(resumed_stream(TOTALS[2][0], dropped)))
+
+    def test_model_descriptors_that_change_or_vanish_are_not_lost(self):
+        def described(total, model_usage, window, extra=True):
+            usage = json.loads(json.dumps(model_usage))
+            for figures_ in usage.values():
+                figures_.update(contextWindow=window, maxOutputTokens=window // 10, thinkingTokens=0,
+                                webSearchRequests=0)
+                if extra:
+                    figures_.update(canonicalModel=MAIN, costBasis="list", provider="anthropic")
+            return resumed_stream(total, usage)
+
+        streams = [described(*TOTALS[0], window=1000000), described(*TOTALS[1], window=200000),
+                   resumed_stream(*TOTALS[2]), described(*TOTALS[3], window=100000, extra=False),
+                   described(*TOTALS[4], window=200000)]
+        rows = SESSION.run_session(scenario(), {}, 4.0, FakeCli(streams), lambda *a: (True, ""), TIERS)
+        session = rows[-1]
+        self.assertEqual((session["stopped"], session["error"], session["user_turns_run"]), (None, False, 5))
+        self.assertEqual(session["cost_per_turn"], [0.4, 0.7, 0.75, 0.3, 0.45])
+
+    def test_a_falling_thinking_or_search_total_errors_the_session(self):
+        for key in ("thinkingTokens", "webSearchRequests"):
+            with self.subTest(key=key):
+                before = {"total_cost_usd": 1.0, "modelUsage": {MAIN: {key: 5, "costUSD": 1.0}}}
+                after = {"total_cost_usd": 1.2, "modelUsage": {MAIN: {key: 4, "costUSD": 1.2}}}
+                self.assertTrue(SESSION.totals_fell(before, after))
 
     def test_totals_that_hold_or_rise_are_not_lost(self):
         self.assertFalse(SESSION.totals_fell(SESSION.ZERO_TOTALS, {"total_cost_usd": 0.1, "modelUsage": {}}))

@@ -890,6 +890,9 @@ is the latest total. A segment metric of the pack's reads the same change, again
 A turn whose result names another session, or whose running totals fall below the previous turn's
 (`total_cost_usd` or any model's `modelUsage` key), lost the session on resume: it counts at the
 rest of the cap, as a timeout does, and errors the session with `error_kind: resume-lost`.
+The CLI's `--max-budget-usd` counts the invocation's own spend, not the restored session total: in
+the pilot a resumed turn given a 0.33 USD budget started at a 0.44 USD session total and ran to
+success, so each turn is given the cap less the latest total.
 
 **`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
 session, the cost-per-turn slope, the main thread's peak context and the share of cost on model
