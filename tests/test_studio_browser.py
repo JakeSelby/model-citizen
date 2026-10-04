@@ -161,8 +161,10 @@ class StudioBrowserTests(unittest.TestCase):
         record = json.loads((state_root(self.home) / "instance.json").read_text())
         self.cookie = self._bootstrap(record)
         self.profile = Path(self.temporary.name) / "chrome"
+        # The suite runs on a disposable HOME (`isolation.SUITE_HOME`) with no login keychain;
+        # macOS Chrome then stalls on keychain access past the DevTools socket timeout.
         self.browser = subprocess.Popen(
-            [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+            [chrome, "--headless=new", "--disable-gpu", "--no-sandbox", "--use-mock-keychain",
              "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
              "--disable-backgrounding-occluded-windows",
              "--remote-debugging-port=0", "--user-data-dir=" + str(self.profile), "about:blank"],
