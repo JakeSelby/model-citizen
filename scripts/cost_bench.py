@@ -17,9 +17,11 @@ rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
 import ast
+import contextlib
 import datetime
 import hashlib
 import importlib.util
+import io
 import itertools
 import json
 import os
@@ -54,6 +56,7 @@ import oracle_metrics  # noqa: E402  named metrics a check may return beside pas
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
+import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -1971,6 +1974,8 @@ def history_row(rows, series, detections=None, break_even=delegation_verdict.BRE
            "delegation": delegation_verdict.report(rows, break_even)}
     if detections is not None:
         row["mechanisms"] = replay_detect.mechanisms(detections)
+    if first.get(strata.KEY):
+        row[strata.KEY] = first[strata.KEY]
     return row
 
 
@@ -2073,14 +2078,20 @@ def _span(interval):
         "undefined" if v is None else "%.3f" % v for v in interval)
 
 
-def cmd_summarise(args):
+def cmd_summarise(args, rows=None):
     """SM-2's report from a saved `results.jsonl` alone, then the delegation verdict per task
-    (`delegation_verdict`), which SM-2's analysis never reads; calls no model."""
+    (`delegation_verdict`), which SM-2's analysis never reads; calls no model. Rows from several
+    strata are reported per stratum (`summarise_strata`), which passes each stratum's `rows` in."""
     path = Path(args.results).expanduser()
     path = path / RESULTS if path.is_dir() else path
-    if not path.is_file():
-        raise SystemExit("cost-bench: %s does not exist" % path)
-    rows = read_jsonl(path)
+    if rows is None:
+        # A multi-model run keeps each stratum's rows in its own folder under the tag's.
+        folders = sorted(path.parent.glob("*/" + RESULTS)) if not path.is_file() and path.parent.is_dir() else []
+        if not path.is_file() and not folders:
+            raise SystemExit("cost-bench: %s does not exist" % path)
+        rows = read_jsonl(path) if path.is_file() else [row for folder in folders for row in read_jsonl(folder)]
+        if strata.is_stratified(rows) or getattr(args, "pool", False):
+            return summarise_strata(rows, path, args)
     if unit_economy.is_design(rows):
         return summarise_design(rows, path, args)
     if ablations.is_ablation(rows):
@@ -2112,6 +2123,41 @@ def cmd_summarise(args):
     write_report(report, cache_basis(rows), args.json,
                  replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
     return 0
+
+
+def summarise_strata(rows, path, args, root=ROOT):
+    """Every section of the report once per stratum, in the order the rows name them, then the
+    pooled report only when `--pool` is given and the run's pre-registration names a pooled
+    analysis (`replay_strata.pool`). With `--json` the reports nest under `strata` and `pooled`.
+    The exit status is the worst of them."""
+    grouped = strata.groups(rows)
+    if not strata.is_stratified(rows):
+        raise SystemExit("cost-bench: --pool needs rows from two or more strata; %s holds one" % path)
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws one stratum; summarise each stratum's own results file")
+    pooled = strata.pool(rows, root) if getattr(args, "pool", False) else None  # refused before any output
+    reports, status = {}, 0
+    parts = list(grouped.items()) + ([(strata.POOLED, pooled[1])] if pooled else [])
+    for name, mine in parts:
+        own = path.parent / strata.directory(str(name)) / RESULTS  # a pair's decisions sit beside its rows
+        one = argparse.Namespace(**dict(vars(args), pool=False, results=str(own if own.is_file() else path)))
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            status = max(status, cmd_summarise(one, mine) or 0)
+        if args.json:
+            reports[str(name)] = json.loads(captured.getvalue())
+        else:
+            heading = ("pooled across %d strata, as pre-registered: %s" % (len(grouped), pooled[0])
+                       if name == strata.POOLED and pooled else "stratum %s" % name)
+            sys.stdout.write("== %s ==\n%s\n" % (heading, captured.getvalue()))
+    if args.json:
+        document = {"strata": {name: report for name, report in reports.items() if name != strata.POOLED}}
+        if pooled:
+            document["pooled"] = dict(reports[strata.POOLED], analysis=pooled[0])
+        sys.stdout.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    elif not pooled:
+        print("not pooled: strata are reported apart unless the pre-registration names a pooled analysis")
+    return status
 
 
 def write_report(result, basis, as_json, text):
@@ -2352,11 +2398,34 @@ def resolve_tier(args, pack=None):
 
 
 def cmd_replay(args):
+    models = strata.parse_models(getattr(args, "model", None))
+    if len(models) > 1:
+        return replay_strata(args, models)
+    args.model = models[0] if models else None
     pack = open_pack_for(args)
     try:
         return _cmd_replay(args, pack)
     finally:
         replay_pack.close_pack(pack)
+
+
+def replay_strata(args, models):
+    """Every model `--model` names as its own stratum (`replay_strata`): the whole replay once per
+    model, with its own schedule, caps, preflight, results folder and history row. Strata run in
+    the order named; the exit status is the worst of them."""
+    if (getattr(args, "tier", None) or micro.PRODUCTION) == micro.MICRO:
+        raise SystemExit("cost-bench: --tier micro pins its manifest's one model; it takes no strata")
+    print("%d strata, each run and reported on its own: %s" % (len(models), ", ".join(models)))
+    status = 0
+    for number, model in enumerate(models, 1):
+        print("stratum %d of %d: model %s" % (number, len(models), model))
+        one = argparse.Namespace(**dict(vars(args), model=model, stratum=model, strata=list(models)))
+        pack = open_pack_for(one)
+        try:
+            status = max(status, _cmd_replay(one, pack) or 0)
+        finally:
+            replay_pack.close_pack(pack)
+    return status
 
 
 def _cmd_replay(args, pack):
@@ -2413,6 +2482,13 @@ def _cmd_replay(args, pack):
         print("micro tier: %g USD if every run and preflight reaches its cap; its rows go to %s only"
               % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, micro.PREFLIGHT_CAP_USD),
                  micro.HISTORY_NAME))
+    if getattr(args, "stratum", None):
+        preflights = 0 if args.skip_preflight else len(names) * len(tags)
+        print("stratum %s: worst case %.2f USD if all %d run(s) reach %g USD and all %d preflight(s) reach "
+              "%g USD; its own spend cap applies" % (
+                  args.stratum, strata.ceiling_usd(len(plan) * len(tags), args.run_cap, preflights,
+                                                   PREFLIGHT_CAP_USD),
+                  len(plan) * len(tags), args.run_cap, preflights, PREFLIGHT_CAP_USD))
     if pair:
         print("pair %s: %s, reference %r, treatment %r; one harness image, the factor set by value"
               % (pair["name"], pair["factor"], pair["reference"], pair["treatment"]))
@@ -2785,7 +2861,7 @@ def replay_tag(tag, args, common, harness):
     series = hashlib.sha256(source + args.model.encode()
                             + b"|container" + (b"|micro" if is_micro else b"")).hexdigest()[:8]
     home = micro.HISTORY_DIR if is_micro else Path("benchmarks")
-    out = (common["out"] or ROOT / home / version) / tag
+    out = strata.out_dir((common["out"] or ROOT / home / version) / tag, getattr(args, "stratum", None))
     streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
@@ -2804,6 +2880,8 @@ def replay_tag(tag, args, common, harness):
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
                           "harness_version": version, "harness_sha": commit,
                           "surface_drift_allowed": bool(args.allow_surface_drift),
+                          **({strata.KEY: args.stratum, "strata": args.strata}
+                             if getattr(args, "stratum", None) else {}),
                           **({"tier": micro.MICRO} if is_micro else {}),
                           **common.get("pack_stamp", {}),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
@@ -2984,7 +3062,8 @@ def main(argv=None):
     run.add_argument("--tag", action="append", help="the harness ref the harness arm is built from: a "
                      "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
                      "writes its own history row. Required")
-    run.add_argument("--model", help="the one model id every arm runs")
+    run.add_argument("--model", action="append", help="the model id every arm runs; a comma list or a "
+                     "repeated flag names several, each run and reported as its own stratum")
     run.add_argument("--reps", type=int, help="trials per task and arm; default %d, the micro tier's %d"
                      % (DEFAULT_REPS, micro.REPS))
     run.add_argument("--effort", choices=arms.EFFORT_LEVELS, default=arms.DEFAULT_EFFORT,
@@ -3068,6 +3147,8 @@ def main(argv=None):
                       help="absorbed calls above which a task should delegate; default FR-34's "
                       "%(default)s, hypothetical")
     summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
+    summ.add_argument("--pool", action="store_true", help="with rows from several strata, report them "
+                      "pooled as well; refused unless the run's pre-registration names a pooled analysis")
     summ.add_argument("--correction", choices=("bonferroni",), help="for an ablation run, the multiplicity "
                       "correction its pre-registration names; without one, several arms read exploratory")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
