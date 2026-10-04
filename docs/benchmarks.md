@@ -749,7 +749,7 @@ python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --ta
     --exploratory --dry-run                                         # every planned session and the ceiling
 python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --pack-digest <digest> \
     --tag <full commit> --ablations <manifest> --spend-cap <usd> --pre-registration <plan>
-python3 scripts/cost_bench.py summarise <results dir>
+python3 scripts/cost_bench.py summarise --results <results dir>
 ```
 
 - **A set lists `scenarios`, not `tasks`, at tier `long-session`.** Loading validates each
