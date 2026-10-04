@@ -2840,6 +2840,9 @@ def _store_write(cmd):
     linked = _linked_segments(stripped) if stripped is not None else None
     if linked is None:
         return True
+    marked = _linked_segments(_mark_expansions(stripped))
+    if marked is None or len(marked) != len(linked):
+        return True
     tainted, moved, reached = set(), False, []
 
     def names_store(text):
@@ -2847,7 +2850,7 @@ def _store_write(cmd):
                     or any(re.search(r"\$\{?" + re.escape(v) + r"(?![A-Za-z0-9_])", text)
                            for v in tainted))
 
-    for tokens, fed in linked:
+    for (tokens, fed), (marks, _same) in zip(linked, marked):
         text = " ".join(tokens)
         here = moved or names_store(text) or (isinstance(fed, int) and reached[fed])
         reached.append(here)
@@ -2878,7 +2881,10 @@ def _store_write(cmd):
         clean, targets = _redirects(words)
         if targets and (moved or any(names_store(t) for t in targets)):
             return True
-        if clean and not ro.segment_verdict(clean) and not _reads_only(clean):
+        # `words` is a suffix of `tokens`, so the marked words are the same suffix.
+        shown = list(marks)[len(tokens) - len(words):]
+        if clean and not ro.segment_verdict(clean) and not _reads_only(
+                clean, shown=_redirects(shown)[0]):
             return True
     if any(names_store(inner) for inner in inners):
         return True
@@ -2914,22 +2920,67 @@ PROGRAM_WRITES_RE = re.compile(WRITE_CALLS)
 STORE_WRITES_RE = re.compile(r"\bopen\s*\([^)]*,|" + WRITE_CALLS)
 
 
-def _reads_only(words, modes=False):
+def _reads_only(words, modes=False, shown=None):
     """Whether the simple command `words` is an interpreter of a `TEXT_FAMILIES` family running an
     inline program that can neither run a command nor write a file, as `python3 -c
-    "json.load(open(p))"` can only read. `modes` is `_program_writes`'s."""
+    "json.load(open(p))"` can only read. `modes` is `_program_writes`'s. `shown` is the same
+    command as `_mark_expansions` marks it; given, a program the shell may rewrite before the
+    interpreter runs it, as `"…${W}"` may append a write, is not read-only."""
     family = _program_family(words[0]) if words else None
     if family not in TEXT_FAMILIES:
         return False
-    evals = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)[0] - {"-m"}
-    for i in range(1, len(words) - 1):
+    evals, values = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)
+    evals = evals - {"-m"}
+    i = 1
+    while i < len(words) - 1:
         if words[i] in evals:
             program = words[i + 1]
+            if shown is not None and (len(shown) != len(words) or EXPANDS in shown[i + 1]):
+                return False
             return (_inert_program(program, {family})
                     and not _program_writes(program, modes))
         if not words[i].startswith("-"):
             return False
+        # An option's value, as `ignore` is in `python3 -W ignore -c …`, is no script operand.
+        i += 2 if words[i] in values else 1
     return False
+
+
+# What `_mark_expansions` puts in place of a shell expansion.
+EXPANDS = ""
+
+
+def _mark_expansions(text):
+    """`text` with every shell expansion outside single quotes, `$` and backquote included, and
+    each substitution's placeholder replaced by `EXPANDS`, splitting into the same words as
+    `text`. An ANSI-C `$'…'` string becomes one `EXPANDS`, so a word only single quotes or none
+    produce carries none."""
+    text = text.replace(PLACEHOLDER, EXPANDS)
+    out, i, n, dq = [], 0, len(text), False
+    while i < n:
+        c = text[i]
+        if c == "'" and not dq:
+            end = text.find("'", i + 1)
+            end = n if end < 0 else end + 1
+            out.append(text[i:end])
+            i = end
+            continue
+        if c == "\\":
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if c == "$" and not dq and text.startswith("$'", i):
+            end = ro._ansi_end(text, i)
+            out.append(EXPANDS)
+            i = n if end is None else end
+            continue
+        if c in "$`":
+            out.append(EXPANDS)
+        else:
+            out.append(c)
+            dq = dq != (c == '"')
+        i += 1
+    return "".join(out)
 
 
 def _grade_text(cmd, cwd, depth):
@@ -5698,7 +5749,8 @@ def data_mentions_only(command):
     """Whether every protected path `command` names is data that nothing in it writes.
 
     A mention is data in two places: the inline program of an interpreter that only reads
-    (`_reads_only`, an `open` with a read-only mode included), and a quoted text value of gh's
+    (`_reads_only`, an `open` with a read-only mode included, the program free of any shell
+    expansion that could rewrite it), and a quoted text value of gh's
     issue and pull request subcommands, a quoted here-document only `cat` or gh reads into one
     included. Every mention must sit inside quotes, and no simple command, a substitution's
     included, may run text as a shell (`_runs_input`, `_runs_unseen`, `_sources`) or redirect
@@ -5723,8 +5775,11 @@ def _data_text(text, heads, depth):
     linked = _linked_segments(stripped) if stripped is not None else None
     if linked is None or _protected_count(_mask_strings(stripped)):
         return False
+    marked = _linked_segments(_mark_expansions(stripped))
+    if marked is None or len(marked) != len(linked):
+        return False
     counted = 0
-    for tokens, _fed in linked:
+    for (tokens, _fed), (shown, _same) in zip(linked, marked):
         if _runs_input(tokens) or _runs_unseen(tokens) or _sources(tokens):
             return False
         words, targets = _redirects(list(tokens))
@@ -5741,7 +5796,7 @@ def _data_text(text, heads, depth):
         if values is not None:
             if any(_protected_count(w) for k, w in enumerate(words) if k not in values):
                 return False
-        elif not _reads_only(words, modes=True):
+        elif not _reads_only(words, modes=True, shown=_redirects(list(shown))[0]):
             return False
     # A loop's header is no simple command, so a mention there reaches commands unread.
     if _protected_count(stripped) > counted:
