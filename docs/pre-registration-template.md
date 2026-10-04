@@ -90,7 +90,8 @@ an appended entry in the deviation log, never an edit above it.
   intra-cluster correlation>
 - **Power calculation:** <the command that produced k, n and m for the decision rule and for the
   claim, and its output: `python3 scripts/replay_power.py --pilot <results dir> --mde <effect>
-  --have <k> <n> <m>`, with `--assumed-pass-rate <p>` when one is stated above, or the formula used
+  --have <k> <n> <m>`, with `--assumed-pass-rate <p>` when one is stated above and `--tau2 <assumed
+  variance>` when the pilot has fewer than two tasks passing in both arms, or the formula used
   instead>
 
 ## Stopping rule

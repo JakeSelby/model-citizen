@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from test_harness import REPO
 from test_replay_power import POWER, pilot_rows
 
 STATED = ("--tau2", "0.02", "--cv2", "0.1", "--tau2-pass", "0.005", "--long-tau2", "0.02")
@@ -73,6 +74,8 @@ class AssumedPassRateTests(unittest.TestCase):
         code, out, _ = self.main(*STATED + ("--assumed-pass-rate", "0.8"))
         self.assertEqual(code, 0)
         self.assertIn("pre-registered assumption", out)
+        self.assertIn("tau2_pass 0.0050 is stated, not measured", out)
+        self.assertNotIn("measured figure", out)
         stated = self.main(*STATED + ("--pass-rate", "0.8"))[1]
         self.assertEqual(stated.splitlines()[-2:], out.splitlines()[-2:])
         self.assertEqual(self.main(*STATED + ("--pass-rate", "0.8", "--assumed-pass-rate", "0.8"))[0], 2)
@@ -111,6 +114,22 @@ class FloorPilotTests(unittest.TestCase):
         self.assertEqual(result["inputs"]["tau2"], 0.02)
         self.assertEqual(result["inputs"]["measured_pass_rate"], 0.0)
 
+    def test_a_non_finite_assumed_tau2_is_refused(self):
+        for value in ("nan", "inf", "-0.01"):
+            with self.assertRaisesRegex(ValueError, "must be finite and must not be negative"):
+                POWER.estimate(floor_rows(), assumed_tau2=float(value))
+            with tempfile.TemporaryDirectory() as tmp:
+                code, out, err = self.main("--pilot", self.pilot(tmp), "--assumed-pass-rate", "0.7",
+                                           "--tau2", value, "--json")
+            self.assertEqual(code, 2, value)
+            self.assertEqual(out, "")
+            self.assertIn("must be finite", err)
+
+    def test_non_finite_stated_inputs_are_refused(self):
+        code, out, err = self.main("--tau2", "nan", "--cv2", "0.1", "--tau2-pass", "0.005", "--pass-rate", "0.8")
+        self.assertEqual(code, 2)
+        self.assertIn("must be finite", err)
+
     def test_a_stated_tau2_never_overrides_a_measured_one(self):
         with self.assertRaisesRegex(ValueError, "the pilot measured tau2"):
             POWER.estimate(pilot_rows(), assumed_tau2=0.02)
@@ -120,6 +139,15 @@ class FloorPilotTests(unittest.TestCase):
                                                   encoding="utf-8")
             self.assertEqual(self.main("--pilot", tmp, "--tau2", "0.02")[0], 2)
             self.assertEqual(self.main("--pilot", tmp, "--cv2", "0.1")[0], 2)
+
+
+class TemplateTests(unittest.TestCase):
+    def test_the_power_command_names_both_assumptions(self):
+        text = (REPO / "docs" / "pre-registration-template.md").read_text(encoding="utf-8")
+        field = text.split("- **Power calculation:**", 1)[1].split("\n- **", 1)[0].split("\n## ", 1)[0]
+        self.assertIn("--pilot", field)
+        self.assertIn("--assumed-pass-rate <p>", field)
+        self.assertIn("--tau2 <assumed", field)
 
 
 if __name__ == "__main__":

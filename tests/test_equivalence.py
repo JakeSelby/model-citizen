@@ -165,6 +165,31 @@ class CommandTests(unittest.TestCase):
         self.assertAlmostEqual(assessed["tool_errors"]["interval"][0], 0.5)
         self.assertEqual(assessed["unreported_score"]["verdict"], EQ.INCONCLUSIVE)
 
+    def test_fewer_than_five_trials_keep_the_verdicts_but_label_them_exploratory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(r) for r in rows(1.5, 3, reps=3)) + "\n",
+                                                  encoding="utf-8")
+            Path(tmp, "plan.md").write_text(PLAN, encoding="utf-8")
+            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200")
+            self.assertEqual(code, 0)
+            self.assertIn("Cost-of-Pass ratio: not equivalent (exploratory)", out)
+            self.assertIn("fewer than five paired trials", out)
+            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
+        ratio = json.loads(out)[EQ.RATIO]
+        self.assertEqual(ratio["verdict"], EQ.NOT_EQUIVALENT)
+        self.assertTrue(ratio["exploratory"])
+        self.assertIn("fewer than five paired trials", ratio["limitation"])
+
+    def test_five_trials_are_not_labelled_exploratory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(r) for r in rows(1.5, 5)) + "\n",
+                                                  encoding="utf-8")
+            Path(tmp, "plan.md").write_text(PLAN, encoding="utf-8")
+            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
+        ratio = json.loads(out)[EQ.RATIO]
+        self.assertFalse(ratio["exploratory"])
+        self.assertIsNone(ratio["limitation"])
+
     def test_a_plan_without_margins_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "plan.md").write_text("## Decision rule\n\nx\n", encoding="utf-8")

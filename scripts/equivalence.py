@@ -12,7 +12,8 @@ uses at 0.05; the analysis keeps one interval per metric rather than computing a
 A margin is `(lower, upper)` on the metric's own scale: a ratio's margin brackets 1.0 and is
 positive, a difference's brackets 0. Margins come from the pre-registration's "Equivalence
 margins" section (`margins_from_plan`), one `- **<metric>:** <lower> to <upper>` field each; a
-field reading "none" registers no margin. `Cost-of-Pass ratio` and `Pass-rate difference` read
+field reading "none" registers no margin. When the analysis carries a limitation (fewer than five
+paired trials per task and arm), the verdicts stand but each is labelled exploratory with it. `Cost-of-Pass ratio` and `Pass-rate difference` read
 `replay_stats.analyse`'s intervals; any other field is a behaviour score, an oracle metric named
 as `oracle_metrics.summarise` reports it, judged from that metric's paired treatment-minus-reference
 difference interval, so its margin brackets 0 too. How a plan states them:
@@ -89,6 +90,15 @@ def assess(intervals, margins):
     return out
 
 
+def label(assessed, limitation):
+    """`assessed` with each verdict marked `exploratory` and carrying `limitation`, the analysis's
+    reason it cannot be cited (None when it can). The verdicts themselves are kept."""
+    for item in assessed.values():
+        item["exploratory"] = bool(limitation)
+        item["limitation"] = limitation
+    return assessed
+
+
 def parse_margin(metric, text):
     """`(lower, upper)` from `<lower> to <upper>`, or None for "none"."""
     if text.strip().lower().startswith("none"):
@@ -123,8 +133,10 @@ def render(assessed):
         interval = item["interval"]
         shown = "undefined" if not interval else "[%s, %s]" % tuple(
             "undefined" if v is None else "%.4g" % v for v in interval)
-        lines.append("%s: %s; interval %s, margin [%g, %g]; %s"
-                     % (metric, item["verdict"], shown, item["margin"][0], item["margin"][1], item["reason"]))
+        lines.append("%s: %s%s; interval %s, margin [%g, %g]; %s%s"
+                     % (metric, item["verdict"], " (exploratory)" if item.get("exploratory") else "", shown,
+                        item["margin"][0], item["margin"][1], item["reason"],
+                        "; %s" % item["limitation"] if item.get("limitation") else ""))
     return "\n".join(lines)
 
 
@@ -142,8 +154,9 @@ def main(argv=None):
         if path.is_dir():
             path = path / "results.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-        assessed = assess(intervals_of(replay_stats.analyse(rows, args.seed, args.resamples),
-                                       oracle_metrics.summarise(rows, args.seed, args.resamples)), margins)
+        result = replay_stats.analyse(rows, args.seed, args.resamples)
+        assessed = label(assess(intervals_of(result, oracle_metrics.summarise(rows, args.seed, args.resamples)),
+                                margins), result.get("limitation"))
     except (ValueError, OSError) as exc:
         print("equivalence: %s" % exc, file=sys.stderr)
         return 2

@@ -191,8 +191,8 @@ def check_inputs(inputs, effect, alpha, power):
                          "everything or nothing has no variance to size from, so state the "
                          "pre-registered pass rate with --assumed-pass-rate")
     for key in ("tau2", "cv2", "tau2_pass", "long_tau2"):
-        if inputs.get(key) is not None and inputs[key] < 0:
-            raise ValueError("%s must not be negative" % key)
+        if inputs.get(key) is not None and (not math.isfinite(inputs[key]) or inputs[key] < 0):
+            raise ValueError("%s must be finite and must not be negative" % key)
 
 
 def _sample_var(values):
@@ -261,8 +261,8 @@ def estimate(rows, arms=replay_stats.ARMS, assumed_tau2=None):
     if tau2 is not None and assumed_tau2 is not None:
         raise ValueError("the pilot measured tau2; --tau2 with --pilot is only for a pilot that has none")
     if tau2_assumed:
-        if assumed_tau2 < 0:
-            raise ValueError("tau2 must not be negative")
+        if not math.isfinite(assumed_tau2) or assumed_tau2 < 0:
+            raise ValueError("tau2 must be finite and must not be negative")
         tau2 = assumed_tau2
     diffs = [statistics.mean(1.0 if a["passed"] else 0.0 for a in cells[t][arms[1]])
              - statistics.mean(1.0 if a["passed"] else 0.0 for a in cells[t][arms[0]]) for t in tasks]
@@ -306,11 +306,14 @@ def render(result, inputs, effect, alpha, power, have=None):
              % (_num(inputs["tau2"]), _num(inputs["cv2"]), _num(inputs["pass_rate"]),
                 _num(inputs["tau2_pass"]), _num(inputs.get("long_tau2")) if inputs.get("long_tau2") is not None
                 else "unknown (claim power is unavailable)")]
-    if inputs.get("pass_rate_assumed"):
+    if inputs.get("pass_rate_assumed") and "tasks" in inputs:
         lines.append("assumption: pass rate %s is the pre-registered assumption, not a measurement; the "
                      "measured pass rate is %s, and tau2_pass %s is the measured figure"
                      % (_num(inputs["pass_rate"]), _num(inputs.get("measured_pass_rate")),
                         _num(inputs["tau2_pass"])))
+    elif inputs.get("pass_rate_assumed"):
+        lines.append("assumption: pass rate %s is the pre-registered assumption, not a measurement; "
+                     "tau2_pass %s is stated, not measured" % (_num(inputs["pass_rate"]), _num(inputs["tau2_pass"])))
     if inputs.get("tau2_assumed"):
         lines.append("assumption: tau2 %s is the pre-registered assumption, not a measurement; fewer "
                      "than two pilot tasks passed in both arms" % _num(inputs["tau2"]))
