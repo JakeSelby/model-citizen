@@ -153,6 +153,24 @@ class SpendReportTests(unittest.TestCase):
         self.assertEqual(committed, frontend_documents(),
                          "regenerate with: python3 tests/test_studio_spend.py --write")
 
+    def test_the_ledger_work_for_a_year_of_sessions_takes_under_a_second(self):
+        """AC3's one-second budget, held on the work the page waits for: the report itself.
+
+        Best of three, so one scheduling stall on a loaded machine is not read as the report.
+        The route test below adds the HTTP path under a looser ceiling.
+        """
+        write_year(self.home / "year.jsonl")
+        install_ledger(self.home, self.home / "year.jsonl")
+        for by in ("day", "session"):
+            elapsed = []
+            for _ in range(3):
+                started = time.monotonic()
+                payload = spend.report(ROOT, by, 365)
+                elapsed.append(time.monotonic() - started)
+            with self.subTest(by=by):
+                self.assertEqual(payload["ledger"]["totals"]["runs"], 365 * 20)
+                self.assertLess(min(elapsed), 1.0, elapsed)
+
     def test_an_empty_ledger_answers_with_empty_groups(self):
         (self.home / ".local" / "state" / "agent-harness" / "usage.jsonl").unlink()
         payload = spend.report(ROOT, "day", 30)
@@ -320,13 +338,77 @@ class SpendRouteTests(studio_security.StudioSecurityFixture):
                 self.assertEqual(payload["basis"]["price_as_of"], fixture_as_of())
 
 
+class SpendRouteConcurrencyTests(studio_security.StudioSecurityFixture):
+    """Over HTTP: a grouping in flight refuses a second request, and a disconnect kills the child.
+
+    A transcript that is a FIFO blocks the rebuild child on open() until something writes it,
+    which nothing does, so the child stays running for exactly as long as the test needs.
+    """
+
+    DAYS = 3333
+
+    def setUp(self):
+        super().setUp()
+        projects = self.home / ".claude" / "projects" / "blocked"
+        projects.mkdir(parents=True)
+        os.mkfifo(str(projects / "session.jsonl"))
+        _issued, status, headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        self.cookie_value = self.cookie(headers)
+        _status, _headers, body = self.request("GET", "/api/session",
+                                               {"Cookie": self.cookie_value})
+        self.csrf = json.loads(body)["csrf_token"]
+
+    def headers(self, body):
+        return {"Cookie": self.cookie_value, "Content-Type": "application/json",
+                "Content-Length": str(len(body)), "Origin": self.record["url"].rstrip("/"),
+                "X-Studio-CSRF": self.csrf, "Host": self.record["host"]}
+
+    def children(self):
+        listing = subprocess.run(["ps", "-Ao", "pid=,command="], capture_output=True,
+                                 text=True).stdout
+        marker = "--by rebuild --days %d" % self.DAYS
+        return [line for line in listing.splitlines() if marker in line and "harness" in line]
+
+    def wait_for(self, condition, seconds=15):
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if condition():
+                return True
+            time.sleep(0.1)
+        return False
+
+    def test_a_busy_grouping_answers_429_and_a_disconnect_kills_its_child(self):
+        import http.client
+        body = json.dumps({"by": "rebuild", "days": self.DAYS}).encode()
+        first = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=30)
+        first.request("POST", "/api/reports/spend", body=body, headers=self.headers(body))
+        try:
+            self.assertTrue(self.wait_for(lambda: len(self.children()) == 1),
+                            "the rebuild child never started")
+            status, _headers, payload = self.request("POST", "/api/reports/spend",
+                                                     self.headers(body), body)
+            self.assertEqual(status, 429)
+            self.assertEqual(json.loads(payload), {"error": "spend_busy"})
+            self.assertEqual(len(self.children()), 1)
+        finally:
+            first.close()
+        self.assertTrue(self.wait_for(lambda: not self.children()),
+                        "the child outlived its client")
+        # The slot is free again once the abandoned child is gone.
+        other = json.dumps({"by": "day", "days": 30}).encode()
+        status, _headers, _payload = self.request("POST", "/api/reports/spend",
+                                                  self.headers(other), other)
+        self.assertEqual(status, 200)
+
+
 class SpendRoutePerformanceTests(studio_security.StudioSecurityFixture):
     """AC3, end to end: the authenticated route answers a year-sized ledger within budget.
 
-    The criterion is one second, which a developer machine meets with room to spare (about
-    0.5 s per grouping, most of it the CLI's start-up). The ceiling here is three seconds so a
-    shared, loaded CI runner does not fail an unchanged tree; a regression that scales with the
-    ledger, such as a quadratic grouping, still breaks it.
+    The criterion is one second, held on the report itself by the in-process test above. This
+    one adds the HTTP path, session and CSRF checks under a three-second ceiling, so a shared,
+    loaded CI runner does not fail an unchanged tree while a route that serialises or stalls
+    still does.
     """
 
     CEILING = 3.0

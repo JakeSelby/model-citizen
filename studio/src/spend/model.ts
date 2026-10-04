@@ -24,6 +24,9 @@ export type UsageGroup = {
   cache_hit_denominator: number | null;
   usd: number | null;
   unpriced_runs: number;
+  /** How much of `usd` is spend recorded by Studio runs, which is not a table price. */
+  actual_spend_runs?: number;
+  actual_spend_usd?: number;
 };
 
 export type RoleGroup = {
@@ -122,6 +125,16 @@ export function pricingDate(basis: SpendReport["basis"]): string {
 /** The label every dollar figure carries: what it is, and which price snapshot made it. */
 export function moneyLabel(basis: SpendReport["basis"]): string {
   return `${basis.label}, ${pricingDate(basis)}`;
+}
+
+export const ACTUAL_SPEND_LABEL = "actual spend recorded by the Studio run";
+
+/** A usage row's dollar label: a Studio run's recorded spend keeps its own basis, never a table date. */
+export function usageMoneyLabel(row: UsageGroup, basis: SpendReport["basis"]): string {
+  const runs = row.actual_spend_runs ?? 0;
+  if (!runs) return moneyLabel(basis);
+  if (runs === row.runs) return ACTUAL_SPEND_LABEL;
+  return `${moneyLabel(basis)}; includes ${formatUsd(row.actual_spend_usd ?? null)} ${ACTUAL_SPEND_LABEL.replace("the Studio run", "Studio runs")}`;
 }
 
 /** A recorded dollar figure as text; `null` stays unpriced and never reads as zero. */

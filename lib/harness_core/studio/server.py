@@ -8,7 +8,7 @@ import json
 import os
 import re
 import secrets
-import select
+import selectors
 import signal
 import socket
 import subprocess
@@ -550,13 +550,23 @@ def _activity(handler: Handler, route: Route) -> None:
 
 
 def _client_gone(connection) -> bool:
-    """Whether the peer has closed its end: readable with nothing left to read."""
+    """Whether the peer has closed its end: readable with nothing left to read.
+
+    A selector rather than `select.select`, which refuses descriptors at or above FD_SETSIZE and
+    would read a live client on a busy server as gone. Only a closed socket or a failed read
+    counts as gone; a check that cannot be made keeps the request.
+    """
+    if connection.fileno() < 0:
+        return True
     try:
-        readable, _writable, _errors = select.select([connection], [], [], 0)
-        if not readable:
-            return False
+        with selectors.DefaultSelector() as selector:
+            selector.register(connection, selectors.EVENT_READ)
+            if not selector.select(0):
+                return False
         return connection.recv(1, socket.MSG_PEEK) == b""
-    except (OSError, ValueError):
+    except BlockingIOError:
+        return False
+    except (ConnectionError, OSError):
         return True
 
 

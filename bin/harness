@@ -5745,6 +5745,8 @@ USAGE_JSON_VERSION = 1
 
 # Every dollar a usage report prints is this, never an invoice: see docs/usage.md "What it cost".
 COST_BASIS = "list_price_equivalent"
+# The basis of a Studio run's dollars: the spend its runner recorded, not a table price.
+ACTUAL_SPEND_BASIS = "actual_spend"
 
 
 class UsedPrices(dict):
@@ -5759,12 +5761,36 @@ class UsedPrices(dict):
     def __init__(self, table: Dict[str, Dict[str, Any]], undated: Iterable[str] = ()):
         super().__init__(table)
         self.used: set = set()
+        self.pending: set = set()
         self.undated = frozenset(undated)
 
     def get(self, key: Any, default: Any = None) -> Any:
-        if key in self:
-            self.used.add(key)
-        return super().get(key, default)
+        value = super().get(key, default)
+        # An entry whose rates are unusable prices nothing, so it never dates a figure.
+        if key in self and usable_rate(value) is not None:
+            self.pending.add(key)
+        return value
+
+    def settle(self, priced: bool) -> None:
+        """Keep the entries looked up since the last settle only if they produced a figure.
+
+        A row priced in parts (per model, or a session and its children) looks up several
+        entries and is unpriced when any part fails; the entries its other parts read priced
+        nothing the report shows.
+        """
+        if priced:
+            self.used |= self.pending
+        self.pending = set()
+
+
+def settled_cost(row: Dict[str, Any], table: Dict[str, Dict[str, Any]],
+                 children: Optional[List[Dict[str, Any]]] = None) -> Optional[float]:
+    """`row_cost`, recording the entries it read for `price_as_of` only when it priced the row."""
+    cost = row_cost(row, table, children)
+    settle = getattr(table, "settle", None)
+    if settle is not None:
+        settle(cost is not None)
+    return cost
 
 
 def report_prices(cfg: Optional[Dict[str, Any]] = None) -> UsedPrices:
@@ -5781,7 +5807,9 @@ def report_prices(cfg: Optional[Dict[str, Any]] = None) -> UsedPrices:
 def price_basis(table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """The label and pricing date a JSON report's dollars carry, so a reader never re-derives them.
 
-    `price_as_of` is the oldest `as_of` among the entries the report's figures were priced from,
+    The caller settles each figure first (`settled_cost`, or `settle(True)` after an engine
+    whose lookups all priced something). `price_as_of` is the oldest `as_of` among the entries
+    the report's figures were priced from,
     so no figure is newer than the date it carries. It is `"unknown"` when one of those entries
     carries no date, or comes from a user override that names none, and None when nothing in
     the report was priced from the table.
@@ -5916,7 +5944,7 @@ def provider_report(rows: List[Dict[str, Any]], days: int,
     groups = []
     for key in sorted(grouped):
         group = grouped[key]
-        costs = [row_cost(r, table) for r in group]
+        costs = [settled_cost(r, table) for r in group]
         inputs = [usage_count(row.get("input")) for row in group]
         known_inputs = [value for value in inputs if value is not None]
         unpriced += sum(1 for cost in costs if cost is None)
@@ -6028,7 +6056,7 @@ def role_report(rows: List[Dict[str, Any]], days: int,
         output = sorted(value for value in (usage_count(r.get("output")) for r in group)
                         if value is not None)
         tools = sorted(int(r["tool_calls"]) for r in group if isinstance(r.get("tool_calls"), int))
-        costs = [row_cost(r, table) for r in group]
+        costs = [settled_cost(r, table) for r in group]
         unpriced += sum(1 for cost in costs if cost is None)
         usd = sorted(cost for cost in costs if cost is not None)
         groups.append({
@@ -6129,6 +6157,8 @@ def adherence_report(days: int, json_output: bool = False) -> int:
     table = report_prices()
     result = soft_estimates.report(rows, adherence, intervals, calls_for,
                                    table, pricing, feed._context, cutoff)
+    # The estimator looks a rate up only to price the call it is repricing.
+    table.settle(True)
     if json_output:
         data = soft_estimates.summary(result)
         return usage_json("adherence", "adherence", days, data["groups"], labels=data["labels"],
@@ -6251,6 +6281,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
         result = rebuilds.analyse(claude_projects_root(),
                                   time.time() - max(args.days, 0) * 86400,
                                   args.days, rebuild_prices, pricing)
+        # A call or break looks up a usable rate only to price itself.
+        rebuild_prices.settle(True)
         if json_output:
             groups = [dict({"scope": name}, **result["scopes"][name])
                       for name in ("long", "all")]
@@ -6303,6 +6335,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
     # measured ratio — a Codex row, which says `unknown`, a worker row, or a row written
     # before the field existed, which carries no key at all — is counted as unknown.
     dedup_raw, dedup_counted, dedup_runs, dedup_unknown = 0.0, 0, 0, 0
+    # A Studio run's dollars are the spend its runner recorded, never a table price, so each
+    # group says how much of its `usd` is that, under its own basis.
+    actual: Dict[str, List[Any]] = {}
+    actual_total = [0, 0.0]
     ledger = usage_ledger(path)
     if by == "prefix":
         # Read-only and retrospective: `cache_prefix` derives the miss ratio from the cache
@@ -6354,7 +6390,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
                     and not isinstance(amount, bool) and math.isfinite(amount) and amount >= 0
                     else None)
         else:
-            cost = row_cost(row, table, children.get(row.get("session_id") or "")
+            cost = settled_cost(row, table, children.get(row.get("session_id") or "")
                             if kind == "session" and row.get("runtime") != "codex" else None)
         # The ratio is reported over exactly what TOTAL counts: a run where the runs column
         # counts one, and tokens where the token columns add them, which under `--by day` is
@@ -6451,6 +6487,12 @@ def cmd_usage(args: argparse.Namespace) -> int:
             dedup_unknown += 1
         if cost is not None:
             acc[5] += cost
+            if kind == "studio_run":
+                spent = actual.setdefault(key, [0, 0.0])
+                spent[0] += 1
+                spent[1] += cost
+                actual_total[0] += 1
+                actual_total[1] += cost
         for i, name in enumerate(RATE_FIELDS):
             if kind == "studio_run":
                 continue
@@ -6476,8 +6518,9 @@ def cmd_usage(args: argparse.Namespace) -> int:
         for line in coverage:
             say(line)
         return status
-    def record_for(label: str, acc: List[Any]) -> Dict[str, Any]:
+    def record_for(label: str, acc: List[Any], spent: Optional[List[Any]] = None) -> Dict[str, Any]:
         served = acc[1] + acc[3] + acc[4]
+        spent = spent or [0, 0.0]
         cache_unknown = any(acc[6][name] for name in ("input", "cache_read", "cache_write"))
         return {"name": label, "runs": acc[0],
                 "tokens": {name: None if acc[6][name] else acc[index + 1]
@@ -6485,7 +6528,8 @@ def cmd_usage(args: argparse.Namespace) -> int:
                 "unknown_token_runs": dict(acc[6]),
                 "cache_hit_rate": acc[3] / served if served and not cache_unknown else None,
                 "cache_hit_denominator": None if cache_unknown else served,
-                "usd": None if acc[7] else acc[5], "unpriced_runs": acc[7]}
+                "usd": None if acc[7] else acc[5], "unpriced_runs": acc[7],
+                "actual_spend_runs": spent[0], "actual_spend_usd": spent[1]}
 
     total = usage_accumulator()
     group_records = []
@@ -6493,16 +6537,16 @@ def cmd_usage(args: argparse.Namespace) -> int:
         acc = groups[key]
         for index in range(6):
             total[index] += acc[index]
-        group_records.append(record_for(key, acc))
+        group_records.append(record_for(key, acc, actual.get(key)))
     total[6], total[7] = total_unknown, total_unpriced
-    total_record = record_for("TOTAL", total)
+    total_record = record_for("TOTAL", total, actual_total)
     dedup = {"ratio": dedup_raw / dedup_counted if dedup_counted else None,
              "runs": dedup_runs, "unknown_runs": dedup_unknown}
     if json_output:
         return usage_json("usage", by, args.days, group_records, total_record,
                           unpriced=unpriced, unknown_metrics=sorted(unknown_metrics),
                           raw_vs_deduped=dedup, price_table=bool(table), rescan=rescan_result,
-                          **price_basis(table))
+                          actual_spend_basis=ACTUAL_SPEND_BASIS, **price_basis(table))
     if not groups:
         say(f"no sessions recorded in the last {args.days} day(s); looked in {path}")
         return 0

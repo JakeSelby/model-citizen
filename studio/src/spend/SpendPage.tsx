@@ -13,6 +13,7 @@ import {
   pageOf,
   partialNotes,
   pricingDate,
+  usageMoneyLabel,
   WINDOWS,
   type Grouping,
   type RebuildCause,
@@ -27,8 +28,7 @@ import {
 type Basis = SpendReport["basis"];
 
 /** A dollar figure with its list-price label and pricing date, visible to every reader. */
-export function Money({ value, basis }: { value: number | null; basis: Basis }) {
-  const label = moneyLabel(basis);
+export function Money({ value, basis, label = moneyLabel(basis) }: { value: number | null; basis: Basis; label?: string }) {
   return <span className="list-price" title={label}>
     {formatUsd(value)}<span className="visually-hidden"> ({label})</span>
   </span>;
@@ -40,11 +40,13 @@ function usdHeading(basis: Basis, name = "USD"): string {
 
 function Pager({ page, pages, total, onPage }: { page: number; pages: number; total: number; onPage: (page: number) => void }) {
   if (pages <= 1) return null;
-  return <Group gap="sm" aria-label="Pages">
-    <Button disabled={page === 0} size="compact-sm" variant="default" onClick={() => onPage(page - 1)}>Previous</Button>
-    <Text size="sm">Page {page + 1} of {pages} · {total.toLocaleString("en-US")} groups</Text>
-    <Button disabled={page >= pages - 1} size="compact-sm" variant="default" onClick={() => onPage(page + 1)}>Next</Button>
-  </Group>;
+  return <nav aria-label="Spend table pages">
+    <Group gap="sm">
+      <Button disabled={page === 0} size="compact-sm" variant="default" onClick={() => onPage(page - 1)}>Previous</Button>
+      <Text aria-live="polite" role="status" size="sm">Page {page + 1} of {pages} · {total.toLocaleString("en-US")} groups</Text>
+      <Button disabled={page >= pages - 1} size="compact-sm" variant="default" onClick={() => onPage(page + 1)}>Next</Button>
+    </Group>
+  </nav>;
 }
 
 type UsageRow = UsageGroup & { total: boolean };
@@ -59,7 +61,7 @@ function UsageTable({ ledger, basis }: { ledger: UsageLedger; basis: Basis }) {
     { key: "cache_read", heading: "Cache read", cell: (row) => formatCount(row.tokens.cache_read) },
     { key: "cache_write", heading: "Cache write", cell: (row) => formatCount(row.tokens.cache_write) },
     { key: "hit", heading: "Cache hit", cell: (row) => formatShare(row.cache_hit_rate) },
-    { key: "usd", heading: usdHeading(basis), cell: (row) => <Money basis={basis} value={row.usd} /> },
+    { key: "usd", heading: usdHeading(basis), cell: (row) => <Money basis={basis} label={usageMoneyLabel(row, basis)} value={row.usd} /> },
     { key: "unpriced", heading: "Unpriced runs", cell: (row) => formatCount(row.unpriced_runs) },
   ];
   // The total row is the ledger's own `totals`, never a sum of the rows above it.
@@ -110,6 +112,19 @@ function RebuildTables({ ledger, basis }: { ledger: RebuildLedger; basis: Basis 
   })}</Stack>;
 }
 
+/** Why no report is shown: a busy grouping is not a broken CLI, so it says which. */
+export function SpendFailure({ error, by, days }: { error: Error; by: Grouping; days: number }) {
+  if (error.message === "spend_busy") {
+    return <EvidenceState kind="refused" title="Spend report busy">A {by} report is already being read, in this tab or another. Try again when it finishes.</EvidenceState>;
+  }
+  return <><EvidenceState kind="error" title="Spend unavailable">citizen usage did not answer; run the command below in a terminal to see why.</EvidenceState><CommandChip command={`citizen usage --json --by ${by} --days ${days}`} /></>;
+}
+
+/** The identity a grouping table is keyed by, so a new grouping or window starts on page one. */
+export function tableKey(report: SpendReport): string {
+  return `${report.by}:${report.days}`;
+}
+
 /** The report as the ledger gave it: header notes, the table, the same notes in the footer. */
 export function SpendReportView({ report }: { report: SpendReport }) {
   const { ledger, basis } = report;
@@ -117,11 +132,12 @@ export function SpendReportView({ report }: { report: SpendReport }) {
   return <Stack gap="md">
     <Paper className="spend-basis" p="md" withBorder>
       <Text fw={650}>Every dollar figure is a {basis.label}, {pricingDate(basis)}.</Text>
-      <Text c="dimmed" size="sm">Computed from token counts at list price; not an invoice. Read from the local usage ledger only; nothing is exported.</Text>
+      <Text c="dimmed" size="sm">Computed from token counts at list price; not an invoice. A Studio run's dollars are the spend its runner recorded and are labelled so. Read from the local usage ledger only; nothing is exported.</Text>
       {notes.length ? <Text className="spend-partial" size="sm">Partial data: {notes.join(" ")}</Text> : null}
     </Paper>
-    {ledger.report === "usage" ? <UsageTable basis={basis} ledger={ledger} />
-      : ledger.report === "roles" ? <RoleTable basis={basis} ledger={ledger} />
+    {/* Keyed by the report, so switching grouping or window starts on page one. */}
+    {ledger.report === "usage" ? <UsageTable basis={basis} key={tableKey(report)} ledger={ledger} />
+      : ledger.report === "roles" ? <RoleTable basis={basis} key={tableKey(report)} ledger={ledger} />
         : <RebuildTables basis={basis} ledger={ledger} />}
     <Text c="dimmed" component="footer" size="sm">{notes.length ? `Partial data: ${notes.join(" ")}` : "Unpriced: none."} Figures are {basis.label}, {pricingDate(basis)}.</Text>
     <CommandChip command={report.command} />
@@ -147,7 +163,7 @@ export function SpendPage() {
       <NativeSelect data={WINDOWS.map((value) => ({ value: String(value), label: `Last ${value} days` }))} label="Window" value={String(days)} onChange={(event: ChangeEvent<HTMLSelectElement>) => setDays(Number(event.currentTarget.value))} />
     </Group>
     {by === "rebuild" ? <Text c="dimmed" size="sm">Cache-rebuild attribution reads session transcripts on every request, so it can take longer than the ledger groupings.</Text> : null}
-    {query.isError ? <><EvidenceState kind="error" title="Spend unavailable">citizen usage did not answer; run the command below in a terminal to see why.</EvidenceState><CommandChip command={`citizen usage --json --by ${by} --days ${days}`} /></> : null}
+    {query.isError ? <SpendFailure by={by} days={days} error={query.error} /> : null}
     {query.isPending ? <EvidenceState kind="loading" title="Reading the local usage ledger" /> : null}
     {query.data ? <SpendReportView report={query.data} /> : null}
   </Stack>;

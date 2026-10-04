@@ -107,6 +107,38 @@ class SessionGroupingAndBasisTests(unittest.TestCase):
                                                                       "as_of": "2026-09-30"}}})
         self.assertEqual(dated["price_as_of"], "2026-08-01")
 
+    def test_only_entries_that_priced_a_figure_date_the_report(self):
+        # An undated override with unusable rates prices nothing, so it dates nothing.
+        broken = self.document([row(), row(session_id="s-2", models=["new-model"])],
+                               config={"prices": {"new-model": {"input": 1.0}}},
+                               prices=dict(TABLE, **{"new-model": {"input": 1.0}}))
+        self.assertEqual(broken["price_as_of"], "2026-08-01")
+        self.assertEqual(broken["unpriced"], 1)
+        # A row priced per model is unpriced when a later part fails; the entry its first part
+        # read priced no figure, so only the other session's entry dates the report.
+        part = {"input": 1, "output": 1, "cache_read": 1, "cache_write": 1}
+        parent = row(session_id="p-1", models=["model-a", "model-z"],
+                     by_model={"model-a": dict(part), "model-z": dict(part)})
+        other = row(session_id="o-1", models=["model-b"])
+        data = self.document([parent, other], by="session")
+        names = {group["name"]: group["usd"] for group in data["groups"]}
+        self.assertIsNone(names["p-1"])
+        self.assertEqual(data["price_as_of"], "2026-09-15")
+
+    def test_studio_run_spend_is_reported_under_its_own_basis(self):
+        studio = {"kind": "studio_run", "runtime": "studio", "run_id": "run-1",
+                  "spend_usd": 0.5, "ended": NOW}
+        data = self.document([row(session_id="a"), studio], by="day")
+        self.assertEqual(data["actual_spend_basis"], "actual_spend")
+        group = data["groups"][0]
+        self.assertEqual((group["actual_spend_runs"], group["actual_spend_usd"]), (1, 0.5))
+        self.assertEqual((data["totals"]["actual_spend_runs"],
+                          data["totals"]["actual_spend_usd"]), (1, 0.5))
+        sessions = self.document([row(session_id="a"), studio], by="session")["groups"]
+        by_name = {item["name"]: item for item in sessions}
+        self.assertEqual(by_name["a"]["actual_spend_usd"], 0.0)
+        self.assertEqual(by_name["run-1"]["actual_spend_usd"], by_name["run-1"]["usd"])
+
     def test_provider_rebuild_and_adherence_reports_carry_the_basis(self):
         provider = {"kind": harness.decision_ledger.KIND, "point": "grade-bash", "mode": "ask",
                     "model": "model-b", "input": 10, "output": 5, "cache_read": 0,

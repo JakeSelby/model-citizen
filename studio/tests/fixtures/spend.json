@@ -106,11 +106,14 @@
     "command": "citizen usage --json --by session --days 3660",
     "days": 3660,
     "ledger": {
+      "actual_spend_basis": "actual_spend",
       "by": "session",
       "cost_basis": "list_price_equivalent",
       "days": 3660,
       "groups": [
         {
+          "actual_spend_runs": 0,
+          "actual_spend_usd": 0.0,
           "cache_hit_denominator": 2100,
           "cache_hit_rate": 0.7142857142857143,
           "name": "codex-parent",
@@ -131,6 +134,8 @@
           "usd": null
         },
         {
+          "actual_spend_runs": 1,
+          "actual_spend_usd": 0.42,
           "cache_hit_denominator": 0,
           "cache_hit_rate": null,
           "name": "run-0001",
@@ -151,6 +156,8 @@
           "usd": 0.42
         },
         {
+          "actual_spend_runs": 0,
+          "actual_spend_usd": 0.0,
           "cache_hit_denominator": 65000,
           "cache_hit_rate": 0.8615384615384616,
           "name": "sess-alpha",
@@ -171,6 +178,8 @@
           "usd": 0.150875
         },
         {
+          "actual_spend_runs": 0,
+          "actual_spend_usd": 0.0,
           "cache_hit_denominator": 34800,
           "cache_hit_rate": 0.8620689655172413,
           "name": "sess-beta",
@@ -191,6 +200,8 @@
           "usd": 0.0386
         },
         {
+          "actual_spend_runs": 0,
+          "actual_spend_usd": 0.0,
           "cache_hit_denominator": 2350,
           "cache_hit_rate": 0.851063829787234,
           "name": "worker-1",
@@ -222,6 +233,8 @@
       "rescan": null,
       "schema_version": 1,
       "totals": {
+        "actual_spend_runs": 1,
+        "actual_spend_usd": 0.42,
         "cache_hit_denominator": 104250,
         "cache_hit_rate": 0.8585131894484412,
         "name": "TOTAL",

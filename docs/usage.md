@@ -38,7 +38,10 @@ Every report that prices tokens (`usage` in each token grouping, `--by role`, `-
 `price_as_of`: the oldest `as_of` among the price entries its figures were priced from, so no figure
 is newer than the date it carries. It is `"unknown"` when one of those entries has no date or comes
 from a `prices` override in `config.json` that names no `as_of` of its own, and `null` when nothing
-in the window was priced from the table. `--by rebuild` also carries `unpriced`, the window's
+in the window was priced from the table; an entry read for a row that ended unpriced does not count.
+A Studio run's dollars are the spend its runner recorded, not a table price, so each group and the
+totals of a token grouping also carry `actual_spend_runs` and `actual_spend_usd`, the share of `usd`
+under `actual_spend_basis: "actual_spend"`. `--by rebuild` also carries `unpriced`, the window's
 unpriced breaks, and `unpriced_calls`; both are the `all` scope's, which holds every `long` session.
 The Studio's spend report is these documents as `citizen usage --json` prints them, so a dollar
 figure there and here comes from one computation and one pricing date.

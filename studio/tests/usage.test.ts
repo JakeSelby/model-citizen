@@ -7,8 +7,8 @@ import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 
 import { loadSpend } from "../src/spend/api.ts";
-import { formatUsd, moneyLabel, PAGE_SIZE, pageOf, partialNotes, pricingDate, type SpendReport, type UsageLedger } from "../src/spend/model.ts";
-import { SpendReportView } from "../src/spend/SpendPage.tsx";
+import { ACTUAL_SPEND_LABEL, formatUsd, moneyLabel, PAGE_SIZE, pageOf, partialNotes, pricingDate, usageMoneyLabel, type SpendReport, type UsageLedger } from "../src/spend/model.ts";
+import { SpendFailure, SpendReportView, tableKey } from "../src/spend/SpendPage.tsx";
 
 // Written by `python3 tests/test_studio_spend.py --write` from the CLI's own fixture ledger.
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/spend.json", import.meta.url), "utf8")) as Record<"session" | "role", SpendReport>;
@@ -42,7 +42,8 @@ test("a year of sessions renders one page of groups plus the ledger's total row"
   assert.equal(html.match(/<tr>/g)?.length, PAGE_SIZE + 2);
   assert.match(html, /s-49</);
   assert.doesNotMatch(html, /s-50</);
-  assert.match(html, /Page 1 of 146 · 7,300 groups/);
+  assert.match(html, /<nav aria-label="Spend table pages">/);
+  assert.match(html, /aria-live="polite"[^>]*>Page 1 of 146 · 7,300 groups/);
   assert.match(html, /<strong>Total<\/strong>/);
   assert.deepEqual(pageOf(groups, 999).rows.map((row) => row.name), ["s-7250", ...groups.slice(7251).map((row) => row.name)]);
   assert.equal(pageOf([], 3).pages, 1);
@@ -60,15 +61,40 @@ test("the total row is the ledger's own totals, not a sum the Studio computed", 
 test("every dollar figure carries the list-price label and the pricing date", () => {
   const ledger = session.ledger as UsageLedger;
   const html = render(session);
-  const cells = ledger.groups.length + 1;
-  // One visible-to-assistive-technology label and one title per money cell, plus the headings.
-  assert.equal(html.match(escaped(`(${label})`))?.length, cells);
-  assert.equal(html.match(escaped(`title="${label}"`))?.length, cells);
+  // Sessions priced from the table carry the table label; the Studio run keeps its own basis;
+  // the total, which holds both, says how much of it is the run's recorded spend.
+  const tablePriced = ledger.groups.filter((group) => !group.actual_spend_runs).length;
+  assert.equal(html.match(escaped(`(${label})`))?.length, tablePriced);
+  assert.equal(html.match(escaped(`title="${label}"`))?.length, tablePriced);
+  assert.equal(html.match(escaped(`title="${ACTUAL_SPEND_LABEL}"`))?.length, 1);
+  assert.match(html, escaped(`title="${label}; includes $0.4200 actual spend recorded by Studio runs"`));
+  assert.equal(html.match(/class="list-price"/g)?.length, ledger.groups.length + 1);
   assert.match(html, escaped(`USD · list-price equivalent · prices as of ${session.basis.price_as_of}`));
   assert.match(html, /Every dollar figure is a list-price equivalent, prices as of/);
   const roles = render(fixture.role);
   const priced = (fixture.role.ledger.groups as Array<unknown>).length * 2;
   assert.equal(roles.match(escaped(`title="${moneyLabel(fixture.role.basis)}"`))?.length, priced);
+});
+
+test("a Studio run's recorded spend never carries the price table's label or date", () => {
+  const ledger = session.ledger as UsageLedger;
+  const run = ledger.groups.find((group) => group.name === "run-0001")!;
+  assert.equal(usageMoneyLabel(run, session.basis), ACTUAL_SPEND_LABEL);
+  assert.doesNotMatch(usageMoneyLabel(run, session.basis), /prices as of/);
+  const alpha = ledger.groups.find((group) => group.name === "sess-alpha")!;
+  assert.equal(usageMoneyLabel(alpha, session.basis), label);
+});
+
+test("a busy grouping says so instead of blaming the CLI, and tables reset per report", () => {
+  const busy = renderToStaticMarkup(h(MantineProvider, {}, h(SpendFailure, { error: new Error("spend_busy"), by: "rebuild", days: 7 })));
+  assert.match(busy, /Spend report busy/);
+  assert.match(busy, /A rebuild report is already being read/);
+  assert.doesNotMatch(busy, /did not answer/);
+  const failed = renderToStaticMarkup(h(MantineProvider, {}, h(SpendFailure, { error: new Error("spend_unavailable"), by: "day", days: 30 })));
+  assert.match(failed, /Spend unavailable/);
+  assert.match(failed, /citizen usage --json --by day --days 30/);
+  assert.notEqual(tableKey(session), tableKey({ ...session, by: "day" }));
+  assert.notEqual(tableKey(session), tableKey({ ...session, days: 30 }));
 });
 
 test("partial data shows in the header and the footer, and unpriced stays unpriced", () => {
