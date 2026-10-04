@@ -7197,6 +7197,11 @@ def _studio_route_cli(args: argparse.Namespace, path: str, request: Dict[str, An
     return 0 if status == 200 else (1 if status >= 500 else 2)
 
 
+def cmd_reports(args: argparse.Namespace) -> int:
+    """`POST /api/reports/trends`, through its own handler."""
+    return _studio_route_cli(args, "/api/reports/trends", {})
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -7745,6 +7750,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="print one machine-readable result object")
     p.add_argument("--_serve", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_studio)
+
+    p = sub.add_parser("reports", help="print a Studio report as the Studio shows it")
+    reports_sub = p.add_subparsers(dest="report", required=True)
+    trends_parser = reports_sub.add_parser(
+        "trends", help="benchmark cost lines, static context and the proof set over time")
+    trends_parser.add_argument("--json", action="store_true")
+    trends_parser.set_defaults(func=cmd_reports)
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

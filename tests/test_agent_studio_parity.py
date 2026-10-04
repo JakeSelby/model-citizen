@@ -129,6 +129,7 @@ def cases(draft, revision, files):
              "--task", "one", "--pack", "absent", "--pack-digest", "0" * 64, "--effect", "0.1"],
             {"draft": d, "request": dict(FORM), "effect": 0.1, "cv": None}, "refused"),
         ("POST", "/api/configure/test/verdicts"): (["draft", "test", d], {"draft": d}, "same"),
+        ("POST", "/api/reports/trends"): (["reports", "trends"], {}, "same"),
         ("POST", "/api/rules/health"): (["usage", "--rules", "--health"], {}, "same"),
         ("POST", "/api/rules/try-without"): (
             ["draft", "try-without", "not a rule"], {"rule": "not a rule"}, "refused"),
