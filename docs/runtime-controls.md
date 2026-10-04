@@ -28,6 +28,12 @@ The retry budget is counted per session, so sessions sharing a checkout do not r
 After a block, a final message with a line that starts `Gate cannot pass:` and gives a reason
 releases the turn as unverified and is logged as `declined`; any other finish is blocked again.
 Unexpected gate errors block. State writes are atomic.
+The hook runs a repository's `## Stop gate` block when it declares one and its `## Gate` block
+otherwise, so a repository whose full suite outlasts the hook's four-minute budget declares a
+subset that fits and keeps `## Gate` for the push. A timeout kills the gate's whole process group.
+A linked git worktree is trusted when its main checkout is. Every timeout, forced release, decline
+and mid-run tree change is logged with its reason and the seconds the gate ran: the decision
+row carries `release_reason` and `elapsed_seconds`, and every row whose gate ran names its `gate_block`.
 
 Constrained roles use [isolated CLI workers](role-workers.md), with shared role/stance resolution
 and fixed native tool controls. The harness validates and publishes planner content to a new

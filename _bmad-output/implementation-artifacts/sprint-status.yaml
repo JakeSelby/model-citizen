@@ -531,6 +531,8 @@ development_status:
   ah-b164-fix-security-grade-bash-flags-quoted-text-misses: ready-for-dev
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: ready-for-dev
   ah-b166-fix-ci-the-bmad-traceability-workflow-is-red-on: ready-for-dev
+  ah-b167-fix-coordination-intent-overlap-refusals-are: ready-for-dev
+  ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
