@@ -676,8 +676,17 @@ python3 scripts/cost_bench.py replay --tasks <tasks> --tag <full commit> --model
   digest and its image, and schedules it with the leading arm rotating.
 - **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
   `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
-  `results.jsonl` and no history row. `summarise` does not report config arms yet: it refuses
-  their rows as an unknown arm.
+  `results.jsonl` and no history row.
+- **`summarise` reports every arm, per stratum.** SM-2's report comes first and is unchanged: its
+  verdict is harness against bare. Then each arm's pass rate and Cost-of-Pass, and each arm's
+  paired comparison against bare and, for a config arm, against harness: the Cost-of-Pass ratio
+  and the pass-rate difference, each with a task-clustered 95% interval, and the oracle-metric
+  differences. Only SM-2's comparison has a verdict. A config arm's comparisons are `secondary`
+  unless the rows' pre-registration names them in **Primary arm comparisons** under Run, as
+  `<arm> vs bare` or `<arm> vs harness`; naming a comparison the run does not make is refused. The
+  reliability section covers every arm. With `--json` they are `arms`, `comparisons` and
+  `primary_named` beside SM-2's keys. Every task needs every arm on one trial set, and `--plot`
+  is refused.
 
 ### Unit evals: the two-by-two
 
@@ -840,8 +849,12 @@ python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/p
   counted as a tie and flagged inconsistent, and the share of such pairs is reported. An answer
   that cannot be read is an error and left out, never a tie.
 - **What a run is judged on.** The final reply comes from the run's saved stream, so the set needs
-  `--raw`. The diff is a `<task>-<arm>-<rep>.diff` beside the stream when one exists; otherwise it
-  is the file edits the stream's Edit, MultiEdit and Write calls record, which miss any change a
+  `--raw`. The diff is a `<task>-<arm>-<rep>.diff` beside the stream when one exists; under
+  `--raw` the runner saves one per run, the final tree against the task's base commit, new files
+  included, and the row records `diff_path` and `diff_bytes`, or `diff_error` when Git could not
+  produce it. It is taken after the run and before the scorer touches the tree, with a Git
+  directory of the runner's own, so nothing the agent wrote into the tree's `.git/config` runs on
+  the host. A set without saved diffs falls back to the file edits the stream's Edit, MultiEdit and Write calls record, which miss any change a
   shell command made. Each side is clipped at the pinned `max_chars`, with the remainder counted.
 - **Calibration.** `export` takes the pinned 40 pairs by default, spread round-robin over tasks
   (`--all` takes every pair, for a judged evaluation), and writes `label.html`, a local form over

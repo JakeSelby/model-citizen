@@ -42,6 +42,8 @@ an appended entry in the deviation log, never an edit above it.
 - **Pooled analysis:** <"none", so every stratum is reported apart; or the pooled analysis and why it
   answers the question. Only a value here lets `summarise --pool` report the strata pooled, with each
   task-and-model pair as its own cluster>
+- **Primary arm comparisons:** <"none", so every config arm's comparison is secondary; or each one the
+  claim rests on, as `<arm> vs bare` or `<arm> vs harness`. Harness against bare is always primary>
 
 ## Hypotheses
 

@@ -1509,6 +1509,50 @@ def save_stream(opts, task_id, arm, rep, stdout):
     return path
 
 
+def diff_name(task_id, arm, rep):
+    """`<task>-<arm>-<rep>.diff`, beside the run's stream, where `replay_judge` looks for it."""
+    return str(Path(replay_detect.raw_name(task_id, arm, rep)).with_suffix(".diff"))
+
+
+def save_diff(opts, task_id, arm, rep, workdir, base):
+    """`{diff_path, diff_bytes, diff_error}`: the run's final tree against the task's `base` commit,
+    as `git diff --binary`, kept under `--raw` as `diff_name`, new files included.
+
+    Taken after the run, while the mounted tree still exists and before the scorer copies held-back
+    tests into it. Git runs with a fresh git dir of its own, borrowing the tree's objects, and a
+    throwaway index: the agent could write the tree's own `.git/config`, and a filter, fsmonitor or
+    diff driver named there would otherwise run on the host. A failure is recorded, never a
+    missing diff passed off as an empty one."""
+    path = Path(opts["raw"]) / diff_name(task_id, arm, rep)
+    scratch = Path(tempfile.mkdtemp(prefix="cost-diff-", dir=opts.get("tmp")))
+    try:
+        gitdir = scratch / "git"
+        done = subprocess.run(["git", "init", "-q", "--bare", str(gitdir)], env=scrubbed_env(),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        if done.returncode:
+            return {"diff_path": None, "diff_bytes": None, "diff_error": "git init: " + done.stdout.strip()}
+        (gitdir / "objects" / "info" / "alternates").write_text(
+            str((Path(workdir) / ".git" / "objects").resolve()) + "\n", encoding="utf-8")
+        env = scrubbed_env({"GIT_DIR": str(gitdir), "GIT_WORK_TREE": str(workdir),
+                            "GIT_INDEX_FILE": str(scratch / "index")})
+        git = ["git", "-c", "core.bare=false", "-c", "core.fsmonitor=false"]
+        for args in (["read-tree", base], ["add", "-A"],
+                     ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]):
+            done = subprocess.run(git + args, env=env, cwd=str(workdir), stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+            if done.returncode:
+                detail = done.stderr.decode("utf-8", errors="replace").strip().splitlines()
+                return {"diff_path": None, "diff_bytes": None,
+                        "diff_error": "git %s: %s" % (args[0], detail[-1] if detail else "exit %d" % done.returncode)}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(done.stdout)
+        return {"diff_path": str(path), "diff_bytes": len(done.stdout), "diff_error": None}
+    except OSError as exc:
+        return {"diff_path": None, "diff_bytes": None, "diff_error": "%s: %s" % (type(exc).__name__, exc)}
+    finally:
+        shutil.rmtree(str(scratch), ignore_errors=True)
+
+
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
@@ -1531,6 +1575,7 @@ def _attempt(task, rep, arm, opts, launch):
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None,
                arm_config=(opts.get("arm_configs") or {}).get(arm))
+    row.update(diff_path=None, diff_bytes=None, diff_error=None)
     row.update(oracle_metrics.row_fields(task.get("metrics")))  # nothing for a task declaring none
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
@@ -1559,6 +1604,8 @@ def _attempt(task, rep, arm, opts, launch):
     try:
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         task_workdir(task, opts["repo"], workdir)
+        base = _git_required(workdir, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip() \
+            if opts.get("raw") else None  # read before the agent can move it
         memory, row["cache_nonce"] = trial_memory(workdir.parent)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
@@ -1577,6 +1624,8 @@ def _attempt(task, rep, arm, opts, launch):
                 done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed, memory)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
+        if base:
+            row.update(save_diff(opts, task["id"], arm, rep, workdir, base))
         if timeout is not None:
             exc = timeout
             partial = getattr(exc, "stdout", None)
@@ -2108,6 +2157,8 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
         raise SystemExit("cost-bench: --correction applies to an ablation run's arms only")
     if replay_pair.is_pair(rows):
         return summarise_pair(rows, path, args)
+    if set(replay_stats.arm_names(rows)) - set(ARMS):
+        return summarise_arms(rows, path, args, detections)
     try:
         result = replay_stats.analyse(rows, args.seed, args.resamples)
     except ValueError as exc:
@@ -2136,6 +2187,75 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
     write_report(report, cache_basis(rows), args.json,
                  replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
                  + reliability_text)
+    return 0
+
+
+PRIMARY_FIELD = ("Run", "Primary arm comparisons")
+COMPARISON = re.compile(r"\b([a-z0-9][a-z0-9-]*) vs (bare|harness)\b")
+
+
+def primary_comparisons(rows, root=None):
+    """`(plan path or None, labels)`: the config-arm comparisons the rows' pre-registration names
+    primary in its **Primary arm comparisons** field under Run, each as `<arm> vs bare` or `<arm> vs
+    harness`. Rows that are not all one pre-registered plan name none, so every config comparison
+    is secondary. SystemExit when a named plan cannot be read at its commit."""
+    plans = {(r.get("evidence"), r.get("pre_registration"), r.get("pre_registration_commit")) for r in rows}
+    if len(plans) != 1:
+        return None, ()
+    evidence, plan, commit = plans.pop()
+    if evidence != experiment_protocol.PREREGISTERED or not plan or not commit:
+        return None, ()
+    done = subprocess.run(["git", "-C", str(root or ROOT), "show", "%s:%s" % (commit, plan)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if done.returncode:
+        raise SystemExit("cost-bench: cannot read the pre-registration %s at %s: %s"
+                         % (plan, commit, done.stderr.strip()))
+    section, name = PRIMARY_FIELD
+    value = experiment_protocol.fields(experiment_protocol.sections(done.stdout).get(section, "")).get(name, "")
+    if not value or experiment_protocol.PLACEHOLDER.search(value) or value.lower().startswith("none"):
+        return plan, ()
+    return plan, tuple(dict.fromkeys("%s vs %s" % pair for pair in COMPARISON.findall(value)))
+
+
+def summarise_arms(rows, path, args, detections=BESIDE):
+    """A run with config arms: SM-2's report, harness against bare and unchanged, then every arm's
+    figures and each arm's paired comparisons against bare and against harness
+    (`replay_stats.analyse_arms`), each with its oracle-metric differences, then the delegation
+    verdict and the reliability section over every arm. A config arm's comparison is secondary
+    unless the pre-registration names it primary (`primary_comparisons`)."""
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws a two-arm result; a run with config arms reports text or JSON")
+    plan, primary = primary_comparisons(rows)
+    try:
+        result = replay_stats.analyse([r for r in rows if r.get("arm") in ARMS], args.seed, args.resamples)
+        every = replay_stats.analyse_arms(rows, args.seed, args.resamples, primary)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the arms in %s: %s" % (path, exc))
+    metrics_text = ""
+    try:
+        for comparison in every["comparisons"]:
+            pair = (comparison["reference"], comparison["treatment"])
+            metrics = oracle_metrics.summarise(rows, args.seed, args.resamples, pair)
+            comparison["metrics"] = metrics
+            metrics_text += oracle_metrics.render(metrics).replace(
+                "Oracle metrics:", "Oracle metrics, %s (%s):" % (comparison["label"], comparison["role"]), 1)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
+    delegation = delegation_verdict.report(rows, args.break_even)
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(
+            rows, replay_reliability.detections_beside(path) if detections is BESIDE else detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, arms=every["arms"], arm_names=every["arm_names"], comparisons=every["comparisons"],
+                  primary_named=every["primary_named"], pre_registration=plan,
+                  delegation=delegation, reliability=reliability)
+    sm2_metrics = every["comparisons"][0]["metrics"]  # harness against bare, as a two-arm report has it
+    if sm2_metrics is not None:
+        report["metrics"] = sm2_metrics
+    write_report(report, cache_basis(rows), args.json,
+                 replay_stats.render(result) + replay_stats.render_arms(every) + metrics_text
+                 + delegation_verdict.render(delegation) + reliability_text)
     return 0
 
 
@@ -3017,9 +3137,8 @@ def replay_tag(tag, args, common, harness):
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
     if common.get("config_records"):
-        # `summarise` knows no config arm, so it is not offered here.
-        print("cost-bench: a run with config arms writes no history row; its rows are in %s" % (out / RESULTS),
-              file=sys.stderr)
+        print("cost-bench: a run with config arms writes no history row; its rows are in %s, and summarise "
+              "reads them" % (out / RESULTS), file=sys.stderr)
     elif pair or common.get("ablation") or design:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
               % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
