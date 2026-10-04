@@ -9,7 +9,6 @@ import sys
 import tempfile
 import threading
 import unittest
-import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
@@ -212,7 +211,7 @@ class UpstreamDiffTests(unittest.TestCase):
 class DraftAuthoringTests(unittest.TestCase):
     @contextmanager
     def real_draft(self, prefix):
-        name = prefix + "-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name(prefix + "-")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             home = base / "home"

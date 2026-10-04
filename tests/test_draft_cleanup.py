@@ -4,7 +4,6 @@ from __future__ import annotations
 import ast
 import json
 import os
-import secrets
 import subprocess
 import sys
 import tempfile
@@ -26,7 +25,6 @@ with drafts._locked(Path(sys.argv[2])):
     sys.stdin.read()
 """
 GUARDS = {"register_draft_cleanup", "discard_draft"}
-# Draft names the guarded Studio tests create, so a sibling run's drafts never count here.
 GUARDED_RUN = (
     "test_studio_selection_editing.SelectionEditingTests"
     ".test_saved_checkpoint_equals_sequential_real_config_set_output",
@@ -86,14 +84,107 @@ def unguarded_creates(source: str, filename: str = "<source>") -> List[str]:
     return found
 
 
-def setUpModule():
-    global BEFORE
-    BEFORE = draft_support.draft_branches()
+CREATING_ROUTES = {"/api/first-run/start"}
+
+
+def _words(elements) -> List[object]:
+    return [element.value if isinstance(element, ast.Constant) else None for element in elements]
+
+
+def _new_branch(elements):
+    """The ``<name>`` of a ``"-b", "draft/" + <name>`` pair among git arguments, or ``None``."""
+    words = _words(elements)
+    for index, element in enumerate(elements[1:], 1):
+        if (words[index - 1] == "-b" and isinstance(element, ast.BinOp)
+                and isinstance(element.op, ast.Add) and isinstance(element.left, ast.Constant)
+                and element.left.value == "draft/"):
+            return element.right
+    return None
+
+
+def _created_name(node: ast.AST):
+    """The draft-name expression of a create in the shared repository, or ``None``.
+
+    Four shapes create one: the real CLI's ``draft create`` argument list, a test home's
+    ``cli("draft", "create", name)``, a ``-b draft/<name>`` git argument list and a POST to a
+    route that creates its draft, whose JSON body names it under ``draft``.
+    """
+    if isinstance(node, ast.List):
+        words = _words(node.elts)
+        if _is_shared_create(node):
+            index = next(index for index in range(len(words))
+                         if words[index:index + 2] == ["draft", "create"])
+            return node.elts[index + 2] if index + 2 < len(node.elts) else None
+        return _new_branch(node.elts)
+    if not isinstance(node, ast.Call):
+        return None
+    branch = _new_branch(node.args)
+    if branch is not None:
+        return branch
+    if (isinstance(node.func, ast.Attribute) and node.func.attr == "cli"
+            and _words(node.args[:2]) == ["draft", "create"] and len(node.args) > 2):
+        return node.args[2]
+    if any(isinstance(arg, ast.Constant) and arg.value in CREATING_ROUTES for arg in node.args):
+        for arg in node.args:
+            if isinstance(arg, ast.Dict):
+                for key, value in zip(arg.keys, arg.values):
+                    if isinstance(key, ast.Constant) and key.value == "draft":
+                        return value
+    return None
+
+
+def _is_draft_name(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "draft_name" and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "draft_support")
+
+
+def _assigned(scope: ast.AST, matches) -> List[ast.AST]:
+    """The value of every single-target assignment in ``scope`` whose target ``matches``."""
+    values = []
+    for node in ast.walk(scope):
+        if isinstance(node, ast.Assign):
+            values += [node.value for target in node.targets if matches(target)]
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and matches(node.target):
+            values.append(node.value)
+    return values
+
+
+def unstamped_creates(source: str, filename: str = "<source>") -> List[str]:
+    """Each shared-repository draft create whose name does not come from ``draft_name``.
+
+    The name is the call itself, a local whose every assignment in the function is one, or an
+    attribute whose every assignment in the module is one. A parameter, a literal or a
+    hand-built name is reported, since a leak check scoped to the run token cannot see it.
+    """
+    found = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        tree = ast.parse(source, filename)
+    functions = [node for node in ast.walk(tree)
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for node in ast.walk(tree):
+        name = _created_name(node)
+        if name is None:
+            continue
+        if isinstance(name, ast.Name):
+            scope = min((function for function in functions
+                         if function.lineno <= node.lineno <= function.end_lineno),
+                        key=lambda function: function.end_lineno - function.lineno, default=tree)
+            values = _assigned(scope, lambda target: isinstance(target, ast.Name)
+                               and target.id == name.id)
+        elif isinstance(name, ast.Attribute):
+            values = _assigned(tree, lambda target: isinstance(target, ast.Attribute)
+                               and target.attr == name.attr)
+        else:
+            values = [name]
+        if not values or not all(_is_draft_name(value) for value in values):
+            found.append((node.lineno, f"{filename}:{node.lineno}"))
+    return [location for _line, location in sorted(found)]
 
 
 def tearDownModule():
-    leaked = sorted(name for name in draft_support.draft_branches() - BEFORE
-                    if name.startswith("cleanup-guard-"))
+    leaked = draft_support.leaked_drafts(("cleanup-guard-",))
     if leaked:
         raise AssertionError("draft branches survived the cleanup tests: " + ", ".join(leaked))
 
@@ -113,7 +204,7 @@ class DraftCleanupTests(unittest.TestCase):
             "HARNESS_HOME": str(home),
             "HARNESS_WORKTREE_ROOT": str(Path(temporary.name) / "worktrees"),
         })
-        self.name = "cleanup-guard-" + secrets.token_hex(4)
+        self.name = draft_support.draft_name("cleanup-guard-")
         created = subprocess.run(
             [sys.executable, str(draft_support.CLI), "draft", "create", self.name, "--json"],
             cwd=ROOT, env=self.env, capture_output=True, text=True, timeout=30,
@@ -168,17 +259,24 @@ class DraftCleanupTests(unittest.TestCase):
         self.assertFalse(draft_support.draft_worktree_registered(self.name))
 
     def test_guarded_studio_tests_leave_no_draft_branch(self):
-        before = draft_support.draft_branches()
+        # A token of its own, so only the drafts this child run creates can count as leaks.
+        token = draft_support.new_run_token()
+        log = Path(self.env["HOME"]).parent / "draft-names"
         env = {key: value for key, value in os.environ.items() if not key.startswith("HARNESS_")}
+        env.update({draft_support.RUN_TOKEN_ENV: token, draft_support.NAME_LOG_ENV: str(log)})
         run = subprocess.run(
             [sys.executable, "-m", "unittest", *GUARDED_RUN],
             cwd=ROOT / "tests", env=env, capture_output=True, text=True, timeout=300,
         )
         self.assertEqual(run.returncode, 0, run.stderr[-2000:])
         self.assertIn("Ran 2 tests", run.stderr)
-        leaked = sorted(name for name in draft_support.draft_branches() - before
-                        if name.startswith(GUARDED_PREFIXES))
-        self.assertEqual(leaked, [])
+        # Positive control: the child named its drafts with this token, so the filter sees them.
+        created = log.read_text(encoding="utf-8").split()
+        self.assertEqual(len(created), 2, created)
+        for name in created:
+            self.assertTrue(draft_support.owned_by(name, GUARDED_PREFIXES, token), name)
+            self.assertFalse(draft_support.draft_branch_exists(name), f"draft/{name} leaked")
+        self.assertEqual(draft_support.leaked_drafts(GUARDED_PREFIXES, token), [])
 
 
 class GuardScanTests(unittest.TestCase):
@@ -187,6 +285,50 @@ class GuardScanTests(unittest.TestCase):
         for path in sorted((ROOT / "tests").glob("test_*.py")):
             unguarded += unguarded_creates(path.read_text(encoding="utf-8"), path.name)
         self.assertEqual(unguarded, [])
+
+    def test_every_shared_repository_draft_is_named_with_the_run_token(self):
+        unstamped = []
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            unstamped += unstamped_creates(path.read_text(encoding="utf-8"), path.name)
+        self.assertEqual(unstamped, [])
+
+    def test_name_scan_reports_a_hand_built_name_in_every_create_shape(self):
+        source = (
+            "def test_a(self):\n"
+            "    name = 'selection-parity-' + uuid.uuid4().hex\n"
+            "    run([sys.executable, CLI, 'draft', 'create', name])\n"
+            "    home.cli('draft', 'create', name, '--json')\n"
+            "    git('worktree', 'add', '-b', 'draft/' + name, path)\n"
+            "    self._post('/api/first-run/start', {'draft': name})\n"
+            "    run([sys.executable, CLI, 'draft', 'create', 'literal'])\n"
+        )
+        self.assertEqual(unstamped_creates(source),
+                         ["<source>:%d" % line for line in (3, 4, 5, 6, 7)])
+
+    def test_name_scan_reports_a_parameter_and_a_mixed_attribute(self):
+        source = (
+            "def helper(self, name):\n"
+            "    home.cli('draft', 'create', name)\n"
+            "def setUp(self):\n"
+            "    self.draft = draft_support.draft_name('x-')\n"
+            "def other(self):\n"
+            "    self.draft = 'x-' + secrets.token_hex(4)\n"
+            "    run([sys.executable, CLI, 'draft', 'create', self.draft])\n"
+        )
+        self.assertEqual(unstamped_creates(source), ["<source>:2", "<source>:7"])
+
+    def test_name_scan_accepts_names_from_draft_name(self):
+        source = (
+            "def setUp(self):\n"
+            "    self.draft = draft_support.draft_name('x-')\n"
+            "    run([sys.executable, CLI, 'draft', 'create', self.draft])\n"
+            "def test_a(self, prefix):\n"
+            "    name = draft_support.draft_name(prefix + '-')\n"
+            "    home.cli('draft', 'create', name, '--json')\n"
+            "    self._post('/api/first-run/start', {'draft': name})\n"
+            "    run([sys.executable, CLI, 'draft', 'create', draft_support.draft_name('y-')])\n"
+        )
+        self.assertEqual(unstamped_creates(source), [])
 
     def test_scan_catches_a_multi_line_create_without_a_guard(self):
         source = (

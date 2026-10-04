@@ -10,7 +10,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import uuid
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -65,7 +64,7 @@ class SelectionEditingTests(unittest.TestCase):
                    ("rules.cache-hygiene", "off")]
         expected = self.manual_cli(changes)
         expected_bytes = (json.dumps(expected, indent=2, sort_keys=True) + "\n").encode()
-        name = "selection-parity-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("selection-parity-")
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / "home"
             config_path = home / ".config" / "agent-harness" / "config.json"
@@ -244,7 +243,7 @@ class SelectionEditingTests(unittest.TestCase):
     def test_json_type_change_is_checkpointed_and_reloads_as_boolean(self):
         config = json.loads(json.dumps(self.config))
         config["core_switches_acknowledged"] = 1
-        name = "selection-json-type-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("selection-json-type-")
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / "home"
             config_path = home / ".config" / "agent-harness" / "config.json"

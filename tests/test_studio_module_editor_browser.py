@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import secrets
 import subprocess
 import sys
 import time
@@ -35,7 +34,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
         config = json.loads((browser_support.REPO / "config.example.json").read_text(encoding="utf-8"))
         config["primitive_roots"] = [str(browser_support.REPO / "developer-primitives")]
         config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        self.draft = "module-browser-" + secrets.token_hex(4)
+        self.draft = draft_support.draft_name("module-browser-")
         created = subprocess.run(
             [sys.executable, str(browser_support.CLI), "draft", "create", self.draft, "--json"],
             env=self.env, capture_output=True, text=True, timeout=20,
@@ -984,7 +983,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
         self.assertNotIn("Draft checkpoint saved", self.devtools.evaluate("document.body.textContent"))
 
     def test_delayed_inventory_and_keyed_reads_cannot_replace_newer_editor_ownership(self):
-        other = "module-browser-owner-" + secrets.token_hex(4)
+        other = draft_support.draft_name("module-browser-owner-")
         created = subprocess.run(
             [sys.executable, str(browser_support.CLI), "draft", "create", other, "--json"],
             env=self.env, capture_output=True, text=True, timeout=20, check=True,
@@ -1068,7 +1067,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
         ))
 
     def test_late_preview_cannot_update_a_switched_draft(self):
-        other = "module-browser-other-" + secrets.token_hex(4)
+        other = draft_support.draft_name("module-browser-other-")
         created = subprocess.run(
             [sys.executable, str(browser_support.CLI), "draft", "create", other, "--json"],
             env=self.env, capture_output=True, text=True, timeout=20,
