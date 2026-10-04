@@ -5,11 +5,11 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 163,
-    "chore": 105,
+    "chore": 106,
     "decision": 15,
     "epic": 28,
     "spike": 20,
-    "story": 344,
+    "story": 348,
     "task": 41
   },
   "items": [
@@ -8861,6 +8861,32 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B162.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S347",
+      "github_number": 1212,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1212",
+      "title": "Protect the record: block agent writes to transcripts and logs, and chain their hashes",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S347.md",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C105",
+      "github_number": 1213,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1213",
+      "title": "Reserve the record-protection story's ID and write its story file",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C105.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
