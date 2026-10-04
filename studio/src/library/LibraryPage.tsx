@@ -16,6 +16,9 @@ import { useSearchParams } from "react-router-dom";
 import { CodeView, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { useLiveUpdates } from "../live/LiveUpdates";
 import { updateTouchesPaths } from "../live/model";
+import { TestThisRule } from "../experiments/evals/EvalTiersPanel";
+import { loadEvalCatalog } from "../experiments/evals/api";
+import { unitFor, type EvalCatalog } from "../experiments/evals/model";
 import { loadLibrary } from "./api";
 import { filterLibrary, LibraryRequestGate, repositoryRelativePath, type LibraryFilters, type LibraryModule, type LibraryPayload, type ModuleFork } from "./model";
 import "./library.css";
@@ -48,10 +51,11 @@ export function ForkProvenance({ fork }: { fork: ModuleFork }) {
   );
 }
 
-function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository }: {
+function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository, evals }: {
   module: LibraryModule; sharedRoot: string; focusedPath: string; focusedLine: number | null;
-  repository: string;
+  repository: string; evals: EvalCatalog | null;
 }) {
+  const unit = unitFor(evals, module.kind, module.name);
   const sourcePath = repositoryRelativePath(repository, module.source.path);
   const focused = sourcePath === focusedPath && focusedLine !== null;
   return (
@@ -69,6 +73,7 @@ function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository
       <Stack className="library-module-body" gap="md">
       <Text c="dimmed" size="sm">Ownership: {module.root.label}</Text>
       {module.fork ? <ForkProvenance fork={module.fork} /> : null}
+      {unit && evals ? <TestThisRule catalog={evals} unit={unit} /> : null}
       <Group gap="xs">
         <Badge variant="light">{module.context_cost.tokens.toLocaleString()} tokens</Badge>
         <Text c="dimmed" size="xs">{module.context_cost.estimate} · {module.context_cost.method}</Text>
@@ -104,8 +109,9 @@ function ModuleDetail({ module, sharedRoot, focusedPath, focusedLine, repository
   );
 }
 
-export function LibraryGroups({ modules, focusedPath = "", focusedLine = null, repository = "" }: {
+export function LibraryGroups({ modules, focusedPath = "", focusedLine = null, repository = "", evals = null }: {
   modules: LibraryModule[]; focusedPath?: string; focusedLine?: number | null; repository?: string;
+  evals?: EvalCatalog | null;
 }) {
   const kinds = [...new Set(modules.map((module) => module.kind))].sort();
   return <Stack gap="lg">{kinds.map((kind) => {
@@ -120,7 +126,7 @@ export function LibraryGroups({ modules, focusedPath = "", focusedLine = null, r
         <Group gap="xs"><Title order={2}>{kind}</Title><Text c="dimmed" size="sm">{ownership.label}{roots.size > 1 ? " + others" : ""}</Text></Group>
         <Badge variant="light">{items.length}</Badge>
       </Group>
-      {items.map((module) => <ModuleDetail focusedLine={focusedLine} focusedPath={focusedPath}
+      {items.map((module) => <ModuleDetail evals={evals} focusedLine={focusedLine} focusedPath={focusedPath}
         key={module.key} module={module} repository={repository} sharedRoot={sharedRoot} />)}
     </Paper>;
   })}</Stack>;
@@ -133,6 +139,7 @@ export function LibraryPage() {
   const focusedLine = Number.isSafeInteger(requestedLine) && requestedLine > 0 ? requestedLine : null;
   const [payload, setPayload] = useState<LibraryPayload | null>(null);
   const [error, setError] = useState("");
+  const [evals, setEvals] = useState<EvalCatalog | null>(null);
   const [filters, setFilters] = useState<LibraryFilters>(EMPTY_FILTERS);
   const requestGate = useRef(new LibraryRequestGate());
   const filtered = useMemo(
@@ -157,6 +164,12 @@ export function LibraryPage() {
     void reload();
     return () => { requestGate.current.invalidate(); };
   }, [reload]);
+  useEffect(() => {
+    let active = true;
+    // No unit eval is offered while the catalog is unread or its engine is absent.
+    void loadEvalCatalog().then((value) => { if (active) setEvals(value); }).catch(() => {});
+    return () => { active = false; };
+  }, []);
   useLiveUpdates(["library", "library-index"], () => { void reload(); },
     (event) => event.topics.includes("library-index") || updateTouchesPaths(event, visiblePaths));
 
@@ -209,7 +222,7 @@ export function LibraryPage() {
       </Text> : null}
       <Stack gap="md" aria-live="polite">
         {payload ? <Text c="dimmed" size="sm">Showing {filtered.length} of {payload.summary.modules} modules</Text> : null}
-        <LibraryGroups focusedLine={focusedLine} focusedPath={focusedPath} modules={filtered}
+        <LibraryGroups evals={evals} focusedLine={focusedLine} focusedPath={focusedPath} modules={filtered}
           repository={payload?.repository ?? ""} />
       </Stack>
     </Stack>

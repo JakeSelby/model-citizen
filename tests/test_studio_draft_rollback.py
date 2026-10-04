@@ -73,7 +73,7 @@ class RollbackTests(unittest.TestCase):
                     draft_support.discard_draft(self, name, home.env)
 
     def draft(self, home, prefix):
-        name = prefix + "-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name(prefix + "-")
         created = home.cli("draft", "create", name, "--json", timeout=60)
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
         self.drafts.append(name)
