@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 164,
+    "bug": 166,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -8503,6 +8503,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S344",
+      "github_number": 1143,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1143",
+      "title": "Admit oracle scorers that return named metrics alongside pass",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S344.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C102",
       "github_number": 1144,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1144",
@@ -8575,6 +8588,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B156.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B165",
+      "github_number": 1164,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1164",
+      "title": "test(benchmarks): keep git maintenance out of repositories replay_pack.materialize creates",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B165.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8848,6 +8874,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B161.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B162",
+      "github_number": 1195,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1195",
+      "title": "fix(cost): the price table has no entry for claude-opus-5-5",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B162.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

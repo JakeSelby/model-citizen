@@ -526,7 +526,9 @@ development_status:
   ah-b159-fix-hooks-the-stop-gate-ignores-a-stated-reason: ready-for-dev
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: ready-for-dev
   ah-b161-fix-benchmarks-the-delegation-verdict-ignores: ready-for-dev
+  ah-b162-fix-cost-the-price-table-has-no-entry-for-claude: ready-for-dev
   ah-b163-fix-tests-the-test-suite-writes-to-the-real-hook: ready-for-dev
+  ah-b165-test-benchmarks-keep-git-maintenance-out-of: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -699,6 +701,7 @@ development_status:
   ah-s330-a-workflow-script-s-agent-calls-bypass-band: ready-for-dev
   ah-s331-add-a-codex-plugin-manifest-for-the-skills: ready-for-dev
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: ready-for-dev
+  ah-s344-admit-oracle-scorers-that-return-named-metrics: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
