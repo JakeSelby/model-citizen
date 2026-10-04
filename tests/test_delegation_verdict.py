@@ -354,6 +354,7 @@ class ReportTests(unittest.TestCase):
                 BENCH.main(["summarise", "--results", tmp, "--resamples", "200", "--json", "--break-even", "20"])
             printed = json.loads(out.getvalue())
         block = printed.pop("delegation")
+        self.assertIn("pass_k", printed.pop("reliability"))  # a separate key (#1180)
         self.assertEqual(printed.pop("cache_basis"), BENCH.CACHE_SHARED)
         sm2 = BENCH.replay_stats.analyse(rows, BENCH.replay_stats.SEED, 200)
         self.assertEqual(printed, json.loads(json.dumps(sm2, sort_keys=True)))  # SM-2's fields, unchanged

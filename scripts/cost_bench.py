@@ -54,6 +54,7 @@ import oracle_metrics  # noqa: E402  named metrics a check may return beside pas
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
+import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -2106,11 +2107,17 @@ def cmd_summarise(args):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    report = dict(result, delegation=delegation)
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(
+            rows, replay_reliability.detections_beside(path))
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, delegation=delegation, reliability=reliability)
     if metrics is not None:  # a set without metrics reports exactly as before
         report["metrics"] = metrics
     write_report(report, cache_basis(rows), args.json,
-                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
+                 + reliability_text)
     return 0
 
 
