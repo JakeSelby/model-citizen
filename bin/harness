@@ -3891,7 +3891,7 @@ def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> in
                      if args.pack is not None else None)}
     try:
         registration = studio_draft_registration.register(
-            root, repo, args.name, spec, args.effect, args.cv)
+            root, repo, args.name, spec, args.effect, None)
     except (OSError, studio_draft_tests.DraftTestError) as exc:
         code = getattr(exc, "code", "draft_test_registration_failed")
         message = str(exc) if not isinstance(exc, OSError) else "registration I/O failed"
@@ -7293,14 +7293,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     test_parser.add_argument("--model", help="with --register: the model both sides run")
     test_parser.add_argument("--repetitions", type=int, help="with --register: trials per task")
     test_parser.add_argument("--task", action="append",
-                             help="with --register: a task id; repeat for each task")
+                             help="with --register: a task id; repeat for every task of the set")
     test_parser.add_argument("--pack", help="with --register: the evaluator pack's name")
     test_parser.add_argument("--pack-digest", help="with --register: the evaluator pack's digest")
     test_parser.add_argument("--effect", type=float,
-                             help="with --register: the change worth detecting, a fraction up to 0.15")
-    test_parser.add_argument("--cv", type=float,
-                             help="with --register: a planning coefficient of variation; default "
-                                  "the repository's declared assumption")
+                             help="with --register: the change worth detecting, a fraction up to 0.15; power "
+                                  "is planned from the repository's declared variance")
+
     test_parser.set_defaults(func=cmd_draft)
     review_parser = draft_sub.add_parser(
         "review", help="show every file and configuration key a draft changes, its checks, budget "

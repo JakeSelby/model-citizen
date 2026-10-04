@@ -826,7 +826,9 @@ _DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft
                       "draft_test_registration_not_found": 404,
                       "draft_test_registration_stale": 409,
                       "draft_test_registration_mismatch": 409,
+                      "draft_test_registration_used": 409,
                       "draft_test_underpowered": 409, "draft_test_effect_too_large": 400,
+                      "draft_test_cv_not_declared": 400, "draft_test_registration_subset": 400,
                       "draft_test_registration_failed": 500}
 
 
@@ -839,8 +841,11 @@ def _draft_test_error(handler: Handler, exc: Exception) -> None:
 
 
 def _draft_test_plan(handler: Handler, route: Route) -> None:
-    """Power and spend before a draft test: nothing starts here."""
-    request = _required_request(handler, ("draft", "request", "effect", "cv"))
+    """Power and spend before a draft test, and how it departs from the registration it names:
+    nothing starts here, and nothing is claimed."""
+    body = getattr(handler, "request_json", {})
+    request = _required_request(handler, ("draft", "request", "effect", "cv") + (
+        ("registration",) if isinstance(body, dict) and "registration" in body else ()))
     if request is None:
         return
     try:
@@ -853,13 +858,18 @@ def _draft_test_plan(handler: Handler, route: Route) -> None:
         admission = _replay_admission(handler)
         resolved = admission.resolve(form)
         draft_tests.check_request(draft, resolved)
+        registration, deviations = draft_tests.start_registration(
+            handler.server.run_supervisor.state_root, handler.server.repo_root, draft, resolved,
+            request.get("registration"))
         preview = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
     payload = {"schema_version": draft_tests.SCHEMA_VERSION, "draft": draft, "power": power,
                "power_line": draft_tests.power_line(power),
-               "evidence_note": draft_tests.EXPLORATORY_NOTE, "preview": preview}
+               "evidence_note": draft_tests.EXPLORATORY_NOTE, "preview": preview,
+               "registration": None if registration is None else {
+                   "registration_id": registration, "deviations": deviations}}
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -909,7 +919,7 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
         power = draft_tests.power(handler.server.repo_root, len(selected.tasks),
                                   selected.repetitions, planned)
         registration, deviations = draft_tests.start_registration(
-            handler.server.run_supervisor.state_root, draft, selected,
+            handler.server.run_supervisor.state_root, handler.server.repo_root, draft, selected,
             request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
@@ -918,6 +928,14 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
+    if registration is not None:
+        # Single use: the first run started claims it; a run that loses the race runs exploratory.
+        try:
+            if not draft_registration.claim(handler.server.run_supervisor.state_root,
+                                            registration, started["run_id"]):
+                deviations = deviations + ["the registration already backs another run"]
+        except (OSError, draft_tests.DraftTestError):
+            deviations = deviations + ["the registration's use could not be recorded"]
     try:
         recorded = draft_tests.record(handler.server.run_supervisor.state_root, started["run_id"],
                                       draft, confirmed, power, registration, deviations)
@@ -2065,7 +2083,8 @@ DRAFT_TEST_PLAN = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("draft", "object"), ("power", "object"),
                                                    ("power_line", "string"),
                                                    ("evidence_note", "string"),
-                                                   ("preview", "object")))
+                                                   ("preview", "object"),
+                                                   ("registration", "object-or-null")))
 DRAFT_TEST_REGISTER = ResponseSchema("json-object", (("registration", "object"),
                                                        ("power_line", "string")))
 DRAFT_TEST_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),

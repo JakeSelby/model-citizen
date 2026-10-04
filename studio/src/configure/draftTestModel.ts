@@ -29,6 +29,8 @@ export type DraftTestPlan = {
   power_line: string;
   evidence_note: string;
   preview: ReplayPreview;
+  /** The server's deviations from the registration the plan named; null when it named none. */
+  registration: { registration_id: string; deviations: string[] } | null;
 };
 
 export type DraftTestVerdictName =
@@ -42,9 +44,11 @@ export type DraftTestRegistration = {
   registration_id: string; draft: string; draft_id: string; revision: string; config_digest: string | null;
   base_revision: string; model: string; tasks: string[]; repetitions: number;
   pack: { name: string; version: string | null; commit: string; digest: string } | null;
-  effect: number; cv: number | null; power: DraftTestPower; plan: string; plan_commit: string;
-  plan_sha256: string; created_at: string;
+  manifest_digest: string; effect: number; cv: number | null; power: DraftTestPower; plan: string;
+  plan_commit: string; plan_sha256: string; created_at: string;
   stale: boolean; stale_reason: string | null; problems: string[];
+  /** The one run the registration backs, once a run has claimed it. */
+  used_by: string | null;
 };
 
 export type DraftTestVerdict = {
@@ -111,29 +115,26 @@ export function planBody(draft: string, form: DraftTestForm): Record<string, unk
   };
 }
 
-/** The register route's body: the sample a registration fixes, without targets or caps. */
+/** The register route's body: the sample a registration fixes, without targets or caps. Power is
+ * planned from the repository's declared variance, so no coefficient of variation is sent. */
 export function registerBody(draft: string, form: DraftTestForm): Record<string, unknown> {
   const body = planBody(draft, form);
   const request = body.request as Record<string, unknown>;
   return {
-    draft, effect: body.effect, cv: body.cv,
+    draft, effect: body.effect, cv: null,
     request: { model: request.model, repetitions: request.repetitions, tasks: request.tasks, pack: request.pack },
   };
 }
 
-/** The registration a new test may run under: the newest that is current and intact. */
+/** The registration a new test may run under: the newest that is current, intact and unused. */
 export function currentRegistration(verdicts: DraftTestVerdicts | null): DraftTestRegistration | null {
-  return verdicts?.registrations.find((item) => !item.stale && item.problems.length === 0) ?? null;
+  return verdicts?.registrations.find((item) => !item.stale && item.problems.length === 0 && item.used_by === null) ?? null;
 }
 
-/** How the form departs from a registration, one line each; empty when a run would match it. */
-export function registrationDifferences(registration: DraftTestRegistration, form: DraftTestForm): string[] {
-  const out: string[] = [];
-  if (registration.model !== form.model.trim()) out.push("model");
-  if (registration.repetitions !== form.repetitions) out.push("trials per task");
-  if ([...registration.tasks].sort().join("\n") !== [...form.tasks].sort().join("\n")) out.push("task set");
-  if ((registration.pack?.digest ?? null) !== (form.pack?.digest ?? null)) out.push("evaluator pack");
-  return out;
+/** Why the test cannot start yet as asked; null when it can. Ticking pre-register without a
+ * current registration would otherwise start an unregistered run the developer took for registered. */
+export function startBlocked(preRegister: boolean, registration: DraftTestRegistration | null): string | null {
+  return preRegister && !registration ? "Register the test before you start it, or untick pre-register." : null;
 }
 
 /** The evidence badge beside a verdict: a pre-registered run is filled, an exploratory one is not. */
@@ -193,6 +194,9 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_registration_not_found: "That registration no longer exists; register the test again.",
     draft_test_registration_mismatch: "That registration belongs to another draft.",
     draft_test_registration_failed: "The registration could not be written; nothing was registered.",
+    draft_test_registration_used: "That registration already backs a run; register the test again.",
+    draft_test_cv_not_declared: "A registration plans from the repository's declared variance; clear the coefficient of variation.",
+    draft_test_registration_subset: "Only the whole task set can be registered; choose every task.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
     replay_target_config_unsupported: "This draft changed its configuration, which a replay cannot measure.",
   };

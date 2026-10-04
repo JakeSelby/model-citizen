@@ -589,7 +589,8 @@ def _registration_key(root: Path, item: Mapping[str, Any], started_at: Optional[
     except DraftTestError as exc:
         return "unreadable:" + str(exc)
     return json.dumps([found["plan_sha256"], found["created_at"], found["problems"],
-                       item.get("deviations") or [], started_at], sort_keys=True)
+                       found["used_by"], found["committed"], item.get("deviations") or [],
+                       started_at], sort_keys=True)
 
 
 def registered_claim(comparison: Mapping[str, Any]) -> Dict[str, Any]:
@@ -632,7 +633,8 @@ def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
         return {"verdict": "unavailable", "reasons": [str(exc)], "spend_usd": spend}
     from . import draft_registration
     label, deviations = draft_registration.evidence(
-        root, item.get("registration"), list(item.get("deviations") or []), comparison, started_at)
+        root, item.get("registration"), list(item.get("deviations") or []), item["run_id"],
+        comparison, started_at)
     judged = registered_claim(comparison) if label == replay.PREREGISTERED else claim(comparison)
     if label != replay.PREREGISTERED and judged["verdict"] in (HELPED, WORSE, INCONCLUSIVE,
                                                                EXPLORATORY):
@@ -674,25 +676,17 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
             "unreadable_records": skipped}
 
 
-def start_registration(root: Path, draft: Mapping[str, Any], selected: replay.ReplayRequest,
+def start_registration(root: Path, repository: Path, draft: Mapping[str, Any],
+                       selected: replay.ReplayRequest,
                        registration: Any) -> Tuple[Optional[str], List[str]]:
     """`(registration id, deviations)` for a test about to start: None and nothing when it is not
-    registered. A stale registration is refused (a new one is required); any other departure from
-    it starts the test exploratory, with every deviation recorded."""
+    registered. A stale or already used registration is refused (a new one is required); any other
+    departure from it starts the test exploratory, with every deviation recorded
+    (`draft_registration.start_check`). The caller claims the registration once the run exists."""
     if registration is None:
         return None, []
     from . import draft_registration
-    found = draft_registration.load(root, registration)
-    if found["draft_id"] != draft["draft_id"]:
-        raise DraftTestError("the registration is for another draft",
-                             "draft_test_registration_mismatch")
-    stale, reason = staleness(draft, found["revision"], found["config_digest"])
-    if stale:
-        raise DraftTestError("the registration is stale (%s); register the test again" % reason,
-                             "draft_test_registration_stale")
-    deviations = ["the registration is not intact: %s" % item for item in found["problems"]]
-    deviations += draft_registration.deviations(found, draft_registration.from_request(selected))
-    return found["registration_id"], deviations
+    return draft_registration.start_check(root, repository, draft, selected, registration)
 
 
 def render(payload: Mapping[str, Any]) -> List[str]:
@@ -719,6 +713,8 @@ def render(payload: Mapping[str, Any]) -> List[str]:
             entry["registration_id"], entry["revision"][:12],
             "stale" if entry["stale"] else "current", len(entry["tasks"]), entry["repetitions"],
             entry["model"]))
+        if entry.get("used_by"):
+            lines.append("    backs run %s" % entry["used_by"])
         for problem in entry["problems"]:
             lines.append("    not intact: " + problem)
     if payload["unreadable_records"]:

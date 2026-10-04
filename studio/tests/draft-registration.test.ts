@@ -8,7 +8,7 @@ import { MantineProvider } from "@mantine/core";
 import { RegistrationList, VerdictCard } from "../src/configure/DraftTest.tsx";
 import { registerDraftTest, startDraftTest } from "../src/configure/draftTestApi.ts";
 import {
-  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, registerBody, registrationDifferences,
+  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, registerBody, startBlocked,
   type DraftTestRegistration, type DraftTestVerdicts,
 } from "../src/configure/draftTestModel.ts";
 
@@ -23,10 +23,10 @@ function registration(changes: Partial<DraftTestRegistration> = {}): DraftTestRe
   return {
     registration_id: "22222222-2222-4222-8222-222222222222", draft: "tuned", draft_id: "id",
     revision: fixture.revision, config_digest: null, base_revision: fixture.base_revision, model: "claude-test",
-    tasks: ["b", "a"], repetitions: 5, pack: null, effect: 0.15, cv: 0.1,
+    tasks: ["b", "a"], repetitions: 5, pack: null, manifest_digest: "d".repeat(64), effect: 0.15, cv: 0.1,
     power: fixture.checkpoints[0].latest.power, plan: "benchmarks/preregistrations/2026-10-03-draft-x.md",
     plan_commit: "f".repeat(40), plan_sha256: "e".repeat(64), created_at: "2026-10-03T00:00:00+00:00",
-    stale: false, stale_reason: null, problems: [], ...changes,
+    stale: false, stale_reason: null, problems: [], used_by: null, ...changes,
   };
 }
 
@@ -34,32 +34,36 @@ function page(element: ReturnType<typeof h>): string {
   return renderToStaticMarkup(h(MantineProvider, {}, element));
 }
 
-test("the register body fixes the sample and the effect, without targets or caps", () => {
+test("the register body fixes the sample and the effect, never a caller's cv", () => {
   const form = { ...initialForm("claude-test", null), tasks: ["a", "b"], cv: "0.1" };
   assert.deepEqual(registerBody("tuned", form), {
-    draft: "tuned", effect: 0.15, cv: 0.1,
+    draft: "tuned", effect: 0.15, cv: null,
     request: { model: "claude-test", repetitions: 5, tasks: ["a", "b"], pack: null },
   });
 });
 
-test("only the newest current, intact registration is used, and a form that differs says how", () => {
+test("only the newest current, intact, unused registration is used", () => {
   const verdicts = clone(fixture);
   verdicts.registrations = [registration({ stale: true, stale_reason: "the draft has a newer checkpoint" }),
-    registration({ registration_id: "intact" })];
+    registration({ registration_id: "used", used_by: "run" }), registration({ registration_id: "intact" })];
   assert.equal(currentRegistration(verdicts)?.registration_id, "intact");
-  verdicts.registrations[1].problems = ["the plan differs from the text registered"];
+  verdicts.registrations[2].problems = ["the plan differs from the text registered"];
   assert.equal(currentRegistration(verdicts), null);
-  const form = { ...initialForm("claude-test", null), tasks: ["a", "b"] };
-  assert.deepEqual(registrationDifferences(registration(), form), []);
-  assert.deepEqual(registrationDifferences(registration(), { ...form, repetitions: 6, tasks: ["a"], model: "other" }),
-    ["model", "trials per task", "task set"]);
+});
+
+test("pre-register ticked with no current registration blocks the start", () => {
+  assert.equal(startBlocked(true, null), "Register the test before you start it, or untick pre-register.");
+  assert.equal(startBlocked(true, registration()), null);
+  assert.equal(startBlocked(false, null), null);
 });
 
 test("a stale or altered registration stays listed and is marked", () => {
   const html = page(h(RegistrationList, { registrations: [
     registration({ stale: true, stale_reason: "the draft has a newer checkpoint" }),
     registration({ registration_id: "other", problems: ["the plan differs from the text registered"] }),
+    registration({ registration_id: "third", used_by: "run-1" }),
   ] }));
+  assert.ok(html.includes("Backs run"), html);
   assert.ok(html.includes("Stale: the draft has a newer checkpoint; register the test again."), html);
   assert.ok(html.includes("Not intact"));
   assert.ok(html.includes("the plan differs from the text registered"));

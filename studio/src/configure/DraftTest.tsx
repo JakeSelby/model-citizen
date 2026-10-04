@@ -12,7 +12,7 @@ import { initialPack, packOptions, tasksFor, type ReplayCatalog } from "../exper
 import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
   currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, planBody, readingLines, registerBody,
-  registrationDifferences, spendLine, validateDraftTest, verdictBadge, withNeededTrials,
+  spendLine, startBlocked, validateDraftTest, verdictBadge, withNeededTrials,
   type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
@@ -88,9 +88,11 @@ export function RegistrationList({ registrations }: { registrations: DraftTestRe
             <Text size="sm">Registered checkpoint <Code>{item.revision.slice(0, 12)}</Code>: {item.tasks.length} task(s), {item.repetitions} trial(s) per task, {item.model}, a {(item.effect * 100).toFixed(1)}% change</Text>
             {item.stale && <Badge color="yellow" variant="outline">Stale</Badge>}
             {item.problems.length > 0 && <Badge color="red" variant="outline">Not intact</Badge>}
+            {item.used_by && <Badge color="gray" variant="light">Used</Badge>}
           </Group>
           {item.stale_reason && <Text c="dimmed" size="xs">Stale: {item.stale_reason}; register the test again.</Text>}
           {item.problems.map((problem) => <Text c="red" key={problem} size="xs">{problem}</Text>)}
+          {item.used_by && <Text c="dimmed" size="xs">Backs run <Code>{item.used_by}</Code>; a registration backs one run.</Text>}
           <Text c="dimmed" size="xs">Plan <Code>{item.plan}</Code> at <Code>{item.plan_commit.slice(0, 12)}</Code></Text>
         </Paper>
       ))}
@@ -123,7 +125,10 @@ export function DraftTest({ draft, revision }: Props) {
   const [preRegister, setPreRegister] = useState(false);
   const errors = validateDraftTest(form);
   const registration = currentRegistration(verdicts);
-  const differences = registration ? registrationDifferences(registration, form) : [];
+  const blocked = startBlocked(preRegister, registration);
+  // The server's deviations, for the registration this plan named; never recomputed here.
+  const deviations = plan?.registration && plan.registration.registration_id === registration?.registration_id
+    ? plan.registration.deviations : null;
 
   useEffect(() => {
     let active = true;
@@ -163,7 +168,8 @@ export function DraftTest({ draft, revision }: Props) {
     if (errors.length) return;
     setBusy(true);
     try {
-      const value = await planDraftTest(planBody(draft, form));
+      const under = preRegister && registration ? { registration: registration.registration_id } : {};
+      const value = await planDraftTest({ ...planBody(draft, form), ...under });
       setPlan(value);
       setStatus("Power and spend are ready. Nothing has started.");
     } catch (error) {
@@ -178,7 +184,8 @@ export function DraftTest({ draft, revision }: Props) {
     setBusy(true);
     try {
       await registerDraftTest(registerBody(draft, form));
-      setStatus("Registered. The registration is fixed; any edit to the draft makes it stale.");
+      setPlan(null);
+      setStatus("Registered. It backs one run and is fixed; any edit to the draft makes it stale. Check power and spend again.");
       await refresh();
     } catch (error) {
       setStatus(message(error, "The test could not be registered."));
@@ -254,25 +261,30 @@ export function DraftTest({ draft, revision }: Props) {
         )}
         <Checkbox checked={preRegister} disabled={busy} label="Pre-register this test"
           description="Optional. A run that matches its registration exactly may read helped or worse; any other run stays exploratory."
-          onChange={(event) => setPreRegister(event.currentTarget.checked)} />
+          onChange={(event) => { setPreRegister(event.currentTarget.checked); setPlan(null); }} />
         {preRegister && (
           <Stack gap="xs">
-            {registration
-              ? <Alert color={differences.length ? "yellow" : "blue"} title={differences.length ? "Differs from the registration" : "Registered"}>
-                  {differences.length
-                    ? `This test's ${differences.join(", ")} differ from the registration, so it would run exploratory.`
-                    : "This test matches the current registration."}
-                </Alert>
-              : <Text c="dimmed" size="sm">No current registration. Check power, then register before you start.</Text>}
+            {registration && deviations === null && <Text c="dimmed" size="sm">Registered. Check power and spend to see whether this test matches it.</Text>}
+            {registration && deviations !== null && (
+              <Alert color={deviations.length ? "yellow" : "blue"} title={deviations.length ? "Differs from the registration" : "Matches the registration"}>
+                {deviations.length
+                  ? <ul className="message-list">{deviations.map((item) => <li key={item}>{item}</li>)}</ul>
+                  : "This test matches the current registration exactly."}
+                {deviations.length > 0 && <Text size="sm">It would run exploratory.</Text>}
+              </Alert>
+            )}
+            {!registration && <Text c="dimmed" size="sm">No current registration. Check power, then register before you start.</Text>}
+            {form.cv.trim() !== "" && <Text c="dimmed" size="sm">A registration plans from the repository's declared variance; clear the coefficient of variation to register.</Text>}
             <Group justify="flex-end">
-              <Button variant="light" disabled={busy || !plan?.power.enough} loading={busy} onClick={register}>Register this test</Button>
+              <Button variant="light" disabled={busy || !plan?.power.enough || form.cv.trim() !== ""} loading={busy} onClick={register}>Register this test</Button>
             </Group>
             {verdicts && <RegistrationList registrations={verdicts.registrations} />}
           </Stack>
         )}
+        {blocked && <Text aria-live="polite" c="dimmed" size="sm">{blocked}</Text>}
         <Group justify="flex-end">
           <Button variant="light" disabled={busy || errors.length > 0} loading={busy} onClick={check}>Check power and spend</Button>
-          <Button disabled={busy || !plan?.preview.valid || !plan.preview.confirmation_token} loading={busy} onClick={start}>Confirm and test</Button>
+          <Button disabled={busy || blocked !== null || !plan?.preview.valid || !plan.preview.confirmation_token} loading={busy} onClick={start}>Confirm and test</Button>
         </Group>
         <Group justify="space-between">
           <Title order={3}>Verdicts by checkpoint</Title>

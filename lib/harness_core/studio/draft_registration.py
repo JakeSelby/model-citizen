@@ -1,31 +1,39 @@
-"""Pre-register a draft test, so a run that matches its registration may say helped or worse.
+"""Pre-register a draft test, so the one run that matches its registration may say helped or worse.
 
 A draft test is exploratory by default (`draft_tests`). Opting in, the developer registers the test
-before running it: the draft's checkpoint and configuration digest, its base commit, the task set
-and evaluator pack, the trials per task, the model and the change worth detecting. `register` is
-the one path `citizen draft test --register` and `POST /api/configure/test/register` share.
+before running it: the draft's checkpoint and configuration digest, its base commit, the whole task
+set of its evaluator pack or of the repository, the trials per task, the model and the change worth
+detecting. `register` is the one path `citizen draft test --register` and
+`POST /api/configure/test/register` share.
 
-**The engine's format and checks.** The plan is written from `docs/pre-registration-template.md`,
-every section filled, as `benchmarks/preregistrations/<date>-draft-<id>.md` and committed to a
-private Git repository under the supervisor's state root (`draft-tests/registry`), and it must pass
-`experiment_protocol.check` there, unchanged: dated name, every required field filled, committed,
-clean, and the first filled commit's text intact. The registry stands in for the repository the
-engine's own runs commit to, because a draft test must never write into the installed checkout or
-the draft (an edit to the draft would make the registration stale at once). A structured record
-beside it (`draft-tests/registrations/<id>.json`) is linked into place once and never replaced; it
-names the plan, its commit and its SHA-256, so an edit to either is found on every read.
+**The engine's format and checks.** The plan is `docs/pre-registration-template.md` itself, read
+section by section with `experiment_protocol`'s readers: every field this module states replaces the
+template's, every other field keeps the template's text, and a field still holding a `<...>`
+placeholder fails the registration, so a template change is never silently skipped. The plan is
+written as `benchmarks/preregistrations/<date>-draft-<id>.md`, committed to a private Git repository
+under the supervisor's state root (`draft-tests/registry`), and must pass `experiment_protocol.check`
+there, unchanged: dated name, every required field filled, committed, clean, the first filled
+commit's text intact. The registry stands in for the repository the engine's own runs commit to,
+because a draft test must never write into the installed checkout or the draft (an edit to the draft
+would make the registration stale at once). Every value a run is compared against is read back from
+the committed plan (`committed`), never from the record JSON beside it, which only indexes it.
 
 **Refused before it is written.** SM-2 states the minimum detectable effect before the run and caps
-it at 15% (docs/evidence-standard.md, item 1), so a larger effect is refused. A trial count that
-cannot detect the effect is refused with the engine's minimum detectable effect and the fewest trials
-that would (`draft_tests.power`, from `replay_stats.minimum_detectable_effect`).
+it at 15% (docs/evidence-standard.md, item 1), so a larger effect is refused. Power is planned from
+the repository's declared variance (`benchmarks/ablations.json`), never a coefficient of variation
+the caller states. A task subset is refused: as for a release (`replay.label_evidence`), only the
+whole set may be registered. A trial count that cannot detect the effect is refused with the
+engine's minimum detectable effect and the fewest trials that would (`draft_tests.power`).
 
-**When it counts.** A registration is stale once the draft has another checkpoint or configuration;
-a stale one stays listed and a new one is needed. A run counts as pre-registered only when its
-registration is intact, was written before the run started, and the run measured exactly what it
-registers (`deviations`); any difference makes the run exploratory, and its verdict carries no
-direction. The native benchmark still runs the draft `--exploratory`, so a draft test never writes a
-benchmark history row: the registration lets the Studio apply the decision rule, nothing more.
+**When it counts.** A registration is single-use: the first run started under it claims it with a
+file created exclusively (`<id>.used`, naming the run), a later start is refused, and at verdict time
+only the claiming run may count. A registration is stale once the draft has another checkpoint or
+configuration; a stale one stays listed and a new one is needed. A run counts as pre-registered only
+when its registration is intact, was written before the run started, was claimed by that run, and
+the run measured exactly what the committed plan registers (`deviations`); any difference makes it
+exploratory, and its verdict carries no direction. The native benchmark still runs the draft
+`--exploratory`, so a draft test never writes a benchmark history row: the registration lets the
+Studio apply the decision rule, nothing more.
 """
 from __future__ import annotations
 
@@ -48,14 +56,26 @@ SCHEMA_VERSION = 1
 REGISTRATIONS_DIR = "registrations"
 REGISTRY_DIR = "registry"
 LOCK_NAME = "registry.lock"
+USED_SUFFIX = ".used"
 PLAN_DIRECTORY = Path("benchmarks") / "preregistrations"
+TEMPLATE = Path(__file__).resolve().parents[3] / "docs" / "pre-registration-template.md"
+TASKS_FILE = Path("benchmarks") / "tasks.json"
 MAX_EFFECT = 0.15  # SM-2: the minimum detectable effect is at most 15%
 MAX_MODEL = 256
 SPEC_KEYS = frozenset(("model", "repetitions", "tasks", "pack"))
 RECORD_KEYS = frozenset((
     "schema_version", "registration_id", "draft", "draft_id", "revision", "config_digest",
-    "base_revision", "model", "tasks", "repetitions", "pack", "effect", "cv", "power", "plan",
-    "plan_commit", "plan_sha256", "created_at"))
+    "base_revision", "model", "tasks", "repetitions", "pack", "manifest_digest", "effect", "cv",
+    "power", "plan", "plan_commit", "plan_sha256", "created_at"))
+# What a run is compared against: the key, the field in the plan's Run section, and its label.
+COMPARED = (("base_revision", "Base commit", "base commit"),
+            ("revision", "Draft commit", "draft commit"),
+            ("config_digest", "Configuration digest", "draft configuration"),
+            ("tasks", "Task set", "task set"),
+            ("model", "Model", "model"),
+            ("pack_digest", "Evaluator pack digest", "evaluator pack"))
+TRIALS_FIELD = ("Sample size", "Trials per task and arm")
+NONE = "none"
 IDENTITY = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 REPOSITORY_VARIABLES = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
                                   "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -64,13 +84,23 @@ GIT_IDENTITY = ("-c", "user.name=Model Citizen Studio", "-c", "user.email=studio
                 "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false")
 
 
-def _protocol() -> Any:
-    return replay._engine_module("experiment_protocol")
-
-
 def _git_env() -> Dict[str, str]:
     """The environment for registry Git calls, without a caller's repository variables."""
     return {key: value for key, value in os.environ.items() if key not in REPOSITORY_VARIABLES}
+
+
+def _protocol() -> Any:
+    """`experiment_protocol`, loaded privately, its Git calls run without a caller's repository
+    variables so a `GIT_DIR` in the environment cannot point the check at another repository."""
+    module = replay._engine_module("experiment_protocol")
+
+    def scrubbed(root: Any, *args: str) -> Tuple[int, str]:
+        done = subprocess.run(["git", "-C", str(root)] + list(args), stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, universal_newlines=True, env=_git_env())
+        return done.returncode, done.stdout.strip()
+
+    module._git = scrubbed
+    return module
 
 
 def _git(registry: Path, *args: str) -> str:
@@ -80,7 +110,7 @@ def _git(registry: Path, *args: str) -> str:
     if done.returncode:
         raise draft_tests.DraftTestError("the registration could not be committed",
                                          "draft_test_registration_failed")
-    return done.stdout.strip()
+    return done.stdout
 
 
 def _private_dir(directory: int, name: str) -> int:
@@ -117,15 +147,32 @@ def _locked(root: Path) -> Iterator[int]:
         os.close(directory)
 
 
+def manifest(repository: Path, pack: Optional[Mapping[str, Any]]) -> Dict[str, str]:
+    """Where the task catalog is read from and the digest that pins it: the pack's own digest, or
+    the SHA-256 of the installed checkout's task list as it reads now."""
+    if pack is not None:
+        return {"source": "evaluator pack `%s` version `%s` at commit `%s`, digest `%s`"
+                          % (pack["name"], pack["version"], pack["commit"], pack["digest"]),
+                "digest": pack["digest"]}
+    try:
+        content = (Path(repository) / TASKS_FILE).read_bytes()
+    except OSError as exc:
+        raise draft_tests.DraftTestError("the task catalog cannot be read") from exc
+    digest = hashlib.sha256(content).hexdigest()
+    return {"source": "the installed checkout's `%s` as read at registration, not the base "
+                      "commit's, SHA-256 `%s`" % (TASKS_FILE.as_posix(), digest),
+            "digest": digest}
+
+
 def _parse_spec(repository: Path, spec: Any) -> Dict[str, Any]:
-    """The registered sample: model, trials per task, a sorted task set and a resolved pack."""
+    """The registered sample: model, trials per task, the whole task set and a resolved pack."""
     if not isinstance(spec, dict) or set(spec) != SPEC_KEYS:
         raise draft_tests.DraftTestError("a registration names exactly its model, repetitions, "
                                          "tasks and pack")
     model, repetitions, tasks, chosen = (spec["model"], spec["repetitions"], spec["tasks"],
                                          spec["pack"])
     if (not isinstance(model, str) or not model or len(model) > MAX_MODEL or "\0" in model
-            or model.startswith("-")):
+            or model.startswith("-") or "\n" in model or "`" in model):
         raise draft_tests.DraftTestError("a registration names its model")
     if (not isinstance(repetitions, int) or isinstance(repetitions, bool)
             or not 1 <= repetitions <= draft_tests.MAX_TRIALS):
@@ -149,8 +196,13 @@ def _parse_spec(repository: Path, spec: Any) -> Dict[str, Any]:
     unknown = sorted(set(tasks) - set(catalog))
     if unknown:
         raise draft_tests.DraftTestError("unknown benchmark tasks: " + ", ".join(unknown))
+    if set(tasks) != set(catalog):
+        raise draft_tests.DraftTestError(
+            "only the whole task set can be registered, as for a release; this leaves out "
+            + ", ".join(sorted(set(catalog) - set(tasks))), "draft_test_registration_subset")
     return {"model": model, "repetitions": repetitions, "tasks": sorted(tasks), "pack": pack,
-            "long": sum(1 for task in tasks if catalog[task])}
+            "long": sum(1 for task in tasks if catalog[task]),
+            "manifest": manifest(repository, pack)}
 
 
 def _catalog(repository: Path, chosen: Optional[Mapping[str, Any]]) -> Dict[str, bool]:
@@ -169,116 +221,168 @@ def _percent(value: Optional[float]) -> str:
     return "undefined" if value is None else "%.1f%%" % (100 * value)
 
 
-def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str) -> str:
-    """The plan, every section of `docs/pre-registration-template.md` filled for this draft test."""
+def _fill(template: str, fields: Mapping[str, Mapping[str, str]], bodies: Mapping[str, str],
+          extra: Mapping[str, List[Tuple[str, str]]]) -> str:
+    """The template's sections, in order, below its `---` rule: each field in `fields` replaces the
+    template's (continuation lines included), each section in `bodies` replaces the whole body, and
+    `extra` fields follow a section's own. A placeholder left anywhere fails, as does an override
+    naming a section or field the template lacks."""
+    protocol = _protocol()
+    lines = template.split("\n")
+    try:
+        lines = lines[lines.index("---") + 1:]
+    except ValueError as exc:
+        raise draft_tests.DraftTestError("the pre-registration template has no rule above its "
+                                         "sections", "draft_test_registration_failed") from exc
+    known = protocol.sections("\n".join(lines))
+    for section, values in fields.items():
+        present = protocol.fields(known.get(section, ""))
+        missing = [name for name in values if name not in present]
+        if section not in known or missing:
+            raise draft_tests.DraftTestError(
+                "the pre-registration template has no %s field %s" % (section, missing),
+                "draft_test_registration_failed")
+    out: List[str] = []
+    section, skipping, replacing = None, False, False
+
+    def close() -> None:
+        if section in extra:
+            while out and not out[-1].strip():
+                out.pop()
+            out.extend("- **%s:** %s" % pair for pair in extra[section])
+            out.append("")
+
+    for line in lines:
+        if line.startswith("## "):
+            close()
+            section, replacing = line[3:].strip(), False
+            out.append(line)
+            skipping = section in bodies
+            if skipping:
+                out.extend(["", bodies[section], ""])
+            continue
+        if skipping:
+            continue
+        match = protocol.FIELD.match(line)
+        if match:
+            name = match.group(1).strip()
+            replacing = name in fields.get(section, {})
+            if replacing:
+                out.append("- **%s:** %s" % (name, fields[section][name]))
+                continue
+        elif replacing and line.startswith("  ") and line.strip():
+            continue
+        else:
+            replacing = False
+        if protocol.PLACEHOLDER.search(line):
+            raise draft_tests.DraftTestError(
+                "the pre-registration template's %s section has an unfilled line: %s"
+                % (section, line.strip()), "draft_test_registration_failed")
+        out.append(line)
+    close()
+    return "\n".join(out).strip("\n") + "\n"
+
+
+def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
+              template: Optional[str] = None) -> str:
+    """The plan: `docs/pre-registration-template.md` with this draft test's values filled in."""
     stats = compare._engine()
     power, pack = record["power"], record["pack"]
-    manifest = ("evaluator pack `%s` version `%s` at commit `%s`, digest `%s`"
-                % (pack["name"], pack["version"], pack["commit"], pack["digest"]) if pack
-                else "`benchmarks/tasks.json` at the base commit `%s`" % record["base_revision"])
     k, m = len(record["tasks"]), record["repetitions"]
-    return "\n".join([
+    effect, delta = _percent(record["effect"]), "%g" % stats.DELTA
+    fields = {
+        "Run": {
+            "Question": "does draft %s at checkpoint %s lower Cost-of-Pass against its base "
+                        "commit %s without lowering the pass rate by more than the margin?"
+                        % (record["draft"], record["revision"], record["base_revision"]),
+            "Author role": "maintainer",
+            "Date registered": today,
+            "Task manifest": "%s; set: the whole set" % sample["manifest"]["source"],
+            "Arms": "base commit `%s` (control) and draft checkpoint `%s`"
+                    % (record["base_revision"], record["revision"]),
+            "Model, CLI and effort": "`%s`, the CLI version each row stamps, the default effort"
+                                     % record["model"],
+        },
+        "Hypotheses": {
+            "Primary": "the draft lowers Cost-of-Pass against its base by at least %s, and does "
+                       "not lower the pass rate by more than the non-inferiority margin δ = %s."
+                       % (effect, delta),
+            "Secondary": "none; the draft test judges the decision rule only.",
+            "Exploratory": "every other measure the engine reports; none supports a claim.",
+        },
+        "Primary metric": {
+            "Metric": "Cost-of-Pass ratio, draft over base, pooled across the set: the total cost "
+                      "of every attempt divided by the total number of passes, per side.",
+            "Interval": "paired, task-clustered %g%% interval, by the engine's %s "
+                        "(`replay_stats.compare`) with %d resamples and seed %d."
+                        % (100 * stats.CONFIDENCE, stats.METHOD, stats.RESAMPLES, stats.SEED),
+        },
+        "Guardrails": {
+            "Pass rate": "non-inferiority margin δ = %s on the paired, task-clustered pass-rate "
+                         "difference (draft minus base)." % delta,
+            "Fallback rate": "none; the native benchmark pins the model it is given.",
+            "Spend": "the per-run budget and whole-test cap confirmed when the test starts.",
+            "Other": "none.",
+        },
+        "Sample size": {
+            "Tasks": "%d, of which %d are long multi-turn tasks." % (k, sample["long"]),
+            "Trials per task and arm": "%d" % m,
+            "Claim power": "not computed: a draft test makes no long-task saving claim, only the "
+                           "decision rule below.",
+            "Minimum detectable effect": "%s at %d attempts per side; the change to detect is %s."
+                                         % (_percent(power["minimum_detectable_effect"]),
+                                            power["attempts_per_side"], effect),
+            "Variance source": "coefficient of variation %g (%s)." % (power["cv"],
+                                                                     power["cv_source"]),
+            "Power calculation": "`replay_stats.minimum_detectable_effect(%d, %g)` gives %s, at "
+                                 "or below the %s registered; it treats attempts as independent."
+                                 % (power["attempts_per_side"], power["cv"],
+                                    _percent(power["minimum_detectable_effect"]), effect),
+        },
+        "Stopping rule": {
+            "Fixed sample": "the run stops when every task has %d trials per side, and no result "
+                            "is read before then. The registration backs one run only." % m,
+            "Early stop for harm or cost": "the spend cap confirmed at start.",
+            "Stop condition for the claim": "the decision rule below, on the whole set.",
+        },
+        "Multiplicity": {"Further confirmatory tests": "none."},
+        "Exclusions": {"Pre-stated exclusions": "none."},
+    }
+    bodies = {
+        "Decision rule": "\n".join([
+            "The hypothesis is supported only when both hold:", "",
+            "- the paired, task-clustered 95% interval on the Cost-of-Pass ratio lies wholly "
+            "below 1.0;",
+            "- the lower bound of the paired, task-clustered 95% interval on the pass-rate "
+            "difference (draft minus base) is above −δ.", "",
+            "Its exact mirror reads worse; anything else is inconclusive."]),
+        "Deviation log": "- %s: none yet" % today,
+    }
+    extra = {"Run": [
+        ("Registration", record["registration_id"]),
+        ("Draft", "`%s` (%s)" % (record["draft"], record["draft_id"])),
+        ("Draft commit", record["revision"]),
+        ("Base commit", record["base_revision"]),
+        ("Configuration digest", record["config_digest"] or NONE),
+        ("Task set", ", ".join(record["tasks"])),
+        ("Task manifest digest", record["manifest_digest"]),
+        ("Evaluator pack digest", pack["digest"] if pack else NONE),
+        ("Model", record["model"]),
+    ]}
+    header = "\n".join([
         "# Draft test pre-registration: %s at %s" % (record["draft"], record["revision"][:12]),
         "",
         "Written by the Studio (`citizen draft test --register`) from",
         "`docs/pre-registration-template.md` before the run's first trial. The sections above the",
-        "deviation log are frozen; the registration is stale once the draft changes.",
-        "",
-        "## Run",
-        "",
-        "- **Question:** does draft %s at checkpoint %s lower Cost-of-Pass against its base commit"
-        % (record["draft"], record["revision"]),
-        "  %s without lowering the pass rate by more than the margin?" % record["base_revision"],
-        "- **Author role:** maintainer",
-        "- **Date registered:** %s" % today,
-        "- **Task manifest:** %s; tasks %s" % (manifest, ", ".join(record["tasks"])),
-        "- **Arms:** base commit `%s` (control) and draft checkpoint `%s`, configuration digest `%s`"
-        % (record["base_revision"], record["revision"], record["config_digest"]),
-        "- **Model, CLI and effort:** `%s`, the CLI version each row stamps, the default effort"
-        % record["model"],
-        "- **Draft:** `%s` (%s), registration %s" % (record["draft"], record["draft_id"],
-                                                     record["registration_id"]),
-        "",
-        "## Hypotheses",
-        "",
-        "- **Primary:** the draft lowers Cost-of-Pass against its base by at least %s, and does not"
-        % _percent(record["effect"]),
-        "  lower the pass rate by more than the non-inferiority margin δ = %g." % stats.DELTA,
-        "- **Secondary:** none; the draft test judges the decision rule only.",
-        "- **Exploratory:** every other measure the engine reports; none supports a claim.",
-        "",
-        "## Primary metric",
-        "",
-        "- **Metric:** Cost-of-Pass ratio, draft over base, pooled across the set: the total cost",
-        "  of every attempt divided by the total number of passes, per side.",
-        "- **Interval:** paired, task-clustered %g%% interval, by the engine's %s"
-        % (100 * stats.CONFIDENCE, stats.METHOD),
-        "  (`replay_stats.compare`) with %d resamples and seed %d." % (stats.RESAMPLES, stats.SEED),
-        "- **Undefined case:** if either side passes nothing, the result is reported as a pass-rate",
-        "  result only and the verdict is inconclusive.",
-        "",
-        "## Guardrails",
-        "",
-        "- **Contamination control:** the native benchmark's own controls, unchanged.",
-        "- **Pass rate:** non-inferiority margin δ = %g on the paired, task-clustered pass-rate"
-        % stats.DELTA,
-        "  difference (draft minus base).",
-        "- **Fallback rate:** none; the native benchmark pins the model it is given.",
-        "- **Spend:** the per-run budget and whole-test cap confirmed when the test starts.",
-        "- **Other:** none.",
-        "",
-        "## Sample size",
-        "",
-        "- **Tasks:** %d, of which %d are long multi-turn tasks." % (k, sample["long"]),
-        "- **Trials per task and arm:** %d" % m,
-        "- **α and power:** α %g two-sided, power %g." % (round(1 - stats.CONFIDENCE, 4),
-                                                         stats.POWER),
-        "- **Minimum detectable effect:** %s at %d attempts per side; the change to detect is %s."
-        % (_percent(power["minimum_detectable_effect"]), power["attempts_per_side"],
-           _percent(record["effect"])),
-        "- **Variance source:** coefficient of variation %g (%s)." % (power["cv"],
-                                                                     power["cv_source"]),
-        "- **Power calculation:** `replay_stats.minimum_detectable_effect(%d, %g)` gives %s, at or"
-        % (power["attempts_per_side"], power["cv"], _percent(power["minimum_detectable_effect"])),
-        "  below the %s registered; it treats attempts as independent." % _percent(record["effect"]),
-        "",
-        "## Stopping rule",
-        "",
-        "- **Fixed sample:** the run stops when every task has %d trials per side, and no result is" % m,
-        "  read before then.",
-        "- **Early stop for harm or cost:** the spend cap confirmed at start.",
-        "- **Stop condition for the claim:** the decision rule below, on the whole set.",
-        "",
-        "## Multiplicity",
-        "",
-        "- **Decision rule:** both conditions must hold, so the two tests form one joint test.",
-        "- **Further confirmatory tests:** none.",
-        "- **Everything else:** exploratory, labelled so, and supports no claim.",
-        "",
-        "## Decision rule",
-        "",
-        "The hypothesis is supported only when both hold:",
-        "",
-        "- the paired, task-clustered 95% interval on the Cost-of-Pass ratio lies wholly below 1.0;",
-        "- the lower bound of the paired, task-clustered 95% interval on the pass-rate difference",
-        "  (draft minus base) is above −δ.",
-        "",
-        "Its exact mirror reads worse; anything else is inconclusive.",
-        "",
-        "## Exclusions",
-        "",
-        "- **Analysis population:** every assigned trial, crashes, timeouts and fallbacks included.",
-        "- **Pre-stated exclusions:** none.",
-        "",
-        "## Deviation log",
-        "",
-        "- %s: none yet" % today,
-        "",
-    ])
+        "deviation log are frozen; the registration backs one run and is stale once the draft",
+        "changes.", "", ""])
+    text = template if template is not None else TEMPLATE.read_text(encoding="utf-8")
+    return header + _fill(text, fields, bodies, extra)
 
 
 def _write_once(directory: int, name: str, content: bytes) -> None:
-    """Write `name` whole or not at all; an existing file is never replaced."""
+    """Write `name` whole or not at all, read-only; an existing file is never replaced
+    (FileExistsError)."""
     temporary = ".%s.%s.tmp" % (name, uuid.uuid4().hex)
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o400,
                          dir_fd=directory)
@@ -302,7 +406,12 @@ def _registry(root: Path) -> Path:
 def register(root: Path, repository: Path, name: str, spec: Any, effect: Any,
              cv: Any) -> Dict[str, Any]:
     """Register a test of the draft's current checkpoint, or refuse it, before any run starts."""
-    plan = draft_tests.parse_plan(effect, cv)
+    if cv is not None:
+        raise draft_tests.DraftTestError(
+            "a registration plans from the repository's declared variance (%s); leave the "
+            "coefficient of variation empty" % draft_tests.PLANNING_MANIFEST.as_posix(),
+            "draft_test_cv_not_declared")
+    plan = draft_tests.parse_plan(effect, None)
     if plan["effect"] > MAX_EFFECT:
         raise draft_tests.DraftTestError(
             "SM-2 caps the minimum detectable effect at %s; state a change of at most that"
@@ -321,7 +430,8 @@ def register(root: Path, repository: Path, name: str, spec: Any, effect: Any,
               "revision": draft["revision"], "config_digest": draft["config_digest"],
               "base_revision": draft["base_revision"], "model": sample["model"],
               "tasks": sample["tasks"], "repetitions": sample["repetitions"],
-              "pack": sample["pack"], "effect": plan["effect"], "cv": plan["cv"], "power": power}
+              "pack": sample["pack"], "manifest_digest": sample["manifest"]["digest"],
+              "effect": plan["effect"], "cv": power["cv"], "power": power}
     relative = PLAN_DIRECTORY / ("%s-draft-%s.md" % (today, registration_id))
     text = plan_text(record, sample, today)
     with _locked(root) as directory:
@@ -354,10 +464,24 @@ def register(root: Path, repository: Path, name: str, spec: Any, effect: Any,
                         (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"))
         finally:
             os.close(records)
-    return dict(record, stale=False, stale_reason=None, problems=[])
+    return dict(record, stale=False, stale_reason=None, problems=[], used_by=None,
+                committed=committed(root, record))
 
 
-def _read_json(directory: int, name: str) -> Optional[Dict[str, Any]]:
+def _open_records(root: Path) -> Optional[int]:
+    directory = draft_tests._records_fd(Path(root), create=False)
+    if directory is None:
+        return None
+    try:
+        return os.open(REGISTRATIONS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                       dir_fd=directory)
+    except OSError:
+        return None
+    finally:
+        os.close(directory)
+
+
+def _read_small(directory: int, name: str) -> Optional[bytes]:
     try:
         descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
     except OSError:
@@ -366,11 +490,19 @@ def _read_json(directory: int, name: str) -> Optional[Dict[str, Any]]:
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode) or info.st_size > draft_tests.MAX_RECORD_BYTES:
             return None
-        value = json.loads(os.read(descriptor, draft_tests.MAX_RECORD_BYTES + 1).decode("utf-8"))
-    except (OSError, UnicodeError, ValueError):
+        return os.read(descriptor, draft_tests.MAX_RECORD_BYTES + 1)
+    except OSError:
         return None
     finally:
         os.close(descriptor)
+
+
+def _read_json(directory: int, name: str) -> Optional[Dict[str, Any]]:
+    content = _read_small(directory, name)
+    try:
+        value = json.loads(content.decode("utf-8")) if content is not None else None
+    except (UnicodeError, ValueError):
+        return None
     if (not isinstance(value, dict) or set(value) != RECORD_KEYS
             or value["schema_version"] != SCHEMA_VERSION
             or name != "%s.json" % value["registration_id"]):
@@ -378,8 +510,72 @@ def _read_json(directory: int, name: str) -> Optional[Dict[str, Any]]:
     return value
 
 
-def problems(root: Path, record: Mapping[str, Any]) -> List[str]:
-    """Why a registration no longer stands as written; empty when its plan is intact."""
+def used_by(root: Path, registration_id: str) -> Optional[str]:
+    """The run that claimed the registration, or None while it is unused."""
+    records = _open_records(root)
+    if records is None:
+        return None
+    try:
+        content = _read_small(records, registration_id + USED_SUFFIX)
+    finally:
+        os.close(records)
+    try:
+        return content.decode("utf-8").strip() if content is not None else None
+    except UnicodeError:
+        return "unreadable"
+
+
+def claim(root: Path, registration_id: str, run_id: str) -> bool:
+    """Claim the registration for `run_id`, atomically; False when another run already holds it."""
+    if str(uuid.UUID(run_id)) != run_id or not IDENTITY.fullmatch(registration_id):
+        raise draft_tests.DraftTestError("the run or registration id is invalid")
+    with _locked(root) as directory:
+        records = _private_dir(directory, REGISTRATIONS_DIR)
+        try:
+            _write_once(records, registration_id + USED_SUFFIX, (run_id + "\n").encode("utf-8"))
+        except FileExistsError:
+            return False
+        finally:
+            os.close(records)
+    return True
+
+
+def _value(text: str) -> str:
+    return text.strip().strip("`").strip()
+
+
+def committed(root: Path, record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The values the committed plan registers, read back from its registry commit; None when the
+    commit or a field cannot be read."""
+    protocol = _protocol()
+    done = subprocess.run(["git", "-C", str(_registry(root)), "show",
+                           "%s:%s" % (record["plan_commit"], record["plan"])],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True, env=_git_env())
+    if done.returncode:
+        return None
+    parts = protocol.sections(done.stdout)
+    run = protocol.fields(parts.get("Run", ""))
+    trials = re.match(r"^\s*(\d+)\b", protocol.fields(parts.get(TRIALS_FIELD[0], "")).get(
+        TRIALS_FIELD[1], ""))
+    if trials is None or run.get("Registration") != record["registration_id"] \
+            or any(field not in run for _key, field, _label in COMPARED):
+        return None
+    out: Dict[str, Any] = {"trials": int(trials.group(1))}
+    for key, field, _label in COMPARED:
+        value = _value(run[field])
+        out[key] = (None if value == NONE else value) if key in ("config_digest", "pack_digest") \
+            else value
+    out["tasks"] = sorted(item.strip() for item in out["tasks"].split(",") if item.strip())
+    digest = _value(run.get("Task manifest digest", ""))
+    out["manifest_digest"] = digest or None
+    return out
+
+
+def problems(root: Path, record: Mapping[str, Any],
+             registered: Optional[Mapping[str, Any]]) -> List[str]:
+    """Why a registration no longer stands as written; empty when its plan is intact and the record
+    agrees with it."""
     registry = _registry(root)
     errors, checked = _protocol().check(str(record["plan"]), str(registry), cwd=str(registry))
     out = list(errors)
@@ -392,58 +588,61 @@ def problems(root: Path, record: Mapping[str, Any]) -> List[str]:
         digest = None
     if digest != record["plan_sha256"]:
         out.append("the plan differs from the text registered")
+    if registered is None:
+        out.append("the committed plan's registered values cannot be read")
+    elif registered != _from_record(record):
+        out.append("the record differs from the committed plan")
     return out
 
 
+def _from_record(record: Mapping[str, Any]) -> Dict[str, Any]:
+    value = measured(record["base_revision"], record["revision"], record["config_digest"],
+                     record["tasks"], record["repetitions"], record["model"],
+                     record["pack"]["digest"] if record["pack"] else None)
+    value["manifest_digest"] = record["manifest_digest"]
+    return value
+
+
+def _annotated(root: Path, value: Mapping[str, Any]) -> Dict[str, Any]:
+    registered = committed(root, value)
+    return dict(value, committed=registered, problems=problems(root, value, registered),
+                used_by=used_by(root, value["registration_id"]))
+
+
 def load(root: Path, registration_id: Any) -> Dict[str, Any]:
-    """One registration and its problems; DraftTestError when it does not exist."""
+    """One registration, the values its committed plan registers, its problems and the run that
+    claimed it; DraftTestError when it does not exist."""
     if not isinstance(registration_id, str) or not IDENTITY.fullmatch(registration_id):
         raise draft_tests.DraftTestError("the registration id is invalid")
-    directory = draft_tests._records_fd(Path(root), create=False)
+    records = _open_records(root)
     value = None
-    if directory is not None:
+    if records is not None:
         try:
-            try:
-                records = os.open(REGISTRATIONS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                                  dir_fd=directory)
-            except OSError:
-                records = None
-            if records is not None:
-                try:
-                    value = _read_json(records, registration_id + ".json")
-                finally:
-                    os.close(records)
+            value = _read_json(records, registration_id + ".json")
         finally:
-            os.close(directory)
+            os.close(records)
     if value is None:
         raise draft_tests.DraftTestError("no such registration", "draft_test_registration_not_found")
-    return dict(value, problems=problems(root, value))
+    return _annotated(root, value)
 
 
 def listed(root: Path, draft: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Every registration of this draft, newest first, each marked stale or not; none removed."""
-    directory = draft_tests._records_fd(Path(root), create=False)
-    if directory is None:
+    """Every registration of this draft, newest first, each marked stale, used or not; none
+    removed."""
+    records = _open_records(root)
+    if records is None:
         return []
     try:
-        try:
-            records = os.open(REGISTRATIONS_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                              dir_fd=directory)
-        except OSError:
-            return []
-        try:
-            values = [_read_json(records, name) for name in sorted(os.listdir(records))
-                      if name.endswith(".json") and not name.startswith(".")]
-        finally:
-            os.close(records)
+        values = [_read_json(records, name) for name in sorted(os.listdir(records))
+                  if name.endswith(".json") and not name.startswith(".")]
     finally:
-        os.close(directory)
+        os.close(records)
     out = []
     for value in values:
         if value is None or value["draft_id"] != draft["draft_id"]:
             continue
         stale, reason = draft_tests.staleness(draft, value["revision"], value["config_digest"])
-        out.append(dict(value, stale=stale, stale_reason=reason, problems=problems(root, value)))
+        out.append(dict(_annotated(root, value), stale=stale, stale_reason=reason))
     return sorted(out, key=lambda item: (item["created_at"], item["registration_id"]), reverse=True)
 
 
@@ -454,14 +653,12 @@ def measured(base_revision: str, revision: str, config_digest: Optional[str], ta
             "tasks": sorted(tasks), "trials": trials, "model": model, "pack_digest": pack_digest}
 
 
-def deviations(record: Mapping[str, Any], run: Mapping[str, Any]) -> List[str]:
-    """Every way a run departs from its registration; empty only on an exact match."""
-    registered = measured(record["base_revision"], record["revision"], record["config_digest"],
-                          record["tasks"], record["repetitions"], record["model"],
-                          record["pack"]["digest"] if record["pack"] else None)
-    labels = (("base_revision", "base commit"), ("revision", "draft commit"),
-              ("config_digest", "draft configuration"), ("tasks", "task set"),
-              ("trials", "trials per task"), ("model", "model"), ("pack_digest", "evaluator pack"))
+def deviations(registered: Optional[Mapping[str, Any]], run: Mapping[str, Any]) -> List[str]:
+    """Every way a run departs from what the committed plan registers; empty only on an exact
+    match. `registered` is `committed`'s answer; None is itself a deviation."""
+    if registered is None:
+        return ["the committed plan's registered values cannot be read"]
+    labels = [(key, label) for key, _field, label in COMPARED] + [("trials", "trials per task")]
     return ["the run's %s differs from the registration's" % label
             for key, label in labels if registered[key] != run[key]]
 
@@ -480,6 +677,33 @@ def from_comparison(comparison: Mapping[str, Any]) -> Dict[str, Any]:
                     candidate["trials"], candidate["model"], candidate["pack_digest"])
 
 
+def start_check(root: Path, repository: Path, draft: Mapping[str, Any],
+                selected: replay.ReplayRequest, registration_id: Any) -> Tuple[str, List[str]]:
+    """`(registration id, deviations)` for a test about to start under a registration. A stale, used
+    or foreign registration is refused; any other departure is returned, and the test runs
+    exploratory."""
+    found = load(root, registration_id)
+    if found["draft_id"] != draft["draft_id"]:
+        raise draft_tests.DraftTestError("the registration is for another draft",
+                                         "draft_test_registration_mismatch")
+    stale, reason = draft_tests.staleness(draft, found["revision"], found["config_digest"])
+    if stale:
+        raise draft_tests.DraftTestError(
+            "the registration is stale (%s); register the test again" % reason,
+            "draft_test_registration_stale")
+    if found["used_by"] is not None:
+        raise draft_tests.DraftTestError(
+            "the registration already backs run %s; register the test again" % found["used_by"],
+            "draft_test_registration_used")
+    out = ["the registration is not intact: %s" % item for item in found["problems"]]
+    out += deviations(found["committed"], from_request(selected))
+    if found["committed"] is not None:
+        current = manifest(repository, selected.pack)["digest"]
+        if current != found["committed"]["manifest_digest"]:
+            out.append("the run's task manifest differs from the registration's")
+    return found["registration_id"], out
+
+
 def _instant(value: Any) -> Optional[datetime.datetime]:
     """An aware timestamp from an ISO string, with "Z" read as UTC; None when unreadable."""
     if not isinstance(value, str):
@@ -492,10 +716,11 @@ def _instant(value: Any) -> Optional[datetime.datetime]:
     return parsed if parsed.tzinfo is not None else None
 
 
-def evidence(root: Path, registration_id: Optional[str], recorded: List[str],
+def evidence(root: Path, registration_id: Optional[str], recorded: List[str], run_id: str,
              comparison: Mapping[str, Any], started_at: Optional[str]) -> Tuple[str, List[str]]:
     """`(label, reasons)` for a finished run: pre-registered only on an intact registration written
-    before the run started that the run matches exactly; otherwise exploratory, with every reason."""
+    before the run started, claimed by this run, that the run matches exactly; otherwise
+    exploratory, with every reason."""
     if registration_id is None:
         return replay.EXPLORATORY, []
     try:
@@ -504,11 +729,14 @@ def evidence(root: Path, registration_id: Optional[str], recorded: List[str],
         return replay.EXPLORATORY, ["the registration cannot be read: %s" % exc]
     reasons = list(recorded) + ["the registration is not intact: %s" % item
                                 for item in record["problems"]]
+    if record["used_by"] != run_id:
+        reasons.append("the registration backs %s, not this run"
+                       % ("run %s" % record["used_by"] if record["used_by"] else "no run"))
     registered, started = _instant(record["created_at"]), _instant(started_at)
     if started_at is not None and (registered is None or started is None or registered > started):
         reasons.append("the registration was written after the run started")
     if comparison.get("base") and comparison.get("candidate"):
-        found = deviations(record, from_comparison(comparison))
+        found = deviations(record["committed"], from_comparison(comparison))
         reasons.extend(item for item in found if item not in reasons)
     return (replay.EXPLORATORY if reasons else replay.PREREGISTERED), reasons
 
@@ -524,5 +752,6 @@ def render(registration: Mapping[str, Any]) -> List[str]:
             len(registration["tasks"]), registration["repetitions"], registration["model"],
             "pack %s@%s" % (pack["name"], pack["digest"][:12]) if pack else "repository tasks"),
         "  " + draft_tests.power_line(registration["power"]),
-        "  plan: %s at %s" % (registration["plan"], registration["plan_commit"][:12]),
+        "  plan: %s at %s; it backs one run" % (registration["plan"],
+                                                registration["plan_commit"][:12]),
     ]
