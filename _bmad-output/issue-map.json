@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 166,
+    "bug": 169,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -8900,6 +8900,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B164.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B168",
+      "github_number": 1204,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1204",
+      "title": "fix(usage-feed): finished-subagent spend reads unknown since 09-28",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B168.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

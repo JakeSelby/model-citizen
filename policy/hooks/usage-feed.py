@@ -813,6 +813,18 @@ def journal_records(journal_file, offset):
     return out
 
 
+def internal(state, record):
+    """Whether a stop is Claude Code's own end-of-turn agent rather than a subagent anyone spawned.
+
+    Such a stop fires within seconds of the main session's `Stop`, with no `SubagentStart` before
+    it, no agent type and no transcript written anywhere, so no lookup can ever give it a figure.
+    Reported, it read `unknown finished, spend unknown` once a turn and was most of the feed's
+    unknown lines. The stop journals the first two facts as `internal`; the third is that no start
+    was seen for it, which keeps a spawned agent whose transcript went missing reported.
+    """
+    return bool(record.get("internal")) and record.get("id") not in state["running"]
+
+
 def needs_sum(record):
     """Whether a journalled stop's figure is one to take as final.
 
@@ -856,8 +868,13 @@ def to_settle(state, journal_file, payload, env, first=None):
         items.append((agent_id, expand(entry[0], env, agent_id) or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)))
     rounds = dict(state.get("rounds") or {})
+    seen_running = {"running": dict(state.get("running") or {})}
     for record in journal_records(journal_file, state.get("journal_offset", 0)):
         agent_id = record["id"]
+        if record.get("t") == "start":
+            seen_running["running"][agent_id] = 0
+        if internal(seen_running, record):
+            continue
         repeat = False
         if record.get("t") == "stop":
             rounds[agent_id] = rounds.get(agent_id, 0) + 1
@@ -929,7 +946,7 @@ def ingest(state, journal_file, resolved=None):
             if record.get("t") == "start":
                 state["running"][agent_id] = int(record.get("at") or 0)
                 continue
-            if record.get("t") != "stop":
+            if record.get("t") != "stop" or internal(state, record):
                 continue
             state["running"].pop(agent_id, None)
             round_number = bump_round(state, agent_id)
@@ -1433,6 +1450,8 @@ def on_subagent_event(payload, env, kind):
         path = payload.get("agent_transcript_path") or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)
         record["path"] = redact(path, env)
+        if not payload.get("agent_type") and not readable(path):
+            record["internal"] = True
         if workflow_agent(path):
             record["workflow"] = True
         totals = agent_totals(path)
