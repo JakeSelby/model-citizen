@@ -48,7 +48,7 @@ class FirstWaveTrialTests(unittest.TestCase):
         kills = [c[0] for c in launch.calls if c[0][:2] == ["docker", "kill"]]
         self.assertEqual(len(kills), 1)
         self.assertEqual([s["brief_budget"] for s in row["spawn_briefs"]], [True, True])
-        self.assertEqual([s["model"] for s in row["spawn_briefs"]], ["claude-haiku-test", "claude-sonnet-test"])
+        self.assertEqual([s["model"] for s in row["spawn_briefs"]], ["claude-haiku-4-5-20251001", "claude-sonnet-5"])
         self.assertTrue(row["required_skills_loaded"])
         self.assertEqual(row["spawns"], 2)
         self.assertNotIn('"t3"', saved)

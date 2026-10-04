@@ -34,13 +34,13 @@ class SpawnBriefTests(unittest.TestCase):
         rows = SPAWNS.spawn_briefs(stream("fanout-harness.jsonl"))
         first = rows[0]
         self.assertEqual((first["brief_source"], first["brief_bound"], first["brief_budget"]), ("hook", True, True))
-        self.assertEqual(first["model"], "claude-haiku-test")
+        self.assertEqual(first["model"], "claude-haiku-4-5-20251001")
 
     def test_the_subagents_own_first_message_is_the_brief_it_received(self):
         second = SPAWNS.spawn_briefs(stream("fanout-harness.jsonl"))[1]
         self.assertEqual((second["brief_source"], second["brief_bound"], second["brief_budget"]),
                          ("thread", True, True))
-        self.assertEqual((second["requested_model"], second["model"]), ("opus", "claude-sonnet-test"))
+        self.assertEqual((second["requested_model"], second["model"]), ("claude-opus-5", "claude-sonnet-5"))
 
     def test_a_hook_that_changed_nothing_leaves_the_written_brief_unbudgeted(self):
         third = SPAWNS.spawn_briefs(stream("fanout-harness.jsonl"))[2]
