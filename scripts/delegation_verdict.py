@@ -16,7 +16,9 @@ Each task then gets one harness verdict from its clean rows:
 
 Size is the median of the clean bare runs' gather calls, and unknown unless every clean bare run
 reported one, because the harness arm's own count falls when it delegates. A gather call is a `GATHER_TOOLS` call, the only kind counted as absorbable: the
-count is deterministic and undercounts, so a `missed` verdict is conservative. `Workflow` launches
+count is deterministic and undercounts, so a `missed` verdict is conservative. `gather_call` also
+counts a read-only Bash command, judged by the `allow-readonly-bash` hook's own classifier so the
+read-only grammar has one definition; `gather_threads` applies it to a saved stream. `Workflow` launches
 are reported beside spawns, never counted as one, until Workflow agents are routed to a band.
 
 The break-even and the fired share are pre-registered inputs, not measurements: FR-34 puts the
@@ -28,8 +30,10 @@ with no verdict, as the control. Everything here is adherence, descriptive and n
 cost split between spawning and non-spawning runs shows what they cost, not what a spawn saved.
 Standard library only; it calls no model.
 """
+import importlib.util
 import math
 import statistics
+from pathlib import Path
 
 import experiment_protocol
 
@@ -44,9 +48,54 @@ FIRED_SHARE = 0.75
 MIN_RUNS = 4
 GATHER_TOOLS = ("Read", "Grep", "Glob")
 WORKFLOW_TOOLS = ("Workflow",)
+# A Bash call is a gather when the command is read-only by the hook that approves read-only Bash.
+BASH_TOOLS = ("Bash",)
+READONLY_HOOK = Path(__file__).resolve().parent.parent / "policy" / "hooks" / "allow-readonly-bash.py"
+_CLASSIFIER = []
 VERDICTS = ("fired", "declined-below-break-even", "missed-above-break-even", "not-offered", "unknown")
 LABEL = "adherence, descriptive, not causal"
 COUNT_FIELDS = ("spawns", "gather_calls", "absorbed_calls", "workflow_launches")
+
+
+def read_only(command):
+    """True when every command `command` would run is read-only under the `allow-readonly-bash`
+    hook's grammar: pipelines, `cd … &&` sequences and substitutions are decomposed, and a write,
+    a file redirect or text the grammar cannot read is not read-only."""
+    if not _CLASSIFIER:
+        spec = importlib.util.spec_from_file_location("delegation_readonly_bash", str(READONLY_HOOK))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CLASSIFIER.append(module.command_ok)
+    try:
+        return bool(_CLASSIFIER[0](command))
+    except Exception:
+        return False  # as in the hook, unreadable text is never read-only
+
+
+def gather_call(name, tool_input=None):
+    """Whether one `tool_use` block is a gather call: a `GATHER_TOOLS` call, or a Bash call whose
+    command is read-only."""
+    if name in GATHER_TOOLS:
+        return True
+    if name not in BASH_TOOLS or not isinstance(tool_input, dict):
+        return False
+    command = tool_input.get("command")
+    return isinstance(command, str) and bool(command.strip()) and read_only(command)
+
+
+def gather_threads(messages):
+    """The thread of each gather call in a stream's assistant messages, in stream order; None is
+    the main thread. Its length is a run's gather count, and the entries inside a counted spawn's
+    thread are its absorbed calls."""
+    threads = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("type") != "assistant":
+            continue
+        for block in (message.get("message") or {}).get("content") or []:
+            if (isinstance(block, dict) and block.get("type") == "tool_use"
+                    and gather_call(str(block.get("name") or ""), block.get("input"))):
+                threads.append(message.get("parent_tool_use_id"))
+    return threads
 
 
 def _value(row, field):
