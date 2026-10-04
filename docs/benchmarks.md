@@ -852,7 +852,9 @@ python3 scripts/cost_bench.py summarise --results <results dir>
   metrics are null. A turn that times out counts at the rest of the cap and errors the session.
 - **Each checkpoint is scored on the tree and its segment.** The check runs as a pack task's does,
   in a fresh container with no network, with the stream of every turn since the previous checkpoint
-  mounted read-only at `/session-stream.jsonl`.
+  mounted read-only at `/session-stream.jsonl`, and the session's totals as they stood before the
+  segment's first turn at `/session-baseline.json`: `{"total_cost_usd": n, "modelUsage": {model:
+  usage}}` from the last result before the segment, zero and empty for the first.
 - **The dry run prices the tier:** each scenario's turns, checkpoints and session cap, the ceiling
   if every session and preflight reaches its cap, then every planned session. Three scenarios,
   three arms and three reps on `claude-sonnet-5` at the 1.3.0 pack's caps is 378.75 USD.
@@ -868,8 +870,8 @@ reader of these rows, the Studio included, must key on `row_kind` before reading
   `metric_errors` and `metric_stream`, `segment_turns` (first and last turn of the segment), and
   over the segment `cost_usd`, `input_tokens`, `cache_creation_input_tokens`,
   `cache_read_input_tokens`, `output_tokens`, `main_peak_context_tokens` (the largest main-thread
-  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from each
-  result's per-model cost), with `cumulative_cost_usd` at the checkpoint.
+  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from the
+  change in each model's cost), with `cumulative_cost_usd` at the checkpoint.
 - `row_kind: session`, one per session, `checkpoint` and `checkpoint_index` null: the session's
   totals of the same cost, token, context and tier fields, `main_mean_context_tokens`,
   `user_turns_planned`, `user_turns_run`, `stopped` (`cap`, `max_user_turns`, `error` or null),
@@ -878,9 +880,13 @@ reader of these rows, the Studio included, must key on `row_kind` before reading
   `cumulative_cost_usd`, `main_peak_context_per_turn`, `agent_turns_per_turn`, with
   `cost_per_turn_slope` (least squares on turn number) and the `branches` taken.
 
-The per-turn cost is the turn's own `total_cost_usd`; that a resumed `-p` run reports its own spend,
-not the session's to date, is how the pack's segment metrics read it too, and the first paid pilot
-should confirm it.
+A resumed `-p` turn's result reports `total_cost_usd` and `modelUsage` as the session's running
+totals, not the turn's own; only its top-level `usage` is the turn's alone. The first paid pilot
+showed it on all 17 turns: each turn's change in `total_cost_usd` equalled its own `usage` priced
+at the model's rates (#1243). So a turn's cost, tokens and cost by tier are the change in those
+totals since the previous turn's result, model by model, turn 1 counting against zero; a segment's
+figures are the change across the segment; and the session's spend, the figure its cap is held to,
+is the latest total. A segment metric of the pack's reads the same change, against the baseline file.
 
 **`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
 session, the cost-per-turn slope, the main thread's peak context and the share of cost on model

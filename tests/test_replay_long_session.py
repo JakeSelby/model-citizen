@@ -83,6 +83,28 @@ def turn_stream(cost=1.0, context=1000, sub_cost=0.0, subtype="success", session
     return "\n".join(json.dumps(line) for line in lines) + "\n"
 
 
+def running(outputs):
+    """Per-turn streams as a resumed session reports them (#1243): each result's `total_cost_usd`
+    and `modelUsage` become the session's running totals, so each turn's own figures are the change."""
+    total, models, out = 0.0, {}, []
+    for item in outputs:
+        text = item.get("stdout") or "" if isinstance(item, dict) else item
+        lines = []
+        for line in text.splitlines():
+            event = json.loads(line)
+            if event.get("type") == "result":
+                total = round(total + event["total_cost_usd"], 6)
+                for model, figures in event["modelUsage"].items():
+                    kept = models.setdefault(model, {})
+                    for key, value in figures.items():
+                        kept[key] = round(kept.get(key, 0) + value, 6)
+                event = dict(event, total_cost_usd=total, modelUsage=json.loads(json.dumps(models)))
+            lines.append(json.dumps(event))
+        text = "\n".join(lines) + "\n" if lines else text
+        out.append(dict(item, stdout=text) if isinstance(item, dict) else text)
+    return out
+
+
 def scenario(**over):
     """A loaded scenario as `load_scenarios` returns it, without a pack on disk."""
     spec = scenario_spec(**over)
@@ -104,10 +126,11 @@ class FakeCli:
 
 
 def run(outputs, verdicts=None, cap=4.0, spec=None):
-    cli, seen = FakeCli(outputs), []
+    """One session of `outputs`, each turn's stream given with its own figures (`running`)."""
+    cli, seen = FakeCli(running(outputs)), []
     verdicts = dict(verdicts or {})
 
-    def checker(name, stream):
+    def checker(name, stream, baseline):
         seen.append((name, stream))
         return verdicts.get(name, True), "ok", {"metrics": {"segment_cost_usd": 1.0}, "metric_errors": [],
                                                  "metric_stream": True}
@@ -238,14 +261,14 @@ class SessionDriverTests(unittest.TestCase):
         self.assertEqual((first, second), ("cp1", "cp2"))
         results = lambda text: [json.loads(l)["total_cost_usd"] for l in text.splitlines()
                                 if json.loads(l)["type"] == "result"]
-        self.assertEqual(results(one), [0.25, 0.5])
-        self.assertEqual(results(two), [1.0, 0.75])
+        self.assertEqual(results(one), [0.25, 0.75])  # the session's running totals
+        self.assertEqual(results(two), [1.75, 2.5])
         self.assertEqual((rows[0]["cost_usd"], rows[1]["cost_usd"]), (0.75, 1.75))
         self.assertEqual((rows[0]["segment_turns"], rows[1]["segment_turns"]), ([1, 2], [3, 4]))
         self.assertEqual((rows[0]["cumulative_cost_usd"], rows[1]["cumulative_cost_usd"]), (0.75, 2.5))
 
     def test_a_check_that_cannot_run_errors_the_session(self):
-        def broken(name, stream):
+        def broken(name, stream, baseline):
             raise RuntimeError("no oracle")
         rows = SESSION.run_session(scenario(), {}, 4.0, FakeCli([turn_stream(0.1)] * 5), broken, TIERS)
         self.assertEqual((rows[-1]["error"], rows[-1]["error_kind"]), (True, "check cp1: RuntimeError"))
@@ -306,7 +329,7 @@ def workspace_scenario(tmp):
 class ContainerSessionTests(unittest.TestCase):
     def run_session(self, outputs, **over):
         with tempfile.TemporaryDirectory() as tmp:
-            launch = Launch(outputs)
+            launch = Launch(running(outputs))
             memories = []
             original = launch.__call__
 
@@ -316,7 +339,7 @@ class ContainerSessionTests(unittest.TestCase):
                 return original(command, **kwargs)
 
             opts = options(tmp, model=MAIN, run_cap=None, stamp={"date": "2026-01-01", "model": MAIN},
-                           session_scorer=lambda task, workdir, repo, stream: (True, "", None), **over)
+                           session_scorer=lambda task, workdir, repo, stream, baseline: (True, "", None), **over)
             rows = BENCH.run_long_session(workspace_scenario(tmp), 2, "harness", opts, reading)
         return rows, launch, memories
 
@@ -356,11 +379,11 @@ class ContainerSessionTests(unittest.TestCase):
 
             def driver(number, prompt, budget, resume):
                 calls.append(number)
-                return {"stdout": turn_stream(1.0), "returncode": 0}
+                return {"stdout": turn_stream(float(number)), "returncode": 0}  # 1 USD a turn
 
             opts = options(tmp, model=MAIN, run_cap=None, reps=1, spend_cap=6.0, session_driver=driver,
                            stamp={"date": "2026-01-01", "model": MAIN},
-                           session_scorer=lambda task, workdir, repo, stream: (True, "", None))
+                           session_scorer=lambda task, workdir, repo, stream, baseline: (True, "", None))
             with mock.patch.object(BENCH, "probe_workdirs"), mock.patch.object(BENCH.arms, "admit"), \
                     mock.patch.object(BENCH.arms, "admit_pair"):
                 rows, stopped = BENCH.replay([item], opts, Launch([]), out=Path(tmp) / "results.jsonl")
