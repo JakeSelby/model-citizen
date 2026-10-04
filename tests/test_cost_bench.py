@@ -630,7 +630,9 @@ class ReplayRunTests(unittest.TestCase):
                 self.assertIn("model-citizen-arm-bare:test", command)
                 self.assertEqual(command[command.index("--network") + 1], "none")
                 self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env_flags(command))
-                self.assertEqual(len(mounts(command)), 1)
+                # The tree, and the run's own stream read-only (#1177); nothing else.
+                self.assertEqual([m.split(":", 1)[1] for m in mounts(command)],
+                                 ["/work", BENCH.arms.SESSION_STREAM + ":ro"])
                 self.assertEqual(command[-2:], ["python3", "-"])
                 self.assertIn("-i", command)  # Docker drops stdin without it, and the oracle is on stdin
                 self.assertIn("def check(root)", kwargs["input"])
