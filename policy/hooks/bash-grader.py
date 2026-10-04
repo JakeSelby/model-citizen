@@ -233,7 +233,7 @@ DEFAULT_PROGRAM_FLAGS = ({"-c", "-e", "-E", "--eval"}, set())
 # Options whose value is a file the interpreter runs as its program.
 PROGRAM_FILE_VALUES = {"pwsh": {"-f", "-File", "-file"}, "php": {"-f"}}
 # Families whose short options cluster as getopt reads them, so `perl -ne` reads like `-n -e`.
-CLUSTERED = {"python", "perl", "ruby"}
+CLUSTERED = {"python", "perl", "ruby", "node"}
 # Interpreters that read a program file only through an option, by name: (the option letters
 # whose value is a program file, the long options that are, the other letters that take a value,
 # the letters whose optional value is only the rest of their cluster).
@@ -1400,7 +1400,7 @@ GIT_VALUE_OPTIONS = {
 # command it governs can no longer be graded by its words. Matched on the lower-cased key.
 GIT_RISKY_CONFIG_RE = re.compile(
     r"^(?:core\.(?:fsmonitor|hookspath|sshcommand|pager|editor|askpass|gitproxy|worktree|bare|"
-    r"alternaterefscommand)|sequence\.editor|diff\.external|diff\..+\.(?:textconv|command)|"
+    r"alternaterefscommand)|sequence\.editor|diff\.external|.+\.textconv|diff\..+\.command|"
     r"filter\..+|merge\..+\.driver|credential\..*|gpg\..*|pager\..+|include\..+|includeif\..+|"
     r"uploadpack\..+|remote\..+\.(?:mirror|push|uploadpack|receivepack|vcs)|"
     r"clean\.requireforce|interactive\.difffilter|init\.templatedir|ssh\.variant)$")
@@ -1499,7 +1499,7 @@ def _git_alias(args, sub, sargs, configs, where, cwd, aliases):
         if re.search(r"alias\.", _LINE[0], re.I) or GIT_CONFIG_ENV_RE.search(_LINE[0]):
             return unknowable  # this line may define the alias before it runs
         done = _git_call(["config", "--get", name], where if where and os.path.isdir(where)
-                         else "")
+                         else "", user_config=True)
         if done is None or done.returncode not in (0, 1):
             return unknowable
         if done.returncode == 1:
@@ -1570,14 +1570,34 @@ def _git(args, cwd, aliases=0):
         if any(o.startswith("+") for o in ops):
             return 3, "git push", " ".join(ops), "git-history"
         return 2, "git push", " ".join(ops), "remote"
+    if sub == "send-pack":
+        # The plumbing under `git push`, which forces as it does.
+        if _on(flags, "--force", "--mirror") or "-f" in flags or any(
+                o.startswith("+") for o in ops):
+            return 3, "git send-pack --force", " ".join(ops), "git-history"
+        return 2, "git send-pack", " ".join(ops), "remote"
+    if sub == "fetch" and not dry_run:
+        # A forced fetch into a local branch moves it as `git branch -f` does; one into a
+        # remote-tracking ref or a tag is the ordinary update.
+        forced = _on(flags, "--force") or "-f" in flags
+        for op in ops[1:]:
+            source, colon, dest = op.partition(":")
+            dest = dest.strip()
+            if colon and dest and (forced or source.startswith("+")) and not dest.startswith(
+                    ("refs/remotes/", "refs/tags/")):
+                return 3, "git fetch --force", op, "git-discard"
+    if sub == "mv" and (_on(flags, "--force") or "-f" in flags) and not dry_run:
+        hit = _discards("git mv -f over", _copy_targets(ops, where or cwd), where or cwd)
+        if hit:
+            return hit
     # Every route that overwrites the working tree or the index grades alike: what was changed
     # and not committed is gone, whichever command replaced it. A reset that keeps the index
-    # (`--soft`) or refuses over local changes (`--keep`) is not one.
+    # (`--soft`), refuses over local changes (`--keep`) or only rewrites the index (the default
+    # `--mixed`, `git reset HEAD <file>`) is not one: the working tree keeps every change.
     if sub == "reset" and _on(flags, "--hard"):
         return 3, "git reset --hard", target, "git-discard"
-    if sub == "reset" and not ({"--soft", "--keep"} & flags):
-        verb = "git reset --merge" if _on(flags, "--merge") else "git reset"
-        return 3, verb, target, "git-discard"
+    if sub == "reset" and _on(flags, "--merge"):
+        return 3, "git reset --merge", target, "git-discard"
     # `clean.requireForce` set false, in a file or with `-c`, lets a bare `git clean` delete, so
     # any `git clean` but a dry run grades as the forced one does.
     if sub == "clean" and not dry_run:
@@ -1603,8 +1623,11 @@ def _git(args, cwd, aliases=0):
         if "-C" in flags or _on(flags, "--force-create"):
             return 3, "git switch -C", target, "git-discard"
     if sub == "restore":
+        # `--staged` alone restores the index only; the working tree keeps its changes.
         staged = _on(flags, "--staged") or "-S" in flags
-        return 3, "git restore --staged" if staged else "git restore", target, "git-discard"
+        worktree = _on(flags, "--worktree") or "-W" in flags
+        if not staged or worktree:
+            return 3, "git restore", target, "git-discard"
     if sub == "read-tree" and not dry_run:
         return 3, "git read-tree", target, "git-discard"
     if sub == "checkout-index" and (_on(flags, "--force") or "-f" in flags):
@@ -1633,6 +1656,10 @@ def _git(args, cwd, aliases=0):
         key = _config_write(flags, ops)
         if key and GIT_RISKY_CONFIG_RE.match(key.lower()):
             return 3, "git config " + key, "", "opaque"
+        if key and key.lower().startswith("alias."):
+            value = ops[ops.index(key) + 1] if ops.index(key) + 1 < len(ops) else ""
+            if value.lstrip().startswith("!"):
+                return 3, "git config " + key, value, "opaque"  # an alias that runs a shell
     return 1, "git " + sub, target, None
 
 
@@ -1759,11 +1786,15 @@ def _expand(op):
     return os.path.normpath(text) if text else text
 
 
-def _rm_risky(op, cwd):
-    """True when deleting `op` recursively reaches outside the working tree, or takes the whole
-    working tree, the repository metadata or a wildcard with it."""
-    if "*" in op:
+def _rm_risky(op, cwd, recursive=True):
+    """True when deleting `op` reaches outside the working tree, or takes the whole working tree,
+    the repository metadata or, `recursive`, a wildcard with it. A wildcard `rm -f` takes only the
+    files it matches, which `_discards` asks git about as a pathspec, so `rm -f *.o` of ignored
+    build output is not risky while one that matches a file holding work is."""
+    if "*" in op and (recursive or "/" in op.rstrip("/").lstrip("./")):
         return True
+    if "*" in op:
+        return False
     path = _expand(op)
     if not path or path == "/":
         return True
@@ -1785,8 +1816,9 @@ def _rm(args, cwd):
     flagged = short(args, "rRf") or has(args, "--recursive", "--force")
     verb = ("rm -rf" if short(args, "rR") or has(args, "--recursive") else "rm -f") if flagged else "rm"
     if flagged:
+        recursive = short(args, "rR") or has(args, "--recursive")
         for op in operands(args):
-            if _rm_risky(op, cwd):
+            if _rm_risky(op, cwd, recursive):
                 return 3, verb, op, "delete"
     return (_discards(verb, operands(args), cwd, deletes=True)
             or (1, verb, _joined(args, 1), None))
@@ -1807,6 +1839,8 @@ _GIT_SPENT = [0.0, 0]
 # the grader cannot say; `grade_text` clears both for each line.
 _CDS = []
 _CD_LOST = [False]
+# The literal values this line assigns to variables a `cd` may name.
+_CD_VARS = {}
 UNCHECKED = "which git status did not answer for in time"
 UNKNOWN_PATH = "a path the grader cannot know"
 HIDDEN = "which git is told not to check (assume-unchanged or skip-worktree)"
@@ -1816,17 +1850,42 @@ class _Unknown(str):
     """The answer of `_dirty_tracked` when it cannot say: the text says why."""
 
 
-def _git_call(argv, where):
+# Every git process the grader starts runs under these, so a repository's configuration, one an
+# earlier command planted included, cannot make grading run a program: no fsmonitor hook, no
+# hooks, no pager, no attributes file from outside the repository. A filter driver the
+# repository's configuration defines is switched off by name (`_repo_state`).
+GIT_HARDENED = ["--no-pager", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                "-c", "core.attributesFile=/dev/null", "-c", "core.pager=cat",
+                "-c", "core.sshCommand=false", "-c", "credential.helper="]
+# Variables a git process would run as a command, beside every `GIT_*` one, none of which the
+# grader's own git calls inherit.
+GIT_EXEC_ENV = frozenset(("PAGER", "EDITOR", "VISUAL", "SSH_ASKPASS", "LESSOPEN", "LESSCLOSE"))
+
+
+def _git_env(user_config=False):
+    """The environment of a git process the grader starts: no inherited `GIT_*` variable and none
+    in `GIT_EXEC_ENV`, and no system or global configuration unless `user_config`, for a lookup
+    that only reads configuration (an alias may be defined globally) and so runs nothing."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.upper().startswith("GIT_") and k.upper() not in GIT_EXEC_ENV}
+    env.update(GIT_OPTIONAL_LOCKS="0", LC_ALL="C", GIT_TERMINAL_PROMPT="0", GIT_ATTR_NOSYSTEM="1")
+    if not user_config:
+        env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    return env
+
+
+def _git_call(argv, where, user_config=False):
     """The finished `git` run of `argv` in `where` (the process's own directory when ""), or
     None when this line's budget of calls or seconds is spent or the run did not finish in time.
-    No `git` to run reads as a repository-less answer, exit 128."""
+    No `git` to run reads as a repository-less answer, exit 128. It runs hardened
+    (`GIT_HARDENED`, `_git_env`)."""
     remaining = GIT_STATUS_TOTAL - _GIT_SPENT[0]
     if _GIT_SPENT[1] >= GIT_STATUS_CALLS or remaining <= 0.05:
         return None
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", LC_ALL="C")
+    env = _git_env(user_config)
     started = time.monotonic()
     try:
-        return subprocess.run(["git"] + (["-C", where] if where else []) + argv,
+        return subprocess.run(["git"] + GIT_HARDENED + (["-C", where] if where else []) + argv,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                               stdin=subprocess.DEVNULL, timeout=min(GIT_STATUS_SECONDS, remaining),
                               env=env)
@@ -1846,7 +1905,7 @@ def _unknowable(path):
     return "$" in path or "`" in path or PLACEHOLDER in path
 
 
-def _dirty_tracked(paths, cwd, deletes=False):
+def _dirty_tracked(paths, cwd, deletes=False, emptying=False):
     """The first of `paths` (pathspecs, relative to `cwd`) whose loss git cannot undo: a tracked
     file with working-tree changes not in the index, and when `deletes`, an untracked file that
     is not ignored, as `git clean -f` would take. "" when there is none or no repository to ask.
@@ -1865,47 +1924,83 @@ def _dirty_tracked(paths, cwd, deletes=False):
     if not specs:
         return ""
     bases = [d for d in [cwd] + _CDS if d and os.path.isabs(d)]
-    if deletes and _CD_LOST[0] and any(not _expand(p).startswith("/") for p in specs):
+    # A `cd` the grader cannot follow moves every relative path: a delete or an emptying write
+    # there may take any file's work (`EMPTYING_VERBS`); a write of new content is left to `>`.
+    if (deletes or emptying) and _CD_LOST[0] and any(not _expand(p).startswith("/")
+                                                     for p in specs):
         return _Unknown(UNKNOWN_PATH)
-    groups = {}
     for spec in specs:
         path = _expand(spec)
         for base in ([""] if path.startswith("/") else bases):
             full = os.path.normpath(os.path.join(base, path)) if base else path
-            parent, name = os.path.split(full)
-            if PATHSPEC_RE.search(parent) or not name:
-                parent, name = base or "/", os.path.relpath(full, base or "/")
-            groups.setdefault(parent, []).append(name)
-    for parent, names in groups.items():
-        found = _dirty_in(parent, tuple(names), deletes)
-        if found is None or found:
-            return found
+            found = _dirty_in(full, deletes)
+            if found is None or found:
+                return found
     return ""
 
 
-def _dirty_in(parent, names, deletes):
-    """`_dirty_tracked` for `names`, each relative to the directory `parent`."""
-    key = (parent, names, deletes)
+def _repo_root(full):
+    """(the working tree holding the path `full`, `full` relative to it), found by looking for
+    `.git` from the nearest existing directory up, or None outside any repository and when no
+    directory on the path exists, since then no file there holds work to lose."""
+    parts = full.split("/")
+    # A glob in a name (`src/*/x.py`) is matched by the pathspec, not walked.
+    glob = next((k for k, part in enumerate(parts) if PATHSPEC_RE.search(part)), None)
+    if glob is not None:
+        start = "/".join(parts[:glob]) or "/"
+    else:
+        start = full if os.path.isdir(full) else os.path.dirname(full) or "/"
+    if not os.path.isdir(start):
+        return None
+    probe = start
+    while True:
+        if os.path.lexists(os.path.join(probe, ".git")):
+            return probe, os.path.relpath(full, probe)
+        up = os.path.dirname(probe)
+        if up == probe:
+            return None
+        probe = up
+
+
+def _repo_state(root):
+    """What git says of the working tree `root`, asked once per command line, whatever number of
+    paths it names: ({path: status letters} of each changed or untracked file, the set of files
+    git is told not to check), both relative to `root`. "" when `root` is no repository to git;
+    None or an `_Unknown` as `_dirty_tracked` gives them. A filter driver the repository's own
+    configuration defines is switched off for the run, since `git status` runs one on a file it
+    must re-read."""
+    key = ("repository", root)
     if key in _DIRTY:
         return _DIRTY[key]
-    if not os.path.isdir(parent):
-        _DIRTY[key] = ""  # no such directory holds a file to lose
-        return ""
-    done = _git_call(["status", "--porcelain=v1", "-z",
-                      "--untracked-files=" + ("all" if deletes else "no"),
-                      "--ignore-submodules", "--"] + list(names), parent)
-    if done is None:
-        _DIRTY[key] = None
+    _DIRTY[key] = state = _repo_ask(root)
+    return state
+
+
+def _repo_ask(root):
+    """`_repo_state`, uncached."""
+    drivers = _git_call(["config", "-z", "--name-only", "--get-regexp", r"^filter\."], root)
+    if drivers is None:
         return None
-    found = ""
+    if drivers.returncode == 128 and b"not a git repository" in drivers.stderr:
+        return ""
+    if drivers.returncode not in (0, 1):
+        return _Unknown(UNCHECKED)
+    off = []
+    for key in set(drivers.stdout.decode("utf-8", "replace").split("\0")):
+        name = key.strip()[len("filter."):].rpartition(".")[0]
+        if name:
+            for setting in ("clean", "smudge", "process"):
+                off += ["-c", "filter.%s.%s=" % (name, setting)]
+            off += ["-c", "filter.%s.required=false" % name]
+    done = _git_call(off + ["status", "--porcelain=v1", "-z", "--untracked-files=all",
+                            "--ignore-submodules"], root)
+    if done is None:
+        return None
     if done.returncode == 128 and b"not a git repository" in done.stderr:
-        _DIRTY[key] = ""
         return ""
     if done.returncode != 0:
-        _DIRTY[key] = _Unknown(UNCHECKED)
-        return _DIRTY[key]
-    entries = done.stdout.decode("utf-8", "replace").split("\0")
-    i = 0
+        return _Unknown(UNCHECKED)
+    changed, entries, i = {}, done.stdout.decode("utf-8", "replace").split("\0"), 0
     while i < len(entries):
         entry = entries[i]
         i += 1
@@ -1913,31 +2008,78 @@ def _dirty_in(parent, names, deletes):
             continue
         if entry[0] in "RC":
             i += 1  # a rename's or a copy's source path follows as its own field
-        if entry[1] in "MT" or (deletes and entry[:2] == "??"):
-            found = entry[3:]
-            break
-    if not found:
-        # git status does not look at a file it is told is unchanged, so such a file may hold
-        # any change: its loss is unknown, never clean.
-        listed = _git_call(["ls-files", "-v", "-z", "--"] + list(names), parent)
-        if listed is None:
-            found = None
-        elif listed.returncode != 0:
-            found = _Unknown(UNCHECKED)
-        else:
-            for entry in listed.stdout.decode("utf-8", "replace").split("\0"):
-                if len(entry) > 2 and (entry[0].islower() or entry[0] == "S"):
-                    found = _Unknown(HIDDEN + ": " + entry[2:])
-                    break
-    _DIRTY[key] = found
-    return found
+        changed[entry[3:]] = entry[:2]
+    listed = _git_call(["ls-files", "-v", "-z"], root)
+    if listed is None:
+        return None
+    if listed.returncode != 0:
+        return _Unknown(UNCHECKED)
+    entries = [entry for entry in listed.stdout.decode("utf-8", "replace").split("\0")
+               if len(entry) > 2]
+    hidden = set(entry[2:] for entry in entries if entry[0].islower() or entry[0] == "S")
+    return changed, hidden, set(entry[2:] for entry in entries)
+
+
+def _covers(rel, path):
+    """Whether the pathspec `rel` names `path`, both relative to one working tree: the path
+    itself, a file under it, or, as git reads a glob, any path its `*` matches across `/`."""
+    if rel in ("", "."):
+        return True
+    if PATHSPEC_RE.search(rel):
+        return fnmatch.fnmatchcase(path, rel) or fnmatch.fnmatchcase(path, rel + "/*")
+    return path == rel or path.startswith(rel + "/")
+
+
+def _dirty_in(full, deletes):
+    """`_dirty_tracked` for the one absolute path `full`, answered from `_repo_state`."""
+    found = _repo_root(full)
+    if found is None:
+        return ""
+    root, rel = found
+    state = _repo_state(root)
+    if not state:
+        return state
+    changed, hidden, _tracked = state
+    for path, letters in changed.items():
+        if _covers(rel, path) and (letters[1] in "MT" or (deletes and letters == "??")):
+            return path
+    # git status does not look at a file it is told is unchanged, so such a file may hold any
+    # change: its loss is unknown, never clean.
+    for path in hidden:
+        if _covers(rel, path):
+            return _Unknown(HIDDEN + ": " + path)
+    return ""
+
+
+def _tracked_among(paths, cwd):
+    """The first of `paths` (relative to `cwd` and to where a `cd` on the line went) that names
+    a file git tracks, "" when none does, or None when git did not say."""
+    bases = [d for d in [cwd] + _CDS if d and os.path.isabs(d)]
+    for spec in paths:
+        path = _expand(spec)
+        for base in ([""] if path.startswith("/") else bases):
+            found = _repo_root(os.path.normpath(os.path.join(base, path)) if base else path)
+            if found is None:
+                continue
+            root, rel = found
+            state = _repo_state(root)
+            if state is None or isinstance(state, _Unknown):
+                return None
+            for tracked in (state[2] if state else ()):
+                if _covers(rel, tracked):
+                    return tracked
+    return ""
+
+
+# The verbs of `_discards` that leave a file empty, whatever it held.
+EMPTYING_VERBS = {"empty write to", "cp /dev/null", "truncate"}
 
 
 def _discards(verb, paths, cwd, deletes=False):
     """Grade 3 when `verb` deletes, empties or overwrites a file of `paths` that holds
     uncommitted work, as `git checkout -- <path>` grades for the same loss, or when that cannot
     be known (`_dirty_tracked`); None when none does."""
-    found = _dirty_tracked(paths, cwd, deletes)
+    found = _dirty_tracked(paths, cwd, deletes, verb in EMPTYING_VERBS)
     if found is None:
         return 3, verb, " ".join(paths[:2]) + ", " + UNCHECKED, "git-discard"
     if isinstance(found, _Unknown):
@@ -1983,6 +2125,8 @@ def _emptying(tokens, clean, cwd):
             hit = _discards("tee over", operands(clean[1:]), cwd)
         if hit is None and prog in ("sed", "gsed"):
             hit = _sed_empties(clean[1:], cwd)
+        if hit is None:
+            hit = _replaces(prog, clean[1:], cwd)
         if hit is not None:
             return hit
     if prog == "truncate":
@@ -2009,6 +2153,29 @@ def _emptying(tokens, clean, cwd):
                 if any(path == b or path.endswith("/" + b) or b.endswith("/" + path) for b in blobs):
                     return 3, "git " + sub + " >", target, "git-discard"
             return _discards("git " + sub + " >", targets, cwd)
+    return None
+
+
+def _replaces(prog, args, cwd):
+    """The grade of an `rsync`, `ln -f` or `patch -R` that writes over files: graded as `cp` is
+    for the files `rsync` and `ln -f` replace, and those `rsync --delete` removes; a reversed
+    patch takes its files from the diff, which the grader cannot read, so it grades 3. None for
+    any other command."""
+    if prog == "rsync":
+        ops = operands(args)
+        local = [o for o in ops if not re.match(r"^[^/]*:", o)]
+        if len(ops) < 2 or ops[-1] not in local:
+            return None  # the destination is on another host
+        if any(a.startswith("--del") or a.startswith("--remove-source") for a in args):
+            hit = _discards("rsync --delete", ops[-1:], cwd, deletes=True)
+            if hit:
+                return hit
+        return _discards("rsync over", _copy_targets(ops, cwd), cwd)
+    if prog in ("ln", "gln") and (short(args, "f") or has(args, "--force")):
+        return _discards("ln -f over", _copy_targets([a for a in args if a != "-s"], cwd), cwd)
+    if prog in ("patch", "gpatch") and (short(args, "R") or has(args, "--reverse")) \
+            and not has(args, "--dry-run"):
+        return 3, "patch -R", UNKNOWN_PATH, "git-discard"
     return None
 
 
@@ -2222,6 +2389,9 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
             return 3, "redirect to", target, "system"
         if target and target != "/dev/null":
             wrote = target
+    steered = _exec_env(tokens)
+    if steered:
+        return steered
     while tokens and ASSIGN_RE.match(tokens[0]):
         tokens = tokens[1:]
     emptied = _emptying(raw, tokens, cwd)
@@ -2298,7 +2468,9 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
             return 3, prog + " " + rest[0].rpartition("/")[2], UNKNOWN_PATH, "delete"
         return _inner_tokens(rest, cwd, depth)
     if prog in WRAPPERS:
-        rest, unread, _moved, files = _unwrap(prog, args, keyword_time and head == "time")
+        rest, unread, moved, files = _unwrap(prog, args, keyword_time and head == "time")
+        if moved:
+            _CD_LOST[0] = True  # `env -C dir`: what it runs reads its paths from `dir`
         if wrapped is not None:
             wrapped.append((unread, _names_push(args) and not _names_push(rest), files))
         if rest:
@@ -2412,6 +2584,39 @@ def _grade_step(tokens, cwd, depth, recorded, budget, keyword_time=False, wrappe
     return 1, prog, _joined(args, 1), None
 
 
+# Variables git or a program it starts runs as a command: assigned before a command, through
+# `env` or by `export`, the command runs what they hold, which its words do not show. A pager or
+# an editor set to one of `INERT_COMMAND_RE`'s, as `GIT_PAGER=cat` is, runs nothing.
+EXEC_ENV_RE = re.compile(
+    r"^(?:GIT_SSH_COMMAND|GIT_SSH|GIT_EXTERNAL_DIFF|GIT_PAGER|GIT_EDITOR|GIT_SEQUENCE_EDITOR|"
+    r"GIT_ASKPASS|SSH_ASKPASS|GIT_PROXY_COMMAND|GIT_EXEC_PATH|GIT_TEMPLATE_DIR|GIT_CONFIG\w*|"
+    r"PAGER|EDITOR|VISUAL|LESSOPEN|LESSCLOSE)$")
+PAGER_ENV = {"GIT_PAGER", "PAGER", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR", "EDITOR", "VISUAL"}
+INERT_COMMAND_RE = re.compile(r"^(?:(?:/usr)?(?:/bin/)?(?:cat|less|more|true|false)|:)?"
+                              r"(?:\s+-[A-Za-z]+)*$")
+
+
+def _exec_env(tokens):
+    """Grade 3 for a simple command that assigns a variable of `EXEC_ENV_RE` before its command,
+    through `env`, or with `export` and its kin; None otherwise."""
+    words = list(tokens)
+    assigned = []
+    while words and ASSIGN_RE.match(words[0]):
+        assigned.append(words.pop(0))
+    head = words[0].rpartition("/")[2] if words else ""
+    if head == "env" or head in DECLARING:
+        assigned += [w for w in words[1:] if ASSIGN_RE.match(w)]
+    for word in assigned:
+        name, _eq, value = word.partition("=")
+        if not EXEC_ENV_RE.match(name):
+            continue
+        value = value.strip().strip("'\"").strip()
+        if name in PAGER_ENV and INERT_COMMAND_RE.match(value):
+            continue
+        return 3, name + "=", value, "opaque"
+    return None
+
+
 def _inline_programs(family, args):
     """The programs an interpreter of `family` is handed inline by `args`, as `python3 -c`,
     `node -e`, `perl -e` or `ruby -e` take one, each graded as `_grade_program` reads a program:
@@ -2420,8 +2625,19 @@ def _inline_programs(family, args):
     evals, values = PROGRAM_FLAGS.get(family, DEFAULT_PROGRAM_FLAGS)
     evals = evals - {"-m"}
     out, i = [], 0
+    if family in ("deno", "bun"):
+        # `deno eval [options] <code>`: the subcommand comes first, its program after options.
+        words = [a for a in args if not a.startswith("-")]
+        if words[:1] == ["eval"]:
+            return words[1:2] + [a.partition("=")[2] for a in args if a.startswith("--eval=")]
     while i < len(args):
         a = args[i]
+        module = re.match(r"^-[bBdEhiIOPqsSuvx]*m(.*)$", a) if family == "python" else None
+        if module:
+            # `python -m timeit "<code>"`: a module may run any of its arguments as a program,
+            # so every word after the module's name but an option is read as one.
+            start = i + 1 if module.group(1) else i + 2
+            return out + [w for w in args[start:] if not w.startswith("-")]
         if a == "--" or not a.startswith("-") or a == "-":
             break
         long_name, eq, value = a.partition("=")
@@ -2569,6 +2785,7 @@ def grade_text(cmd, cwd="", depth=0):
         _GIT_SPENT[:] = [0.0, 0]
         del _CDS[:]
         _CD_LOST[0] = False
+        _CD_VARS.clear()
         _LINE[0] = cmd
     try:
         best = _grade_text(cmd, cwd, depth)
@@ -2579,7 +2796,21 @@ def grade_text(cmd, cwd="", depth=0):
     if depth == 0 and best[0] > 0 and best[3] != "approvals" and approvals is not None \
             and _store_write(cmd):
         return 3, "write to", "the approvals store", "approvals"
+    if depth == 0 and 0 < best[0] < 3:
+        inside = GIT_INTERNAL_RE.search(cmd)
+        if inside:
+            return 3, "write to", inside.group(0).strip(" '\"/;&|(<>"), "opaque"
     return best
+
+
+# The repository's configuration, hooks and other files git runs from, or a directory a command
+# reaches them through: a command that is not read-only and names one may make a later git
+# command, or the grader's own, run a program (`GIT_HARDENED`).
+GIT_INTERNAL_RE = re.compile(
+    r"(?:^|[\s'\"/;&|(<>])\.git/+(?:config(?:\.worktree)?|hooks|info|modules|worktrees|"
+    r"commondir|gitdir)(?![\w.-])"
+    r"|(?:^|[\s'\";&|(])\.git(?=\s*(?:$|[\s;&|)'\"]))"
+    r"|\brev-parse\b[^;&|\n]*--(?:absolute-)?git-(?:dir|path|common-dir)(?![\w-])")
 
 
 # The harness's state directory, where the approvals store lives: a `cd` into it, or a variable
@@ -2760,7 +2991,15 @@ def _track_cd(tokens, cwd):
     `cd` is kept too, which can only ask about more places. One to a directory the grader
     cannot know marks the line lost; `popd` and `cd -` return to a directory already kept."""
     words = [t for t in tokens if t not in COMMAND_OPENERS]
+    if len(words) == len([w for w in words if ASSIGN_RE.match(w)]):
+        # A line's own `D=src` is followed into a later `cd "$D"`; one it cannot read is not.
+        for word in words:
+            name, _eq, value = word.partition("=")
+            _CD_VARS[name] = None if _unknowable(value) else value
+        return
     while words and ASSIGN_RE.match(words[0]):
+        words = words[1:]
+    while words and words[0] in ("builtin", "command"):
         words = words[1:]
     if not words or words[0].rpartition("/")[2] not in ("cd", "pushd", "chdir"):
         return
@@ -2768,6 +3007,9 @@ def _track_cd(tokens, cwd):
     target = ops[0] if ops else "~"
     if target == "-":
         return
+    known = re.fullmatch(r"\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))", target)
+    if known and _CD_VARS.get(known.group(1) or known.group(2)):
+        target = _CD_VARS[known.group(1) or known.group(2)]
     if _unknowable(target) or "*" in target or "?" in target:
         _CD_LOST[0] = True
         return
@@ -3385,36 +3627,40 @@ def _open_writes(text):
     arguments are spread, or one given a mode that is not a plain read-only string. The path is
     the first argument of a bare `open(…)`; a method such as `Path(p).open('w')` takes the mode
     first. A string that is no mode, as a path is, is passed over wherever it sits."""
-    for match in OPEN_RE.finditer(text):
-        rest = text[match.end():]
-        paren = re.match(r"\s*\(", rest)
-        if not paren:
-            return True  # `f = open`, `map(open, …)`: called where this cannot see
-        args = _call_args(text, match.end() + paren.end() - 1)
-        if args is None:
+    return any(_one_open_writes(text, match) for match in OPEN_RE.finditer(text))
+
+
+def _one_open_writes(text, match):
+    """`_open_writes` for the one `open` `match` found in `text`."""
+    rest = text[match.end():]
+    paren = re.match(r"\s*\(", rest)
+    if not paren:
+        return True  # `f = open`, `map(open, …)`: called where this cannot see
+    args = _call_args(text, match.end() + paren.end() - 1)
+    if args is None:
+        return True
+    method = text[:match.start()].rstrip().endswith(".")
+    positional = 0
+    for arg in args:
+        if arg.startswith("*"):
             return True
-        method = text[:match.start()].rstrip().endswith(".")
-        positional = 0
-        for arg in args:
-            if arg.startswith("*"):
+        keyword = re.match(r"^([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$", arg, re.S)
+        if keyword:
+            name, value = keyword.groups()
+            if name == "opener" or name in ("mode", "flags") and not READ_MODE_RE.match(
+                    _string_value(value) or "w"):
                 return True
-            keyword = re.match(r"^([A-Za-z_]\w*)\s*=(?!=)\s*(.*)$", arg, re.S)
-            if keyword:
-                name, value = keyword.groups()
-                if name == "opener" or name in ("mode", "flags") and not READ_MODE_RE.match(
-                        _string_value(value) or "w"):
-                    return True
-                continue
-            positional += 1
-            if positional == 1 and not method:
-                continue  # the file
-            value = _string_value(arg)
-            if value is None:
-                if re.match(r"^-?\d+$", arg):
-                    continue  # buffering
-                return True
-            if MODE_LIKE_RE.match(value) and not READ_MODE_RE.match(value):
-                return True
+            continue
+        positional += 1
+        if positional == 1 and not method:
+            continue  # the file
+        value = _string_value(arg)
+        if value is None:
+            if re.match(r"^-?\d+$", arg):
+                continue  # buffering
+            return True
+        if MODE_LIKE_RE.match(value) and not READ_MODE_RE.match(value):
+            return True
     return False
 
 
@@ -3423,6 +3669,168 @@ def _program_writes(text):
     must not."""
     return bool(STORE_WRITES_RE.search(text) or WRITE_REFERENCES_RE.search(text)
                 or _open_writes(text))
+
+
+# Calls in another language that delete a file or write over one: Python's `os`, `shutil` and
+# `pathlib`, Node's `fs`, Deno's and Bun's file APIs, Ruby's `File` and `FileUtils`, and a bare
+# `unlink` or `rmtree` (Perl's, or one imported by name). `mod` is the module named before it.
+DISCARD_API_RE = re.compile(
+    r"(?<![\w$])(?:(?P<mod>shutil|os|posix|nt|fs|fsp|promises|Deno|Bun|File|FileUtils)\s*\.\s*)?"
+    r"(?P<name>rmtree|remove\w*|unlink\w*|rmdir\w*|rm_\w+|rmSync|rm|truncate\w*|write_text|"
+    r"write_bytes|writeFile\w*|writeTextFile\w*|write|delete|copy\w*|move|rename\w*|replace)\b")
+OS_DISCARDS = {"remove", "removedirs", "unlink", "rmdir", "truncate", "rename", "renames",
+               "replace"}
+# Called on an object whose path the grader may not see, these read as something else
+# (`f.write`, `items.remove`, `seen.delete`), so a call on no module named here is passed over.
+METHOD_PASS = {"write", "delete", "remove", "rm", "truncate", "copy", "move", "rename", "replace"}
+# Of these, the file written is the second argument, not the first.
+SECOND_ARG = {"copy", "copy2", "copyfile", "copyFile", "copyFileSync", "move", "rename",
+              "renames", "replace", "renameSync"}
+DELETE_NAMES_RE = re.compile(r"^(?:rmtree|remove\w*|unlink\w*|rmdir\w*|rm_\w+|rmSync|rm|delete)$")
+PATH_RECEIVER_RE = re.compile(
+    r"(?:Path|PurePath|PosixPath)\s*\(\s*[rRbBuU]?([\"'])([^\"'\\]*)\1\s*\)\s*\.\s*$")
+
+
+def _call_path(text, end, second=False):
+    """The literal path argument of the call whose name ends at `text[end]`: the first, or the
+    second when `second`; Perl's paren-less `unlink "f"` too. None when it is no plain string."""
+    rest = text[end:]
+    paren = re.match(r"\s*\(", rest)
+    if paren:
+        args = _call_args(text, end + paren.end() - 1)
+        index = 1 if second else 0
+        if not args or len(args) <= index:
+            return None
+        value = _string_value(args[index])
+        if value is None and re.match(r"^[A-Za-z_]\w*$", args[index]):
+            # `p = 'doc.md'` once, then `open(p, 'w')`: a name bound only to one string.
+            bound = re.findall(r"(?:^|[\n;])[ \t]*(?:const |let |var |my )?\$?%s[ \t]*=(?!=)"
+                               r"[ \t]*([^\n;]*)" % re.escape(args[index]), text)
+            if len(bound) == 1:
+                value = _string_value(bound[0].strip())
+        return value
+    bare = re.match(r"\s+([\"'])([^\"'\\]*)\1", rest)
+    return bare.group(2) if bare and not second else None
+
+
+def _mask_strings(text):
+    """`text` with the inside of each quoted string blanked, so a call is found only where it is
+    code; every index still points where it did in `text`."""
+    out, quote, i = list(text), None, 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\":
+                out[i] = " "
+                if i + 1 < len(text):
+                    out[i + 1] = " "
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            else:
+                out[i] = " "
+        elif c in "'\"`":
+            quote = c
+        i += 1
+    return "".join(out)
+
+
+def _program_targets(text):
+    """(the paths a program deletes, the paths it writes over, whether it deletes a path the
+    grader cannot know), from the calls `DISCARD_API_RE` and a writing `open` name."""
+    deletes, writes, unknown = [], [], False
+    code = _mask_strings(text)
+    for match in DISCARD_API_RE.finditer(code):
+        mod, name = match.group("mod"), match.group("name")
+        before = text[:match.start()].rstrip()
+        method = mod is None and before.endswith(".")
+        if mod is None and not method and name not in ("unlink", "rmtree"):
+            continue
+        if mod in ("os", "posix", "nt") and name not in OS_DISCARDS:
+            continue
+        if mod == "shutil" and name not in ("rmtree", "move") and not name.startswith("copy"):
+            continue
+        if method and name in METHOD_PASS:
+            continue
+        target = deletes if DELETE_NAMES_RE.match(name) else writes
+        receiver = PATH_RECEIVER_RE.search(before) if method else None
+        pathlib = name in ("write_text", "write_bytes", "unlink", "rmdir")
+        raw = (_receiver_raw(before) if method and pathlib
+               else _call_raw(text, match.end(), name in SECOND_ARG))
+        if target is writes and _reads_back(text, raw):
+            continue  # read, changed and written back: an edit in place, as `sed -i` is
+        path = receiver.group(2) if receiver else _call_path(text, match.end(), name in SECOND_ARG)
+        if method and not receiver and pathlib:
+            path = None  # pathlib: the path is the object it is called on, not an argument
+        if path is not None:
+            target.append(path)
+        elif target is deletes:
+            unknown = True  # a write to a path it cannot name grades as `> "$f"` does
+    for match in OPEN_RE.finditer(code):
+        if not _one_open_writes(text, match):
+            continue
+        before = text[:match.start()].rstrip()
+        method = before.endswith(".")
+        if _reads_back(text, _receiver_raw(before) if method else _call_raw(text, match.end())):
+            continue
+        receiver = PATH_RECEIVER_RE.search(before) if method else None
+        path = receiver.group(2) if receiver else (
+            None if method else _call_path(text, match.end()))
+        if path is not None:
+            writes.append(path)
+    return deletes, writes, unknown
+
+
+def _call_raw(text, end, second=False):
+    """The source text of the path argument `_call_path` reads, or None."""
+    paren = re.match(r"\s*\(", text[end:])
+    if not paren:
+        return None
+    args = _call_args(text, end + paren.end() - 1)
+    index = 1 if second else 0
+    return args[index] if args and len(args) > index else None
+
+
+def _receiver_raw(before):
+    """The source text of the object a method is called on, `before` ending at its `.`."""
+    match = re.search(r"((?:Path|PurePath|PosixPath)\s*\([^()\n]*\)|[A-Za-z_][\w.]*)\s*\.$", before)
+    return match.group(1) if match else None
+
+
+def _reads_back(text, raw):
+    """Whether the program `text` also reads the path written as `raw`: a read-mode `open`,
+    `read_text`, `readFileSync` and the like, so the write puts back what it read, changed."""
+    if not raw:
+        return False
+    r = re.escape(raw.strip())
+    return bool(
+        re.search(r"\bopen\s*\(\s*%s\s*(?:\)|,\s*(?:mode\s*=\s*)?[rRbBuU]?[\"'][rbtU]*[\"']\s*[,)])"
+                  % r, text)
+        or re.search(r"%s\s*\.\s*read_(?:text|bytes)\s*\(" % r, text)
+        or re.search(r"\b(?:readFileSync|readFile|readTextFile\w*|read_text|read_bytes)\s*\(\s*"
+                     r"%s\s*[,)]" % r, text))
+
+
+def _program_losses(text, cwd):
+    """Grade 3 for a program that deletes a file the grader cannot name, a file git tracks or one
+    holding work git cannot restore, or that writes over a file holding work (`_discards`, as
+    `>` grades, a path it cannot name included); None otherwise. A write back of what the
+    program read is an edit, graded as `sed -i` is (`_reads_back`)."""
+    if not DISCARD_API_RE.search(text) and not OPEN_RE.search(text):
+        return None
+    deletes, writes, unknown = _program_targets(text)
+    if unknown:
+        return 3, "a program that deletes or writes over", UNKNOWN_PATH, "delete"
+    hit = (_discards("a program that deletes", deletes, cwd, deletes=True) if deletes else None) \
+        or (_discards("a program that writes over", writes, cwd) if writes else None)
+    if hit:
+        return hit
+    tracked = _tracked_among(deletes, cwd) if deletes else ""
+    if tracked is None or tracked:
+        return (3, "a program that deletes",
+                tracked or ", ".join(deletes[:2]) + ", " + UNCHECKED, "delete")
+    return None
 
 
 def _grade_program(text, cwd, depth, skip=None, families=None):
@@ -3435,6 +3843,9 @@ def _grade_program(text, cwd, depth, skip=None, families=None):
     grader knows, `PROGRAM_CHECKS` of them at most, `skip` never, as its caller grades it; the
     whole text is scanned for grade-3 families and a push, which covers what any one line or
     string of it would show a scan. Linear in the length of the text."""
+    lost = _program_losses(text, cwd)
+    if lost:
+        return lost
     if _inert_program(text, families):
         return INERT
     best = max(_scan_text(text), (1, "", "", "opaque"), key=lambda h: h[0])

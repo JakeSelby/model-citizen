@@ -266,7 +266,9 @@ class Repository(unittest.TestCase):
             time.sleep(min(0.2, kwargs.get("timeout") or 0.2))
             return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-        with mock.patch.object(library, "GIT_STATUS_TOTAL", 0.5), \
+        # A line asks git three times per repository (`_repo_state`); this budget runs out
+        # before the third.
+        with mock.patch.object(library, "GIT_STATUS_TOTAL", 0.3), \
                 mock.patch.object(library.subprocess, "run", side_effect=slow):
             started = time.monotonic()
             grade, verb, target, _family = self.grade(": > a.py; : > b.py; : > clean.py")
@@ -306,6 +308,279 @@ class ConfirmedIsLogged(Base):
     def test_a_confirmed_grade_one_command_writes_no_graded_row(self):
         self.run_hook("HARNESS_CONFIRMED=1 make build")
         self.assertEqual([r for r in self.rows() if r.get("grade") == 3], [])
+
+
+class RoundTwoEnvironment(unittest.TestCase):
+    # Round two, item 1: a variable git or its programs run as a command, set for the command.
+    THREE = [
+        "GIT_SSH_COMMAND='%s' git fetch" % FORCE,
+        "GIT_EXTERNAL_DIFF='rm -rf ~' git diff",
+        "GIT_PAGER='rm -rf ~' git log",
+        "GIT_EDITOR='rm -rf ~' git commit",
+        "GIT_ASKPASS=./x.sh git fetch",
+        "GIT_SSH=./x.sh git fetch",
+        "PAGER='rm -rf ~' git log",
+        "EDITOR='rm -rf ~' git commit",
+        "GIT_CONFIG_COUNT=1 git status",
+        "env GIT_SSH_COMMAND='rm -rf ~' git fetch",
+        "export GIT_EXTERNAL_DIFF='rm -rf ~'",
+    ]
+    BELOW = [
+        "GIT_PAGER=cat git log",
+        "PAGER= git log",
+        "GIT_EDITOR=true git rebase --continue",
+        "LANG=C git status",
+    ]
+
+    def test_a_variable_that_runs_a_command_grades_three(self):
+        for command in self.THREE:
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 3)
+
+    def test_an_inert_pager_or_editor_stays_below_three(self):
+        for command in self.BELOW:
+            with self.subTest(command=command):
+                self.assertLess(grade(command), 3)
+
+
+class RoundTwoPrograms(unittest.TestCase):
+    # Round two, items 2 to 5.
+    THREE = [
+        "node -pe \"require('child_process').execSync('%s')\"" % FORCE,
+        "deno eval \"new Deno.Command('sh',{args:['-c','rm -rf ~']}).outputSync()\"",
+        "python3 -m timeit -n1 -r1 \"__import__('os').system('rm -rf ~')\"",
+        "python3 -mtimeit \"__import__('os').system('rm -rf ~')\"",
+        "python3 -c \"import os; os.remove(p)\"",
+        "python3 -c \"import shutil, sys; shutil.rmtree(sys.argv[1])\" src",
+        "python3 -c \"from pathlib import Path; p.unlink()\"",
+        "node -e \"require('fs').rmSync(dir, {recursive: true})\"",
+        "perl -e 'unlink $ARGV[0]' f",
+    ]
+    BELOW = [
+        "python3 -c \"print('open the unlink')\"",
+        "python3 -c \"print(open('README.md').read())\"",
+        "node -pe \"1+1\"",
+        "python3 -m pytest -q tests",
+        "python3 -m json.tool data.json",
+        "python3 -c \"import shutil; shutil.rmtree('/tmp/scratch-dir')\"",
+        # A write to a path the program computes grades as `> "$f"` does.
+        "python3 -c \"f = open(name, 'w')\"",
+    ]
+
+    def test_each_route_grades_three(self):
+        for command in self.THREE:
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 3)
+
+    def test_a_program_that_deletes_nothing_it_cannot_name_stays_below_three(self):
+        for command in self.BELOW:
+            with self.subTest(command=command):
+                self.assertLess(grade(command), 3)
+
+    def test_a_short_option_cluster_hands_its_program_on(self):
+        self.assertEqual(library._inline_programs("node", ["-pe", "x"]), ["x"])
+        self.assertEqual(library._inline_programs("deno", ["eval", "--quiet", "x"]), ["x"])
+        self.assertEqual(library._inline_programs("python", ["-m", "timeit", "-n1", "x"]), ["x"])
+
+    def test_a_call_named_only_inside_a_string_is_text(self):
+        self.assertEqual(library._program_targets("print('os.remove(p)')"), ([], [], False))
+
+
+class RoundTwoGitRoutes(unittest.TestCase):
+    # Round two, items 7 and 8 and the index-only false refusals.
+    THREE = [
+        "git send-pack --force origin main",
+        "git send-pack origin +main",
+        "git fetch -f . HEAD~9:main",
+        "git fetch origin +main:main",
+        "git fetch --force origin main:refs/heads/main",
+        "git config alias.x '!rm -rf ~'",
+        "git config diff.py.textconv cat",
+        "git config core.hooksPath /tmp/hooks",
+        "git config core.editor vi",
+        "git config filter.x.clean cat",
+        "git diff | patch -R -p1",
+        "patch --reverse -p1 < fix.diff",
+        "git restore --staged --worktree app.py",
+        "git restore app.py",
+        "git reset --hard",
+        "git reset --merge",
+    ]
+    BELOW = [
+        "git fetch origin",
+        "git fetch origin main:topic",
+        "git fetch origin +refs/heads/*:refs/remotes/origin/*",
+        "git send-pack origin main",
+        "git config alias.st status",
+        "git reset",
+        "git reset HEAD app.py",
+        "git reset -- app.py",
+        "git restore --staged app.py",
+        "git restore -S app.py",
+        "patch -p1 < fix.diff",
+    ]
+
+    def test_each_route_grades_three(self):
+        for command in self.THREE:
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 3)
+
+    def test_what_keeps_the_work_stays_below_three(self):
+        for command in self.BELOW:
+            with self.subTest(command=command):
+                self.assertLess(grade(command), 3)
+
+
+class RoundTwoGitInternals(unittest.TestCase):
+    # Round two, item 9: what git runs from its own directory is never written below grade 3.
+    THREE = [
+        "printf '[core]\\n\\tfsmonitor = \"rm -rf ~ #\"\\n' >> .git/config",
+        "printf 'x' > .git/hooks/pre-commit",
+        "chmod +x .git/hooks/pre-commit",
+        "cp evil .git/hooks/post-checkout",
+        "echo x >> .git/info/attributes",
+        "echo x >> /work/repo/.git/config",
+        "cd .git && echo x >> config",
+        "echo x >> \"$(git rev-parse --git-dir)/hooks/pre-push\"",
+        "python3 -c \"open('.git/config', 'a').write('x')\"",
+    ]
+    BELOW = [
+        "cat .git/config",
+        "echo node_modules >> .gitignore",
+        "git clone https://example.invalid/x/y.git dest",
+    ]
+
+    def test_a_write_into_gits_directory_grades_three(self):
+        for command in self.THREE:
+            with self.subTest(command=command):
+                self.assertEqual(grade(command), 3)
+
+    def test_a_read_of_it_or_a_name_that_only_starts_alike_stays_below_three(self):
+        for command in self.BELOW:
+            with self.subTest(command=command):
+                self.assertLess(grade(command), 3)
+
+    def test_the_graders_git_runs_hardened(self):
+        for setting in ("core.fsmonitor=false", "core.hooksPath=/dev/null"):
+            self.assertIn(setting, library.GIT_HARDENED)
+        planted = {"GIT_DIR": "/elsewhere", "GIT_SSH_COMMAND": "x", "GIT_EXTERNAL_DIFF": "x",
+                   "GIT_CONFIG_PARAMETERS": "'core.fsmonitor=x'", "PAGER": "x", "EDITOR": "x"}
+        with mock.patch.dict(os.environ, planted):
+            env = library._git_env()
+            reads = library._git_env(user_config=True)
+        for name in planted:
+            self.assertNotIn(name, env)
+        self.assertEqual((env["GIT_CONFIG_NOSYSTEM"], env["GIT_CONFIG_GLOBAL"]), ("1", os.devnull))
+        self.assertNotIn("GIT_CONFIG_GLOBAL", reads)
+
+
+@unittest.skipUnless(GIT, "git is not installed")
+class RoundTwoRepository(unittest.TestCase):
+    """Round two against a real repository: the clean, dirty and untracked files of
+    `Repository`, an ignored build artefact and a configuration planted to run a program."""
+    setUp = Repository.setUp
+    git = Repository.git
+    write = Repository.write
+    grade = Repository.grade
+
+    def ignore(self):
+        self.write(".gitignore", "*.o\n")
+        self.write("x.o", "built\n")
+
+    def test_a_program_that_deletes_or_writes_over_work_grades_three(self):
+        for command in ("python3 -c \"import shutil; shutil.rmtree('src')\"",
+                        "python3 -c \"import os; os.remove('dirty.py')\"",
+                        "python3 -c \"import os; os.remove('clean.py')\"",
+                        "python3 -c \"import os; os.remove('new.txt')\"",
+                        "python3 -c \"from pathlib import Path; Path('dirty.py').write_text('')\"",
+                        "python3 -c \"open('dirty.py', 'w')\"",
+                        "node -e \"require('fs').rmSync('src', {recursive: true})\"",
+                        "node -e \"require('fs').writeFileSync('dirty.py', '')\""):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 3)
+
+    def test_a_program_that_edits_in_place_or_touches_only_ignored_files_stays_below_three(self):
+        # A delete of a tracked file grades 3 from a program; a write over one grades as `>`
+        # does, and one that writes back what it read is an edit, as `sed -i` is.
+        self.ignore()
+        for command in ("python3 -c \"import os; os.remove('x.o')\"",
+                        "python3 -c \"open('out.json', 'w').write('{}')\"",
+                        "python3 -c \"open('clean.py', 'w').write('x')\"",
+                        "python3 -c \"p = 'dirty.py'; s = open(p).read(); "
+                        "open(p, 'w').write(s.upper())\"",
+                        "python3 -c \"from pathlib import Path; p = Path('dirty.py'); "
+                        "p.write_text(p.read_text().upper())\"",
+                        "python3 -c \"import sys\nfor p in sys.argv[1:]:\n"
+                        "    s = open(p).read()\n    open(p, 'w').write(s)\" a b"):
+            with self.subTest(command=command):
+                self.assertLess(self.grade(command)[0], 3)
+
+    def test_a_cd_through_a_variable_a_builtin_or_env_is_followed(self):
+        for command in ("D=src; cd \"$D\" && : > app.py", "builtin cd src && rm app.py",
+                        "command cd src && rm app.py", "env -C src rm app.py",
+                        "env --chdir=src rm app.py", "cd \"$(mktemp -d)\" && : > app.py"):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 3)
+
+    def test_an_overwrite_by_rsync_ln_or_git_mv_grades_three(self):
+        for command in ("rsync clean.py dirty.py", "ln -sf clean.py dirty.py",
+                        "ln -f clean.py dirty.py", "git mv -f clean.py dirty.py"):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 3)
+        for command in ("ln -s clean.py link.py", "rsync clean.py copy.py"):
+            with self.subTest(command=command):
+                self.assertLess(self.grade(command)[0], 3)
+
+    def test_a_delete_of_ignored_build_output_stays_below_three(self):
+        self.ignore()
+        for command in ("rm -f *.o", "rm x.o", "rm -f x.o"):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 1)
+        for command in ("rm -f *.py", "rm -rf *.o", "rm new.txt"):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 3)
+
+    def test_an_index_only_reset_or_restore_stays_below_three(self):
+        self.git("add", "dirty.py")
+        for command in ("git reset", "git reset HEAD dirty.py", "git restore --staged dirty.py"):
+            with self.subTest(command=command):
+                self.assertLess(self.grade(command)[0], 3)
+
+    def test_one_line_asks_git_once_whatever_number_of_files_it_writes(self):
+        line = "; ".join("echo %d > new%d.txt" % (n, n) for n in range(20))
+        calls = []
+        real = subprocess.run
+
+        def counted(argv, **kwargs):
+            calls.append(argv)
+            return real(argv, **kwargs)
+
+        with mock.patch.object(library.subprocess, "run", side_effect=counted):
+            self.assertEqual(self.grade(line)[0], 1)
+        self.assertEqual(len([c for c in calls if "status" in c]), 1)
+        self.assertLessEqual(len(calls), 3)
+
+    def test_a_planted_configuration_runs_nothing_while_the_grader_asks_git(self):
+        marker = os.path.join(self.repo, "ran")
+        script = os.path.join(self.repo, "planted.sh")
+        self.write("planted.sh", "#!/bin/sh\ntouch '%s'\ncat\n" % marker)
+        os.chmod(script, 0o755)
+        self.write(".gitattributes", "*.py filter=planted\n")
+        self.git("config", "core.fsmonitor", script)
+        self.git("config", "filter.planted.clean", script)
+        self.git("config", "filter.planted.required", "true")
+        # The same file, re-stamped: git status re-reads it through the clean filter.
+        stamp = time.time() + 5
+        os.utime(os.path.join(self.repo, "clean.py"), (stamp, stamp))
+        subprocess.run([GIT, "-C", self.repo, "status", "--porcelain"], capture_output=True,
+                       stdin=subprocess.DEVNULL)
+        self.assertTrue(os.path.exists(marker), "the planted configuration must be live")
+        os.unlink(marker)
+        os.utime(os.path.join(self.repo, "clean.py"), (stamp + 5, stamp + 5))
+        for command in ("rm clean.py", ": > clean.py", "rm -f *.o"):
+            with self.subTest(command=command):
+                self.grade(command)
+                self.assertFalse(os.path.exists(marker))
 
 
 if __name__ == "__main__":
