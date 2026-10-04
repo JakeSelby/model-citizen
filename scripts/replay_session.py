@@ -40,6 +40,9 @@ MODEL_USAGE_KEYS = ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTo
 UNRANKED = "unranked"
 BUDGET_STOP = "error_max_budget_usd"
 TURN_CAP_STOP = "error_max_turns"
+# A resumed turn whose result is another session's, or whose running totals fell: the resume lost
+# the session, so the turn's own figures are unknown.
+RESUME_LOST = "resume-lost"
 # Why a session stopped before its script ended.
 STOP_CAP, STOP_USER_TURNS, STOP_ERROR = "cap", "max_user_turns", "error"
 CONTROL = "bare"
@@ -118,6 +121,17 @@ def session_totals(result):
 
 def _number(value):
     return value if isinstance(value, (int, float)) else 0
+
+
+def totals_fell(previous, current):
+    """Whether any running total in `current` is below `previous`: `total_cost_usd`, or any key
+    of any model's `modelUsage`, a model missing from `current` counting as zero."""
+    if _number(current.get("total_cost_usd")) < _number(previous.get("total_cost_usd")):
+        return True
+    now = current.get("modelUsage") or {}
+    return any(_number((now.get(model) or {}).get(key)) < _number(value)
+               for model, usage in (previous.get("modelUsage") or {}).items()
+               for key, value in usage.items() if isinstance(value, (int, float)))
 
 
 def turn_usage(stdout, tiers, previous=None):
@@ -204,13 +218,15 @@ def run_session(scenario, base, cap, driver, checker, tiers):
     returns `(passed, detail)` or `(passed, detail, recorded metrics)`; it is called with a third
     argument, `baseline`, the session totals of the last result before the segment (`ZERO_TOTALS`
     for the first). `base` is copied into every row. Spend that no result reported, a timed-out
-    turn's, counts at what was left of the cap."""
+    turn's, counts at what was left of the cap, as does a turn whose resume lost the session
+    (`RESUME_LOST`): its result names another session, or a running total fell (`totals_fell`)."""
     caps = scenario["caps"]
     order = scenario["checkpoint_order"]
     verdicts, records = {}, {}
     usages, branches, segment, segment_text = [], [], [], []
     spent, stopped, error_kind = 0.0, None, ""
     latest = segment_baseline = ZERO_TOTALS
+    session_id = None
     agent_cap_hits = 0
     for number, turn in enumerate(scenario["turns"], 1):
         if number > caps["max_user_turns"]:
@@ -234,6 +250,14 @@ def run_session(scenario, base, cap, driver, checker, tiers):
             stopped, error_kind = STOP_ERROR, ("timeout" if done.get("timeout") else
                                                "exit %s: no priced result" % done.get("returncode"))
             break
+        lost = (session_id is not None and usage["session_id"] not in (None, session_id)) or \
+            totals_fell(latest, usage["totals"])
+        if lost:  # never a negative cost: like a timeout, the turn counts at what was left of the cap
+            usage.update(cost_usd=round(cap - spent, 6), tokens={k: None for k in TOKEN_KINDS}, cost_by_tier={})
+            spent = cap
+            stopped, error_kind = STOP_ERROR, RESUME_LOST
+            break
+        session_id = session_id or usage["session_id"]
         latest = usage["totals"]
         spent = float(latest["total_cost_usd"])
         if done.get("error_kind"):

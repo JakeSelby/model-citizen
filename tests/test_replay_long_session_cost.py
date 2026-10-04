@@ -30,11 +30,11 @@ TOTALS = [
 ]
 
 
-def resumed_stream(total, model_usage, turn_usage=None, subtype="success"):
+def resumed_stream(total, model_usage, turn_usage=None, subtype="success", session="s-1"):
     """One turn's stream as a resumed session reports it: running totals, and its own `usage`."""
-    lines = [{"type": "system", "subtype": "init", "session_id": "s-1", "model": MAIN},
+    lines = [{"type": "system", "subtype": "init", "session_id": session, "model": MAIN},
              {"type": "result", "subtype": subtype, "is_error": subtype != "success", "num_turns": 2,
-              "session_id": "s-1", "total_cost_usd": total, "modelUsage": model_usage,
+              "session_id": session, "total_cost_usd": total, "modelUsage": model_usage,
               "usage": turn_usage or {"input_tokens": 1, "output_tokens": 1}}]
     return "\n".join(json.dumps(line) for line in lines) + "\n"
 
@@ -104,6 +104,41 @@ class ResumedTurnCostTests(unittest.TestCase):
         _, _, baselines = run()
         self.assertEqual(baselines, [("cp1", {"total_cost_usd": 0, "modelUsage": {}}),
                                      ("cp2", {"total_cost_usd": 1.1, "modelUsage": TOTALS[1][1]})])
+
+
+class ResumeLostTests(unittest.TestCase):
+    def run_lost(self, third):
+        cli = FakeCli([resumed_stream(*TOTALS[0]), resumed_stream(*TOTALS[1]), third, resumed_stream(*TOTALS[3])])
+        rows = SESSION.run_session(scenario(), {}, 4.0, cli, lambda *a: (True, ""), TIERS)
+        return rows[-1], cli
+
+    def assert_lost(self, session, cli):
+        self.assertEqual(len(cli.calls), 3)
+        self.assertEqual((session["stopped"], session["error"], session["error_kind"]),
+                         ("error", True, SESSION.RESUME_LOST))
+        # Never a negative cost: the lost turn counts at the rest of the cap, as a timeout does.
+        self.assertEqual((session["cost_per_turn"], session["cost_usd"]), ([0.4, 0.7, 2.9], 4.0))
+        self.assertIsNone(session["output_tokens"])
+        self.assertIsNone(session["passed"])
+
+    def test_a_result_naming_another_session_errors_the_session(self):
+        self.assert_lost(*self.run_lost(resumed_stream(*TOTALS[2], session="s-2")))
+
+    def test_a_falling_total_cost_errors_the_session(self):
+        self.assert_lost(*self.run_lost(resumed_stream(0.3, {MAIN: figures(1, 1, 1, 1, 0.3)})))
+
+    def test_a_falling_model_usage_key_errors_the_session_even_when_the_cost_rose(self):
+        fell = json.loads(json.dumps(TOTALS[2][1]))
+        fell[SUB]["cacheReadInputTokens"] = 99  # below turn 2's 100
+        self.assert_lost(*self.run_lost(resumed_stream(TOTALS[2][0], fell)))
+        dropped = {MAIN: TOTALS[2][1][MAIN]}  # a model the session had used is gone
+        self.assert_lost(*self.run_lost(resumed_stream(TOTALS[2][0], dropped)))
+
+    def test_totals_that_hold_or_rise_are_not_lost(self):
+        self.assertFalse(SESSION.totals_fell(SESSION.ZERO_TOTALS, {"total_cost_usd": 0.1, "modelUsage": {}}))
+        same = {"total_cost_usd": TOTALS[3][0], "modelUsage": TOTALS[3][1]}
+        self.assertFalse(SESSION.totals_fell({"total_cost_usd": TOTALS[2][0], "modelUsage": TOTALS[2][1]}, same))
+        self.assertFalse(SESSION.totals_fell(same, same))
 
 
 class BaselineFileTests(unittest.TestCase):

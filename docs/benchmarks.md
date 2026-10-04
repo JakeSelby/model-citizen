@@ -887,6 +887,9 @@ at the model's rates (#1243). So a turn's cost, tokens and cost by tier are the 
 totals since the previous turn's result, model by model, turn 1 counting against zero; a segment's
 figures are the change across the segment; and the session's spend, the figure its cap is held to,
 is the latest total. A segment metric of the pack's reads the same change, against the baseline file.
+A turn whose result names another session, or whose running totals fall below the previous turn's
+(`total_cost_usd` or any model's `modelUsage` key), lost the session on resume: it counts at the
+rest of the cap, as a timeout does, and errors the session with `error_kind: resume-lost`.
 
 **`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
 session, the cost-per-turn slope, the main thread's peak context and the share of cost on model

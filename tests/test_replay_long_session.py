@@ -255,8 +255,8 @@ class SessionDriverTests(unittest.TestCase):
                          (True, "installed-checkout-read", 1))
 
     def test_each_checkpoint_scores_the_stream_of_every_turn_since_the_previous_one(self):
-        rows, _, seen = run([turn_stream(0.25, session="a"), turn_stream(0.5, session="b"),
-                             turn_stream(1.0, session="c"), turn_stream(0.75, session="d"), turn_stream(0.1)])
+        rows, _, seen = run([turn_stream(0.25), turn_stream(0.5), turn_stream(1.0), turn_stream(0.75),
+                             turn_stream(0.1)])
         (first, one), (second, two) = seen
         self.assertEqual((first, second), ("cp1", "cp2"))
         results = lambda text: [json.loads(l)["total_cost_usd"] for l in text.splitlines()
