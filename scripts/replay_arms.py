@@ -131,6 +131,9 @@ def _selection_problem(selection):
     if not isinstance(selection, dict):
         return "a selection is an object of kind to {unit: value}"
     for kind, units in selection.items():
+        # A core hook switched off needs the acknowledgement a user gives (`posture.CORE_ACK`).
+        if kind == "core_switches_acknowledged" and units is True:
+            continue
         if not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z-]*", kind) or not isinstance(units, dict) \
                 or not units or any(not isinstance(unit, str) or not isinstance(value, str) or not value
                                     for unit, value in units.items()):
