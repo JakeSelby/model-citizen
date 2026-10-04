@@ -860,9 +860,11 @@ def _runs_compare(handler: Handler, route: Route) -> None:
         return
     try:
         sides = compare.parse_request(request)
-        # Read-only and engine-bound, so it stays off the one mutation thread.
+        # The run index belongs to the mutation thread, so the reads go through it; the engine
+        # then runs here, off that thread.
         payload = compare.compare_runs(handler.server.run_supervisor,
-                                       handler.server.repo_root, sides)
+                                       handler.server.repo_root, sides,
+                                       owner=handler.server.mutations.call)
     except compare.CompareError as exc:
         handler._error(_COMPARE_STATUS.get(exc.code, 409), exc.code)
         return
@@ -1020,9 +1022,11 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
         return
     try:
         supervisor = handler.server.run_supervisor
-        # Read-only: run records, replay results and the engine, off the one mutation thread.
+        # Supervisor reads go through the mutation thread, which owns the run index; record
+        # files and the engine are read here, off it.
         payload = draft_tests.verdicts(supervisor, handler.server.repo_root,
-                                       supervisor.state_root, request["draft"])
+                                       supervisor.state_root, request["draft"],
+                                       owner=handler.server.mutations.call)
     except draft_tests.DraftTestError as exc:
         _draft_test_error(handler, exc)
         return

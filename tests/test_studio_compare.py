@@ -124,7 +124,10 @@ def sides(base, candidate):
 
 class Handler:
     def __init__(self, supervisor, body):
-        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO)
+        # Inline owner: the fixture supervisor has no thread-bound index (see
+        # test_studio_route_thread_ownership for the real one).
+        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO,
+                                      mutations=SimpleNamespace(call=lambda action: action()))
         self.request_json = body
         self.response = None
 

@@ -272,12 +272,22 @@ def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, 
             "preferred": preferred(base, candidate), "result": result, "error": error}
 
 
+def direct(read: Callable[[], Any]) -> Any:
+    """Run a supervisor read on the calling thread: the CLI's owner, which has no other thread."""
+    return read()
+
+
 def compare_runs(supervisor: runs.RunSupervisor, repository: Path,
                  sides: Mapping[str, Tuple[str, int]],
-                 staleness: Optional[Staleness] = None) -> Dict[str, Any]:
-    """The route's and `citizen runs compare`'s one answer for two `(run_id, target)` sides."""
-    loaded = {name: load_side(supervisor, repository, *sides[name], staleness=staleness)
-              for name in SIDES}
+                 staleness: Optional[Staleness] = None,
+                 owner: Callable[[Callable[[], Any]], Any] = direct) -> Dict[str, Any]:
+    """The route's and `citizen runs compare`'s one answer for two `(run_id, target)` sides.
+
+    Both sides are read through `owner`, which in the served Studio is the mutation executor:
+    the supervisor's run index is a SQLite connection that only its creating thread may use.
+    The engine then runs on the caller's thread, so a slow bootstrap holds no mutation."""
+    loaded = owner(lambda: {name: load_side(supervisor, repository, *sides[name],
+                                            staleness=staleness) for name in SIDES})
     return compare(loaded[BASE], loaded[CANDIDATE])
 
 
