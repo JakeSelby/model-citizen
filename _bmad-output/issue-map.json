@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 171,
+    "bug": 175,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -8893,6 +8893,32 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B173",
+      "github_number": 1197,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1197",
+      "title": "fix(cost): the fresh-session thresholds are ignored on 1M-token windows",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B173.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B171",
+      "github_number": 1198,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1198",
+      "title": "fix(cost): sleep-and-poll loops instead of background notifications",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B171.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B169",
       "github_number": 1200,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1200",
@@ -9017,6 +9043,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B170.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B174",
+      "github_number": 1237,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1237",
+      "title": "fix(benchmarks): a voice-bound detector scores runs of other voices",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B174.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

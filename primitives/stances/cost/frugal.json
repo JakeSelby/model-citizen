@@ -7,7 +7,7 @@
     "fast_mode": "never",
     "compaction": "clear-only",
     "budget_multiplier": 0.6,
-    "session_nudge_at": [80000, 120000]
+    "session_handoff_at": 200000
   },
   "default_band": "A",
   "rows": {
