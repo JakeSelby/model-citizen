@@ -9036,6 +9036,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S348",
+      "github_number": 1216,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1216",
+      "title": "Bench: measure the first wave of spawns when a real prompt is replayed",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S348.md",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B170",
       "github_number": 1229,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1229",

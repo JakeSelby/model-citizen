@@ -407,6 +407,7 @@ development_status:
   ah-s342-diff-quality-judge-where-deterministic-graders: ready-for-dev
   ah-s343-layer-scorecard-generated-from-registered-rows: ready-for-dev
   ah-s347-protect-the-record-block-agent-writes-to: backlog
+  ah-s348-bench-measure-the-first-wave-of-spawns-when-a: ready-for-dev
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
 
   # Items with no epic

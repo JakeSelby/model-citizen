@@ -167,7 +167,10 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch` and
-  register the same observation-only command in both arms.
+  register the same observation-only command in both arms. A task that sets
+  `allow_web_search: true` leaves `WebSearch` enabled in both arms, since it runs server-side
+  through the model API and the egress rule does not change; `WebFetch` stays denied, and the
+  row's `web_search` says which settings a run had.
 - **Native observations belong to the replay.** The fixed observer component is declared by its
   source sha256, installed at the same path and compared by manifest parity in both arms. Each
   preflight and scored launch receives container-only ledger, error and profile values; no host
@@ -444,6 +447,43 @@ python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalenc
   [pre-registration template](pre-registration-template.md#decision-rule). A verdict is labelled
   exploratory unless every row records that plan as its pre-registration, each task and arm has
   five trials, and a behaviour score has five known values in each.
+
+### First-wave trials and spawn briefs
+
+A fan-out task can be measured on its first wave of spawns without paying for the fan-out, and
+every row says what the spawn hooks did to each spawn. `scripts/replay_spawns.py` holds all of it
+and defines each reading in its docstrings.
+
+- **A pack can carry a third-party skill without redistributing it.** A workspace's `vendor` list
+  names an upstream git `source` (an https URL or an absolute local path; an option, a transport
+  helper such as `ext::` or any other source is refused), a full `commit`, a permissive `license`
+  (MIT, Apache-2.0, BSD or ISC), `[upstream path, workspace path]` pairs and the `digest` of the placed files. Each trial's
+  workspace fetches those paths at that commit, refuses any other bytes and any file that would
+  replace the workspace's own, and commits them with the workspace. Both arms run one command
+  line in that workspace, so a skill under `.claude/skills/` is offered to both; a task's
+  `requires_skills` makes the row's `required_skills_loaded` say whether the CLI's `init` event
+  listed each one.
+- **`first_wave: true` stops a trial once its first wave is out:** the spawn and `Workflow` calls
+  of the main thread's first spawning turn, each of which has reported the model its thread runs
+  on, or been refused; a `Workflow` launch is out at its result or once a spawn-tool hook event
+  follows it, so its hook check can answer. The container is then stopped by name. The task's
+  `max_turns` and `--run-cap` remain the bounds, and `ended_by` names the one that ended the
+  trial: `first-wave`, `max-turns`, `run-cap`, `finished` or `timeout`. A first-wave trial is not
+  scored (`passed: null`), and one the launcher stopped has no priced result, so the spend ledger
+  counts its run cap. `first_wave_spawns` is the size of the wave.
+- **`spawn_briefs`** has one entry per spawn call: its `requested_model`, the `model` its thread
+  ran on, and `brief_bound` and `brief_budget`, whether the brief the subagent received carried
+  the return bound and the soft budget `brief-guard` appends, judged by the hook's own patterns.
+  `brief_source` says where that brief was read: the subagent's first message, the hook's
+  `updatedInput`, or the written brief when no spawn hook rewrote it. A brief that cannot be read
+  is `null`, never `false`. No brief text reaches a row.
+- **`workflow_launch_hooks`** has one entry per `Workflow` launch: the spawn-tool PreToolUse and
+  PostToolUse `hook_response` events in its window beyond those its own spawn calls explain, and
+  `passed`, whether its agents met `tier-agent-spawns` and `brief-guard`. It is `null` when the
+  stream has no hook events, an unfinished launch met no hook, it showed no activity, or the window's own
+  spawn calls leave the events unattributable.
+- **Saved streams read offline:** `python3 scripts/replay_spawns.py [--no-spawn-hooks] <raw stream>...`
+  prints the same entries as JSON lines; `--no-spawn-hooks` reads a bare-arm stream.
 
 ### Oracle metrics
 
@@ -798,7 +838,8 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   reported cost and the cap, and refuses the replay like any red preflight.
 - **Each run reports pass or fail, whether its mechanism fired, and its cost.** The oracle scores
   pass or fail as for any synthetic task. `mechanism_fired` on each row is `true`, `false` or
-  `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, and the
+  `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, a
+  Workflow task its `workflow_launches` (the `Workflow` tool calls, which are not spawns), and the
   output style the offline detectors named in the manifest, which must all report no hit. A missing
   stream or a detector row without a count is unknown, never "no", so a real run needs `--raw`.
 - **Its rows never meet production rows.** They carry `tier: micro`, seed their own series and go

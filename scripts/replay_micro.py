@@ -39,7 +39,8 @@ REPS = 5
 RUN_CAP_USD = 0.25
 PREFLIGHT_CAP_USD = 0.15
 SPEND_CAP_USD = 7.80
-FIELDS = ("spawns", "stop_hooks", "hook_blocks")
+# `workflow_launches` counts `Workflow` tool calls, which are not spawns (`delegation_verdict`).
+FIELDS = ("spawns", "stop_hooks", "hook_blocks", "workflow_launches")
 FIRED = ("above-zero", "any-hit", "none-hit")
 
 
