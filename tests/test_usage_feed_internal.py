@@ -94,6 +94,37 @@ class SpawnedAgentsStillUnknown(Fixture):
         self.assertEqual(len(self.finished()), 1)
 
 
+class ExpiredStartStillSpawned(unittest.TestCase):
+    """A start forgotten by `running_now` after `RUNNING_TTL` still marks the agent as spawned."""
+
+    def test_a_stop_after_the_running_entry_expired_is_counted_unknown(self):
+        state = FEED.new_state()
+        handle = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        self.addCleanup(lambda: Path(handle.name).unlink())
+        journal = Path(handle.name)
+        with handle:
+            handle.write(json.dumps({"t": "start", "id": "long", "at": 1}) + "\n")
+        FEED.ingest(state, journal)
+        FEED.running_now(state, now=1 + FEED.RUNNING_TTL + 1)
+        self.assertNotIn("long", state["running"])
+        with open(str(journal), "a") as out:
+            out.write(json.dumps({"t": "stop", "id": "long", "internal": True, "output": None,
+                                  "tool_calls": None, "summed": False, "path": ""}) + "\n")
+        FEED.ingest(state, journal)
+        self.assertIn("long", state["counted"])
+        self.assertEqual(state["subagents"]["unknown"], 1)
+        self.assertNotIn("long", state["started"])
+
+    def test_started_survives_a_save_and_load(self):
+        state = FEED.new_state()
+        state["started"] = ["long", 7]
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        self.addCleanup(lambda: Path(handle.name).unlink())
+        handle.close()
+        Path(handle.name).write_text(json.dumps(state))
+        self.assertEqual(FEED.load_state(Path(handle.name))["started"], ["long"])
+
+
 class SettleSkipsInternal(unittest.TestCase):
     """No part of the hook's sum budget is spent on a stop that has no transcript to sum."""
 
@@ -106,6 +137,15 @@ class SettleSkipsInternal(unittest.TestCase):
             journal = self.journal([{"t": "start", "id": "x2"},
                                     {"t": "stop", "id": "x2", "internal": True}])
             self.assertEqual([a for a, _ in FEED.to_settle(state, journal, {}, {})], ["x2"])
+
+    def test_to_settle_names_an_internal_stop_whose_start_has_expired(self):
+        state = FEED.new_state()
+        FEED.ingest(state, self.journal([{"t": "start", "id": "long", "at": 1}]))
+        FEED.running_now(state, now=1 + FEED.RUNNING_TTL + 1)
+        self.assertNotIn("long", state["running"])
+        state["journal_offset"] = 0
+        journal = self.journal([{"t": "stop", "id": "long", "internal": True}])
+        self.assertEqual([a for a, _ in FEED.to_settle(state, journal, {}, {})], ["long"])
 
     def journal(self, records):
         handle = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
