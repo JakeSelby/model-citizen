@@ -116,7 +116,7 @@ function StudioFrame() {
           </nav>
         </Container>
       </header>
-      <div className="workspace-bar">
+      <section aria-label="Workspace" className="workspace-bar">
         <Container className="workspace-inner" size="xl">
           <Text fw={600}>Personal workspace <Text c="dimmed" component="span" fw={400}>/ local</Text></Text>
           <div className="workspace-tools">
@@ -126,7 +126,7 @@ function StudioFrame() {
             <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
           </div>
         </Container>
-      </div>
+      </section>
       <Container component="main" id="main-content" className="main-content" size="xl" tabIndex={-1}>
         <Text className="visually-hidden" component="span">Current page: {title}</Text>
         <Routes>

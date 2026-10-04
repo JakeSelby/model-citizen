@@ -190,7 +190,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       {runStatus && <Alert color={runStatus === "succeeded" ? "teal" : "blue"} title="Replay status">
         {runStatus === "succeeded" ? "Replay complete. Native rows are indexed below." : runStatus}
       </Alert>}
-      {progress.length > 0 && <Table.ScrollContainer minWidth={720} type="native">
+      {progress.length > 0 && <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Live replay progress" tabIndex={0}>
         <Table striped>
           <Table.Caption>Live progress by target, task, repetition and arm</Table.Caption>
           <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Rep</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Status</Table.Th><Table.Th>Result</Table.Th><Table.Th>Cost</Table.Th></Table.Tr></Table.Thead>
@@ -201,7 +201,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
         </Table>
       </Table.ScrollContainer>}
       {rows.length > 0 && (
-        <Table.ScrollContainer minWidth={720} type="native">
+        <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Cost and pass rate" tabIndex={0}>
           <Table striped highlightOnHover>
             <Table.Caption>Cost and pass rate by target, task and arm. Source only: target configuration was not applied.</Table.Caption>
             <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Cost per passed task</Table.Th><Table.Th>Pass rate</Table.Th></Table.Tr></Table.Thead>

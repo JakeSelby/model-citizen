@@ -28,7 +28,7 @@ export function HookMatrixGrid({ result, initialRow }: { result: HookMatrixResul
           </Alert>
         : <Text c="dimmed" size="sm">Every cell matches the committed matrix.</Text>}
       <Select data={result.rows} label="Hook" onChange={(value) => setRow(value ?? "")} value={row || null} />
-      <Table.ScrollContainer minWidth={900}>
+      <Table.ScrollContainer minWidth={900} scrollAreaProps={{ viewportProps: { role: "region", "aria-label": "Hook matrix", tabIndex: 0 } }}>
         <Table aria-label={`Hook matrix for ${row}`} striped withTableBorder>
           <Table.Thead><Table.Tr><Table.Th>Recorded call</Table.Th>{result.variants.map((variant) => <Table.Th key={variant}>{variant}</Table.Th>)}</Table.Tr></Table.Thead>
           <Table.Tbody>{grid.map((line) => <Table.Tr key={line.call}>

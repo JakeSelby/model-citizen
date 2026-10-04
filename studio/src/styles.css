@@ -398,17 +398,22 @@ textarea:focus-visible {
 .command-heading { margin-bottom: var(--studio-space-2); }
 .command-chip .code-view { white-space: pre-wrap; overflow-wrap: anywhere; }
 .interval-display { color: var(--studio-ink-secondary); font-variant-numeric: tabular-nums; }
-.data-table-scroll { max-width: 100%; overflow: auto; }
+.data-table-scroll { position: relative; max-width: 100%; overflow: auto; }
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--studio-text-sm); }
 .data-table caption { padding-block: var(--studio-space-4); color: var(--studio-ink-primary); font-weight: 650; text-align: left; }
 .data-table th, .data-table td { padding: var(--studio-space-3) var(--studio-space-4); border-bottom: var(--studio-border-width) solid var(--studio-border-default); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .data-table th { color: var(--studio-ink-secondary); font-weight: 600; white-space: nowrap; background: var(--studio-surface-canvas); }
 .data-table .evidence-state { margin: 0; border: 0; }
-.toast-region { position: fixed; z-index: 200; right: var(--studio-space-4); bottom: var(--studio-space-4); width: min(var(--studio-toast-width), calc(100% - var(--studio-space-8))); display: grid; gap: var(--studio-space-2); }
+/* Both insets and a max-width, not a width: a fixed width can hold a widened phone viewport open. */
+.toast-region { position: fixed; z-index: 200; right: var(--studio-space-4); bottom: var(--studio-space-4); left: var(--studio-space-4); max-width: var(--studio-toast-width); margin-left: auto; display: grid; gap: var(--studio-space-2); pointer-events: none; }
+.toast-region > * { pointer-events: auto; }
 .studio-toast { display: flex; align-items: center; justify-content: space-between; gap: var(--studio-space-3); padding: var(--studio-space-3) var(--studio-space-4); border: var(--studio-border-width) solid currentColor; border-radius: var(--studio-radius-md); box-shadow: var(--studio-toast-shadow); overflow-wrap: anywhere; }
 .studio-toast .mantine-Button-root { flex-shrink: 0; }
 
 :where(a, button, input, textarea, select, [tabindex]):focus-visible { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+/* Mantine fields drop the outline for a 1px border change, and summaries keep the browser ring;
+   every focus stop gets the Studio ring instead. */
+.studio-frame :focus-visible { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
 
 .save-bar {
   position: sticky;
@@ -423,6 +428,9 @@ textarea:focus-visible {
 
 .visually-hidden {
   position: absolute;
+  /* Pinned to its containing block's edge: at its static place inside a scrolled table it would
+     widen the page past a phone viewport. */
+  left: 0;
   width: var(--studio-border-width);
   height: var(--studio-border-width);
   overflow: hidden;

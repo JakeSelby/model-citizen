@@ -110,7 +110,7 @@ export function RunHistoryPanel() {
       </div>
       {error && <EvidenceState kind="error" title="History unavailable">{error}</EvidenceState>}
       {!page && !error && <EvidenceState kind="loading" title="Loading history">Reading the rebuildable index.</EvidenceState>}
-      {page && <ScrollArea type="auto"><Table className="data-table" highlightOnHover>
+      {page && <ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Run history", tabIndex: 0 }}><Table className="data-table" highlightOnHover>
         <Table.Thead><Table.Tr><Table.Th>Run</Table.Th><Table.Th>Status</Table.Th><Table.Th>Target</Table.Th><Table.Th>Cost</Table.Th><Table.Th>Duration</Table.Th><Table.Th>Date</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>{page.items.map((run) => <Table.Tr key={run.run_id}>
           <Table.Td><Text component={NavLink} to={`/experiments/runs/${run.run_id}`} fw={600}>{run.suite_id}</Text>

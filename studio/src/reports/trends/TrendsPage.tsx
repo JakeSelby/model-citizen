@@ -55,7 +55,7 @@ function LinePanel({ line, measure }: { line: Line; measure: Measure }) {
     { key: "context", heading: "Run", cell: (point) => <Stack gap={2}>
       <Text size="xs">{point.model ?? "model not recorded"} · {point.reps ?? "?"} rep(s){point.cache_basis ? ` · cache ${point.cache_basis}` : ""}</Text>
       <Text c="dimmed" size="xs">{delegationText(point)}</Text>
-      <Anchor component={NavLink} size="xs" to="/reports/rules" aria-label={`Rule health, current adherence and precision (beside ${pointLabel(point)})`}>Rule health: current reading</Anchor>
+      <Anchor component={NavLink} size="xs" to="/reports/rules" aria-label={`Rule health: current reading, adherence and precision (beside ${pointLabel(point)})`}>Rule health: current reading</Anchor>
     </Stack> },
   ];
   return <Paper p="lg" withBorder>

@@ -137,11 +137,11 @@ export function RunDetailPage() {
         {detail.rerun_of && <Text>Rerun of <Text component={NavLink} to={`/experiments/runs/${detail.rerun_of}`}>{detail.rerun_of}</Text></Text>}
         {detail.reruns.items.map((id) => <Text key={id}>Rerun: <Text component={NavLink} to={`/experiments/runs/${id}`}>{id}</Text></Text>)}
         {detail.reruns.next_cursor && <Button variant="default" onClick={() => void loadMoreLineage(detail.reruns.next_cursor as string)}>Load more reruns</Button>}
-        {detail.exact_command && <ScrollArea type="auto"><Code block>{detail.exact_command}</Code></ScrollArea>}
+        {detail.exact_command && <ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Exact command", tabIndex: 0 }}><Code block>{detail.exact_command}</Code></ScrollArea>}
         <Button disabled={!detail.rerun.available || rerunPending} loading={rerunPending} onClick={() => void startRerun()}>Rerun</Button>
         {!detail.rerun.available && <Text c="dimmed" size="sm">{detail.rerun.reason}</Text>}
       </Stack></Paper>
-      <Paper p="xl" withBorder><Title order={2}>Cases</Title><ScrollArea type="auto"><Table className="data-table">
+      <Paper p="xl" withBorder><Title order={2}>Cases</Title><ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Cases", tabIndex: 0 }}><Table className="data-table">
         <Table.Thead><Table.Tr><Table.Th>Case</Table.Th><Table.Th>Outcome</Table.Th><Table.Th>Commit</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>{detail.cases.map((item) => <Table.Tr key={item.id}><Table.Td>
           <Button variant="subtle" onClick={() => void showCaseHistory(item.id)}>{item.id}</Button>
@@ -164,7 +164,7 @@ export function RunDetailPage() {
             onClick={() => void showEvidence(item.id)}>{item.label}</Button>;
       })}</Group>
         {evidenceError && <EvidenceState kind="error" title="Evidence unavailable">{evidenceError}</EvidenceState>}
-        {evidence && <ScrollArea className="run-log" h={300} mt="md"><Code block>{evidence}</Code></ScrollArea>}</Paper>
+        {evidence && <ScrollArea className="run-log" h={300} mt="md" viewportProps={{ role: "region", "aria-label": "Case evidence", tabIndex: 0 }}><Code block>{evidence}</Code></ScrollArea>}</Paper>
     </>}
   </Stack>;
 }
