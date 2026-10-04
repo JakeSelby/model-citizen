@@ -117,22 +117,26 @@ untouched; do not move or replace either tag.
    rollback, conflicts and uninstall. Store its JSON output with the candidate evidence. This is a
    filesystem/configuration lifecycle check; it does not qualify a native client.
 
-   Run `python3 scripts/studio_lifecycle_acceptance.py --output
-   compatibility/evidence/studio-<platform>-<version>.json` on macOS and Linux at the frozen source
-   commit. Commit both records. Each must name current stable Chrome and pass every lifecycle,
-   security and browser-flow case; the qualification round's smoke tier runs the same command and
-   stops the round before any paid target when it fails. Release preflight also rebuilds `studio/`
-   from the exact lockfile and refuses any path, size or digest that differs from `studio/dist/`.
+   Qualify Studio on macOS and Linux at the frozen source commit, after the freeze and never
+   before it. Both release records come from the `studio-qualification` workflow run on the commit
+   being frozen: commit the record its macOS job prints as
+   `compatibility/evidence/studio-macos-<version>.json` and the one its Linux job prints as
+   `compatibility/evidence/studio-linux-<version>.json`. Each job runs
+   `python3 scripts/studio_lifecycle_acceptance.py` and must pass every lifecycle, security and
+   browser-flow case. The macOS job installs Google's current stable Chrome over the runner image's,
+   so only its record carries `browser.image_version` (the image's own Chrome) and
+   `browser.installer_sha256`; the Linux job uses the image's Chrome. The qualification round's
+   smoke tier runs the same command on the operator's host and stops the round before any paid
+   target when it fails; that host run is a gate, not a release record. Release preflight also
+   rebuilds `studio/` from the exact lockfile and refuses any path, size or digest that differs
+   from `studio/dist/`.
 
-   Generate these records only once `VERSION` names the release and the catalog names the frozen
-   qualification source: preflight reads `studio-<platform>-<VERSION>.json` and refuses a record
-   whose `candidate_commit` is not that source, so a record from an earlier development commit can
-   never be carried into a release and is not committed. Run the macOS record on a Mac checkout of
-   the frozen commit. For Linux, run the `studio-qualification` workflow on the frozen commit and
-   commit the record its Linux job prints. The macOS job installs Google's current stable Chrome over
-   the runner image's and records the image's own version as `browser.image_version`. When current
-   stable moves to a new major, update that platform's `stable_major` in `compatibility/studio.json`
-   before regenerating.
+   Preflight reads `studio-<platform>-<VERSION>.json` and refuses a record whose `candidate_commit`
+   is not the catalog's frozen qualification source, so a record from any other commit is never
+   committed. Each job also checks the frozen commit's `stable_major` before running; when stable
+   Chrome has moved past it, the job fails with "Studio Chrome pin is behind". No valid record can
+   then name that frozen commit: update the platform's `stable_major` in
+   `compatibility/studio.json`, freeze the new commit as the candidate, and qualify it again.
 
 5. Tag the verified commit with the matching immutable `v<version>` tag and push that tag.
    The release workflow repeats qualification and source gates before publishing. Never move an

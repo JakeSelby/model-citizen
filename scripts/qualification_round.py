@@ -28,6 +28,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,13 +37,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness_core import qualification  # noqa: E402
 from native_acceptance import (CLIENTS, catalog, confirmed_targets,  # noqa: E402
                                executed_by, host_mismatch, unobserved_note)
+import smoke_tier  # noqa: E402
+import studio_lifecycle_acceptance  # noqa: E402
 
 SMOKE = "smoke_tier.py"
 RUNNER = "native_acceptance.py"
 PASSED = "passed"
 SKIPPED = "skipped"
 RUNNING = "running"
-ROUND_TIMEOUT = 5400
+# A target's deadline, and at least the smoke tier's: every tier step may run to its own limit.
+TARGET_TIMEOUT = 5400
+ROUND_MARGIN = 300
+ROUND_TIMEOUT = max(TARGET_TIMEOUT, smoke_tier.total_seconds() + ROUND_MARGIN)
 
 
 def provision_record(round_dir):
@@ -72,10 +78,17 @@ def smoke(clone, env, targets=()):
     argv = [sys.executable, str(Path(clone) / "scripts" / SMOKE)]
     if targets:
         argv += ["--targets", ",".join(targets)]
-    try:
-        return subprocess.run(argv, cwd=str(clone), env=env, check=False, timeout=ROUND_TIMEOUT)
-    except subprocess.TimeoutExpired:
-        return None
+    # The tier records each step's process group and every detached Studio server it starts, so
+    # a tier that overruns the round is killed with everything it started, not just itself.
+    with tempfile.TemporaryDirectory(prefix="studio-processes-") as tracked:
+        env = dict(env, **{studio_lifecycle_acceptance.TRACK_ENV: tracked})
+        try:
+            return subprocess.run(argv, cwd=str(clone), env=env, check=False,
+                                  timeout=ROUND_TIMEOUT, start_new_session=True)
+        except subprocess.TimeoutExpired:
+            return None
+        finally:
+            studio_lifecycle_acceptance.kill_tracked(tracked)
 
 
 def nothing_observed(reason):

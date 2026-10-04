@@ -38,22 +38,81 @@ BROWSER_SUITES = {
         "test_late_preview_cannot_update_a_switched_draft",
     ),
 }
-# Each suite runs whole under its own budget; the module editor's 19 rendered flows take over six
-# minutes on a loaded Mac.
-BROWSER_SUITE_TIMEOUT = 1200
+# Each suite runs whole, under a budget proportional to its size: a fixed allowance for Studio
+# and Chrome startup plus a per-case allowance about twice the 20 s a rendered case took on a
+# loaded Mac (the module editor's 19 cases ran 383 s).
+SUITE_BASE_SECONDS = 60
+SUITE_CASE_SECONDS = 45
 STARTUP_TIMEOUT = 45
-# Git reads, the HTTP refusal probes, the version read and the stop, each individually bounded.
-LIFECYCLE_OVERHEAD = 120
+# The lifecycle's own bounded steps outside startup: the clean-tree and HEAD reads (30 s each),
+# five HTTP probes (3 s each), the non-loopback connect (0.5 s), the Chrome version read (10 s)
+# and the stop with its confirming status (10 s each). The overhead adds slack for the host
+# lookup, which has no bound of its own.
+LIFECYCLE_BOUNDS = 30 + 30 + 5 * 3 + 0.5 + 10 + 10 + 10
+LIFECYCLE_OVERHEAD = 150
 # The browser the suites must use, so the recorded version is the one that ran.
 CHROME_ENV = "HARNESS_STUDIO_CHROME"
 # Set by the hosted workflow to the runner image's own Chrome before it installs current stable.
 IMAGE_CHROME_ENV = "HARNESS_STUDIO_IMAGE_CHROME"
+# Set by the same workflow to the SHA-256 of the Chrome installer it verified and installed.
+INSTALLER_SHA_ENV = "HARNESS_STUDIO_CHROME_INSTALLER_SHA256"
+SHA256 = re.compile(r"[0-9a-f]{64}")
+# A directory of PID files naming every Chrome and detached Studio server a qualification starts.
+# Detached servers leave the process group, so whoever kills a qualification also kills these.
+TRACK_ENV = "HARNESS_STUDIO_TRACK_DIR"  # harness_core.studio.lifecycle.TRACK_ENV
 CHROME_VERSION = re.compile(r"Google Chrome ([0-9]+)(?:\.[0-9]+){3}")
+TEST_CASE = re.compile(r"^    def (test_[A-Za-z0-9_]+)\(", re.MULTILINE)
 
 
-def worst_case_seconds():
+def suite_cases(pattern, root=ROOT):
+    return len(TEST_CASE.findall((root / "tests" / pattern).read_text(encoding="utf-8")))
+
+
+def suite_timeout(pattern, root=ROOT):
+    return SUITE_BASE_SECONDS + SUITE_CASE_SECONDS * suite_cases(pattern, root)
+
+
+def worst_case_seconds(root=ROOT):
     """The longest a qualification can take before one of its own bounds stops it."""
-    return STARTUP_TIMEOUT + LIFECYCLE_OVERHEAD + BROWSER_SUITE_TIMEOUT * len(BROWSER_SUITES)
+    return (STARTUP_TIMEOUT + LIFECYCLE_OVERHEAD
+            + sum(suite_timeout(pattern, root) for pattern in BROWSER_SUITES))
+
+
+def track(pid, directory=None):
+    directory = directory or os.environ.get(TRACK_ENV)
+    if directory:
+        Path(directory, str(int(pid))).write_text("")
+
+
+def untrack(pid, directory=None):
+    directory = directory or os.environ.get(TRACK_ENV)
+    if directory:
+        try:
+            Path(directory, str(int(pid))).unlink()
+        except OSError:
+            pass
+
+
+def kill_tracked(directory):
+    """Kill every tracked process with its group, and forget them all.
+
+    A tracked process that leads a group is killed with the group, which outlives its leader; one
+    that leads none has no group of its own number and is killed alone.
+    """
+    if not directory or not Path(directory).is_dir():
+        return
+    for entry in Path(directory).iterdir():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except OSError:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+        untrack(pid, directory)
 
 
 def command(*args, env=None, expected=0, timeout=30):
@@ -125,25 +184,28 @@ def request(port, host, method, path, headers=None, body=None):
         connection.close()
 
 
-def run_suite(python, pattern, env, timeout=BROWSER_SUITE_TIMEOUT):
-    """Run one rendered suite in its own process group, killing the group if it overruns.
+def run_suite(python, pattern, env, timeout=None):
+    """Run one rendered suite, killing it and every browser and server it started on overrun.
 
-    The suite's Chrome is its child; killing only the interpreter would leave that browser
-    holding its debugging port and profile across the next attempt.
+    The suite leads its own process group, so its Chrome can be killed with it without killing
+    this process. The group is tracked, as is each detached Studio server the suite starts (the
+    server records itself), so a caller that kills this qualification reaches them all too.
     """
+    timeout = suite_timeout(pattern) if timeout is None else timeout
+    directory = env.get(TRACK_ENV)
     process = subprocess.Popen(
         [python, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"],
         cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         start_new_session=True)
+    track(process.pid, directory)
     try:
         stdout, stderr = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:
-            process.kill()
+        kill_tracked(directory)
         process.communicate()
         raise AssertionError("Studio browser suite {} exceeded {} seconds".format(pattern, timeout))
+    finally:
+        untrack(process.pid, directory)
     if process.returncode != 0:
         raise AssertionError("command returned {}, expected 0: {}".format(
             process.returncode, (stdout + stderr).strip()))
@@ -157,7 +219,12 @@ def observed_chrome(root, executable):
     if match is None:
         raise AssertionError("Studio browser is not the declared Google Chrome stable channel")
     expected_major = supported_tuple(root)["stable_major"]
-    if int(match.group(1)) != expected_major:
+    observed_major = int(match.group(1))
+    if observed_major > expected_major:
+        raise AssertionError(
+            "Studio Chrome pin is behind: stable is major {} but compatibility/studio.json "
+            "pins {}; update compatibility/studio.json".format(observed_major, expected_major))
+    if observed_major != expected_major:
         raise AssertionError("Studio browser is not pinned stable Chrome major {}".format(
             expected_major))
     return version
@@ -191,6 +258,16 @@ def image_chrome():
         return None
     if not CHROME_VERSION.fullmatch(value):
         raise AssertionError(IMAGE_CHROME_ENV + " is not a Google Chrome version")
+    return value
+
+
+def installer_sha256():
+    """The digest of the Chrome installer the hosted workflow installed; else None."""
+    value = os.environ.get(INSTALLER_SHA_ENV, "").strip()
+    if not value:
+        return None
+    if not SHA256.fullmatch(value):
+        raise AssertionError(INSTALLER_SHA_ENV + " is not a SHA-256 digest")
     return value
 
 
@@ -305,6 +382,20 @@ def lifecycle(root=ROOT, python=sys.executable):
 
 def run(root=ROOT, python=sys.executable, browser_runner=browser_flow):
     image = image_chrome()
+    installer = installer_sha256()
+    inherited = os.environ.get(TRACK_ENV)
+    with tempfile.TemporaryDirectory(prefix="studio-processes-") as own:
+        directory = inherited or own
+        os.environ[TRACK_ENV] = directory
+        try:
+            return _run(root, python, browser_runner, image, installer)
+        finally:
+            kill_tracked(directory)
+            if inherited is None:
+                os.environ.pop(TRACK_ENV, None)
+
+
+def _run(root, python, browser_runner, image, installer):
     cases = lifecycle(root, python)
     support = supported_tuple(root)
     executable = chrome(root)
@@ -315,6 +406,8 @@ def run(root=ROOT, python=sys.executable, browser_runner=browser_flow):
                "version_policy": support["version_policy"]}
     if image is not None:
         browser["image_version"] = image
+    if installer is not None:
+        browser["installer_sha256"] = installer
     return {
         "schema_version": 1,
         "candidate_commit": commit,
@@ -375,6 +468,10 @@ def evidence_errors(root, source_commit):
         if image_version is not None and (not isinstance(image_version, str)
                                           or CHROME_VERSION.fullmatch(image_version) is None):
             errors.append(relative + ": hosted image Chrome version is malformed")
+        installer = record.get("browser", {}).get("installer_sha256")
+        if installer is not None and (not isinstance(installer, str)
+                                      or SHA256.fullmatch(installer) is None):
+            errors.append(relative + ": Chrome installer digest is malformed")
         named = [name for name in names if isinstance(name, str)]
         unknown = sorted(set(named) - REQUIRED_CASES)
         duplicates = sorted(name for name in set(named) if named.count(name) > 1)
@@ -399,7 +496,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    rendered = json.dumps(run(), indent=2, sort_keys=True) + "\n"
+    # A terminated qualification still runs its cleanup and kills what it tracked.
+    previous = signal.signal(signal.SIGTERM, lambda *_args: sys.exit(143))
+    try:
+        rendered = json.dumps(run(), indent=2, sort_keys=True) + "\n"
+    finally:
+        signal.signal(signal.SIGTERM, previous)
     if args.output:
         args.output.write_text(rendered)
     print(rendered, end="")

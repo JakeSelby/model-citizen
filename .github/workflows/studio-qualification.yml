@@ -5,6 +5,8 @@ on:
     branches: [main, feature/v0.18.0-studio]
   pull_request:
   merge_group:
+  # Release records are made by running this on the frozen commit; see docs/releasing.md.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,13 +33,31 @@ jobs:
           dmg="$RUNNER_TEMP/googlechrome.dmg"
           curl --fail --location --silent --show-error --output "$dmg" \
             https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg
+          echo "HARNESS_STUDIO_CHROME_INSTALLER_SHA256=$(shasum -a 256 "$dmg" | cut -d' ' -f1)" >> "$GITHUB_ENV"
           mount="$(hdiutil attach -nobrowse -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')"
-          codesign --verify --deep --strict "$mount/Google Chrome.app"
-          codesign --display --verbose=2 "$mount/Google Chrome.app" 2>&1 | grep -qx 'TeamIdentifier=EQHXZ8M8AV'
+          # Verified against Apple's chain with Google's developer team as the leaf, not read
+          # back from the signature's own display fields.
+          codesign --verify --deep --strict \
+            -R='anchor apple generic and certificate leaf[subject.OU] = "EQHXZ8M8AV"' \
+            "$mount/Google Chrome.app"
           sudo rm -rf "$app"
           sudo ditto "$mount/Google Chrome.app" "$app"
           hdiutil detach "$mount"
           "$app/Contents/MacOS/Google Chrome" --version
+      # Stable Chrome moving past the pin is a pin to update, not a Studio failure: say so plainly.
+      - name: Check the Chrome pin
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          import studio_lifecycle_acceptance as qualification
+          try:
+              print(qualification.observed_chrome(qualification.ROOT, qualification.chrome()))
+          except AssertionError as error:
+              title = "Studio Chrome pin is behind" if "pin is behind" in str(error) else "Studio Chrome"
+              print("::error title={}::{}".format(title, error))
+              raise SystemExit(1)
+          PY
       - name: Qualify lifecycle, security and Chrome flows
         run: |
           python3 scripts/studio_lifecycle_acceptance.py \
