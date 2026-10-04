@@ -1621,7 +1621,7 @@ def preflight(tasks, opts, launch=subprocess.run, report_spend=None):
                 (raw / ("preflight-%s.json" % arm)).write_text(done.stdout or "", encoding="utf-8")
             # Every reason a preflight is red is named: an effort mismatch never hides a
             # collector failure behind it.
-            problems = ["a budget stop at %.4f USD reported, against its %g USD cap" % (cost, cap)] \
+            problems = ["a budget stop at %.4f USD reported, against its %g USD cap" % (cost, preflight_cap)] \
                 if budget_stop else []
             problems += ([] if effort_matches else
                          ["observed effort %s, pinned %s" % (observed_effort, effort)])
@@ -1630,7 +1630,8 @@ def preflight(tasks, opts, launch=subprocess.run, report_spend=None):
                            and effort_matches
                            and not observation_problem,
                            "reply": "; ".join(problems) if problems else reply,
-                           "cost_usd": cost, "budget_stop": budget_stop, "cap_usd": cap, "effort": effort,
+                           "cost_usd": cost, "budget_stop": budget_stop, "cap_usd": preflight_cap,
+                           "effort": effort,
                            "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)

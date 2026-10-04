@@ -29,6 +29,7 @@
           "passes": 5
         }
       },
+      "cache_basis": "shared",
       "claim": null,
       "confidence": 0.95,
       "delegation": {
@@ -158,6 +159,77 @@
       "limitation": "fewer than five paired trials per task and arm; exploratory diagnostic only",
       "long": null,
       "method": "task-clustered paired percentile bootstrap",
+      "metrics": {
+        "confidence": 0.95,
+        "method": "task-clustered paired percentile bootstrap",
+        "metrics": {
+          "accuracy": {
+            "arms": {
+              "bare": {
+                "mean": 0.725,
+                "n": 6,
+                "unknown": 0
+              },
+              "harness": {
+                "mean": 0.825,
+                "n": 6,
+                "unknown": 0
+              }
+            },
+            "difference": 0.1,
+            "difference_interval": [
+              0.1,
+              0.1
+            ],
+            "direction": "higher",
+            "paired_tasks": 3,
+            "reading": "better",
+            "reason": null,
+            "tasks": {
+              "a": {
+                "bare": {
+                  "mean": 0.525,
+                  "n": 2,
+                  "unknown": 0
+                },
+                "harness": {
+                  "mean": 0.625,
+                  "n": 2,
+                  "unknown": 0
+                }
+              },
+              "b": {
+                "bare": {
+                  "mean": 0.725,
+                  "n": 2,
+                  "unknown": 0
+                },
+                "harness": {
+                  "mean": 0.825,
+                  "n": 2,
+                  "unknown": 0
+                }
+              },
+              "c": {
+                "bare": {
+                  "mean": 0.925,
+                  "n": 2,
+                  "unknown": 0
+                },
+                "harness": {
+                  "mean": 1.025,
+                  "n": 2,
+                  "unknown": 0
+                }
+              }
+            }
+          }
+        },
+        "reference": "bare",
+        "resamples": 10000,
+        "seed": 795,
+        "treatment": "harness"
+      },
       "ratio": 0.5189,
       "ratio_interval": [
         0.3235294117647059,
@@ -204,6 +276,7 @@
           "passes": 0
         }
       },
+      "cache_basis": "shared",
       "claim": null,
       "confidence": 0.95,
       "delegation": {

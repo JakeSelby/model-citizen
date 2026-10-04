@@ -45,3 +45,11 @@ test("an engine refusal and empty containers stay visible", () => {
   assert.deepEqual(analysisLines({ target: 1, error: "cost-bench: no rows" }), [["Engine refused", "cost-bench: no rows"]]);
   assert.deepEqual(engineLeaves({ long: {}, tasks: [] }), [["long", "{}"], ["tasks", "[]"]]);
 });
+
+test("the cache basis and the oracle's named metrics are displayed", () => {
+  const shown = new Map(analysisLines(fixture[0]));
+  assert.equal(shown.get("cache_basis"), JSON.stringify("shared"));
+  assert.equal(shown.get("metrics.metrics.accuracy.direction"), JSON.stringify("higher"));
+  assert.ok(shown.has("metrics.metrics.accuracy.difference_interval"));
+  assert.equal(new Map(analysisLines(fixture[1])).has("metrics.metrics.accuracy.direction"), false);
+});

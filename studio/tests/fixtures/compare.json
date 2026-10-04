@@ -30,6 +30,7 @@
             "passes": 6
           }
         },
+        "cache_basis": "shared",
         "claim": null,
         "confidence": 0.95,
         "delegation": {
@@ -255,6 +256,7 @@
             "passes": 6
           }
         },
+        "cache_basis": "shared",
         "claim": null,
         "confidence": 0.95,
         "delegation": {

@@ -25,8 +25,9 @@ def _load(name, path):
 pricing = _load("pricing_cover", REPO / "policy" / "hooks" / "pricing.py")
 
 # Ids the fixtures invent, which no provider bills: a test's own rate table, a stand-in for a
-# runtime's model, and the judge version a decision record names. Any other id must be priced.
-PLACEHOLDERS = {"claude-test", "model-a", "placeholder-model", "jev-1.13.0"}
+# runtime's model, the judge version a decision record names, and the id the Studio's spend
+# fixture uses to show an unpriced model reading unknown. Any other id must be priced.
+PLACEHOLDERS = {"claude-test", "model-a", "placeholder-model", "jev-1.13.0", "gpt-unpriced-model"}
 
 
 def _records(path):
