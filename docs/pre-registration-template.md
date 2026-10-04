@@ -80,12 +80,19 @@ an appended entry in the deviation log, never an edit above it.
 - **Claim power:** <the joint power, at this k, n and m, of all three conditions a saving claim
   needs: both tests of the decision rule and the long-task subset's interval win. Size for 0.8, or
   state the lower figure and why.>
-- **Minimum detectable effect:** <at most 15%>
+- **Minimum detectable effect:** <at most 15%, passed to the power command as `--mde`>
+- **Assumed pass rate:** <"none", or the pass rate the power calculation assumes and why. Required
+  when the pilot passes everything or nothing, which leaves no pass-rate variance to size from; the
+  command then refuses to size without `--assumed-pass-rate`, and prints the assumption beside the
+  measured rate. A pilot where fewer than two tasks pass in both arms, the floor included, has no
+  Cost-of-Pass variance either: state the assumed tau2 too, passed as `--tau2` beside `--pilot`>
 - **Variance source:** <the pilot rows or earlier run the power analysis used, with its
   intra-cluster correlation>
 - **Power calculation:** <the command that produced k, n and m for the decision rule and for the
-  claim, and its output: `python3 scripts/replay_power.py --pilot <results dir> --have <k> <n> <m>`,
-  or the formula used instead>
+  claim, and its output: `python3 scripts/replay_power.py --pilot <results dir> --mde <effect>
+  --have <k> <n> <m>`, with `--assumed-pass-rate <p>` when one is stated above and `--tau2 <assumed
+  variance>` when the pilot has fewer than two tasks passing in both arms, or the formula used
+  instead>
 
 ## Stopping rule
 
@@ -113,6 +120,25 @@ The hypothesis is supported only when both hold:
   minus bare) is above −δ.
 
 The result is published with its intervals, whatever it shows.
+
+A metric that does not show an effect is read against its margin under Equivalence margins, so a
+null has bounds: **equivalent** when its 95% interval lies strictly inside the margin, **not
+equivalent** when the interval lies wholly at or beyond one bound, and **inconclusive** otherwise or
+when the interval is undefined. That is two one-sided tests at 0.025 a side.
+`python3 scripts/equivalence.py`, given the run's results directory and this file as `--plan`,
+prints each verdict from the same task-clustered bootstrap interval the decision rule reads.
+
+## Equivalence margins
+
+One field per metric, `LOWER to UPPER` on the metric's own scale, or "none" with the reason. A
+ratio's margin is positive and brackets 1.0; a difference's brackets 0. Choose each margin as the
+largest effect that would not change a decision, before the first trial; a margin chosen after
+seeing the interval is a deviation. SM-2's defaults are filled in.
+
+- **Cost-of-Pass ratio:** 0.85 to 1.1765 (a 15% saving, and its reciprocal as the matching cost)
+- **Pass-rate difference:** -0.125 to 0.125 (the non-inferiority margin δ, both ways)
+- **Behaviour scores:** <"none", or replace this line with one field per score, named as the
+  analysis reports it, whose value is its margin as LOWER to UPPER>
 
 ## Exclusions
 
