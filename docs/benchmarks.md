@@ -335,10 +335,17 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   reliability section all read the balanced rows, the detections of a dropped trial included.
   Balancing was chosen over leaving every uneven task out because it keeps the trials both arms
   share. The verdict then reads `partial`, with the count of cells (tasks) used of those the rows
-  name; a task neither arm reached is not in the rows and so not counted. A partial set supports
-  no claim unless the run is pre-registered and its plan's `Stopping rule` section says
-  `- **Partial set:** allowed`, read from the plan at its recorded commit; then the verdict reads
-  `partial: <SM-2's verdict>`. Otherwise a registered run's verdict reads `partial: no claim`. A
+  name; a task neither arm reached is not in the rows and so not counted. When balancing leaves no
+  task with a trial in both arms, the report still prints, with `0 of N cell(s) used`, every
+  estimate undefined and no claim. A runner that stops a set early writes `stop.json` beside its
+  results, naming its stop reason: `spend-cap`, `effort` (a run at another effort than the pinned
+  one) or `surface-drift`. A partial set supports no claim unless the run is pre-registered and its
+  plan's `Stopping rule` section grants it, read from the plan at its recorded commit:
+  `- **Partial set:** allowed` covers any stop, recorded or not, and
+  `- **Partial set:** allowed when <stop reason>[, <stop reason>]` only a recorded reason it names;
+  `not allowed` or an absent field grants none. Any other value is refused, by `replay` before the
+  run and by `summarise`, naming the value. When the permission covers the stop the verdict reads
+  `partial: <SM-2's verdict>`; otherwise a registered run's verdict reads `partial: no claim`. A
   complete set reports exactly as before, and under `--json` a partial one adds a `partial` key.
 - **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.

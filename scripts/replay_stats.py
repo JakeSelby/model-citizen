@@ -350,16 +350,17 @@ def analyse_set(rows, seed=SEED, resamples=RESAMPLES, registered=False, claim_al
     used and seen, each note and whether the set may support a claim. A partial set supports one
     only when the run is pre-registered and its stopping rule allows it (`claim_allowed`); then the
     verdict reads `partial: <SM-2's verdict>`. Otherwise it reads `partial`, or `partial: no claim`
-    for a registered run, and carries no claim. ValueError as `analyse`."""
+    for a registered run, and carries no claim. A set balancing leaves with no paired cell is
+    reported the same way over `_unpaired`'s empty estimates. ValueError as `analyse`."""
     kept, notes = balance(rows)
     trial_sets = {}
     for row in kept:
         trial_sets.setdefault((row["task"], row["arm"]), set()).add(_trial(row))
     if not notes and len({frozenset(s) for s in trial_sets.values()}) <= 1:
         return analyse(rows, seed, resamples)
-    result = analyse(kept, seed, resamples, fixed_sample=False)
+    result = analyse(kept, seed, resamples, fixed_sample=False) if kept else _unpaired(seed, resamples)
     used, seen = result["tasks"], result["tasks"] + sum(1 for n in notes if n["action"] == "left out")
-    claims = registered and claim_allowed
+    claims = registered and claim_allowed and bool(kept)
     result["partial"] = {"cells_used": used, "cells_seen": seen, "notes": notes,
                          "uneven": len({len(s) for s in trial_sets.values()}) > 1,
                          "registered": registered, "claim_allowed": claims}
@@ -370,11 +371,27 @@ def analyse_set(rows, seed=SEED, resamples=RESAMPLES, registered=False, claim_al
             result["reason"], used_text)
     else:
         result["verdict"] = PARTIAL_NO_CLAIM if registered else PARTIAL
-        result["reason"] = ("a partial set, %s, and the pre-registered stopping rule does not let a "
+        result["reason"] = ("a partial set, %s, so no paired cell is left to analyse" % used_text
+                            if not kept else
+                            "a partial set, %s, and the pre-registered stopping rule does not let a "
                             "partial set support a claim" % used_text if registered else
                             "a partial set, %s, from an exploratory run" % used_text)
         result["claim"] = None
     return result
+
+
+def _unpaired(seed, resamples):
+    """`analyse`'s shape for a partial set that balancing left with no paired cell: every count
+    zero and every estimate undefined, so it renders and supports no claim."""
+    arm = {"attempts": 0, "passes": 0, "errors": 0, "cost_usd": None, "cost_of_pass": None,
+           "mean_cost_per_attempt": None, "pass_rate": None, "pass_rate_interval_descriptive": None}
+    limitation = "no task holds a trial in both arms"
+    return {"method": METHOD, "seed": seed, "resamples": resamples, "confidence": CONFIDENCE,
+            "delta": DELTA, "tasks": 0, "arms": {name: dict(arm) for name in ARMS},
+            "ratio": None, "ratio_undefined": limitation, "ratio_interval": None,
+            "undefined_resamples": 0, "difference": None, "difference_interval": None, "long": None,
+            "sm2_eligible": False, "limitation": limitation,
+            "verdict": INCONCLUSIVE, "reason": limitation, "claim": None}
 
 
 def render_partial(partial):

@@ -147,7 +147,7 @@ class StoppingRuleTests(unittest.TestCase):
         return answer
 
     def test_the_plan_field_decides_and_the_default_is_no(self):
-        self.assertTrue(self.allowed("- **Partial set:** allowed, the cap is the sample size"))
+        self.assertTrue(self.allowed("- **Partial set:** allowed"))
         self.assertFalse(self.allowed("- **Partial set:** not allowed"))
         self.assertFalse(self.allowed(""))
         self.assertFalse(self.allowed("- **Partial set:** allowed", code=128))  # unreadable plan

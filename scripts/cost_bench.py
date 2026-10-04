@@ -1857,7 +1857,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     effort than the pinned one stops the set whatever the stamp says.
 
     A saved result is created exclusively before probes or model calls, so an existing path can
-    never mix attempts from two cohorts."""
+    never mix attempts from two cohorts. A set that stops early records why beside it
+    (`write_stop`), which `summarise` weighs against the plan's `Partial set` permission."""
     if not tasks:
         raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if out is None:
@@ -1867,7 +1868,7 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     except FileExistsError:
         raise SystemExit("cost-bench: refusing to append to existing saved results: %s" % out)
     with sink:
-        return _replay(tasks, opts, launch, sink)
+        return _replay(tasks, opts, launch, sink, lambda reason: write_stop(out, reason))
 
 
 def admit_pair_arms(opts):
@@ -1906,7 +1907,7 @@ def admit_design_cells(opts):
     unit_economy.admit_cells(opts["arms"], fingerprints)
 
 
-def _replay(tasks, opts, launch, sink):
+def _replay(tasks, opts, launch, sink, stop=lambda reason: None):
     refuse_observation_collisions(tasks, opts)
     names = arm_names(opts)
     harness_arms = [arm for arm in names if arm != "bare"]
@@ -1958,6 +1959,7 @@ def _replay(tasks, opts, launch, sink):
         if replay_pack.is_scenario(task):
             cap = replay_session.session_cap(task, opts["run_cap"])
             if spent + cap > opts["spend_cap"]:
+                stop(STOP_SPEND_CAP)
                 return rows, True
             session = run_long_session(task, rep, arm, opts, launch)
             spent += session[-1]["cost_usd"]
@@ -1969,10 +1971,12 @@ def _replay(tasks, opts, launch, sink):
                     sink.write(json.dumps(row, sort_keys=True) + "\n")
                 sink.flush()
             if session[-1]["error_kind"].startswith("effort:"):
+                stop(STOP_EFFORT)
                 raise SystemExit("cost-bench: stopping the set: the %s arm's session of %s rep %d %s"
                                  % (arm, task["id"], rep, session[-1]["error_kind"]))
             continue
         if spent + opts["run_cap"] > opts["spend_cap"]:
+            stop(STOP_SPEND_CAP)
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
         surface = surface_of(row)
@@ -1988,9 +1992,11 @@ def _replay(tasks, opts, launch, sink):
             sink.flush()
         where = "the %s arm's run of %s rep %d" % (arm, task["id"], rep)
         if row.get("observed_effort") is not None and row["observed_effort"] != row["effort"]:
+            stop(STOP_EFFORT)
             raise SystemExit("cost-bench: stopping the set: %s ran at effort %s, pinned %s"
                              % (where, row["observed_effort"], row["effort"]))
         if row["surface_drift"] and not allowed:
+            stop(STOP_SURFACE_DRIFT)
             raise SystemExit("cost-bench: stopping the set: %s loaded a different surface from the arm's "
                              "first run:\n  %s\nthe %d row(s) so far are written; --allow-surface-drift "
                              "runs on and stamps every row" % (where, "\n  ".join(row["surface_drift"]), len(rows)))
@@ -2241,8 +2247,11 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
         return summarise_pair(rows, path, args)
     registered = delegation_verdict.registered(rows)
     try:
-        result = replay_stats.analyse_set(rows, args.seed, args.resamples, registered,
-                                          registered and partial_claim_allowed(rows))
+        allowed = registered and partial_claim_allowed(rows, stop_beside(path))
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise %s: %s" % (path, exc))
+    try:
+        result = replay_stats.analyse_set(rows, args.seed, args.resamples, registered, allowed)
         if result.get("partial"):  # every later section reads the same balanced rows
             rows = replay_stats.balance(rows)[0]
     except ValueError as exc:
@@ -2344,22 +2353,66 @@ def pooled_detections(found):
 
 
 PARTIAL_SET_FIELD = "Partial set"
+# Why the runner stopped a set early, as `write_stop` records it beside the results.
+STOP_SPEND_CAP, STOP_EFFORT, STOP_SURFACE_DRIFT = "spend-cap", "effort", "surface-drift"
+STOP_REASONS = (STOP_SPEND_CAP, STOP_EFFORT, STOP_SURFACE_DRIFT)
+STOP = "stop.json"
+ANY_STOP = frozenset(STOP_REASONS) | {None}  # plain `allowed`: whatever stopped the run, recorded or not
 
 
-def partial_claim_allowed(rows):
-    """Whether the run's pre-registered stopping rule lets a partial set support a claim: its
-    `Stopping rule` section names `- **Partial set:** allowed`, read from the plan as committed at
-    the recorded commit. False when the field is absent, says anything else, or the plan cannot be
-    read, so the default is no claim."""
+def write_stop(results, reason):
+    """Record beside a `results.jsonl` the stop reason, one of `STOP_REASONS`, of a set that ended early."""
+    (Path(results).parent / STOP).write_text(json.dumps({"stop_reason": reason}) + "\n", encoding="utf-8")
+
+
+def stop_beside(results):
+    """The stop reason recorded beside a `results.jsonl`, or None when none was recorded or it
+    cannot be read."""
+    try:
+        reason = json.loads((Path(results).parent / STOP).read_text(encoding="utf-8")).get("stop_reason")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return reason if reason in STOP_REASONS else None
+
+
+def partial_set_permission(value):
+    """The stop reasons under which a plan's `Partial set` value lets a partial set support a
+    claim: `allowed` covers any stop, `allowed when <reason>[, <reason>]` only the named ones (each
+    of `STOP_REASONS`), and `not allowed` or an absent field none. ValueError naming any other value."""
+    text = (value or "").strip()
+    if not text or text == "not allowed":
+        return frozenset()
+    if text == "allowed":
+        return ANY_STOP
+    if text.startswith("allowed when "):
+        reasons = [part.strip() for part in text[len("allowed when "):].split(",")]
+        if reasons and all(reason in STOP_REASONS for reason in reasons):
+            return frozenset(reasons)
+    raise ValueError("the pre-registration's Partial set value %r is not `allowed`, `not allowed` or "
+                     "`allowed when <stop reason>[, <stop reason>]` over %s" % (value, ", ".join(STOP_REASONS)))
+
+
+def registered_partial_permission(rows):
+    """The `Partial set` permission (`partial_set_permission`) of the plan the rows name, read as
+    committed at the recorded commit; empty when the rows name no plan or it cannot be read."""
     first = rows[0] if rows else {}
     plan, commit = first.get("pre_registration"), first.get("pre_registration_commit")
     if not plan or not commit:
-        return False
+        return frozenset()
     code, text = experiment_protocol._git(ROOT, "show", "%s:%s" % (commit, plan))
     if code:
-        return False
+        return frozenset()
     rule = experiment_protocol.fields(experiment_protocol.sections(text).get("Stopping rule", ""))
-    return rule.get(PARTIAL_SET_FIELD, "").lower().startswith("allowed")
+    return partial_set_permission(rule.get(PARTIAL_SET_FIELD))
+
+
+def partial_claim_allowed(rows, stop_reason=None):
+    """Whether the run's pre-registered stopping rule lets this partial set support a claim: its
+    `Stopping rule` section's `- **Partial set:**` value covers `stop_reason`, the reason the
+    runner recorded (`stop_beside`), None when it recorded none. False when the field is absent,
+    says `not allowed`, or the plan cannot be read, so the default is no claim; ValueError when the
+    value is outside the grammar."""
+    return stop_reason in registered_partial_permission(rows)
 
 
 def write_report(result, basis, as_json, text):
@@ -2763,6 +2816,11 @@ def _cmd_replay(args, pack):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    try:  # an ungrammatical Partial set permission is refused before any spend, not at summarise
+        registered_partial_permission([protocol])
+    except ValueError as exc:
+        print("cost-bench: %s" % exc, file=sys.stderr)
+        raise SystemExit(2)
     configs = arm_configs(args)
     if getattr(args, "design", None):
         return replay_design(args, tasks, protocol)
