@@ -213,8 +213,8 @@ def workflow_launch_hooks(messages):
     the launch's window, from its call to its result, beyond the window's own spawn calls; an
     event naming a `tool_use_id` counts only when that id is no spawn call of the stream.
     `activity` is whether the stream shows anything the launch ran. `passed` is True when its
-    agents met a spawn hook, False when the launch finished, ran something, and met none, and
-    None when the stream carries no hook events, the launch never finished, ran nothing visible,
+    agents met a spawn hook, finished or not, False when the launch finished, ran something, and
+    met none, and None when the stream carries no hook events, an unfinished launch met none, it ran nothing visible,
     or the window's own spawn calls leave its events unattributable."""
     messages = _dicts(messages)
     streamed_hooks = any(m.get("type") == "system" and m.get("subtype") == "hook_response" for m in messages)
@@ -239,10 +239,12 @@ def workflow_launch_hooks(messages):
                     counts[event] = sum(1 for m in found if m.get("tool_use_id") not in spawn_ids)
                 else:
                     counts[event] = len(found) - own_calls if len(found) >= own_calls else None
-            if not streamed_hooks or end is None or None in counts.values():
+            if not streamed_hooks or None in counts.values():
                 passed = None
             elif any(counts.values()):
-                passed = True
+                passed = True  # an unfinished launch whose agents met a hook has still met one
+            elif end is None:
+                passed = None
             else:
                 # Spawn calls of its own in the window and no ids: their events and the launch's
                 # cannot be told apart, so none left over is not proof that none was the launch's.
@@ -286,8 +288,11 @@ class FirstWave:
     The wave is the spawn and `Workflow` calls of the main thread's first assistant turn that
     makes any: every main-thread message with that turn's message id, since the CLI streams each
     content block of a turn as its own message. It is out when each spawn's thread has reported
-    the model it runs on, each `Workflow` launch has shown any activity, or a call has its result,
-    which a refused spawn gets at once."""
+    the model it runs on, or a call has its result, which a refused spawn gets at once. A
+    `Workflow` launch is out at its result, or once a spawn-tool hook event follows it, whichever
+    comes first: either lets `workflow_launch_hooks` answer for it, where activity alone would
+    leave its window open and the answer unknown. A hook event is credited to the earliest
+    launch still out."""
 
     def __init__(self):
         self.turn, self.calls, self.workflows, self.seen, self.done = None, [], set(), set(), False
@@ -312,12 +317,13 @@ class FirstWave:
         if main and turn is not None and turn == self.turn:
             self._take(message)
         thread = message.get("parent_tool_use_id")
-        if thread in self.calls:
-            if thread in self.workflows or (message.get("type") == "assistant"
-                                            and (message.get("message") or {}).get("model")):
-                self.seen.add(thread)
-        if message.get("type") == "system" and message.get("tool_use_id") in self.workflows:
-            self.seen.add(message["tool_use_id"])
+        if thread in self.calls and thread not in self.workflows and message.get("type") == "assistant" \
+                and (message.get("message") or {}).get("model"):
+            self.seen.add(thread)
+        if hook_tool(message) in SPAWN_TOOLS and message.get("tool_use_id") not in self.calls:
+            pending = [call for call in self.calls if call in self.workflows and call not in self.seen]
+            if pending:
+                self.seen.add(pending[0])
         for result in _tool_results(message):
             if result.get("tool_use_id") in self.calls:
                 self.seen.add(result["tool_use_id"])

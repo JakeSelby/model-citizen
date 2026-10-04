@@ -99,6 +99,9 @@ PREFIX_FIELDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_inpu
 # refusal only as an error, so both arms are denied them outright; a deny rule outranks any allow
 # the harness arm's settings carry.
 NO_WEB = ("WebFetch", "WebSearch")
+# A task with `allow_web_search: true` leaves this one enabled in both arms (`task_settings`): it
+# runs server-side through the model API, so the egress rule is unchanged. WebFetch stays denied.
+WEB_SEARCH = "WebSearch"
 OBSERVER_COMMAND = arms.OBSERVER_COMMAND
 ARM_SETTINGS = arms.observer_settings()
 # The container is the fence: no host path but the snapshot, no way out but the model API. Inside
@@ -319,6 +322,8 @@ def load_tasks(path):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
+        if not isinstance(task.get("allow_web_search", False), bool):
+            raise SystemExit("task %r is malformed: allow_web_search must be true or false" % task.get("id"))
     return tasks
 
 
@@ -580,7 +585,19 @@ def config_fingerprint(config_dir, home=None):
             "personal_bytes": dict(listed).get("CLAUDE.personal.md", 0)}
 
 
-def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT):
+def task_settings(task):
+    """The settings every arm of `task` launches with: `ARM_SETTINGS`, or, for a task that sets
+    `allow_web_search`, the same with WebSearch dropped from the deny list. The arm declaration's
+    digest stays that of `ARM_SETTINGS`; the row's `web_search` says which a run had."""
+    if not (task or {}).get("allow_web_search"):
+        return ARM_SETTINGS
+    settings = json.loads(json.dumps(ARM_SETTINGS))
+    settings["permissions"]["deny"] = [tool for tool in settings["permissions"]["deny"] if tool != WEB_SEARCH]
+    return settings
+
+
+def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT,
+                settings=None):
     """One command line for every arm, run inside its container: the arms differ by image and by
     nothing else.
 
@@ -590,14 +607,15 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effo
     place a Stop hook's decision appears and the CLI emits them in no other format. `max_turns`
     is the task's own cap; without it a run is bounded only by the soft budget and the timeout.
     `effort` is the arm's pinned reasoning effort, passed as `--effort` on every launch so no run
-    takes the model's default, which differs by model."""
+    takes the model's default, which differs by model. `settings` replaces `ARM_SETTINGS` for one
+    task (`task_settings`)."""
     if effort not in arms.EFFORT_LEVELS:
         raise SystemExit("cost-bench: effort %r is not one of %s" % (effort, ", ".join(arms.EFFORT_LEVELS)))
     turns = ["--max-turns", str(int(max_turns))] if max_turns else []
     return [claude, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "stream-json",
             "--include-hook-events", "--verbose", "--strict-mcp-config", "--no-session-persistence",
             "--max-budget-usd", "%g" % run_cap, "--permission-mode", PERMISSION_MODE] + turns + [
-            "--settings", json.dumps(ARM_SETTINGS)]
+            "--settings", json.dumps(ARM_SETTINGS if settings is None else settings)]
 
 
 _NAMES = itertools.count(1)
@@ -1441,6 +1459,7 @@ def _attempt(task, rep, arm, opts, launch):
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
     row.update(replay_spawns.ROW_DEFAULTS)
+    row["web_search"] = bool(task.get("allow_web_search"))
     # A first-wave task stops once its first spawns are out (`replay_spawns.first_wave_launch`).
     run_launch = replay_spawns.first_wave_launch(launch) if task.get("first_wave") else launch
     if opts.get("ablation") is not None:
@@ -1471,7 +1490,8 @@ def _attempt(task, rep, arm, opts, launch):
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         task_workdir(task, opts["repo"], workdir)
         memory, row["cache_nonce"] = trial_memory(workdir.parent)
-        argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
+        argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort,
+                           task_settings(task))
         name = container_name(task["id"], arm, rep)
         timeout = None
         if kept:
@@ -2326,8 +2346,10 @@ def _cmd_replay(args, pack):
     if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
         for task in tasks if pack else ():
-            print("  task %s: %s, expected absorbed calls %s" % (
-                task["id"], "long" if task.get("long") else "short", task.get("expected_absorbed_calls")))
+            print("  task %s: %s, expected absorbed calls %s%s%s" % (
+                task["id"], "long" if task.get("long") else "short", task.get("expected_absorbed_calls"),
+                ", first wave" if task.get("first_wave") else "",
+                ", WebSearch allowed" if task.get("allow_web_search") else ""))
         refused = 0
         for tag, decl in harness_decls:
             print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],

@@ -362,8 +362,9 @@ def task_errors(spec, task_dir, document):
                       % (where, str(spec["long"]).lower(), calls,
                          "above" if calls > document["break_even_calls"] else "at or below",
                          document["break_even_calls"]))
-    if not isinstance(spec.get("first_wave", False), bool):
-        errors.append("%s: first_wave must be true or false" % where)
+    for flag in ("first_wave", "allow_web_search"):
+        if not isinstance(spec.get(flag, False), bool):
+            errors.append("%s: %s must be true or false" % (where, flag))
     skills = spec.get("requires_skills", [])
     if not isinstance(skills, list) or not all(isinstance(n, str) and NAME.match(n) for n in skills):
         errors.append("%s: requires_skills is not a list of skill names" % where)
@@ -419,7 +420,7 @@ def load_set(pack, set_name, tier):
                          "canary": document["canary"], "name": pack["name"], "source": pack["source"]}}
         if "mechanism" in task_spec:
             task["mechanism"] = task_spec["mechanism"]
-        for key in ("first_wave", "requires_skills"):
+        for key in ("first_wave", "requires_skills", "allow_web_search"):
             if key in task_spec:
                 task[key] = task_spec[key]
         vendor = document["workspaces"][task_spec["workspace"]].get("vendor")

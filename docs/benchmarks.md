@@ -167,7 +167,10 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   `--model`, the pinned `--effort`, `--strict-mcp-config`, `--max-budget-usd 2`, the task's own `max_turns` as
   `--max-turns`, `--permission-mode bypassPermissions`, since the container is the fence and a
   headless run cannot answer a prompt, and settings that deny `WebFetch` and `WebSearch` and
-  register the same observation-only command in both arms.
+  register the same observation-only command in both arms. A task that sets
+  `allow_web_search: true` leaves `WebSearch` enabled in both arms, since it runs server-side
+  through the model API and the egress rule does not change; `WebFetch` stays denied, and the
+  row's `web_search` says which settings a run had.
 - **Native observations belong to the replay.** The fixed observer component is declared by its
   source sha256, installed at the same path and compared by manifest parity in both arms. Each
   preflight and scored launch receives container-only ledger, error and profile values; no host
@@ -435,7 +438,8 @@ and defines each reading in its docstrings.
   listed each one.
 - **`first_wave: true` stops a trial once its first wave is out:** the spawn and `Workflow` calls
   of the main thread's first spawning turn, each of which has reported the model its thread runs
-  on, shown activity, or been refused. The container is then stopped by name. The task's
+  on, or been refused; a `Workflow` launch is out at its result or once a spawn-tool hook event
+  follows it, so its hook check can answer. The container is then stopped by name. The task's
   `max_turns` and `--run-cap` remain the bounds, and `ended_by` names the one that ended the
   trial: `first-wave`, `max-turns`, `run-cap`, `finished` or `timeout`. A first-wave trial is not
   scored (`passed: null`), and one the launcher stopped has no priced result, so the spend ledger
@@ -449,7 +453,7 @@ and defines each reading in its docstrings.
 - **`workflow_launch_hooks`** has one entry per `Workflow` launch: the spawn-tool PreToolUse and
   PostToolUse `hook_response` events in its window beyond those its own spawn calls explain, and
   `passed`, whether its agents met `tier-agent-spawns` and `brief-guard`. It is `null` when the
-  stream has no hook events, the launch never finished or showed no activity, or the window's own
+  stream has no hook events, an unfinished launch met no hook, it showed no activity, or the window's own
   spawn calls leave the events unattributable.
 - **Saved streams read offline:** `python3 scripts/replay_spawns.py [--no-spawn-hooks] <raw stream>...`
   prints the same entries as JSON lines; `--no-spawn-hooks` reads a bare-arm stream.
@@ -655,7 +659,8 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   reported cost and the cap, and refuses the replay like any red preflight.
 - **Each run reports pass or fail, whether its mechanism fired, and its cost.** The oracle scores
   pass or fail as for any synthetic task. `mechanism_fired` on each row is `true`, `false` or
-  `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, and the
+  `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, a
+  Workflow task its `workflow_launches` (the `Workflow` tool calls, which are not spawns), and the
   output style the offline detectors named in the manifest, which must all report no hit. A missing
   stream or a detector row without a count is unknown, never "no", so a real run needs `--raw`.
 - **Its rows never meet production rows.** They carry `tier: micro`, seed their own series and go

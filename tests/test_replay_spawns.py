@@ -93,6 +93,10 @@ class WorkflowHookTests(unittest.TestCase):
         self.assertEqual((rows[1]["pre"], rows[1]["post"]), (1, 1))
         self.assertFalse(rows[2]["activity"])  # never finished, never ran anything visible
 
+    def test_an_unfinished_launch_that_met_no_hook_is_unknown(self):
+        messages = stream("workflow-harness.jsonl")[:5]  # w1 running, no result yet
+        self.assertEqual([r["passed"] for r in SPAWNS.workflow_launch_hooks(messages)], [None])
+
     def test_a_stream_with_no_hook_events_cannot_say(self):
         messages = [m for m in stream("workflow-harness.jsonl") if m.get("subtype") != "hook_response"]
         self.assertEqual([r["passed"] for r in SPAWNS.workflow_launch_hooks(messages)], [None, None, None])
@@ -159,11 +163,20 @@ class FirstWaveTests(unittest.TestCase):
                     "message": {"content": [{"type": "tool_result", "tool_use_id": "t", "is_error": True}]}}]
         self.assertEqual([watcher.feed(m) for m in refused], [False, True])
 
-    def test_a_workflow_launch_is_out_once_it_shows_activity(self):
+    def test_a_workflow_launch_is_out_at_its_result_not_at_its_first_activity(self):
         watcher = SPAWNS.FirstWave()
         done = [watcher.feed_line(line) for line in lines("workflow-harness.jsonl")]
-        self.assertEqual(done.index(True), 3)
+        self.assertEqual(done.index(True), 5)  # w1's result; its activity at 3 does not end it
         self.assertEqual(watcher.calls, ["w1"])
+
+    def test_a_workflow_launch_is_out_once_a_spawn_hook_follows_it(self):
+        messages = [m for m in stream("workflow-harness.jsonl")]
+        second = messages[6:]  # the w2 launch, whose agent meets PreToolUse:Agent before its result
+        watcher = SPAWNS.FirstWave()
+        done = [watcher.feed(m) for m in second]
+        self.assertEqual(second[done.index(True)].get("hook_name"), "PreToolUse:Agent")
+        cut = second[:done.index(True) + 1]
+        self.assertEqual([r["passed"] for r in SPAWNS.workflow_launch_hooks(cut)], [True])
 
     def test_a_run_that_never_spawns_is_never_stopped(self):
         watcher = SPAWNS.FirstWave()
