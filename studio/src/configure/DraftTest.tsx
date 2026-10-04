@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack, Text, TextInput, Title,
+  Alert, Badge, Button, Checkbox, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack, Text, TextInput, Title,
 } from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 
@@ -9,10 +9,11 @@ import { compareRuns } from "../experiments/compare/api";
 import type { CompareResult } from "../experiments/compare/model";
 import { loadReplayCatalog } from "../experiments/replay/api";
 import { initialPack, packOptions, tasksFor, type ReplayCatalog } from "../experiments/replay/model";
-import { loadDraftVerdicts, planDraftTest, startDraftTest } from "./draftTestApi";
+import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
-  draftTestErrorMessage, initialForm, planBody, readingLines, spendLine, validateDraftTest, verdictBadge,
-  withNeededTrials, type DraftTestForm, type DraftTestPlan, type DraftTestVerdict, type DraftTestVerdicts,
+  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, planBody, readingLines, registerBody,
+  registrationDifferences, spendLine, validateDraftTest, verdictBadge, withNeededTrials,
+  type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
 type Props = { draft: string; revision: string };
@@ -24,6 +25,7 @@ function message(error: unknown, fallback: string): string {
 /** One checkpoint's latest verdict: badge, headline, staleness, readings, spend and the comparison. */
 export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; current: boolean; count: number }) {
   const badge = verdictBadge(test.verdict);
+  const evidence = evidenceBadge(test);
   const [comparison, setComparison] = useState<CompareResult | null>(null);
   const [error, setError] = useState("");
   async function open() {
@@ -40,6 +42,7 @@ export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; 
         <Group gap="xs">
           <Text fw={650} size="sm">Checkpoint <Code>{test.revision.slice(0, 12)}</Code>{current ? " (current)" : ""}</Text>
           <Badge color={badge.color} variant={badge.variant}>{badge.label}</Badge>
+          <Badge color="gray" variant={evidence.variant}>{evidence.label}</Badge>
           {test.stale && <Badge color="yellow" variant="outline">Verdict stale</Badge>}
         </Group>
         <Text size="sm">{test.headline}</Text>
@@ -74,6 +77,27 @@ export function PowerNotice({ plan, onUseTrials }: { plan: DraftTestPlan; onUseT
   );
 }
 
+/** Every registration of the draft, newest first: a stale or altered one stays listed, marked. */
+export function RegistrationList({ registrations }: { registrations: DraftTestRegistration[] }) {
+  if (registrations.length === 0) return <Text c="dimmed" size="sm">No registrations of this draft yet.</Text>;
+  return (
+    <Stack gap="xs">
+      {registrations.map((item) => (
+        <Paper key={item.registration_id} p="sm" withBorder>
+          <Group gap="xs">
+            <Text size="sm">Registered checkpoint <Code>{item.revision.slice(0, 12)}</Code>: {item.tasks.length} task(s), {item.repetitions} trial(s) per task, {item.model}, a {(item.effect * 100).toFixed(1)}% change</Text>
+            {item.stale && <Badge color="yellow" variant="outline">Stale</Badge>}
+            {item.problems.length > 0 && <Badge color="red" variant="outline">Not intact</Badge>}
+          </Group>
+          {item.stale_reason && <Text c="dimmed" size="xs">Stale: {item.stale_reason}; register the test again.</Text>}
+          {item.problems.map((problem) => <Text c="red" key={problem} size="xs">{problem}</Text>)}
+          <Text c="dimmed" size="xs">Plan <Code>{item.plan}</Code> at <Code>{item.plan_commit.slice(0, 12)}</Code></Text>
+        </Paper>
+      ))}
+    </Stack>
+  );
+}
+
 /** The latest verdict of every tested checkpoint, newest first. */
 export function CheckpointList({ verdicts }: { verdicts: DraftTestVerdicts | null }) {
   if (!verdicts) return null;
@@ -96,7 +120,10 @@ export function DraftTest({ draft, revision }: Props) {
   const [verdicts, setVerdicts] = useState<DraftTestVerdicts | null>(null);
   const [status, setStatus] = useState("Choose tasks, trials and the change worth detecting.");
   const [busy, setBusy] = useState(false);
+  const [preRegister, setPreRegister] = useState(false);
   const errors = validateDraftTest(form);
+  const registration = currentRegistration(verdicts);
+  const differences = registration ? registrationDifferences(registration, form) : [];
 
   useEffect(() => {
     let active = true;
@@ -146,14 +173,29 @@ export function DraftTest({ draft, revision }: Props) {
     }
   }
 
+  async function register() {
+    if (!plan?.power.enough) return;
+    setBusy(true);
+    try {
+      await registerDraftTest(registerBody(draft, form));
+      setStatus("Registered. The registration is fixed; any edit to the draft makes it stale.");
+      await refresh();
+    } catch (error) {
+      setStatus(message(error, "The test could not be registered."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function start() {
     if (!plan?.preview.confirmation_token) return;
     setBusy(true);
     try {
       const body = planBody(draft, form);
-      const value = await startDraftTest(draft, plan.preview.request, plan.preview.confirmation_token, body.effect, body.cv);
+      const under = preRegister && registration ? registration.registration_id : null;
+      const value = await startDraftTest(draft, plan.preview.request, plan.preview.confirmation_token, body.effect, body.cv, under);
       setPlan(null);
-      setStatus(`Test started as run ${value.run_id}. Refresh to follow its verdict.`);
+      setStatus(`Test started as run ${value.run_id}${under ? " under its registration" : ""}. Refresh to follow its verdict.`);
       await refresh();
     } catch (error) {
       setStatus(message(error, "The test could not start."));
@@ -208,6 +250,24 @@ export function DraftTest({ draft, revision }: Props) {
               Estimate: {plan.preview.estimate.amount_usd === null ? "No matching history" : `$${plan.preview.estimate.amount_usd.toFixed(2)}`}. Cap: ${plan.preview.caps.spend_cap_usd}.
             </Alert>
             <Code block>{plan.preview.command}</Code>
+          </Stack>
+        )}
+        <Checkbox checked={preRegister} disabled={busy} label="Pre-register this test"
+          description="Optional. A run that matches its registration exactly may read helped or worse; any other run stays exploratory."
+          onChange={(event) => setPreRegister(event.currentTarget.checked)} />
+        {preRegister && (
+          <Stack gap="xs">
+            {registration
+              ? <Alert color={differences.length ? "yellow" : "blue"} title={differences.length ? "Differs from the registration" : "Registered"}>
+                  {differences.length
+                    ? `This test's ${differences.join(", ")} differ from the registration, so it would run exploratory.`
+                    : "This test matches the current registration."}
+                </Alert>
+              : <Text c="dimmed" size="sm">No current registration. Check power, then register before you start.</Text>}
+            <Group justify="flex-end">
+              <Button variant="light" disabled={busy || !plan?.power.enough} loading={busy} onClick={register}>Register this test</Button>
+            </Group>
+            {verdicts && <RegistrationList registrations={verdicts.registrations} />}
           </Stack>
         )}
         <Group justify="flex-end">

@@ -37,9 +37,21 @@ export type DraftTestVerdictName =
 
 export type DraftTestSide = { run_id: string; target: 1 | 2 };
 
+/** A pre-registration of a draft test (`citizen draft test --register`), never edited once written. */
+export type DraftTestRegistration = {
+  registration_id: string; draft: string; draft_id: string; revision: string; config_digest: string | null;
+  base_revision: string; model: string; tasks: string[]; repetitions: number;
+  pack: { name: string; version: string | null; commit: string; digest: string } | null;
+  effect: number; cv: number | null; power: DraftTestPower; plan: string; plan_commit: string;
+  plan_sha256: string; created_at: string;
+  stale: boolean; stale_reason: string | null; problems: string[];
+};
+
 export type DraftTestVerdict = {
   run_id: string; revision: string; base_revision: string; created_at: string;
   power: DraftTestPower; power_line: string;
+  /** "pre-registered" only when the run matched an intact registration written before it. */
+  evidence: "pre-registered" | "exploratory"; registration: string | null; deviations: string[];
   stale: boolean; stale_reason: string | null; stale_copy: string | null;
   comparison: { base: DraftTestSide; candidate: DraftTestSide; command: string };
   status: string | null; verdict: DraftTestVerdictName; reasons: string[];
@@ -54,6 +66,8 @@ export type DraftTestVerdicts = {
   /** Every test, newest first; only each checkpoint's latest is scored (`checkpoints`). */
   tests: Array<{ run_id: string; revision: string; created_at: string; latest: boolean }>;
   checkpoints: DraftTestCheckpoint[];
+  /** Every registration of the draft, newest first; a stale one stays listed. */
+  registrations: DraftTestRegistration[];
   unreadable_records: number;
 };
 
@@ -95,6 +109,38 @@ export function planBody(draft: string, form: DraftTestForm): Record<string, unk
     effect: form.effect_percent / 100,
     cv: form.cv.trim() ? Number(form.cv) : null,
   };
+}
+
+/** The register route's body: the sample a registration fixes, without targets or caps. */
+export function registerBody(draft: string, form: DraftTestForm): Record<string, unknown> {
+  const body = planBody(draft, form);
+  const request = body.request as Record<string, unknown>;
+  return {
+    draft, effect: body.effect, cv: body.cv,
+    request: { model: request.model, repetitions: request.repetitions, tasks: request.tasks, pack: request.pack },
+  };
+}
+
+/** The registration a new test may run under: the newest that is current and intact. */
+export function currentRegistration(verdicts: DraftTestVerdicts | null): DraftTestRegistration | null {
+  return verdicts?.registrations.find((item) => !item.stale && item.problems.length === 0) ?? null;
+}
+
+/** How the form departs from a registration, one line each; empty when a run would match it. */
+export function registrationDifferences(registration: DraftTestRegistration, form: DraftTestForm): string[] {
+  const out: string[] = [];
+  if (registration.model !== form.model.trim()) out.push("model");
+  if (registration.repetitions !== form.repetitions) out.push("trials per task");
+  if ([...registration.tasks].sort().join("\n") !== [...form.tasks].sort().join("\n")) out.push("task set");
+  if ((registration.pack?.digest ?? null) !== (form.pack?.digest ?? null)) out.push("evaluator pack");
+  return out;
+}
+
+/** The evidence badge beside a verdict: a pre-registered run is filled, an exploratory one is not. */
+export function evidenceBadge(test: DraftTestVerdict): { label: string; variant: "filled" | "light" } {
+  return test.evidence === "pre-registered"
+    ? { label: "Pre-registered", variant: "filled" }
+    : { label: test.registration ? "Registered, deviated: exploratory" : "Exploratory", variant: "light" };
 }
 
 /** The badge for a verdict: helped, worse and the rest differ in fill and text, not colour alone. */
@@ -141,6 +187,12 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_unrecorded: "The test started, but it could not be linked to this draft.",
     draft_test_unchanged: "This draft has no checkpoint beyond its base yet, so there is nothing to test.",
     draft_test_records_unsafe: "The Studio's test records are not a private directory; nothing was read or written.",
+    draft_test_underpowered: "Too few trials to register: check power and use the trials it asks for.",
+    draft_test_effect_too_large: "The evidence standard caps the change to register at 15%.",
+    draft_test_registration_stale: "The draft changed since it was registered; register the test again.",
+    draft_test_registration_not_found: "That registration no longer exists; register the test again.",
+    draft_test_registration_mismatch: "That registration belongs to another draft.",
+    draft_test_registration_failed: "The registration could not be written; nothing was registered.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
     replay_target_config_unsupported: "This draft changed its configuration, which a replay cannot measure.",
   };

@@ -17,7 +17,10 @@ it: the ratio's interval lies wholly above 1.0 and the difference's upper bound 
 Anything else is "inconclusive"; a withheld direction is "exploratory". Both are read from the
 intervals the engine reports, never from its `reading` alone. A draft target always runs
 `--exploratory` (`replay.target_evidence` registers only a release target), so a draft test is
-exploratory today and its verdict never says helped; the readings are shown without direction.
+exploratory by default and its verdict never says helped; the readings are shown without direction.
+A test pre-registered before it ran (`draft_registration`) that matches its registration exactly
+counts both sides as pre-registered for the direction check; the engine's own exploratory marks and
+the run-window note still withhold a direction, and any deviation leaves the test exploratory.
 
 **Power before the run.** `replay_stats.minimum_detectable_effect` gives the smallest relative
 change in a per-attempt mean the pair can resolve at its attempts per side and a planning
@@ -57,13 +60,14 @@ MAX_TRIALS = 20  # `ReplayRequest.parse` accepts one to twenty repetitions
 PLANNING_MANIFEST = Path("benchmarks") / "ablations.json"
 FORM_KEYS = frozenset(("model", "repetitions", "tasks", "max_budget_usd", "spend_cap_usd", "pack"))
 STALE_COPY = "Stale: the draft changed after this comparison."
-EXPLORATORY_NOTE = ("A draft test is exploratory: the draft runs unregistered, so its result is "
-                    "never cited as evidence and the Studio does not say whether the draft helped.")
+EXPLORATORY_NOTE = ("A draft test is exploratory unless it is pre-registered before it runs: an "
+                    "unregistered result is never cited as evidence and the Studio does not say "
+                    "whether the draft helped. A run that matches its registration exactly may.")
 HELPED, WORSE, INCONCLUSIVE, EXPLORATORY = "helped", "worse", "inconclusive", "exploratory"
 INDEPENDENCE_NOTE = ("The figure treats attempts as independent; the verdict's intervals resample "
                      "tasks, so few tasks can still read inconclusive.")
 CACHE_DIR = "cache"
-CACHE_KEYS = frozenset(("verdict", "reasons", "readings", "spend_usd"))
+CACHE_KEYS = frozenset(("verdict", "reasons", "readings", "spend_usd", "evidence", "deviations"))
 SNAPSHOT_LOCK_TIMEOUT = 2.0  # seconds a read waits for a save's writer lock before giving up
 MAX_RESULT_BYTES = 256 * 1024 * 1024  # a native results file hashed for the cache key
 
@@ -257,14 +261,18 @@ def _records_fd(root: Path, create: bool) -> Optional[int]:
 
 
 def record(root: Path, run_id: str, draft: Mapping[str, Any], selected: replay.ReplayRequest,
-           planned: Mapping[str, Any]) -> Dict[str, Any]:
-    """Write a started test's record once, whole or not at all; an existing one is never replaced."""
+           planned: Mapping[str, Any], registration: Optional[str] = None,
+           deviations: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Write a started test's record once, whole or not at all; an existing one is never replaced.
+    `registration` names the pre-registration the test was started under and `deviations` every
+    way the started request already departs from it."""
     if str(uuid.UUID(run_id)) != run_id:
         raise DraftTestError("the run id is invalid")
     value = {"schema_version": SCHEMA_VERSION, "run_id": run_id, "draft": draft["draft"],
              "draft_id": draft["draft_id"], "revision": selected.targets[1].revision,
              "config_digest": selected.targets[1].config_digest,
              "base_revision": selected.targets[0].revision, "power": dict(planned),
+             "registration": registration, "deviations": list(deviations or []),
              "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}
     content = (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
     directory = _records_fd(Path(root), create=True)
@@ -291,6 +299,8 @@ def record(root: Path, run_id: str, draft: Mapping[str, Any], selected: replay.R
 
 RECORD_KEYS = frozenset(("schema_version", "run_id", "draft", "draft_id", "revision",
                          "config_digest", "base_revision", "power", "created_at"))
+# A record from before pre-registration lacks these two and reads as unregistered.
+REGISTRATION_KEYS = frozenset(("registration", "deviations"))
 
 
 def _read_record(directory: int, name: str) -> Optional[Dict[str, Any]]:
@@ -308,8 +318,14 @@ def _read_record(directory: int, name: str) -> Optional[Dict[str, Any]]:
         return None
     finally:
         os.close(descriptor)
-    if not isinstance(value, dict) or set(value) != RECORD_KEYS \
+    if not isinstance(value, dict) or set(value) not in (RECORD_KEYS, RECORD_KEYS | REGISTRATION_KEYS) \
             or value["schema_version"] != SCHEMA_VERSION or name != "%s.json" % value["run_id"]:
+        return None
+    value.setdefault("registration", None)
+    value.setdefault("deviations", [])
+    if (value["registration"] is not None and not isinstance(value["registration"], str)
+            or not isinstance(value["deviations"], list)
+            or not all(isinstance(item, str) for item in value["deviations"])):
         return None
     return value
 
@@ -546,27 +562,58 @@ def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
            "stale_reason": stale_reason, "stale_copy": STALE_COPY if stale else None,
            "comparison": dict(sides, command="citizen runs compare %s:1 %s:2" % (run_id, run_id)),
            "status": None, "verdict": "unavailable", "reasons": [], "readings": {},
-           "spend_usd": None}
+           "spend_usd": None, "registration": item.get("registration"),
+           "evidence": replay.EXPLORATORY, "deviations": list(item.get("deviations") or [])}
     try:
-        out["status"] = supervisor.show(run_id).get("status")
+        shown = supervisor.show(run_id)
+        out["status"] = shown.get("status")
     except (runs.RunError, OSError):
         out["reasons"] = ["the run is no longer known"]
     else:
         if out["status"] not in runs.TERMINAL:
             out["verdict"] = "running"
         else:
-            out.update(_scored(supervisor, repository, run_id, draft, root))
+            started = shown.get("created_at") or item["created_at"]
+            out.update(_scored(supervisor, repository, item, draft, root, started))
     out["headline"] = HEADLINES[out["verdict"]]
     return out
 
 
-def _scored(supervisor: Any, repository: Path, run_id: str,
-            draft: Mapping[str, Any], root: Path) -> Dict[str, Any]:
-    """The verdict, reasons, readings and spend of a finished run, cached by its recorded results."""
+def _registration_key(root: Path, item: Mapping[str, Any], started_at: Optional[str]) -> str:
+    """What the cached verdict depends on beyond the results: the registration as it reads now."""
+    if item.get("registration") is None:
+        return "unregistered"
+    from . import draft_registration
+    try:
+        found = draft_registration.load(root, item["registration"])
+    except DraftTestError as exc:
+        return "unreadable:" + str(exc)
+    return json.dumps([found["plan_sha256"], found["created_at"], found["problems"],
+                       item.get("deviations") or [], started_at], sort_keys=True)
+
+
+def registered_claim(comparison: Mapping[str, Any]) -> Dict[str, Any]:
+    """`claim` for a run that matches its pre-registration exactly: both sides count as
+    pre-registered, while the engine's exploratory marks and the run window still withhold."""
+    if not comparison["comparable"] or comparison["error"] is not None:
+        return claim(comparison)
+    sides = [dict(comparison[name], evidence=replay.PREREGISTERED) for name in compare.SIDES]
+    return claim(dict(comparison, direction_withheld=compare.direction_withheld(
+        sides[0], sides[1], comparison["result"])))
+
+
+def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
+            draft: Mapping[str, Any], root: Path, started_at: Optional[str]) -> Dict[str, Any]:
+    """The verdict, reasons, readings and spend of a finished run, cached by its recorded results
+    and the state of its registration."""
+    run_id = item["run_id"]
     try:
         digest, spend = _recorded(supervisor, run_id)
     except (replay.ReplayError, runs.RunError, OSError):
         digest, spend = None, None
+    if digest is not None:
+        digest = hashlib.sha256((digest + "\0" + _registration_key(root, item, started_at)).encode(
+            "utf-8")).hexdigest()
     found = _cached(root, run_id, digest) if digest is not None else None
     if found is not None:
         return dict(found)
@@ -583,7 +630,17 @@ def _scored(supervisor: Any, repository: Path, run_id: str,
             "base": (run_id, 1), "candidate": (run_id, 2)}, staleness=snapshot_staleness)
     except compare.CompareError as exc:
         return {"verdict": "unavailable", "reasons": [str(exc)], "spend_usd": spend}
-    value = dict(claim(comparison), readings=_readings(comparison), spend_usd=spend)
+    from . import draft_registration
+    label, deviations = draft_registration.evidence(
+        root, item.get("registration"), list(item.get("deviations") or []), comparison, started_at)
+    judged = registered_claim(comparison) if label == replay.PREREGISTERED else claim(comparison)
+    if label != replay.PREREGISTERED and judged["verdict"] in (HELPED, WORSE, INCONCLUSIVE,
+                                                               EXPLORATORY):
+        # Unregistered or deviating: no direction, whatever the intervals show.
+        judged = {"verdict": EXPLORATORY, "reasons": deviations + [
+            reason for reason in judged["reasons"] if reason not in deviations]}
+    value = dict(judged, readings=_readings(comparison), spend_usd=spend, evidence=label,
+                 deviations=deviations)
     if digest is not None:
         _remember(root, run_id, digest, value)
     return dict(value)
@@ -609,10 +666,33 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
             entry["tests"] += 1
         tests.append({"run_id": item["run_id"], "revision": item["revision"],
                       "created_at": item["created_at"], "latest": entry is None})
+    from . import draft_registration
     return {"schema_version": SCHEMA_VERSION, "draft": draft["draft"],
             "revision": draft["revision"], "base_revision": draft["base_revision"],
             "evidence_note": EXPLORATORY_NOTE, "tests": tests, "checkpoints": checkpoints,
+            "registrations": draft_registration.listed(root, draft),
             "unreadable_records": skipped}
+
+
+def start_registration(root: Path, draft: Mapping[str, Any], selected: replay.ReplayRequest,
+                       registration: Any) -> Tuple[Optional[str], List[str]]:
+    """`(registration id, deviations)` for a test about to start: None and nothing when it is not
+    registered. A stale registration is refused (a new one is required); any other departure from
+    it starts the test exploratory, with every deviation recorded."""
+    if registration is None:
+        return None, []
+    from . import draft_registration
+    found = draft_registration.load(root, registration)
+    if found["draft_id"] != draft["draft_id"]:
+        raise DraftTestError("the registration is for another draft",
+                             "draft_test_registration_mismatch")
+    stale, reason = staleness(draft, found["revision"], found["config_digest"])
+    if stale:
+        raise DraftTestError("the registration is stale (%s); register the test again" % reason,
+                             "draft_test_registration_stale")
+    deviations = ["the registration is not intact: %s" % item for item in found["problems"]]
+    deviations += draft_registration.deviations(found, draft_registration.from_request(selected))
+    return found["registration_id"], deviations
 
 
 def render(payload: Mapping[str, Any]) -> List[str]:
@@ -626,12 +706,21 @@ def render(payload: Mapping[str, Any]) -> List[str]:
         lines.append("  checkpoint %s%s: %s" % (entry["revision"][:12],
                                                 " (current)" if entry["current"] else "",
                                                 test["headline"]))
+        lines.append("    evidence: %s%s" % (test["evidence"], " under registration %s"
+                                             % test["registration"] if test["registration"] else ""))
         if test["stale"]:
             lines.append("    " + STALE_COPY)
         for reason in test["reasons"]:
             lines.append("    " + reason)
         lines.append("    " + test["power_line"])
         lines.append("    comparison: " + test["comparison"]["command"])
+    for entry in payload.get("registrations", []):
+        lines.append("  registration %s at %s, %s: %d task(s), %d trial(s), %s" % (
+            entry["registration_id"], entry["revision"][:12],
+            "stale" if entry["stale"] else "current", len(entry["tasks"]), entry["repetitions"],
+            entry["model"]))
+        for problem in entry["problems"]:
+            lines.append("    not intact: " + problem)
     if payload["unreadable_records"]:
         lines.append("  %d unreadable test record(s) skipped" % payload["unreadable_records"])
     return lines

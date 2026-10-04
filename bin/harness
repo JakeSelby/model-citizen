@@ -83,6 +83,7 @@ from harness_core import overview as overview_core
 from harness_core import studio
 from harness_core.studio import activity as studio_activity
 from harness_core.studio import compare as studio_compare
+from harness_core.studio import draft_registration as studio_draft_registration
 from harness_core.studio import draft_tests as studio_draft_tests
 from harness_core.studio import settings as studio_settings
 from harness_core.studio import selection_editing as studio_selection_editing
@@ -3877,6 +3878,34 @@ def _draft_review_report(result: Dict[str, Any]) -> None:
         say("apply with: " + result["apply_command"])
 
 
+def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> int:
+    """`citizen draft test NAME --register`: the Studio's register route, from the shell."""
+    if not args.model or not args.task or args.effect is None or args.repetitions is None:
+        say("draft test: --register needs --model, --repetitions, at least one --task and --effect")
+        return 2
+    if (args.pack is None) != (args.pack_digest is None):
+        say("draft test: --pack and --pack-digest go together")
+        return 2
+    spec = {"model": args.model, "repetitions": args.repetitions, "tasks": list(args.task),
+            "pack": ({"name": args.pack, "digest": args.pack_digest}
+                     if args.pack is not None else None)}
+    try:
+        registration = studio_draft_registration.register(
+            root, repo, args.name, spec, args.effect, args.cv)
+    except (OSError, studio_draft_tests.DraftTestError) as exc:
+        code = getattr(exc, "code", "draft_test_registration_failed")
+        message = str(exc) if not isinstance(exc, OSError) else "registration I/O failed"
+        say(json.dumps({"error": {"code": code, "message": message}}, sort_keys=True)
+            if args.json else "draft test: " + message)
+        return 2
+    if args.json:
+        say(json.dumps(registration, sort_keys=True))
+    else:
+        for line in studio_draft_registration.render(registration):
+            say(line)
+    return 0
+
+
 def cmd_draft(args: argparse.Namespace) -> int:
     """Expose the same draft domain operations used by Studio."""
     # Draft configuration and managed roots are relative to the installed checkout that owns
@@ -3901,6 +3930,8 @@ def cmd_draft(args: argparse.Namespace) -> int:
         try:
             supervisor = studio.runs.RunSupervisor(
                 state_dir() / "studio", studio.runs.default_catalog_path(REPO), repository=REPO)
+            if args.register:
+                return _draft_test_register(args, repo, supervisor.state_root)
             result = studio_draft_tests.verdicts(supervisor, repo, supervisor.state_root, args.name)
         except (OSError, studio.runs.RunError, studio_draft_tests.DraftTestError) as exc:
             code = getattr(exc, "code", "draft_test_unavailable")
@@ -7255,6 +7286,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                      "whether it is stale, and the comparison it came from")
     test_parser.add_argument("name")
     test_parser.add_argument("--json", action="store_true")
+    test_parser.add_argument(
+        "--register", action="store_true",
+        help="pre-register a test of the draft's current checkpoint before running it, so a run "
+             "that matches it exactly may read helped or worse; nothing runs")
+    test_parser.add_argument("--model", help="with --register: the model both sides run")
+    test_parser.add_argument("--repetitions", type=int, help="with --register: trials per task")
+    test_parser.add_argument("--task", action="append",
+                             help="with --register: a task id; repeat for each task")
+    test_parser.add_argument("--pack", help="with --register: the evaluator pack's name")
+    test_parser.add_argument("--pack-digest", help="with --register: the evaluator pack's digest")
+    test_parser.add_argument("--effect", type=float,
+                             help="with --register: the change worth detecting, a fraction up to 0.15")
+    test_parser.add_argument("--cv", type=float,
+                             help="with --register: a planning coefficient of variation; default "
+                                  "the repository's declared assumption")
     test_parser.set_defaults(func=cmd_draft)
     review_parser = draft_sub.add_parser(
         "review", help="show every file and configuration key a draft changes, its checks, budget "
