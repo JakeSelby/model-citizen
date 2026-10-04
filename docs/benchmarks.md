@@ -588,6 +588,43 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   only together read as two inconclusive results. A sweep over a profile of your own is a local
   diagnostic, not a publishable figure.
 
+### Arm configs
+
+The shipped default is not the only configuration worth measuring. `replay --arm-config
+NAME=PATH`, repeatable, adds one harness arm per config beside bare and harness, each built from
+the tag with a named stance selection declared into its own image.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks <tasks> --tag <full commit> --model <exact id> \
+    --arm-config maintainer=benchmarks/arms/maintainer.json \
+    --arm-config frugal=benchmarks/arms/frugal.json --exploratory --dry-run
+```
+
+- **A config names stance dimension to variant.** `{"schema": 1, "description": "...",
+  "stances": {"voice": "concise"}}`; any other key is refused. `benchmarks/arms/maintainer.json`
+  is the maintainer's configuration, the default stances with the concise voice in place of
+  scannable; `benchmarks/arms/frugal.json` is the frugal cost tiering, which routes gathering to
+  the light class, measured against the balanced default.
+- **Checked against the tag before anything is planned.** Each config is read against a clone of
+  the tag's commit, through its own resolver with an empty home: a dimension the tag does not
+  ship, a variant it does not ship, a selection its resolver refuses, or one that is the tag's
+  default throughout is refused, naming what exists. The arm name must be lower-case letters,
+  digits and hyphens, and none a run already uses (`bare`, `harness`, `control`, `reference`,
+  `treatment`).
+- **Declared, digested and admitted like any harness arm.** The selection is the arm's
+  `selection` component, so its image name moves with it. Before any spend the arm passes the
+  pair check against bare that every harness arm passes, its declaration must equal the harness
+  arm's less its selection, and its selection must resolve to a profile other than the harness
+  arm's.
+- **Rows record the config.** Every row carries `arm_config`: `null` for bare and harness, and for
+  a config arm its name, schema, `stances` and `sha256`, the digest of the config's canonical
+  JSON, so reformatting the file never moves it. The dry run lists each config arm with that
+  digest and its image, and schedules it with the leading arm rotating.
+- **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
+  `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
+  `results.jsonl` and no history row. `summarise` does not report config arms yet: it refuses
+  their rows as an unknown arm.
+
 ### Unit evals: the two-by-two
 
 `replay --design unit-economy --unit <kind>.<id>` measures one rule, skill, role, workflow or hook

@@ -1525,7 +1525,8 @@ def _attempt(task, rep, arm, opts, launch):
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
-    row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    row.update(session_ids=[], respawns_up=None, spawns_unranked=None,
+               arm_config=(opts.get("arm_configs") or {}).get(arm))
     row.update(oracle_metrics.row_fields(task.get("metrics")))  # nothing for a task declaring none
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
@@ -1803,6 +1804,8 @@ def _replay(tasks, opts, launch, sink):
         admit_ablation_arms(opts)
     if opts.get("design") is not None:
         admit_design_cells(opts)
+    if opts.get("arm_configs"):
+        admit_config_arms(opts)
     check_contamination = opts.get("contamination_checker", contamination_errors)
     contaminated = check_contamination(tasks, opts["repo"],
                                        opts["arms"][harness_arms[0]]["harness_commit"], opts.get("tmp"))
@@ -2359,6 +2362,8 @@ def cmd_replay(args):
 def _cmd_replay(args, pack):
     # Named in the cost lines, so a figure built on the default cap never reads as a chosen one.
     args.run_cap_source = "--run-cap" if getattr(args, "run_cap", None) is not None else "default run cap"
+    # Read before `resolve_tier`, which fills the micro tier's two-arm default.
+    spend_cap_given = getattr(args, "spend_cap", None) is not None
     resolve_tier(args, pack)
     tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
     args.set_size = len(tasks)
@@ -2374,6 +2379,7 @@ def _cmd_replay(args, pack):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    configs = arm_configs(args)
     if getattr(args, "design", None):
         return replay_design(args, tasks, protocol)
     if getattr(args, "unit", None):
@@ -2382,20 +2388,27 @@ def _cmd_replay(args, pack):
     if manifest is not None:
         return replay_ablations(args, tasks, protocol, manifest, pack)
     pair = pair_manifest(args)
-    if not pair and args.spend_cap is None:
+    if not pair and not configs and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
+    if configs and not spend_cap_given:
+        args.spend_cap = None  # every tier's default is sized for two arms; the operator names this one
     tags = args.tag or []
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
     bare_decl, harness_decls = declarations(tags, effort=args.effort)  # every ref resolves before anything is built
-    names = replay_pair.ARMS if pair else ARMS
+    if configs:
+        errors = [error for _tag, decl in harness_decls
+                  for error in arm_config_errors(configs, decl["harness"]["commit"], args.tmp)]
+        if errors:
+            raise SystemExit("cost-bench: refusing the arm config(s) before any spend:\n  %s" % "\n  ".join(errors))
+    names = replay_pair.ARMS if pair else ARMS + tuple(name for name, _ in configs)
     plan = schedule(tasks, args.reps, names)
     print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s at effort %s, "
           "%g USD per run, stop at %s USD reported per tag"
           % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(names), args.reps,
              args.model, args.effort, args.run_cap, "%g" % args.spend_cap if args.spend_cap is not None
-             else "the --spend-cap a pair must name"))
+             else "the --spend-cap a %s must name" % ("pair" if pair else "run with config arms")))
     if args.tier == micro.MICRO:
         print("micro tier: %g USD if every run and preflight reaches its cap; its rows go to %s only"
               % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, micro.PREFLIGHT_CAP_USD),
@@ -2415,6 +2428,11 @@ def _cmd_replay(args, pack):
         for tag, decl in harness_decls:
             print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],
                                                    arms.image_name(decl)))
+            for (name, config), (_name, config_decl) in zip(configs, config_declarations(configs, decl, args.effort)):
+                print("    arm %s (config sha256 %s) sets %s: %s" % (
+                    name, arms.arm_config_sha256(config)[:12],
+                    ", ".join("%s to %s" % kv for kv in sorted(config["stances"].items())),
+                    arms.image_name(config_decl)))
             for task_id, errors in contamination_by_task(tasks, ROOT, decl["harness"]["commit"], args.tmp):
                 print("    contamination %s: %s" % (task_id, "; ".join(errors) if errors else "clean"))
                 refused += bool(errors)
@@ -2431,6 +2449,9 @@ def _cmd_replay(args, pack):
     if pair and args.spend_cap is None:
         raise SystemExit("cost-bench: a pair needs --spend-cap: the default is sized for two arms, and a "
                          "pair runs three")
+    if configs and args.spend_cap is None:
+        raise SystemExit("cost-bench: a run with config arms needs --spend-cap: the default is sized for "
+                         "two arms")
     if not os.environ.get(arms.CREDENTIAL):
         raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
                          % arms.CREDENTIAL)
@@ -2448,9 +2469,74 @@ def _cmd_replay(args, pack):
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
             harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
-            status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
-                                            harness))
+            extra = {}
+            if configs:
+                stamps = {name: arms.arm_config_stamp(name, config) for name, config in configs}
+                extra = {"arm_configs": stamps,
+                         "config_selections": {name: arms.arm_config_selection(config) for name, config in configs},
+                         "config_records": {name: arms.build_arm(config_decl, arms_dir, snapshot, tmp=args.tmp)
+                                            for name, config_decl in config_declarations(configs, decl, args.effort)}}
+            status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"],
+                                                            **extra), harness))
     return status
+
+
+def arm_configs(args):
+    """`[(name, config)]` for every `--arm-config NAME=PATH`, in the order given, each file read and
+    checked for shape (`replay_arms.load_arm_config`). A malformed flag, a reserved or repeated
+    name, or a mode that declares its own arms is refused before anything resolves."""
+    specs = getattr(args, "arm_config", None) or []
+    if specs and (getattr(args, "pair", None) or getattr(args, "ablations", None) or getattr(args, "design", None)):
+        raise SystemExit("cost-bench: --arm-config is refused with --pair, --ablations or --design, which "
+                         "declare their own arms")
+    if specs and args.stance_cost:
+        raise SystemExit("cost-bench: --stance-cost is refused with --arm-config: it would override every "
+                         "harness arm's cost stance, the config arms' included")
+    out, seen = [], set()
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not path:
+            raise SystemExit("cost-bench: --arm-config takes NAME=PATH, not %r" % spec)
+        problem = arms.arm_config_name_problem(name)
+        if problem:
+            raise SystemExit("cost-bench: --arm-config: %s" % problem)
+        if name in seen:
+            raise SystemExit("cost-bench: --arm-config names %s twice" % name)
+        seen.add(name)
+        out.append((name, arms.load_arm_config(Path(path).expanduser())))
+    return out
+
+
+def arm_config_errors(configs, commit, tmp=None):
+    """`replay_arms.arm_config_errors` for every config against a clone of `commit`, read by that
+    commit's own resolver with an empty home. No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-arm-config-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        posture = catalog.posture_module(root)
+        return [error for name, config in configs
+                for error in arms.arm_config_errors(name, config, posture, root)]
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def config_declarations(configs, harness_decl, effort):
+    """`[(name, declaration)]`: each config arm declared from the harness arm's own commit and
+    Claude Code version, so the two differ by the declared selection alone."""
+    inputs = arms.qualification_inputs()
+    return [(name, arms.declaration("harness", inputs, harness_decl["harness"], harness_decl["claude_code_version"],
+                                    effort, selection=arms.arm_config_selection(config)))
+            for name, config in configs]
+
+
+def admit_config_arms(opts):
+    """A run with config arms refuses, before any spend, a config arm whose declaration differs from
+    the harness arm's beyond its selection or whose selection resolves to the harness arm's own
+    profile (`ablations.admit_arms`, with the harness arm as control)."""
+    names = [arm for arm in arm_names(opts) if arm != "bare"]
+    fingerprints = {arm: arm_profile(arm, arm_env(arm, opts.get("stance_cost"), opts.get("proxy")), opts)
+                    for arm in names}
+    ablations.admit_arms({arm: opts["arms"][arm] for arm in names}, fingerprints)
 
 
 def ablation_manifest(args):
@@ -2739,6 +2825,11 @@ def replay_tag(tag, args, common, harness):
                         schedule_seed=common["schedule_seed"],
                         ablation_selections=ablations.selections(ablation),
                         arms=dict({"bare": common["bare"], "harness": harness}, **common["ablation_records"]))
+        if common.get("config_records"):
+            # Each config arm is its own declared-selection image beside the tag's harness arm.
+            opts.update(arm_names=ARMS + tuple(common["config_records"]), arm_configs=common["arm_configs"],
+                        ablation_selections=common["config_selections"],
+                        arms=dict(opts["arms"], **common["config_records"]))
         design = common.get("design")
         if design:
             # Every cell is its own declared-selection image; there is no undeclared control.
@@ -2773,7 +2864,11 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if pair or common.get("ablation") or design:
+    if common.get("config_records"):
+        # `summarise` knows no config arm, so it is not offered here.
+        print("cost-bench: a run with config arms writes no history row; its rows are in %s" % (out / RESULTS),
+              file=sys.stderr)
+    elif pair or common.get("ablation") or design:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
               % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
@@ -2910,6 +3005,10 @@ def main(argv=None):
     run.add_argument("--ablations", help="an ablation manifest: benchmarks/ablations.json (schema 2) runs "
                      "bare, control and one declared-selection arm per entry, after stating the minimum "
                      "detectable effect; a schema-1 pair file runs as --pair does; writes no history row")
+    run.add_argument("--arm-config", action="append", metavar="NAME=PATH",
+                     help="a further harness arm built from the stance selection in an arm config "
+                     "(benchmarks/arms/<name>.json), beside bare and harness; repeatable; needs "
+                     "--spend-cap; writes no history row")
     run.add_argument("--schedule-seed", type=int, help="with --ablations or --design, the seed the schedule's order is "
                      "drawn from; default derived from the manifest's digest; recorded on every row")
     run.add_argument("--design", choices=(unit_economy.MANIFEST_DESIGN,),
