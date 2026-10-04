@@ -129,6 +129,31 @@ class StopBlock(Handoff):
         self.grow("m3", 305000)
         self.assertEqual(self.stop_answer()["decision"], "block")
 
+    def test_a_marker_for_another_threshold_is_discarded(self):
+        # Blocked under a 200,000 posture, then switched to 400,000: the new crossing blocks.
+        self.hard(at=200000)
+        self.grow("m1", 210000)
+        self.assertEqual(self.stop_answer()["decision"], "block")
+        self.hard(at=400000)
+        self.grow("m2", 310000)
+        self.assertIsNone(self.stop_answer())
+        self.assertIsNone(self.state()["handed_off"])
+        self.grow("m3", 410000)
+        self.assertEqual(self.stop_answer()["decision"], "block")
+        self.assertEqual(self.state()["handed_off"], 400000)
+
+    def test_a_stop_that_cannot_save_the_marker_is_released(self):
+        # Blocking without the marker on disk would block every later stop too.
+        module = load_feed()
+        self.hard()
+        self.grow("m1", 310000)
+        payload = {"hook_event_name": "Stop", "session_id": self.SESSION,
+                   "transcript_path": str(self.transcript)}
+        with patch.object(module, "save_state", return_value=False):
+            self.assertIsNone(module.on_stop(payload, self.env(**INTERACTIVE)))
+        self.assertEqual(self.emitted(), [])
+        self.assertEqual(self.stop_answer()["decision"], "block")
+
     def test_the_stop_read_leaves_the_turn_line_to_the_next_prompt(self):
         self.hard()
         self.grow("m1", 310000)
@@ -181,6 +206,26 @@ class Logged(Handoff):
         self.assertEqual([(r["recommendation"], r["module"], r["session_id"], r["turn"])
                           for r in rows],
                          [("fresh-session-handoff", "hooks/usage-feed", self.SESSION, 1)])
+
+    def test_a_block_before_any_prompt_is_recorded_and_answerable(self):
+        # A headless stop can block before a prompt is counted; its emission is turn 0.
+        self.hard()
+        self.grow("m1", 310000)
+        self.stop_answer(CLAUDE_CODE_ENTRYPOINT="sdk-cli", HARNESS_HANDOFF_BLOCK="on")
+        rows = self.emitted()
+        self.assertEqual([r["turn"] for r in rows], [0])
+        adherence = load_adherence()
+        def observed(*events):
+            return [{"event": event, "session_id": self.SESSION, "runtime": "claude-code",
+                     "ts": "t"} for event in events]
+        self.assertEqual(adherence.respond(rows[0], observed("Stop", "Stop", "SessionEnd")),
+                         ("followed", "SessionEnd", 0))
+        prompt = "UserPromptSubmit"
+        self.assertEqual(adherence.respond(rows[0], observed("Stop", prompt, prompt, prompt)),
+                         ("not_followed", prompt, 2))
+        self.assertEqual(adherence.respond(rows[0], []), ("unknown", "unobserved", 0))
+        # Every other recommendation still starts at the first prompt.
+        self.assertIsNone(adherence.emission("fresh-session", self.SESSION, 0))
 
     def test_a_session_end_inside_the_window_reads_as_followed(self):
         adherence = load_adherence()

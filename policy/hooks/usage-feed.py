@@ -281,7 +281,8 @@ def load_state(path):
 
 
 def save_state(path, state):
-    """Atomic and private. Called before the slow read as well as after it."""
+    """Atomic and private, and True once the state is on disk. Called before the slow read as
+    well as after it."""
     state["pending"] = state.get("pending", [])[-MAX_PENDING:]
     state["counted"] = state.get("counted", [])[-MAX_COUNTED:]
     state["said_unknown"] = state.get("said_unknown", [])[-MAX_COUNTED:]
@@ -293,7 +294,7 @@ def save_state(path, state):
                                                       - MAX_PENDING)]:
         del state["unsummed"][stale]
     if not ensure_dir(path.parent):
-        return
+        return False
     tmp = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
     try:
         handle = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -302,11 +303,13 @@ def save_state(path, state):
         finally:
             os.close(handle)
         os.replace(str(tmp), str(path))
+        return True
     except OSError:
         try:
             tmp.unlink()
         except OSError:
             pass
+        return False
 
 
 class Lock(object):
@@ -1727,8 +1730,10 @@ def on_stop(payload, env):
     Once per crossing: the threshold blocked at is kept in the state, so the next stop is
     released whether or not the turn wrote the handoff, and a session that stays past the
     threshold is never blocked again. A context that falls back under it, as a compaction does,
-    re-arms it. The block is answered in the adherence log, where a session end within the
-    window counts as followed.
+    re-arms it, and so does a switch to a posture with another threshold. A stop that cannot
+    save the marker is released, since nothing would stop the next one blocking again. The
+    block is answered in the adherence log, where a session end within the window counts as
+    followed.
     """
     table, mode, _, _ = settings(env)
     threshold = handoff_at(table)
@@ -1749,13 +1754,15 @@ def on_stop(payload, env):
             save_state(state_file, state)
             return None
         size = state.get("context")
-        if state.get("handed_off") and (size is None or size < state["handed_off"]):
+        marker = state.get("handed_off")
+        if marker and (size is None or size < marker or marker != threshold):
             state["handed_off"] = None
         if size is None or size < threshold or state.get("handed_off"):
             save_state(state_file, state)
             return None
         state["handed_off"] = threshold
-        save_state(state_file, state)
+        if not save_state(state_file, state):
+            return None
         turn = state["turns"]
     record_adherence("fresh-session-handoff", payload.get("session_id"), turn, env)
     return handoff_reason(size, threshold, table)
