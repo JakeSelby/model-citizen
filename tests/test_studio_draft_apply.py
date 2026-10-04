@@ -36,6 +36,34 @@ def _rule(name, description="Greets the reader first."):
             "create_root": True}
 
 
+def registered_worktrees(repo=ROOT):
+    """Every worktree path registered with ``repo``, resolved."""
+    listed = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"],
+                            capture_output=True, text=True, check=True).stdout
+    return {Path(line[len("worktree "):]).resolve() for line in listed.splitlines()
+            if line.startswith("worktree ")}
+
+
+@contextmanager
+def own_check_checkouts():
+    """Record the temporary checkouts this process's ``checks_for`` calls make.
+
+    The repository is shared by every worktree, so a sibling run's ``studio-apply-check-*``
+    checkout may be registered at any moment; a test checks only the ones it made itself.
+    """
+    made = []
+    original = draft_apply._revision_checkout
+
+    @contextmanager
+    def recording(worktree, revision):
+        with original(worktree, revision) as checkout:
+            made.append(Path(checkout).resolve())
+            yield checkout
+
+    with mock.patch.object(draft_apply, "_revision_checkout", recording):
+        yield made
+
+
 def _tree(root):
     if not root.is_dir():
         return {}
@@ -450,12 +478,13 @@ class DraftApplyTests(unittest.TestCase):
             try:
                 raw = drafts.read_config(ROOT, name)["config"]
                 before = draft_support.draft_worktree_registered(name)
-                checks = draft_apply.checks_for(ROOT, worktree, raw, leaked["revision"])
+                with own_check_checkouts() as made:
+                    checks = draft_apply.checks_for(ROOT, worktree, raw, leaked["revision"])
                 self.assertEqual(checks["status"], "failed")
                 self.assertTrue(any("leaky.md" in line for line in checks["findings"]), checks)
-                listed = subprocess.run(["git", "-C", str(ROOT), "worktree", "list", "--porcelain"],
-                                        capture_output=True, text=True, check=True).stdout
-                self.assertNotIn("studio-apply-check-", listed)
+                self.assertEqual(len(made), 1, made)
+                self.assertNotIn(made[0], registered_worktrees())
+                self.assertFalse(made[0].exists())
                 self.assertEqual(before, draft_support.draft_worktree_registered(name))
             finally:
                 subprocess.run(["git", "-C", str(worktree), "checkout", "--", "."], check=True)
