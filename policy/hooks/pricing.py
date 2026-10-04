@@ -258,9 +258,10 @@ def row_cost(row, table, children=None):
         return None
     # A breakdown is the whole bill: for Claude Code it is cut from the same map the totals are
     # summed over, subagent records included, so nothing is added to it.
-    direct = breakdown_cost(row, table)
-    if direct is not None:
-        return direct
+    # A breakdown with an unpriced part is unpriced: falling back to the totals would charge
+    # that part at whichever single model the row names.
+    if isinstance(row.get("by_model"), dict) and row["by_model"]:
+        return breakdown_cost(row, table)
     joined = None
     child_cost = 0.0
     excluded = set()
