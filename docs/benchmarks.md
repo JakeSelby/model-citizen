@@ -394,6 +394,7 @@ python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack
     --model <id> --tag <full commit> --pre-registration <plan>
 python3 scripts/cost_bench.py replay --tier micro --pack <pack repo> --pack-set delegation-nudge ...
 python3 scripts/replay_power.py --pilot <results dir>                   # k, n and m for SM-2
+python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalence verdicts
 ```
 
 - **It is read from a pinned commit, never a working tree.** `--pack-ref` (default `HEAD`) is
@@ -428,7 +429,16 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   power (the ratio test and the pass-rate test) and claim power (those and the long subset's ratio
   test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
-  in its docstring.
+  in its docstring. A pilot that passes everything or nothing is sized only with the
+  pre-registered `--assumed-pass-rate`, which the output names as an assumption; a pilot with fewer
+  than two tasks passing in both arms, the floor included, also needs the pre-registered `--tau2`.
+  `--mde` sets the minimum detectable effect.
+- **A null has bounds.** `scripts/equivalence.py <results dir> --plan <plan>` reads each metric's
+  task-clustered interval against the plan's Equivalence margins and prints equivalent, not
+  equivalent or inconclusive; the rule is in the
+  [pre-registration template](pre-registration-template.md#decision-rule). A verdict is labelled
+  exploratory unless every row records that plan as its pre-registration, each task and arm has
+  five trials, and a behaviour score has five known values in each.
 
 ### Oracle metrics
 
@@ -586,6 +596,43 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   module's measured effect. One-at-a-time toggling finds main effects only: two entries that matter
   only together read as two inconclusive results. A sweep over a profile of your own is a local
   diagnostic, not a publishable figure.
+
+### Arm configs
+
+The shipped default is not the only configuration worth measuring. `replay --arm-config
+NAME=PATH`, repeatable, adds one harness arm per config beside bare and harness, each built from
+the tag with a named stance selection declared into its own image.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks <tasks> --tag <full commit> --model <exact id> \
+    --arm-config maintainer=benchmarks/arms/maintainer.json \
+    --arm-config frugal=benchmarks/arms/frugal.json --exploratory --dry-run
+```
+
+- **A config names stance dimension to variant.** `{"schema": 1, "description": "...",
+  "stances": {"voice": "concise"}}`; any other key is refused. `benchmarks/arms/maintainer.json`
+  is the maintainer's configuration, the default stances with the concise voice in place of
+  scannable; `benchmarks/arms/frugal.json` is the frugal cost tiering, which routes gathering to
+  the light class, measured against the balanced default.
+- **Checked against the tag before anything is planned.** Each config is read against a clone of
+  the tag's commit, through its own resolver with an empty home: a dimension the tag does not
+  ship, a variant it does not ship, a selection its resolver refuses, or one that is the tag's
+  default throughout is refused, naming what exists. The arm name must be lower-case letters,
+  digits and hyphens, and none a run already uses (`bare`, `harness`, `control`, `reference`,
+  `treatment`).
+- **Declared, digested and admitted like any harness arm.** The selection is the arm's
+  `selection` component, so its image name moves with it. Before any spend the arm passes the
+  pair check against bare that every harness arm passes, its declaration must equal the harness
+  arm's less its selection, and its selection must resolve to a profile other than the harness
+  arm's.
+- **Rows record the config.** Every row carries `arm_config`: `null` for bare and harness, and for
+  a config arm its name, schema, `stances` and `sha256`, the digest of the config's canonical
+  JSON, so reformatting the file never moves it. The dry run lists each config arm with that
+  digest and its image, and schedules it with the leading arm rotating.
+- **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
+  `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
+  `results.jsonl` and no history row. `summarise` does not report config arms yet: it refuses
+  their rows as an unknown arm.
 
 ### Unit evals: the two-by-two
 

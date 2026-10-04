@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "description": "The frugal cost tiering, which routes gathering to the light class, measured against the balanced default.",
+  "stances": {
+    "cost": "frugal"
+  }
+}
