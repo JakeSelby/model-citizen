@@ -1,7 +1,7 @@
 import {
   Alert, Badge, Button, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack, Text, TextInput, Title,
 } from "@mantine/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CommandChip } from "../components/StudioKit";
 import { CompareReport } from "../experiments/compare/ComparePanel";
@@ -110,15 +110,22 @@ export function DraftTest({ draft, revision }: Props) {
     return () => { active = false; };
   }, []);
 
+  // Only the newest refresh may land: a slower, older answer would show an old checkpoint current.
+  const sequence = useRef(0);
   async function refresh() {
+    const mine = ++sequence.current;
     try {
-      setVerdicts(await loadDraftVerdicts(draft));
+      const value = await loadDraftVerdicts(draft);
+      if (mine === sequence.current) setVerdicts(value);
     } catch (error) {
-      setStatus(message(error, "Verdicts could not be read."));
+      if (mine === sequence.current) setStatus(message(error, "Verdicts could not be read."));
     }
   }
 
-  useEffect(() => { void refresh(); }, [draft, revision]);
+  useEffect(() => {
+    void refresh();
+    return () => { sequence.current += 1; };
+  }, [draft, revision]);
 
   function update(next: DraftTestForm) {
     setForm(next);

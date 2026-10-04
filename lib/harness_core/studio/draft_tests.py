@@ -30,9 +30,12 @@ same commit.
 
 Each test is recorded once under the supervisor's state root (`draft-tests/<run id>.json`, written
 to a temporary name and linked into place through a directory descriptor) with the draft's identity
-and checkpoint. Staleness is read from one `drafts.read_snapshot` of the draft per call, never under
-the writer lock; only each checkpoint's latest test is compared, and that comparison is cached by
-run id and a digest of the run's recorded results.
+and checkpoint. Staleness is read from one `drafts.read_snapshot` of the draft per call. That read is
+lock-free while no writer is committing, and waits at most `SNAPSHOT_LOCK_TIMEOUT` seconds for the
+writer lock otherwise (a save holds it through its check, up to 600 s), so a read during a save
+answers `draft_unavailable` at once instead of hanging. Only each checkpoint's latest test is
+compared, and that verdict is cached on disk (`draft-tests/cache/`) by run id and a digest of the
+run's recorded results, so the route and `citizen draft test` share it.
 """
 from __future__ import annotations
 
@@ -41,9 +44,7 @@ import hashlib
 import json
 import os
 import stat
-import threading
 import uuid
-from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -61,9 +62,10 @@ EXPLORATORY_NOTE = ("A draft test is exploratory: the draft runs unregistered, s
 HELPED, WORSE, INCONCLUSIVE, EXPLORATORY = "helped", "worse", "inconclusive", "exploratory"
 INDEPENDENCE_NOTE = ("The figure treats attempts as independent; the verdict's intervals resample "
                      "tasks, so few tasks can still read inconclusive.")
-CACHE_SIZE = 128
-_CACHE: "OrderedDict[Tuple[str, str], Dict[str, Any]]" = OrderedDict()
-_CACHE_LOCK = threading.Lock()
+CACHE_DIR = "cache"
+CACHE_KEYS = frozenset(("verdict", "reasons", "readings", "spend_usd"))
+SNAPSHOT_LOCK_TIMEOUT = 2.0  # seconds a read waits for a save's writer lock before giving up
+MAX_RESULT_BYTES = 256 * 1024 * 1024  # a native results file hashed for the cache key
 
 
 class DraftTestError(ValueError):
@@ -167,8 +169,12 @@ def identity(repository: Path, name: str) -> Dict[str, Any]:
         return drafts.read_snapshot(Path(repository), name, lambda _worktree, state, config: {
             "draft": state["name"], "draft_id": state["draft_id"],
             "base_ref": state["base_ref"], "base_revision": state["base_revision"],
-            "revision": state["revision"], "config_digest": targets._config_digest(dict(config))})
+            "revision": state["revision"], "config_digest": targets._config_digest(dict(config))},
+            lock_timeout=SNAPSHOT_LOCK_TIMEOUT)
     except drafts.DraftError as exc:
+        if exc.code == "busy":
+            raise DraftTestError("the draft is being saved; try again in a moment",
+                                 "draft_unavailable") from exc
         raise DraftTestError(str(exc), "draft_not_found" if exc.code == "not-found"
                              else "draft_unavailable") from exc
     except targets.TargetError as exc:
@@ -386,35 +392,129 @@ def _readings(comparison: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
     return {key: measures[key] for key in compare.PREFERRED if key in measures}
 
 
+def _hash_file(digest: Any, path: str, run_root: str) -> None:
+    """Hash one recorded file confined to the run directory, opened without following a symlink
+    and refused above `MAX_RESULT_BYTES`; an absent file hashes as absent."""
+    resolved = os.path.realpath(os.path.dirname(path))
+    if not os.path.isabs(path) or not (resolved + os.sep).startswith(run_root + os.sep):
+        raise replay.ReplayError("a recorded result lies outside its run")
+    digest.update(path.encode("utf-8") + b"\0")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        digest.update(b"absent")
+        return
+    except OSError as exc:
+        raise replay.ReplayError("a recorded result is unsafe to read") from exc
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RESULT_BYTES:
+            raise replay.ReplayError("a recorded result is unsafe to read")
+        remaining = info.st_size
+        while remaining > 0:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+    finally:
+        os.close(descriptor)
+
+
 def _recorded(supervisor: Any, run_id: str) -> Tuple[str, float]:
     """`(digest, spend)` of a finished run's recorded results: the summary, every native result
     file it lists and the engine analysis beside it. A rerun or rewrite changes the digest."""
-    output = supervisor._run_path(run_id).parent / "replay"
+    run_root = supervisor._run_path(run_id).parent
+    output = run_root / "replay"
     summary = replay.read_summary(output / replay.SUMMARY_NAME)
     digest = hashlib.sha256(json.dumps(summary, sort_keys=True).encode("utf-8"))
+    confined = os.path.realpath(str(run_root))
     for path in sorted(summary["result_files"]) + [str(output / replay.ANALYSIS_NAME)]:
-        digest.update(path.encode("utf-8") + b"\0")
-        try:
-            digest.update(Path(path).read_bytes())
-        except FileNotFoundError:
-            digest.update(b"absent")
+        _hash_file(digest, path, confined)
     return digest.hexdigest(), summary["spend_usd"]
 
 
-def _cached(key: Tuple[str, str]) -> Optional[Dict[str, Any]]:
-    with _CACHE_LOCK:
-        value = _CACHE.get(key)
-        if value is not None:
-            _CACHE.move_to_end(key)
-        return value
+def _cache_fd(root: Path, create: bool) -> Optional[int]:
+    directory = _records_fd(Path(root), create=create)
+    if directory is None:
+        return None
+    try:
+        if create:
+            try:
+                os.mkdir(CACHE_DIR, 0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+        try:
+            return os.open(CACHE_DIR, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            raise DraftTestError("the draft test cache is not a private directory",
+                                 "draft_test_records_unsafe") from exc
+    finally:
+        os.close(directory)
 
 
-def _remember(key: Tuple[str, str], value: Dict[str, Any]) -> None:
-    with _CACHE_LOCK:
-        _CACHE[key] = value
-        _CACHE.move_to_end(key)
-        while len(_CACHE) > CACHE_SIZE:
-            _CACHE.popitem(last=False)
+def _cache_name(run_id: str, digest: str) -> str:
+    return "%s.%s.json" % (run_id, digest)
+
+
+def _cached(root: Path, run_id: str, digest: str) -> Optional[Dict[str, Any]]:
+    """A cached verdict for exactly these recorded results, or None (a bad entry is ignored)."""
+    directory = _cache_fd(root, create=False)
+    if directory is None:
+        return None
+    try:
+        descriptor = os.open(_cache_name(run_id, digest), os.O_RDONLY | os.O_NOFOLLOW,
+                             dir_fd=directory)
+    except OSError:
+        return None
+    finally:
+        os.close(directory)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RECORD_BYTES:
+            return None
+        value = json.loads(os.read(descriptor, MAX_RECORD_BYTES + 1).decode("utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        return None
+    finally:
+        os.close(descriptor)
+    if (not isinstance(value, dict) or set(value) != CACHE_KEYS
+            or value.get("verdict") not in HEADLINES or not isinstance(value.get("reasons"), list)
+            or not isinstance(value.get("readings"), dict)):
+        return None
+    return value
+
+
+def _remember(root: Path, run_id: str, digest: str, value: Mapping[str, Any]) -> None:
+    """Cache a verdict, replacing older entries for the run; a failure only costs a recompute."""
+    try:
+        directory = _cache_fd(root, create=True)
+    except (OSError, DraftTestError):
+        return
+    if directory is None:
+        return
+    name = _cache_name(run_id, digest)
+    temporary = ".%s.%s.tmp" % (run_id, uuid.uuid4().hex)
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+        try:
+            os.write(descriptor, json.dumps(dict(value), sort_keys=True).encode("utf-8"))
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        for other in os.listdir(directory):
+            if other.startswith(run_id + ".") and other != name:
+                os.unlink(other, dir_fd=directory)
+    except OSError:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except OSError:
+            pass
+    finally:
+        os.close(directory)
 
 
 def _recorded_power_line(value: Any) -> str:
@@ -435,7 +535,7 @@ def staleness(draft: Mapping[str, Any], revision: str,
 
 
 def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
-            draft: Mapping[str, Any]) -> Dict[str, Any]:
+            draft: Mapping[str, Any], root: Path) -> Dict[str, Any]:
     """One test's state, verdict, staleness, spend and the comparison it links to."""
     run_id = item["run_id"]
     sides = {"base": {"run_id": run_id, "target": 1}, "candidate": {"run_id": run_id, "target": 2}}
@@ -455,20 +555,19 @@ def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
         if out["status"] not in runs.TERMINAL:
             out["verdict"] = "running"
         else:
-            out.update(_scored(supervisor, repository, run_id, draft))
+            out.update(_scored(supervisor, repository, run_id, draft, root))
     out["headline"] = HEADLINES[out["verdict"]]
     return out
 
 
 def _scored(supervisor: Any, repository: Path, run_id: str,
-            draft: Mapping[str, Any]) -> Dict[str, Any]:
+            draft: Mapping[str, Any], root: Path) -> Dict[str, Any]:
     """The verdict, reasons, readings and spend of a finished run, cached by its recorded results."""
     try:
         digest, spend = _recorded(supervisor, run_id)
     except (replay.ReplayError, runs.RunError, OSError):
         digest, spend = None, None
-    key = (run_id, digest) if digest is not None else None
-    found = _cached(key) if key is not None else None
+    found = _cached(root, run_id, digest) if digest is not None else None
     if found is not None:
         return dict(found)
 
@@ -485,8 +584,8 @@ def _scored(supervisor: Any, repository: Path, run_id: str,
     except compare.CompareError as exc:
         return {"verdict": "unavailable", "reasons": [str(exc)], "spend_usd": spend}
     value = dict(claim(comparison), readings=_readings(comparison), spend_usd=spend)
-    if key is not None:
-        _remember(key, value)
+    if digest is not None:
+        _remember(root, run_id, digest, value)
     return dict(value)
 
 
@@ -504,7 +603,8 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
         if entry is None:
             checkpoints.append({"revision": item["revision"],
                                 "current": item["revision"] == draft["revision"],
-                                "latest": verdict(supervisor, repository, item, draft), "tests": 1})
+                                "latest": verdict(supervisor, repository, item, draft, root),
+                                "tests": 1})
         else:
             entry["tests"] += 1
         tests.append({"run_id": item["run_id"], "revision": item["revision"],

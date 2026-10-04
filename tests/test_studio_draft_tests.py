@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_harness import REPO, harness  # noqa: E402
 from harness_core.studio import compare, draft_tests, drafts, replay, runs, server  # noqa: E402
 from test_studio_compare import BASE, CHEAPER, NOISY, Runs, request, target  # noqa: E402
+from test_replay_stats import rows_for  # noqa: E402
 import test_studio_security as studio_security  # noqa: E402
 
 FIXTURE = REPO / "studio" / "tests" / "fixtures" / "draft-test.json"
@@ -46,7 +47,7 @@ def state(revision=FIRST_REV, draft_id=DRAFT_ID):
 @contextlib.contextmanager
 def draft_at(revision=FIRST_REV, draft_id=DRAFT_ID, exists=True):
     """The draft `tuned` at `revision`, as both the snapshot read and the locked read see it."""
-    def snapshot(_repo, name, operation):
+    def snapshot(_repo, name, operation, lock_timeout=None):
         if not exists or name != "tuned":
             raise drafts.DraftError("not-found", "draft does not exist: " + name)
         return operation(Path("/nonexistent"), state(revision, draft_id), {})
@@ -211,6 +212,16 @@ class PairTests(unittest.TestCase):
             draft_tests.check_request(draft, draft_request(BASE_REV))
         self.assertEqual(caught.exception.code, "draft_test_unchanged")
 
+    def test_a_read_during_a_save_answers_unavailable_without_waiting_out_the_save(self):
+        busy = drafts.DraftError("busy", "another writer is changing this draft")
+        with mock.patch.object(drafts, "read_snapshot", side_effect=busy) as snapshot:
+            with self.assertRaises(draft_tests.DraftTestError) as caught:
+                draft_tests.identity(REPO, "tuned")
+        self.assertEqual(caught.exception.code, "draft_unavailable")
+        self.assertIn("being saved", str(caught.exception))
+        self.assertEqual(snapshot.call_args.kwargs["lock_timeout"], draft_tests.SNAPSHOT_LOCK_TIMEOUT)
+        self.assertLessEqual(draft_tests.SNAPSHOT_LOCK_TIMEOUT, 5)
+
     def test_an_unreadable_draft_configuration_is_unavailable_not_an_error(self):
         with mock.patch.object(drafts, "read_snapshot",
                                side_effect=draft_tests.targets.TargetError("bad")):
@@ -273,6 +284,26 @@ class ClaimTests(unittest.TestCase):
         self.assertEqual(draft_tests.claim(self.comparison(cost=(-0.2, 0.1)))["verdict"],
                          "inconclusive")
 
+    def test_real_engine_output_reads_helped_and_its_mirror_worse(self):
+        """The engine's Cost-of-Pass interval is the ratio less 1.0: pinned on real output."""
+        engine = compare._engine()
+        rows = rows_for({task: {"base": BASE[task]["harness"], "candidate": CHEAPER[task]["harness"]}
+                         for task in BASE})
+        result = engine.compare(rows, control="base")
+        measure = result["arms"][0]["measures"]["cost_per_passed"]
+        cost = lambda arm: sum(cost for task in BASE for _passed, cost in {
+            "base": BASE, "candidate": CHEAPER}[arm][task]["harness"])
+        self.assertAlmostEqual(measure["estimate"], cost("candidate") / cost("base"), places=4)
+        self.assertAlmostEqual(measure["effect"], measure["estimate"] - 1.0, places=4)
+        self.assertLess(measure["interval"][1], 0)  # an effect interval, not the raw ratio's
+        comparison = {"comparable": True, "refusals": [], "error": None, "direction_withheld": [],
+                      "preferred": dict(compare.PREFERRED), "result": result}
+        self.assertEqual(draft_tests.claim(comparison)["verdict"], "helped")
+        reversed_rows = [dict(row, arm={"base": "candidate", "candidate": "base"}[row["arm"]])
+                         for row in rows]
+        mirrored = dict(comparison, result=engine.compare(reversed_rows, control="base"))
+        self.assertEqual(draft_tests.claim(mirrored)["verdict"], "worse")
+
     def test_a_withheld_direction_refusal_or_engine_error_never_reads_helped(self):
         value = draft_tests.claim(self.comparison(withheld=["the candidate is exploratory"]))
         self.assertEqual(value, {"verdict": "exploratory", "reasons": ["the candidate is exploratory"]})
@@ -286,8 +317,6 @@ class VerdictTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        draft_tests._CACHE.clear()
-        self.addCleanup(draft_tests._CACHE.clear)
 
     def test_a_finished_test_shows_its_verdict_readings_spend_and_comparison(self):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
@@ -361,6 +390,36 @@ class VerdictTests(unittest.TestCase):
             analysis.write_text(analysis.read_text() + " ")
             draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
             self.assertEqual(counted.call_count, 3)
+        cache = supervisor.state_root / draft_tests.RECORDS_DIR / draft_tests.CACHE_DIR
+        self.assertEqual(sorted(path.name.split(".")[0] for path in cache.iterdir()),
+                         [RUN_ONE, RUN_THREE])
+        # The cache is on disk, so another process (the CLI) reads it without comparing.
+        with draft_at(SECOND_REV), mock.patch.object(compare, "compare_runs",
+                                                     side_effect=AssertionError("compared")):
+            third = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
+        self.assertEqual(third["checkpoints"][1], first["checkpoints"][1])
+
+    def test_a_result_file_outside_its_run_or_symlinked_is_not_hashed_or_cached(self):
+        supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
+        output = supervisor.root / RUN_ONE / "replay"
+        analysis = output / replay.ANALYSIS_NAME
+        secret = Path(self.tmp.name) / "secret.json"
+        secret.write_text("[]")
+        analysis.rename(output / "analysis-real.json")
+        analysis.symlink_to(secret)
+        with self.assertRaises(replay.ReplayError):
+            draft_tests._recorded(supervisor, RUN_ONE)
+        summary = replay.read_summary(output / replay.SUMMARY_NAME)
+        digest = draft_tests.hashlib.sha256()
+        with self.assertRaises(replay.ReplayError):
+            draft_tests._hash_file(digest, str(secret), os.path.realpath(str(supervisor.root / RUN_ONE)))
+        self.assertTrue(summary["result_files"])
+        cache = supervisor.state_root / draft_tests.RECORDS_DIR / draft_tests.CACHE_DIR
+        with draft_at(), mock.patch.object(compare, "compare_runs", wraps=compare.compare_runs):
+            test = draft_tests.verdicts(supervisor, REPO, supervisor.state_root,
+                                        "tuned")["checkpoints"][0]["latest"]
+        self.assertFalse(cache.exists() and any(cache.iterdir()))
+        self.assertIn(test["verdict"], ("exploratory", "unavailable"))
 
     def test_staleness_comes_from_the_snapshot_never_the_writer_lock(self):
         supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
@@ -430,8 +489,6 @@ class RouteTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.supervisor = tested(self.tmp.name, [(RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00")])
-        draft_tests._CACHE.clear()
-        self.addCleanup(draft_tests._CACHE.clear)
 
     def test_plan_pairs_the_base_and_the_draft_and_reports_power_before_anything_starts(self):
         admission = Admission()
