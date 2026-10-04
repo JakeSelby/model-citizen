@@ -48,7 +48,7 @@ class KeptArmObservationTests(unittest.TestCase):
         self.assertEqual(sorted(Path(opts["tmp"]).glob("cost-observation-*")), [])
         run = [c for c, _ in launch.calls if c[1] == "run"][0]
         self.assertNotIn("--rm", run)
-        self.assertEqual(len([p for p in run if p == "-v"]), 2)  # the snapshot and the stage
+        self.assertEqual(len([p for p in run if p == "-v"]), 3)  # the snapshot, the stage and the cache nonce
 
     def test_a_finished_kept_arm_copies_its_ledger_and_archives_its_observations(self):
         with tempfile.TemporaryDirectory() as tmp:

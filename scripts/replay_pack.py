@@ -31,9 +31,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oracle_metrics  # noqa: E402  a task's declared metrics and which way each improves
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 1
@@ -258,6 +262,8 @@ def task_errors(spec, task_dir, document):
                       % (where, str(spec["long"]).lower(), calls,
                          "above" if calls > document["break_even_calls"] else "at or below",
                          document["break_even_calls"]))
+    if "metrics" in spec:
+        errors.extend(oracle_metrics.declaration_errors(spec["metrics"], where))
     for name in (CHECK_FILE, SOLUTION_FILE):
         path = task_dir / name
         if not path.is_file():
@@ -310,6 +316,8 @@ def load_set(pack, set_name, tier):
                          "canary": document["canary"], "name": pack["name"], "source": pack["source"]}}
         if "mechanism" in task_spec:
             task["mechanism"] = task_spec["mechanism"]
+        if "metrics" in task_spec:
+            task["metrics"] = task_spec["metrics"]
         tasks.append(task)
     if errors:
         raise PackError("pack %s %s, set %s:\n  %s" % (pack["name"], pack["version"], set_name, "\n  ".join(errors)))
@@ -325,12 +333,16 @@ def is_pack(task):
 
 def materialize(task, dest):
     """The task's workspace as a fresh git repository at `dest`, one commit on `main` with a
-    fixed author and date; no file of the task directory, its check or its solution, is copied."""
+    fixed author and date; no file of the task directory, its check or its solution, is copied.
+
+    The repository's own config turns automatic maintenance off, so no background git process
+    is still writing into `.git` while a caller scans the tree or removes it."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(task["pack"]["workspace"], str(dest), symlinks=True)
     env = dict(WORKSPACE_GIT_ENV)
-    for args in (("init", "-q"), ("symbolic-ref", "HEAD", "refs/heads/main"), ("add", "-A"),
+    for args in (("init", "-q"), ("config", "maintenance.auto", "false"), ("config", "gc.auto", "0"),
+                 ("symbolic-ref", "HEAD", "refs/heads/main"), ("add", "-A"),
                  ("-c", "commit.gpgsign=false", "commit", "-q", "-m", "workspace")):
         done = _git(dest, *args, env=env)
         if done.returncode:

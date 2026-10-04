@@ -181,11 +181,12 @@ class ProtocolTests(unittest.TestCase):
     def test_the_micro_defaults_are_five_reps_under_the_pre_registered_stop(self):
         seen = self.verified()
         self.assertEqual(Path(seen.pop("manifest")), BENCH.ROOT / MICRO.TASKS)
-        self.assertEqual(seen, {"model": "claude-haiku-4-5-20251001", "reps": 5, "run_cap": 0.1,
-                                "spend_cap": 4.55, "tasks": 3})
+        self.assertEqual(seen, {"model": "claude-haiku-4-5-20251001", "reps": 5, "run_cap": 0.25,
+                                "spend_cap": 7.80, "tasks": 3})
         ceiling = MICRO.ceiling_usd(seen["tasks"], seen["reps"], len(BENCH.ARMS))
-        self.assertAlmostEqual(ceiling, 3.10)
-        self.assertLess(ceiling, seen["spend_cap"])
+        self.assertAlmostEqual(ceiling, 7.80)
+        self.assertLessEqual(ceiling, 8.00)  # the campaign's pre-registered budget
+        self.assertLessEqual(seen["spend_cap"], ceiling)
 
     def test_a_flag_may_change_the_reps_and_caps_but_not_the_model(self):
         seen = self.verified("--reps", "2", "--run-cap", "0.05", "--spend-cap", "1")
@@ -234,8 +235,8 @@ class ProtocolTests(unittest.TestCase):
             launch = Launch(["garbage", "garbage"])
             checks, spent = BENCH.preflight([TASK], options(tmp, preflight_cap=MICRO.PREFLIGHT_CAP_USD), launch)
         commands = [c for c, _ in launch.calls if "--max-budget-usd" in c]
-        self.assertEqual([c[c.index("--max-budget-usd") + 1] for c in commands], ["0.05", "0.05"])
-        self.assertAlmostEqual(spent, 0.10)  # no readable cost counts each at its own cap
+        self.assertEqual([c[c.index("--max-budget-usd") + 1] for c in commands], ["0.15", "0.15"])
+        self.assertAlmostEqual(spent, 0.30)  # no readable cost counts each at its own cap
 
     def test_the_micro_tier_keeps_the_contamination_refusal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -294,7 +295,7 @@ class MicroSetTests(unittest.TestCase):
             self.assertFalse((history / BENCH.HISTORY_MD.name).exists())
             self.assertIn("voice fired: yes", printed)
             self.assertEqual((opts["model"], opts["reps"], opts["run_cap"], opts["spend_cap"],
-                              opts["preflight_cap"]), ("claude-test", 5, 0.1, 4.55, 0.05))
+                              opts["preflight_cap"]), ("claude-test", 5, 0.25, 7.80, 0.15))
 
     def test_the_micro_series_is_not_the_production_series_over_the_same_bytes(self):
         with tempfile.TemporaryDirectory() as tmp:

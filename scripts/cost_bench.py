@@ -26,6 +26,7 @@ import os
 import platform
 import posixpath
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -50,6 +51,7 @@ import replay_pair  # noqa: E402  the one-policy pair: manifest, parity, re-spaw
 import replay_detect  # noqa: E402  which rules fired, read from the saved streams
 import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
 import replay_pack  # noqa: E402  the evaluator pack: tasks and checks kept outside this repository
+import oracle_metrics  # noqa: E402  named metrics a check may return beside pass, and their report
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
@@ -113,6 +115,8 @@ PERMISSION_MODE = "bypassPermissions"
 # tests' isolation), so demanding it here measures the profile, not the harness.
 PREFLIGHT_PROMPT = "Run exactly this and reply with its output: `python3 bin/harness lint`"
 PREFLIGHT_TURNS = 3
+# The `result` subtype the CLI ends a session with when `--max-budget-usd` stops it.
+BUDGET_STOP = "error_max_budget_usd"
 PREFLIGHT_RED = re.compile(r"PermissionError|Operation not permitted", re.M)
 INHERITED = "inherited"
 # What a profile directory loads, for `backfill` of rows from before arms were containers.
@@ -318,6 +322,14 @@ def load_tasks(path):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
+        if "metrics" not in task:
+            continue
+        if task["kind"] == "issue":  # its unit tests return no metric, so each would stay null
+            raise SystemExit("task %r is malformed: an issue task's unit tests report no metrics"
+                             % task.get("id"))
+        problems = oracle_metrics.declaration_errors(task["metrics"], "task %r" % task.get("id"))
+        if problems:
+            raise SystemExit("task is malformed: " + "; ".join(problems))
     return tasks
 
 
@@ -601,6 +613,28 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effo
 
 _NAMES = itertools.count(1)
 
+# The cache basis a row was measured on. `cold`: the trial's own nonce opened its session segment,
+# so it paid its own prefix write; `shared`: a row from before the nonce (#1174), which may have
+# read an earlier trial's session segment from cache, so its cost understates a cold session.
+CACHE_COLD, CACHE_SHARED = "cold", "shared"
+
+
+def trial_memory(dest):
+    """(path, nonce): a one-line managed memory file in `dest`, unique to one trial.
+
+    Mounted as `replay_arms.MANAGED_MEMORY`, it is the first thing in the session segment: the
+    first message after the system prompt, holding the memory files and then the task prompt. The
+    prompt cache matches on a prefix, so a nonce there makes every trial write its own session
+    segment, as a real session does, while the system prompt and tools before it stay as cached
+    as a real session finds them. A nonce in the task prompt would sit after the session segment
+    and leave it shared between trials. Plain text, not a comment, so it reaches the model."""
+    nonce = secrets.token_hex(16)
+    path = Path(dest) / "trial-memory.md"
+    path.write_text("Benchmark trial %s. This line identifies the trial and asks nothing.\n" % nonce,
+                    encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path, nonce
+
 
 def container_name(*parts):
     """A container name unique to this process, so one that times out can be stopped by name."""
@@ -644,16 +678,19 @@ def check_observer_settings(record):
         raise SystemExit("cost-bench: native observer settings differ from the declared inputs")
 
 
-def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None):
+def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None,
+               memory=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written. `arm` names a pair arm, whose selection is
-    passed by value; `observation_run` is one native session's observation stage."""
+    passed by value; `observation_run` is one native session's observation stage; `memory` is the
+    trial's cache nonce (`trial_memory`)."""
     check_observer_settings(record)
     env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
-                               observation_dir=observation_run["mount"] if observation_run else None)
+                               observation_dir=observation_run["mount"] if observation_run else None,
+                               managed_memory=memory)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -664,7 +701,8 @@ def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=Non
         raise
 
 
-def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None, observation_run=None):
+def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, arm=None, observation_run=None,
+                memory=None):
     """(completed run or None, timeout or None, ledger status): a pair harness arm's run.
 
     The container is kept after it exits so its usage ledger can be copied out to `dest`
@@ -677,7 +715,7 @@ def launch_kept(record, workdir, argv, opts, name, dest, launch=subprocess.run, 
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
                                observation_dir=observation_run["mount"] if observation_run else None,
-                               keep=True)
+                               keep=True, managed_memory=memory)
     client = opts.get("client_env") or arms.client_env()
     quiet = {"env": client, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "universal_newlines": True}
     done = timeout = None
@@ -996,7 +1034,7 @@ def _stream_diagnostics(messages, streamed):
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 name = str(block.get("name") or "")
                 tools[name] = tools.get(name, 0) + 1
-                if name in GATHER_TOOLS:
+                if delegation_verdict.gather_call(name, block.get("input")):
                     gathers.append(thread)
                 elif name in SPAWN_TOOLS:
                     spawn_calls.append((block.get("id"), thread))
@@ -1062,7 +1100,7 @@ def parse_result(stdout):
     inside a `Workflow` agent is in `tool_counts` and not in `spawns`.
 
     `spawn_offered` is whether the `init` event listed a spawn tool. `gather_calls` counts
-    `GATHER_TOOLS` calls in every thread, `absorbed_calls` those made inside a counted spawn's thread,
+    gather calls in every thread (`delegation_verdict.gather_call`: the read tools and read-only Bash), `absorbed_calls` those made inside a counted spawn's thread,
     and `workflow_launches` the `Workflow` calls, which are not spawns (`delegation_verdict`).
     With no assistant message the four counts are None, never zero; `tool_counts` stays `{}`.
 
@@ -1194,8 +1232,9 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
-        errors = json.loads(marks[-1][len(ORACLE_MARK):])
-        return (not errors, "; ".join(errors[:3]))
+        passed, detail, recorded = oracle_metrics.verdict(json.loads(marks[-1][len(ORACLE_MARK):]),
+                                                          task.get("metrics"))
+        return (passed, detail) if recorded is None else (passed, detail, recorded)
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
     done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
@@ -1259,7 +1298,7 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)
-        passed, detail = score(task, after, repo, image, launch)
+        passed, detail = score(task, after, repo, image, launch)[:2]
         if not passed:
             errors.append("%s: the check fails on the known-good tree (%s)" % (task["id"], detail))
     return errors
@@ -1384,7 +1423,7 @@ def _attempt(task, rep, arm, opts, launch):
     env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
     profile = arm_profile(arm, env, opts)
     row = dict(opts["stamp"], task=task["id"], task_long=bool(task.get("long")), arm=arm, tag=opts["tag"],
-               rep=rep, passed=None, error=False,
+               rep=rep, passed=None, error=False, cache_basis=CACHE_COLD, cache_nonce=None,
                error_kind="", cost_usd=None, cost_normalised_usd=None, turns=None, wall_seconds=None,
                first_call_cache_write=None, first_call_context=None, tool_counts={}, spawns=None,
                spawn_offered=None, gather_calls=None, absorbed_calls=None, workflow_launches=None,
@@ -1399,6 +1438,7 @@ def _attempt(task, rep, arm, opts, launch):
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    row.update(oracle_metrics.row_fields(task.get("metrics")))  # nothing for a task declaring none
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
     if opts.get("design") is not None:
@@ -1426,13 +1466,14 @@ def _attempt(task, rep, arm, opts, launch):
     try:
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         task_workdir(task, opts["repo"], workdir)
+        memory, row["cache_nonce"] = trial_memory(workdir.parent)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
         timeout = None
         if kept:
             copied = workdir.parent / "usage.jsonl"
             done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied,
-                                                                 launch, arm, observed)
+                                                                 launch, arm, observed, memory)
             if row["decision_ledger"] == replay_pair.LEDGER_READ:
                 try:
                     keep_decisions(copied, replay_pair.decisions_file(opts["decisions"], task["id"], arm, rep))
@@ -1440,7 +1481,7 @@ def _attempt(task, rep, arm, opts, launch):
                     row["decision_ledger"] = "%s: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
         else:
             try:
-                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed)
+                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed, memory)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
         if timeout is not None:
@@ -1474,7 +1515,10 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
-            row["passed"] = bool(_scorer(opts, launch)(task, workdir, opts["repo"])[0])
+            scored = _scorer(opts, launch)(task, workdir, opts["repo"])
+            row["passed"] = bool(scored[0])
+            if len(scored) > 2 and scored[2] is not None:
+                row.update(scored[2])
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
             return finish(dict(row, error=True, error_kind="check: %s" % type(exc).__name__))
         return finish(row)
@@ -1563,8 +1607,9 @@ def preflight(tasks, opts, launch=subprocess.run, report_spend=None):
             try:
                 parsed = parse_result(done.stdout)
                 cost, observed_effort = parsed["cost_usd"], parsed["observed_effort"]
+                budget_stop = parsed["subtype"] == BUDGET_STOP
             except ValueError:
-                cost, observed_effort = None, None
+                cost, observed_effort, budget_stop = None, None, False
             effort = opts["arms"][arm]["declaration"]["effort"]
             effort_matches = observed_effort is None or observed_effort == effort
             fields, observation_problem = observation_result(collector)
@@ -1576,14 +1621,18 @@ def preflight(tasks, opts, launch=subprocess.run, report_spend=None):
                 (raw / ("preflight-%s.json" % arm)).write_text(done.stdout or "", encoding="utf-8")
             # Every reason a preflight is red is named: an effort mismatch never hides a
             # collector failure behind it.
-            problems = ([] if effort_matches else
-                        ["observed effort %s, pinned %s" % (observed_effort, effort)])
+            problems = ["a budget stop at %.4f USD reported, against its %g USD cap" % (cost, preflight_cap)] \
+                if budget_stop else []
+            problems += ([] if effort_matches else
+                         ["observed effort %s, pinned %s" % (observed_effort, effort)])
             problems += [observation_problem] if observation_problem else []
             checks.append({"arm": arm, "passed": gate_passed(done.stdout, opts.get("preflight_green"))
                            and effort_matches
                            and not observation_problem,
                            "reply": "; ".join(problems) if problems else reply,
-                           "cost_usd": cost, "effort": effort, "observed_effort": observed_effort, **fields})
+                           "cost_usd": cost, "budget_stop": budget_stop, "cap_usd": preflight_cap,
+                           "effort": effort,
+                           "observed_effort": observed_effort, **fields})
         finally:
             shutil.rmtree(str(workdir.parent), ignore_errors=True)
             discard_observation(collector)
@@ -1745,6 +1794,10 @@ def _run_replay(tasks, opts, launch, sink, out, names):
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
         for check in red:
+            if check.get("budget_stop"):
+                print("cost-bench: the %s arm's preflight stopped at its budget: %.4f USD reported, cap %g USD"
+                      % (check["arm"], check["cost_usd"], check["cap_usd"]), file=sys.stderr)
+                continue
             print("cost-bench: the %s arm's gate is red in its own container: %s"
                   % (check["arm"], check["reply"] or "no reply"), file=sys.stderr)
         if red:
@@ -1811,6 +1864,23 @@ def summarise(rows, field="cost_usd"):
         out[arm] = {"runs": len(mine), "errors": len(mine) - len(scored), "passed": _mean(passes),
                     "cost_per_passed": None if None in per_rep or not per_rep else round(_mean(per_rep), 6)}
     return out
+
+
+def cache_basis(rows):
+    """The cache basis the rows' costs stand on, stated in every summary format (`write_report`).
+
+    `cold` only when every row carries its own nonce and no two share one (`trial_memory`);
+    otherwise `shared`, because some trial may have read another's session segment from cache, so
+    the arm with the larger session segment reads cheaper than it is (#1174)."""
+    nonces = [r.get("cache_nonce") for r in rows]
+    cold = bool(rows) and None not in nonces and len(set(nonces)) == len(nonces)
+    return CACHE_COLD if cold else CACHE_SHARED
+
+
+CACHE_BASIS_TEXT = {
+    CACHE_COLD: "cache basis: cold, every trial opened its session segment with its own nonce\n",
+    CACHE_SHARED: "cache basis: shared, trials may have read another trial's session segment from cache, "
+                  "so the arm with the larger one reads cheaper than it is\n"}
 
 
 def per_task(rows, field="cost_usd"):
@@ -2040,10 +2110,23 @@ def cmd_summarise(args):
         if same_file:
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
+    try:
+        metrics = oracle_metrics.summarise(rows, args.seed, args.resamples)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    sys.stdout.write(json.dumps(dict(result, delegation=delegation), indent=2, sort_keys=True) + "\n"
-                     if args.json else replay_stats.render(result) + delegation_verdict.render(delegation))
+    report = dict(result, delegation=delegation)
+    if metrics is not None:  # a set without metrics reports exactly as before
+        report["metrics"] = metrics
+    write_report(report, cache_basis(rows), args.json,
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
     return 0
+
+
+def write_report(result, basis, as_json, text):
+    """Print one summary, in any format, with the cache basis its costs stand on (`cache_basis`)."""
+    sys.stdout.write(json.dumps(dict(result, cache_basis=basis), indent=2, sort_keys=True) + "\n" if as_json
+                     else CACHE_BASIS_TEXT[basis] + text)
 
 
 def summarise_ablation(rows, path, args):
@@ -2056,7 +2139,7 @@ def summarise_ablation(rows, path, args):
                                      surface=surface_of)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot summarise the ablation run in %s: %s" % (path, exc))
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else ablations.render(result))
+    write_report(result, cache_basis(rows), args.json, "" if args.json else ablations.render(result))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2070,7 +2153,7 @@ def summarise_design(rows, path, args):
         result = unit_economy.summarise(rows, None, args.seed, args.resamples, surface=surface_of)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot summarise the grid in %s: %s" % (path, exc))
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json else unit_economy.render(result))
+    write_report(result, cache_basis(rows), args.json, "" if args.json else unit_economy.render(result))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2089,10 +2172,10 @@ def summarise_pair(rows, path, args):
     stamped = {r.get("prices_sha256") for r in rows} - {None}
     result["prices_sha256"] = replay_pair.sha256(prices_path)
     result["price_table_changed"] = bool(stamped) and stamped != {result["prices_sha256"]}
-    sys.stdout.write(json.dumps(result, indent=2, sort_keys=True) + "\n" if args.json
-                     else replay_pair.render(result) + ("price table: changed since the run; decision calls "
-                                                        "are priced at today's rates\n"
-                                                        if result["price_table_changed"] else ""))
+    write_report(result, cache_basis(rows), args.json,
+                 "" if args.json else replay_pair.render(result) + ("price table: changed since the run; decision "
+                                                                    "calls are priced at today's rates\n"
+                                                                    if result["price_table_changed"] else ""))
     return 0 if result["parity"]["ok"] else 1
 
 
@@ -2209,8 +2292,8 @@ def verify_command(args, tasks):
 
 def open_pack_for(args):
     """The evaluator pack `--pack` names, opened at `--pack-ref` and its tier's set loaded, or None
-    without one. Refused first: a pack beside `--tasks` or `--pair`, and a ref or digest with no
-    pack. The caller closes it (`replay_pack.close_pack`)."""
+    without one. Refused first: a pack beside `--tasks`, `--pair` or a schema-1 `--ablations`, and a ref or digest with no
+    pack. `--ablations` takes a pack: `replay_ablations` runs its contamination check and pins it. The caller closes it (`replay_pack.close_pack`)."""
     if not getattr(args, "pack", None):
         if any(getattr(args, flag, None) for flag in ("pack_ref", "pack_digest", "pack_set")):
             raise SystemExit("cost-bench: --pack-ref, --pack-digest and --pack-set need --pack")
@@ -2220,9 +2303,9 @@ def open_pack_for(args):
     if getattr(args, "pair", None):
         raise SystemExit("cost-bench: --pair is refused with --pack: a pair's manifest digest is "
                          "taken over a task file, which a pack does not have")
-    if getattr(args, "ablations", None):
-        raise SystemExit("cost-bench: --ablations is refused with --pack: the ablation runner does "
-                         "not yet run the pack's contamination check or pin its digest")
+    if getattr(args, "ablations", None) and ablations.load(args.ablations).get("schema") == ablations.PAIR_SCHEMA:
+        raise SystemExit("cost-bench: a schema-1 pair file given to --ablations is refused with --pack: "
+                         "a pair's manifest digest is taken over a task file, which a pack does not have")
     pack = replay_pack.open_pack(args.pack, args.pack_ref or "HEAD", args.pack_digest, ROOT,
                                  getattr(args, "tmp", None))
     try:
@@ -2286,6 +2369,8 @@ def cmd_replay(args):
 
 
 def _cmd_replay(args, pack):
+    # Named in the cost lines, so a figure built on the default cap never reads as a chosen one.
+    args.run_cap_source = "--run-cap" if getattr(args, "run_cap", None) is not None else "default run cap"
     resolve_tier(args, pack)
     tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
     args.set_size = len(tasks)
@@ -2307,7 +2392,7 @@ def _cmd_replay(args, pack):
         raise SystemExit("cost-bench: --unit names a grid's unit; it needs --design unit-economy")
     manifest = ablation_manifest(args)
     if manifest is not None:
-        return replay_ablations(args, tasks, protocol, manifest)
+        return replay_ablations(args, tasks, protocol, manifest, pack)
     pair = pair_manifest(args)
     if not pair and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
@@ -2412,22 +2497,30 @@ def ablation_entry_errors(manifest, commit, tmp=None):
         shutil.rmtree(str(parent), ignore_errors=True)
 
 
-def replay_ablations(args, tasks, protocol, manifest):
+def replay_ablations(args, tasks, protocol, manifest, pack=None):
     """An N-arm ablation run: bare, control and one declared-selection image per manifest arm.
 
-    Every entry is checked against the tag before anything is printed as a plan, so an unknown id
-    costs nothing; the minimum detectable effect is stated next; then the schedule, ordered from
-    the recorded seed with the leading arm rotating. A dry run stops there. A real run builds every
-    image, and `_replay` refuses any arm whose declaration differs from control's beyond its
-    selection before the first model call. Rows go to the results directory; no history row."""
+    Control is built from the commit `--tag` resolves to, and every arm is declared from that same
+    commit. Every entry is checked against it before anything is printed as a plan, so an unknown id
+    costs nothing. With an evaluator pack, each task's contamination check (`contamination_by_task`)
+    then runs at that exact commit: a dry run prints every result and exits 2 on a refusal, and a
+    real run is refused before any image is built or arm launched, as is a registered run whose
+    pack digest is not pinned. The worst-case cost at the run's own caps and the minimum detectable
+    effect are stated next; then the schedule, ordered from the recorded seed with the leading arm
+    rotating. A dry run stops there. A real run builds every image, and `_replay` refuses any arm
+    whose declaration differs from control's beyond its selection before the first model call.
+    Every row carries the pack's identity. Rows go to the results directory; no history row."""
     tags = args.tag
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
     bare_decl, [(tag, control_decl)] = declarations(tags, effort=args.effort)
-    errors = ablation_entry_errors(manifest, control_decl["harness"]["commit"], args.tmp)
+    commit = control_decl["harness"]["commit"]
+    errors = ablation_entry_errors(manifest, commit, args.tmp)
     if errors:
         raise SystemExit("cost-bench: refusing the ablation manifest before any spend:\n  %s" % "\n  ".join(errors))
+    contamination = contamination_by_task(tasks, ROOT, commit, args.tmp) if pack else []
+    contaminated = [error for _, task_errors in contamination for error in task_errors]
     seed = args.schedule_seed if getattr(args, "schedule_seed", None) is not None else ablations.default_seed(manifest)
     names = ablations.arm_names(manifest)
     plan = ablations.schedule(tasks, args.reps, names, seed)
@@ -2435,25 +2528,46 @@ def replay_ablations(args, tasks, protocol, manifest):
     selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
                                          control_decl["claude_code_version"], args.effort, selection=selection))
                 for ident, selection in ablations.selections(manifest).items()]
+    cap_source = getattr(args, "run_cap_source", "--run-cap")
+    preflight_cap = 0.0 if args.skip_preflight else PREFLIGHT_CAP_USD
     print("%d run(s): %d task(s) x %d arm(s) (bare, control and %d ablation arm(s)) x %d rep(s), model %s at "
-          "effort %s, %g USD per run, %s; schedule seed %d"
+          "effort %s, %g USD per run (%s), %s; schedule seed %d"
           % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
-             "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
+             cap_source, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
              else "a real run must name its --spend-cap", seed))
+    print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
+          "reach %g USD" % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, preflight_cap),
+                            len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
+                            preflight_cap))
     print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
     print("ablation %s (manifest %s); each arm's selection is declared into its own image"
           % (manifest["name"], manifest["sha256"][:12]))
-    if args.dry_run:  # nothing is built and nothing is spent
+    if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
-        print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), control_decl["harness"]["commit"],
+        print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), commit,
                                                         arms.image_name(control_decl)))
         for spec, (ident, decl) in zip(manifest["arms"], selected):
             change = "removes %s" % spec["removes"] if "removes" in spec else \
                 "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
             print("  arm %s %s: %s" % (ident, change, arms.image_name(decl)))
+        for task_id, task_errors in contamination:
+            print("  contamination %s at %s: %s" % (task_id, commit, "; ".join(task_errors) if task_errors
+                                                     else "clean"))
         for task, rep, arm in plan:
             print("    %s rep %d %s" % (task["id"], rep, arm))
+        if contaminated:
+            print("cost-bench: %d task check(s) refused by the contamination control; the run would "
+                  "stop before any arm launches" % sum(bool(e) for _, e in contamination), file=sys.stderr)
+            return 2
         return 0
+    if contaminated:
+        for error in contaminated:
+            print("cost-bench: contamination: %s" % error, file=sys.stderr)
+        print("cost-bench: refusing the ablation run before any arm launches", file=sys.stderr)
+        raise SystemExit(2)
+    if pack and not args.exploratory and not args.pack_digest:
+        raise SystemExit("cost-bench: a registered run pins its pack: pass --pack-digest %s, the digest "
+                         "its pre-registration names" % pack["digest"])
     if args.spend_cap is None:
         raise SystemExit("cost-bench: an ablation run needs --spend-cap: the default is sized for two arms")
     if not os.environ.get(arms.CREDENTIAL):
@@ -2467,7 +2581,8 @@ def replay_ablations(args, tasks, protocol, manifest):
               "prices": json.loads((ROOT / "policy" / "prices.json").read_text(encoding="utf-8")).get("models", {}),
               "cli_version": bare["manifest"].get("claude_code_version") or bare_decl["claude_code_version"],
               "client_env": arms.client_env({arms.CREDENTIAL: os.environ[arms.CREDENTIAL]}),
-              "protocol": protocol, "pair": None, "ablation": manifest, "schedule_seed": seed}
+              "protocol": protocol, "pair": None, "ablation": manifest, "schedule_seed": seed,
+              "pack_stamp": replay_pack.identity(pack) if pack else {}}
     with arms.egress(bare["image"]) as net:
         control = arms.build_arm(control_decl, arms_dir, snapshot, tmp=args.tmp)
         common["ablation_records"] = {ident: arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)

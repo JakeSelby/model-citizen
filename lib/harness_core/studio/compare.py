@@ -26,10 +26,11 @@ ENGINE = "replay_stats.compare"
 REPLAY_SUITE = "live-replay"
 COMPLETE_STATUS = "succeeded"
 # Which way each measure is preferable. The engine states no direction in its output, so this is
-# the one table: a lower Cost-of-Pass and a higher pass rate are preferable, the two measures the
+# the table, overlaid by a pack's declared metric directions (`preferred`): a lower Cost-of-Pass and a higher pass rate are preferable, the two measures the
 # evidence standard's decision rule judges. Every other measure, per-attempt cost included, gets
 # the engine's reading alone: a run that gives up early is cheaper per attempt without being better.
 PREFERRED = {"cost_per_passed": "lower", "pass_rate": "higher"}
+DIRECTIONS = ("higher", "lower")
 # Row stamps the evidence standard's protocol item 2 (pinned inputs) and item 4 (held constant)
 # require equal across a comparison; a difference refuses it. `(field, what it names)`.
 STAMP_FIELDS = (("cli_version", "CLI versions"), ("os", "container platforms"),
@@ -226,6 +227,27 @@ def direction_withheld(base: Mapping[str, Any], candidate: Mapping[str, Any],
     return out
 
 
+def preferred(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, str]:
+    """`PREFERRED` overlaid with the directions the pack declared for its named metrics, read from
+    the rows' `metric_directions`. A name the rows give two directions, or an unknown one, gets
+    none: the table never guesses which way a metric improves."""
+    declared: Dict[str, str] = {}
+    conflicted = set()
+    for row in list(base["_rows"]) + list(candidate["_rows"]):
+        directions = row.get("metric_directions")
+        if not isinstance(directions, dict):
+            continue
+        for name, direction in directions.items():
+            if direction not in DIRECTIONS or declared.setdefault(name, direction) != direction:
+                conflicted.add(name)
+    out = dict(PREFERRED)
+    for name in conflicted:
+        out.pop(name, None)
+        declared.pop(name, None)
+    out.update(declared)
+    return out
+
+
 def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, Any]:
     """The payload for two loaded sides: identities, refusals, and the engine's output verbatim."""
     reasons = refusals(base, candidate)
@@ -247,7 +269,7 @@ def compare(base: Mapping[str, Any], candidate: Mapping[str, Any]) -> Dict[str, 
                       for name, side in ((BASE, base), (CANDIDATE, candidate)) if side["stale"]],
             "notes": notes(base, candidate),
             "direction_withheld": direction_withheld(base, candidate, result),
-            "preferred": dict(PREFERRED), "result": result, "error": error}
+            "preferred": preferred(base, candidate), "result": result, "error": error}
 
 
 def compare_runs(supervisor: runs.RunSupervisor, repository: Path,
