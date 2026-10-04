@@ -190,9 +190,12 @@ first. It never touches GitHub, and it leaves an issue GitHub no longer returns 
 report as missing.
 
 Run the full live audit before a release and after any triage pass. The `bmad traceability`
-workflow runs it daily, on issue events and when the map changes, with `--ignore-lifecycle` and
-`--grace-days 2`: an issue closes before its map entry can follow it through a pull request, and a
-new issue gets two days to receive its ID. That workflow is not a required check.
+workflow runs it daily, on issue events and when the map changes, with `--ignore-lifecycle`,
+`--warn-unreserved` and `--grace-days 2`: an issue closes before its map entry can follow it
+through a pull request, a new issue gets two days to receive its ID, and an accepted issue still
+without one after that prints as a `warning:` line rather than failing the run, so the unreserved
+backlog stays visible without hiding a missing issue, title drift or projection drift behind a
+permanently red check. That workflow is not a required check.
 
 IDs are never reused and never encode hierarchy. Reparent the metadata rather than renaming the ID.
 Completed historical issues are marked `reconstructed`; the record never claims those artifacts

@@ -428,7 +428,19 @@ HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md
                   "home:.config/agent-harness/config.json",
                   "home:.config/agent-harness/trusted.txt",
                   "home:.local/state/agent-harness/manifest.json",
-                  "home:.local/state/agent-harness/applied.json")
+                  "home:.local/state/agent-harness/applied.json",
+                  # the sync's record of what it owns in each file it edits
+                  "home:.local/state/agent-harness/ownership.json",
+                  # `ensure_gitignore_entries`: the global ignore lines from claude/OWNERSHIP.json
+                  "home:.config/git/ignore",
+                  # the file the sync's lock is taken on; see `EMPTY_WRITES`
+                  "home:.local/state/agent-harness/sync.lock")
+# Writes the harness's only while they hold nothing: a lock file carrying bytes is not the sync's.
+EMPTY_WRITES = ("home:.local/state/agent-harness/sync.lock",)
+EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+# Directories the sync makes even when it leaves them empty: Claude Code's plans directory, which
+# the harness ignores globally. Any other directory is the harness's only as the parent of a write.
+HARNESS_DIRS = ("home:.claude/plans",)
 # Declared components that are not global npm packages; every other one is, as `name@version`.
 NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION)
 # The image user's configuration, and the file a sync copies there when it finds none.
@@ -527,6 +539,8 @@ def _generated_writes(entries):
 def _is_harness_write(entry, generated=None):
     """A regular file a fresh sync renders, excluding personal input files it only reads."""
     if not isinstance(entry, dict) or entry.get("kind") != "file":
+        return False
+    if entry.get("path") in EMPTY_WRITES and entry.get("sha256") != EMPTY_SHA256:
         return False
     return entry.get("path") in (set(HARNESS_WRITES) if generated is None else generated)
 
@@ -701,12 +715,14 @@ MANIFEST_TREATMENT_KEYS = ("entries", "roots", "harness_commit", "summary")
 
 
 def _treatment_paths(manifest):
-    """Exact manifest paths attributable to the harness, plus only their directory parents."""
+    """Exact manifest paths attributable to the harness, the directories it declares, plus only
+    their directory parents."""
     entries = _manifest_entries(manifest)
     generated = _generated_writes(entries)
     paths = {entry.get("path") for entry in entries
              if (entry.get("path") or "").startswith("harness:")
              or _is_harness_write(entry, generated)
+             or (entry.get("kind") == "dir" and entry.get("path") in HARNESS_DIRS)
              or (entry.get("kind") == "link" and _inside(entry.get("target") or "", HARNESS_ROOT))}
     leaves = set(paths)
     for entry in entries:
@@ -740,6 +756,8 @@ def pair_differences(bare, harness):
     treatment = _treatment_paths(right)
     for path in sorted(set(ours) | set(theirs)):
         if path in treatment:
+            if path in ours and ours[path].get("kind") != "dir":
+                out.append("in the bare arm, inside the harness component: %s" % path)
             continue
         if path not in theirs:
             out.append("only in the bare arm: %s" % path)
@@ -840,6 +858,9 @@ def arm_env(proxy=None, stance_cost=None, selection=None):
 
 
 OBSERVATION_MOUNT = "/observations"
+# Claude Code's managed memory file on Linux, the first memory it loads: a file mounted here opens
+# the session segment, the first message after the system prompt (`cost_bench.trial_memory`).
+MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
 OBSERVATION_MARKER = ".model-citizen-benchmark-output"
 
 
@@ -861,7 +882,7 @@ def observation_mount(path):
 
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
-                observation_dir=None, keep=False):
+                observation_dir=None, keep=False, managed_memory=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -871,8 +892,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     names a host path in `host_paths` is refused. The extra output is accepted only with the marker
     `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
-    it is removed by name; it needs a `name`."""
-    reason = host_path_reason([str(workdir)] if workdir is not None else [], env)
+    it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
+    `MANAGED_MEMORY`, the per-trial cache nonce."""
+    sources = [str(p) for p in (workdir, managed_memory) if p is not None]
+    reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
     if keep and not name:
@@ -886,6 +909,8 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, error))
     if observation:
         command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
+    if managed_memory is not None:
+        command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):

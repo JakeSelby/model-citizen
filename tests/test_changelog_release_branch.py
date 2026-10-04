@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import isolation  # noqa: F401 -- keeps git maintenance out of temporary repositories
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

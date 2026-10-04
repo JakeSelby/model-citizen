@@ -59,7 +59,7 @@
         },
         {
           "name": "Shared primitives",
-          "line": "Rules, skills, roles and workflows live in one place and sync into each runtime's native settings. Switch one off and sync leaves it out of both.",
+          "line": "Rules, skills, roles and workflows live in one place and sync into both runtimes, leaving out any you switch off. Skills also install as a Claude Code or Codex plugin.",
           "doc": "docs/sync-model.md"
         },
         {
@@ -259,7 +259,7 @@
     {
       "title": "Measured against bare",
       "line": "Proof set 1 runs the harness against bare Claude Code, and harness evidence verify re-derives every published figure from its rows, whatever they show.",
-      "issue": 799
+      "issue": 560
     },
     {
       "title": "The superpowers mode",

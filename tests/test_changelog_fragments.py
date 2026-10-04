@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+import isolation  # noqa: F401 -- keeps git maintenance out of temporary repositories
 from pathlib import Path
 from unittest import mock
 

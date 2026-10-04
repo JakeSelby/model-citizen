@@ -595,7 +595,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | point | the judgment | the outcome, when there is one |
 | --- | --- | --- |
 | `grade-bash` | the permission answer, `ask` or `deny` | `ran` when the command's PostToolUse arrives, `not_run` when the session ends without one |
-| `stop-gate` | `blocked`, `released` or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
+| `stop-gate` | `blocked`, `released`, `declined` (the session gave a `Gate cannot pass:` reason after a block) or `skipped` | the gate's own result: `passed`, `failed`, `timeout`, `unverified`, `untrusted` |
 | `tier-agent-spawns` | the band worker an unnamed spawn was routed to | not labelled yet |
 | `delegation-nudge` | `nudge`, when a session first reaches its variant's distinct-read threshold; `input` is the count, as `N distinct files` | not labelled yet |
 | `brief-guard` | what was appended: `cap`, `budget` or `cap+budget` | not labelled yet |
@@ -621,6 +621,26 @@ A write that fails is counted and swallowed — a log that can change a permissi
 worse than no log — and `telemetry.decisions: false` in `config.json` turns the whole thing off,
 after which no row, no file and no directory is written. See
 [telemetry.md](telemetry.md#the-decision-log-switch).
+
+### Rows the test suite wrote
+
+Before 0.15.0 some of this repository's tests ran hooks against the real home, so a machine that
+ran the suite may hold rows no session produced. The test rows carry short made-up ids, and
+their outcome rows carry the same id. Count the ids first and note which ones the suite wrote;
+in the rows seen so far they were `s`, `x`, `probe` and ids starting `pid-`. Then drop only those
+in a copy, and replace the log with it once the counts look right. A runtime may name a session
+with an id that is not a UUID, so filter on the test ids you found, never on an id's shape:
+
+```sh
+log=~/.local/state/agent-harness/decisions.jsonl
+jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head -20
+jq -c 'select((.session_id // "") as $id
+  | ($id == "s" or $id == "x" or $id == "probe" or ($id | startswith("pid-"))) | not)' \
+  "$log" > "$log.clean"
+```
+
+The suite now runs on a disposable home, and a guard test fails if a hook's row reaches the
+real one.
 
 ### Sampled allows
 

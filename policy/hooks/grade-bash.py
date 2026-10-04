@@ -22,6 +22,16 @@ Behaviour:
     commands it names (`_grade_streams`, `_grade_program`). When the text still does not
     parse, the raw text is scanned for grade-3 verb families rather than graded 1: an
     unparseable command that says `--force` or `rm -rf` is irreversible whatever the rest is.
+    A program another interpreter reads that calls nothing able to run a command is text, so a
+    quoted verb in an edit script grades nothing (`_inert_program`).
+  - Every route that discards uncommitted work grades 3 alike: `git checkout` of paths, `git
+    restore` of the working tree, `git reset --hard` and `--merge`, `git read-tree`, `git
+    checkout-index -f`, `git rm -f`, `git worktree remove --force`, a blob from `git show` or
+    `git cat-file` written over its own path, and `rm`, `truncate`, `cp /dev/null` or any `>`,
+    a git command's included, on a tracked file whose working-tree changes `git status` reports
+    (`_discards`). An index-only `git reset` or `git restore --staged` keeps that work.
+  - Grading runs under a deadline inside the hook's timeout (`grade_within`); past it the raw
+    text is scanned, a destructive verb is refused and anything else stays open.
   - `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` and command-substitution bodies grade 3 when
     their inner text carries a grade-3 verb, else 1; the read-only hook refuses them all anyway.
   - The autonomy stance sets the threshold: `execute` gates grade 3, `confirm-writes` grade 2 and
@@ -42,7 +52,8 @@ Behaviour:
     names an approval code instead (`approvals.py`): the user replies `approve <code>` as the whole
     message, and the same command, with no marker, then passes once in that session within
     thirty minutes. The approval is consumed here, at the point the hook would deny. A Bash command that writes to
-    the approvals store grades 3, so the agent cannot record an approval of its own.
+    the approvals store grades 3, so the agent cannot record an approval of its own; one that
+    only reads it does not (`_store_write`).
   - When `governance.provider` names a decision provider other than `none`, a command the stance
     lets through is put to it as well (`govern`): each simple command is classified as
     `coding.git_push`, `coding.git_commit`, `coding.pr_merge`, `coding.deploy` or
@@ -154,7 +165,8 @@ def main():
         return
     variant, label = stance()
     threshold = THRESHOLDS.get(variant, THRESHOLDS[STRICTEST])
-    grade, verb, target, family = grade_text(command, payload.get("cwd") or "")
+    (grade, verb, target, family), _timed = grade_within(command, payload.get("cwd") or "",
+                                                         grade=grade_text)
     if grade == 0:
         return
     text = reason(grade, verb, target, family, label)
