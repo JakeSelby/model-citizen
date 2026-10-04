@@ -51,8 +51,10 @@ PARITY_CLAIM = re.compile(
     re.IGNORECASE)
 ARTIFACT_KEYS = ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report",
                  "arms", "trajectories")
-# Optional: the all-rules-at-once summary (`replay_reliability.joint_summary`), never raw detections.
-OPTIONAL_ARTIFACT_KEYS = ("joint_compliance",)
+# Optional: the all-rules-at-once summary (`replay_reliability.joint_summary`), never raw detections,
+# and the layer scorecard (`scripts/layer_scorecard.py`) built from these rows among others.
+OPTIONAL_ARTIFACT_KEYS = ("joint_compliance", "scorecard")
+SCORECARD_KIND, SCORECARD_SCHEMA = "layer-scorecard", 1
 INDEX_KEYS = ("schema_version", "bundle_id", "repository", "artifacts", "design", "statistics",
               "published_figures", "evidence_cards", "items")
 
@@ -310,6 +312,8 @@ def load_bundle(directory):
     if "joint_compliance" in artifacts:
         loaded["raw"]["joint_compliance"] = _read_ref(root, artifacts["joint_compliance"],
                                                       "artifact joint_compliance")
+    if "scorecard" in artifacts:
+        loaded["raw"]["scorecard"] = _read_ref(root, artifacts["scorecard"], "artifact scorecard")
     if not isinstance(artifacts["arms"], list) or len(artifacts["arms"]) != 2:
         raise StrictJSONError("artifacts.arms must contain two records")
     loaded["raw"]["arms"] = [_read_ref(root, ref, "arm record %d" % number)
@@ -487,6 +491,29 @@ def _arm_pair_differences(bare, harness):
     if bare_manifest != harness_manifest:
         differences.append("manifests differ beyond the treatment surface")
     return differences
+
+
+def _scorecard_problems(data, rows_data):
+    """`(problems, reference)` for a carried layer scorecard: it must be one, not exploratory, and
+    built from this bundle's rows file among its production sources. It is checked, not re-derived;
+    `scripts/layer_scorecard.py` rebuilds it from the same rows."""
+    try:
+        card = strict_json(data.decode("utf-8"), "scorecard")
+    except (UnicodeError, StrictJSONError) as exc:
+        return ["scorecard is not strict JSON: %s" % exc], None
+    if not isinstance(card, dict) or card.get("kind") != SCORECARD_KIND or card.get("schema") != SCORECARD_SCHEMA:
+        return ["scorecard is not a schema-%d %s" % (SCORECARD_SCHEMA, SCORECARD_KIND)], None
+    problems = []
+    if card.get("exploratory") is not False:
+        problems.append("scorecard is exploratory, so a bundle cannot carry it")
+    rows_sha = _sha(rows_data)
+    sources = card.get("sources") if isinstance(card.get("sources"), list) else []
+    if not any(isinstance(s, dict) and s.get("role") == "production" and s.get("sha256") == rows_sha
+               for s in sources):
+        problems.append("scorecard was not built from this bundle's rows file")
+    layers = card.get("layers") if isinstance(card.get("layers"), list) else []
+    return problems, {"sha256": _sha(data), "layers": len(layers),
+                      "strata": sorted(card.get("headline") or {}) if isinstance(card.get("headline"), dict) else []}
 
 
 def copy_without_treatment(declaration):
@@ -900,6 +927,13 @@ def _verify_loaded(bundle, git):
                 derived["reliability"]["joint"] = summary
     except (UnicodeError, ValueError) as exc:
         _error(errors, 5, "reliability derivation failed: %s" % exc)
+    derived["scorecard"] = None
+    if "scorecard" in raw:
+        problems, card = _scorecard_problems(raw["scorecard"][1], raw["rows"][1])
+        for problem in problems:
+            _error(errors, 5, problem)
+        if not problems:
+            derived["scorecard"] = card
     derived["icc"] = {arm: {field: _icc(priced_rows, arm, field) for field in ("pass", "cost")}
                       for arm in ARMS}
     planned = {arm: len(tasks) * trials_per_task for arm in ARMS}
