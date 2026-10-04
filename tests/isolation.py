@@ -7,8 +7,21 @@ inherited from the caller's shell silently overrides a temporary `HOME`, so a sy
 the harness into a real profile instead of its own fixture. The suite therefore drops the
 variable everywhere it builds an environment, and importing this module drops it from the test
 process once, before any test runs.
+
+The same applies to the home. Every hook and harness module resolves its user state (the
+decision log, the usage ledger, approvals, intent claims, the session registry) from
+`HARNESS_HOME`, else `HOME`, so a test that runs a hook without pointing `HOME` somewhere
+temporary appends its rows to the user's real `~/.local/state/agent-harness`. Importing this
+module therefore moves the whole test process onto a disposable home, `SUITE_HOME`, with
+`HARNESS_*` dropped. A test that sets its own home still does; one that forgets lands here.
+`REAL_HOME` is the account's home from the password database, kept so the guard test can prove
+nothing reaches it.
 """
+import atexit
 import os
+import pwd
+import shutil
+import tempfile
 
 CONFIG_DIR = "CLAUDE_CONFIG_DIR"
 
@@ -81,5 +94,25 @@ def quiet_git_maintenance(env=None):
     return env
 
 
-drop_inherited_config_dir()
+def real_home():
+    """The account's home from the password database: where an unisolated hook would write."""
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
+def isolate_suite():
+    """Point this process at a disposable home for the rest of the run. Returns that home.
+
+    Called once, when this module is first imported; the directory is removed at exit.
+    """
+    home = tempfile.mkdtemp(prefix="harness-suite-home-")
+    atexit.register(shutil.rmtree, home, True)
+    for key in [name for name in os.environ if name.startswith("HARNESS_")]:
+        del os.environ[key]
+    drop_inherited_config_dir()
+    os.environ["HOME"] = home
+    return home
+
+
+REAL_HOME = real_home()
+SUITE_HOME = isolate_suite()
 quiet_git_maintenance()
