@@ -221,16 +221,16 @@ class SharedSessionTests(Base):
         self.assertTrue(intents.release("S", str(self.b), self.env))
         self.assertEqual([c["worktree"] for c in intents.claims(self.env)], [str(self.a)])
 
-    def test_a_sibling_under_the_same_session_is_warned_then_denied(self):
+    def test_a_sibling_under_the_same_session_is_warned_and_never_denied(self):
         os.environ["CLAUDE_PID"] = str(os.getpid())
         self.claim(self.a, "shared.py")
         self.claim(self.b, "other.py")
         self.assertEqual(self.edit(self.a), {})
-        first = self.edit(self.b)
-        self.assertIn("intent-overlap warning", first["hookSpecificOutput"]["additionalContext"])
-        second = self.edit(self.b)
-        self.assertEqual(second["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertEqual([r["deterministic_answer"] for r in self.rows()], ["warn", "deny"])
+        for _ in range(3):
+            answer = self.edit(self.b)["hookSpecificOutput"]
+            self.assertNotIn("permissionDecision", answer)
+            self.assertIn("intent-overlap warning", answer["additionalContext"])
+        self.assertEqual([r["deterministic_answer"] for r in self.rows()], ["warn"] * 3)
 
     def test_hit_counters_are_separate_per_worktree(self):
         self.assertEqual(intents.hit("S", str(self.a), "shared.py", self.env), 1)

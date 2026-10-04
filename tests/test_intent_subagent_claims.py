@@ -65,19 +65,18 @@ class SubagentClaimTests(test_intents.Base):
         self.assertEqual([r["deterministic_answer"] for r in rows], ["warn", "deny"])
         self.assertEqual({r["claimed_by"] for r in rows}, {"O"})
 
-    def test_a_sibling_in_its_own_worktree_still_overlaps(self):
+    def test_a_sibling_in_its_own_worktree_still_overlaps_but_only_warns(self):
         self.claim(self.a, "shared.py")
         self.claim(self.b, "other.py")
         self.assertEqual(self.edit(self.a, "builder-a"), {})
         first = self.edit(self.b, "builder-b")
         self.assertIn("intent-overlap warning", first["hookSpecificOutput"]["additionalContext"])
-        # The overlap counts under the builder's worktree, never under its parent's.
-        hits = intents.hits_dir(self.env)
-        self.assertTrue((hits / intents.slot("S", str(self.b))).exists())
-        self.assertFalse((hits / intents.slot("S", str(self.main))).exists())
+        # The sibling's claim is never counted toward a denial (#1201).
+        self.assertFalse(intents.hits_dir(self.env).exists())
         second = self.edit(self.b, "builder-b")
-        self.assertEqual(second["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertNotIn("permissionDecision", second["hookSpecificOutput"])
         self.assertEqual([r["claim"] for r in self.rows()], ["shared.py", "shared.py"])
+        self.assertEqual({r["same_session"] for r in self.rows()}, {True})
 
     def test_given_up_a_sibling_writing_into_anothers_worktree_by_absolute_path(self):
         # Documented in the module docstring: the target's worktree reads as the editor's.

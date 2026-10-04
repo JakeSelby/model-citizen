@@ -16,9 +16,12 @@ yet, because the paths a plan names include the files it will create.
 
 `pid` is the long-lived runtime process that owns the session, not the shell that ran the claim:
 `CLAUDE_PID` where the runtime exports it, otherwise the first ancestor that is not a shell or an
-interpreter. A claim whose pid is dead, or whose worktree has been removed, is stale: every read
-removes it, and so does `harness intent sweep`. The second rule is what ends a subagent's claim,
-since its pid is the runtime's and outlives it; landing removes the worktree.
+interpreter. A claim is stale when its pid is dead, its worktree has been removed, or its branch
+has landed: every read removes it, and so does `harness intent sweep`. The last two are what end a
+subagent's claim, since its pid is the runtime's and outlives it. A squash merge leaves no ancestry
+to test, so landed means the claim's branch no longer exists while its worktree is on another
+branch, or its upstream is `[gone]`, as it is once the merged remote branch is deleted and fetched
+with pruning. A detached or unborn branch is never read as landed.
 
 A claim never matches its owner's own edits. Own means an edit inside the worktree the claim was
 made from, by the same session id or the same runtime process. Subagents share both their
@@ -36,6 +39,12 @@ orchestrator's own in its worktree, since parent and subagents share one session
 field tells them apart. A claim another session id left, even one from the same runtime process
 after `/clear`, still overlaps. Only Claude Code's payloads take this rule; a main-thread edit, a
 payload without `agent_id` and every Codex payload keep the `cwd` rule.
+
+A claim that is not the editor's own but carries its session id, recorded in a worktree other than
+the one the edited path lies in, is a sibling's: two builders of one orchestrating session, each
+in its own worktree, editing their own copies of one path. Those cannot collide on disk, only at
+the merge, so a sibling's claim always warns and is never counted toward a denial, whatever the
+variant. A claim on the target's own worktree, or another session's claim, keeps the rule below.
 
 What an overlap does is the `coordination.repeat_overlap` variant in the user config. `deny`, the
 default, warns on the first hit on a path and denies the second in the same session; `warn` never
@@ -138,13 +147,19 @@ def overlap_variant(env=None):
 
 # ---- identity -------------------------------------------------------------------------------
 
-def _git(cwd, *args):
+def _run_git(cwd, *args):
+    """`(returncode, stdout)`, or `(None, "")` when git could not be run at all."""
     try:
         out = subprocess.run(["git", "-C", str(cwd)] + list(args), capture_output=True,
                              text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout if out.returncode == 0 else None
+        return None, ""
+    return out.returncode, out.stdout
+
+
+def _git(cwd, *args):
+    code, out = _run_git(cwd, *args)
+    return out if code == 0 else None
 
 
 def _existing(path):
@@ -393,9 +408,37 @@ def claims(env=None):
 
 
 def stale(data):
-    """Whether a claim no longer holds: its process is dead or its worktree is gone."""
+    """Whether a claim no longer holds: its process is dead, its worktree gone or its branch landed."""
     worktree = data.get("worktree")
-    return not alive(data.get("pid")) or not (isinstance(worktree, str) and Path(worktree).is_dir())
+    if not alive(data.get("pid")) or not (isinstance(worktree, str) and Path(worktree).is_dir()):
+        return True
+    return landed(worktree, data.get("branch"))
+
+
+def landed(worktree, branch):
+    """Whether `branch` has landed: deleted while `worktree` moved on, or its upstream `[gone]`.
+
+    False whenever git cannot answer, so a failure never ends a live claim (module docstring).
+    """
+    if not isinstance(branch, str) or not branch or branch == "HEAD":
+        return False
+    ref = "refs/heads/" + branch
+    out = _git(worktree, "for-each-ref", "--format=%(refname) %(upstream:track)", ref)
+    if out is None:
+        return False
+    for line in out.splitlines():
+        name, _, track = line.partition(" ")
+        if name == ref:
+            # The branch exists; an empty track means no upstream, which is not landed.
+            return track.strip() == "[gone]"
+    # No such branch. An unborn branch has no ref yet, but its worktree is still on it.
+    # `symbolic-ref -q` exits 1 on a detached HEAD; any other failure is git unable to answer.
+    code, current = _run_git(worktree, "symbolic-ref", "--short", "-q", "HEAD")
+    if code == 1:
+        return True
+    if code != 0:
+        return False
+    return current.strip() != branch
 
 
 def _remove(path):
@@ -439,6 +482,20 @@ def own(item, session, pid, root):
         return False
     return (session is not None and item.get("session") == session) or (
         pid is not None and item.get("pid") == pid)
+
+
+def sibling(item, session, target_root):
+    """Whether an overlapping claim is the same session's, made in a worktree other than the target's.
+
+    Such a claim only warns (module docstring); `split` orders the rest ahead of it.
+    """
+    return bool(session) and item.get("session") == session and item.get("worktree") != target_root
+
+
+def split(found, session, target_root):
+    """`(others, siblings)`: the overlaps that keep the deny rule, and the session's own siblings."""
+    others = [f for f in found if not sibling(f[0], session, target_root)]
+    return others, [f for f in found if sibling(f[0], session, target_root)]
 
 
 def editor_root(cwd, target_root, subagent=False):
@@ -587,11 +644,12 @@ def log(point, answer, text, session="", runtime="", extra=None, now=None):
         return None
 
 
-def log_overlap(answer, found, tool, session, variant, runtime=""):
+def log_overlap(answer, found, tool, session, variant, runtime="", same_session=False):
     item, pattern, rel = found
     return log(POINT, answer, (tool + " " + rel).strip(), session, runtime,
                {"variant": variant, "path": rel, "claim": pattern,
-                "claimed_by": item.get("session"), "claimed_branch": item.get("branch")})
+                "claimed_by": item.get("session"), "claimed_branch": item.get("branch"),
+                "same_session": bool(same_session)})
 
 
 # ---- landing merges -------------------------------------------------------------------------
@@ -706,24 +764,31 @@ def check(paths=None, cwd=None, session=None, pid=None, env=None, runtime=""):
     """Every overlap for `paths` (default: the worktree's changes), with its logged answer.
 
     The runtime without a pre-edit event runs this before commit. It has no earlier warning to
-    count from, so under `deny` any overlap denies; under `warn` it only warns. Returns
-    `(answer, found)` where answer is None when nothing overlaps.
+    count from, so under `deny` another session's overlap denies; under `warn`, and for the
+    session's own sibling claims, it only warns. Returns `(answer, found)` where answer is None
+    when nothing overlaps.
     """
     cwd = str(cwd or os.getcwd())
     pid = runtime_pid(env) if pid is None else pid
     session = session or session_key(env, pid)
     targets = list(paths) if paths else changed_paths(cwd)
     found = []
+    siblings = []
     for target in targets:
         full = Path(target) if Path(target).is_absolute() else Path(cwd) / target
-        found.extend(overlaps(full, session, pid, cwd, env))
-    if not found:
+        matched = overlaps(full, session, pid, cwd, env)
+        others, same = split(matched, session, (repository(full) or {}).get("root", ""))
+        found.extend(others)
+        siblings.extend(same)
+    if not found and not siblings:
         return None, []
     variant = overlap_variant(env)
-    answer = "deny" if variant == "deny" else "warn"
+    answer = "deny" if variant == "deny" and found else "warn"
     for item in found:
         log_overlap(answer, item, "check", session, variant, runtime)
-    return answer, found
+    for item in siblings:
+        log_overlap("warn", item, "check", session, variant, runtime, same_session=True)
+    return answer, found + siblings
 
 
 # ---- command line ---------------------------------------------------------------------------
@@ -763,8 +828,13 @@ def command(args, say):
             if answer is None:
                 say("no overlap with a live sibling's claim")
                 return 0
+            session = args.session or session_key(env)
+            root = (repository(os.getcwd()) or {}).get("root", "")
             for item in found:
-                say(answer + ": " + describe(item))
+                if sibling(item[0], session, root):
+                    say("warn: " + describe(item) + ", this session's own claim in another worktree")
+                else:
+                    say(answer + ": " + describe(item))
             return 1 if answer == "deny" else 0
         if action == "merge":
             result = args.result or probe_merge(os.getcwd(), args.base)

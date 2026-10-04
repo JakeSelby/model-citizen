@@ -25,9 +25,26 @@ python3 scripts/bmad_issue_sync.py audit
 python3 -m unittest discover -s tests
 ```
 
+This block is the gate run before every push. The full suite takes longer than a Stop hook may
+run, so the `stop-gate` hook runs the subset below instead: the lint, the BMad checks and the
+hook suites, in about 80 seconds on an idle machine and two minutes under heavy load.
+
+## Stop gate
+
+```sh
+python3 bin/harness lint
+python3 scripts/bmad_issue_sync.py sprint-status --check
+python3 scripts/bmad_issue_sync.py audit
+python3 -m unittest discover -s tests -p "test_stop_gate*.py"
+python3 -m unittest discover -s tests -p "test_agents_gate_block.py"
+python3 -m unittest discover -s tests -p "test_decisions*.py"
+python3 -m unittest discover -s tests -p "test_grade_bash*.py"
+```
+
 The `stop-gate` hook runs this block when the tree has changed since its last green run,
 blocks the turn while it is red, and releases after eight consecutive blocks. It runs only
-once this checkout is trusted: accept Claude Code's folder dialog or run `bin/harness trust .`.
+once this checkout is trusted: accept Claude Code's folder dialog or run `bin/harness trust .`;
+a worktree of a trusted checkout is trusted with it.
 
 ## Issues, milestones and releases
 

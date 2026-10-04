@@ -269,7 +269,8 @@ class StopGateRowTests(unittest.TestCase):
         row = self.row(str(self.transcript))
         self.assertEqual(row["point"], "stop-gate")
         self.assertEqual(row["deterministic_answer"], "blocked")
-        self.assertEqual(sorted(row), ["decision_id", "deterministic_answer", "harness_version",
+        self.assertEqual(sorted(row), ["decision_id", "deterministic_answer", "elapsed_seconds",
+                                       "gate_block", "harness_version",
                                        "input", "input_sha256", "kind", "module", "outcome",
                                        "point", "profile_fingerprint", "runtime", "schema_version",
                                        "session_id", "ts"])

@@ -2,12 +2,18 @@
 # SPDX-License-Identifier: MIT
 """Stop hook: run the repository's own gate and refuse to finish while it is red.
 
-Opt-in per repository — the gate is the fenced block under the `## Gate` heading of the
-repo's `AGENTS.md`, executed together in one shell. A repo without that block is untouched.
+Opt-in per repository — the gate is the fenced block under the `## Stop gate` heading of the
+repo's `AGENTS.md`, or under `## Gate` when it declares no stop gate, executed together in one
+shell. A repo with neither block is untouched. The stop gate exists because a hook has a time
+limit and a full suite often does not fit in it: a repository declares the subset that finishes
+inside BUDGET_SECONDS there and keeps its full `## Gate` as the gate run before a push.
 Trusted folders only: the block is a repository's own text, so it runs only where Claude
 Code's folder-trust dialog has been accepted (the `hasTrustDialogAccepted` flag it records
 per project), the same consent that gates a repository's `.claude/settings.json` hooks, or
-where the root is listed in ~/.config/agent-harness/trusted.txt by `harness trust`.
+where the root is listed in ~/.config/agent-harness/trusted.txt by `harness trust`. A linked
+git worktree carries its main repository's trust, since both share one object store and history.
+Every release that is not a pass (timeout, forced release, decline, a tree changed mid-run) is
+logged with its reason and the seconds the gate ran.
 Bounded: after MAX_BLOCKS consecutive blocks the turn is released, so a gate that can never
 pass cannot trap a session. The count is kept per session, so two sessions stopping in the same
 checkout never reset each other's; a session silent for STALE_SECONDS is forgotten. A timeout releases the turn as unverified; unexpected errors block. Neither records success.
@@ -20,6 +26,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -31,6 +38,8 @@ STALE_SECONDS = 24 * 3600
 BUDGET_SECONDS = 240
 TAIL_LINES = 30
 GATE_FILES = ("AGENTS.md", "CLAUDE.md")
+STOP_HEADING = "## Stop gate"
+GATE_HEADING = "## Gate"
 STATE = Path.home() / ".local" / "state" / "agent-harness" / "stop-gate"
 TRUSTED = Path.home() / ".config" / "agent-harness" / "trusted.txt"
 DECLINE_MARKER = "Gate cannot pass:"
@@ -60,7 +69,7 @@ def decisions():
     return _LOG[0]
 
 
-def log_gate(payload, root, commands, answer, outcome):
+def log_gate(payload, root, commands, answer, outcome, fields=None):
     """Record what this Stop event was answered with, and how the gate turned out.
 
     Both records are written here because both facts are known here: the hook runs the gate
@@ -70,7 +79,9 @@ def log_gate(payload, root, commands, answer, outcome):
     The claim the turn ended on is the transcript's, not the payload's: a Stop event carries no
     assistant text, so the log reads a capped tail of the file the event names. That read only
     happens under `telemetry.completion_claim`, which is off, because it is the one field in the
-    log that holds model prose. Both runtimes' names for the file are accepted.
+    log that holds model prose. Both runtimes' names for the file are accepted. `fields` adds how the
+    run went: the block that ran, the seconds it took and, on a release that is not a pass, the
+    reason.
     """
     module = decisions()
     if module is None:
@@ -79,7 +90,8 @@ def log_gate(payload, root, commands, answer, outcome):
     text = str(root) + "\n" + "\n".join(commands)
     transcript = (payload.get("transcript_path") or payload.get("rollout_path")
                   or payload.get("session_path") or "")
-    identity = module.record("stop-gate", answer, text, payload, transcript=transcript)
+    identity = module.record("stop-gate", answer, text, payload, transcript=transcript,
+                             fields=fields)
     if identity and outcome is not None:
         module.observe(identity, outcome, "stop-gate", payload.get("session_id") or "")
 
@@ -155,7 +167,35 @@ def listed_roots():
     return roots
 
 
+def main_worktree(root):
+    """The main checkout a linked worktree belongs to, or None for a main checkout or bare store.
+
+    A linked worktree's git directory sits under its main repository's `.git/worktrees/`, while
+    the common directory is that `.git` itself, so the two differ only in a linked worktree.
+    """
+    def absolute(text):
+        text = text.strip()
+        if not text:
+            return None
+        found = Path(text)
+        return (found if found.is_absolute() else Path(root) / found).resolve()
+    common = absolute(git(root, "rev-parse", "--git-common-dir"))
+    own = absolute(git(root, "rev-parse", "--git-dir"))
+    if common is None or own is None or common == own or common.name != ".git":
+        return None
+    return str(common.parent)
+
+
 def trusted(root, cwd):
+    """True when `root` is trusted itself (see `trusted_here`) or is a linked worktree of a
+    main checkout that is."""
+    if trusted_here(root, cwd):
+        return True
+    main_root = main_worktree(root)
+    return bool(main_root) and trusted_here(main_root, main_root)
+
+
+def trusted_here(root, cwd):
     """True when the folder-trust dialog has been accepted for the working directory, the
     repository root, or a directory between them, or when `harness trust` listed the root."""
     if os.environ.get("HARNESS_RUNTIME") == "codex":
@@ -188,7 +228,8 @@ def gate_file(root):
     return None
 
 
-def gate_commands(root):
+def gate_commands(root, heading=GATE_HEADING):
+    """The commands of the fenced block under `heading` in the gate file, or [] when none."""
     path = gate_file(root)
     if path is None:
         return []
@@ -198,7 +239,7 @@ def gate_commands(root):
         return []
     start = None
     for i, raw in enumerate(lines):
-        if raw.strip().lower() == "## gate":
+        if raw.strip().lower() == heading.lower():
             start = i + 1
             break
     if start is None:
@@ -217,6 +258,15 @@ def gate_commands(root):
         elif text and not text.startswith("#"):
             commands.append(text)
     return commands
+
+
+def stop_commands(root):
+    """(heading, commands) this hook runs: the declared stop gate, else the full gate."""
+    for heading in (STOP_HEADING, GATE_HEADING):
+        commands = gate_commands(root, heading)
+        if commands:
+            return heading, commands
+    return GATE_HEADING, []
 
 
 def tree_hash(root):
@@ -239,7 +289,8 @@ def tree_hash(root):
             with path.open("rb") as stream:
                 for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                     digest.update(chunk)
-    digest.update("\n".join(gate_commands(root)).encode())
+    heading, commands = stop_commands(root)
+    digest.update((heading + "\n" + "\n".join(commands)).encode())
     digest.update(str(BUDGET_SECONDS).encode())
     return digest.hexdigest()
 
@@ -271,22 +322,36 @@ def write_state(path, data):
             os.unlink(temporary)
 
 
-def run_gate(root, commands):
-    """The first red command as (command, exit code, output), or None when every one passes."""
+def run_gate(root, commands, budget=None):
+    """The first red command as (command, exit code, output), or None when every one passes.
+
+    The gate runs in its own process group, and a timeout kills the whole group: killing only
+    the shell would leave a test suite it started running on, unwatched, after the turn ends.
+    """
     cmd = "\n".join(commands)
-    out = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", cmd], cwd=root,
-                         capture_output=True, text=True, timeout=BUDGET_SECONDS)
-    if out.returncode != 0:
-        return cmd, out.returncode, (out.stdout or "") + (out.stderr or "")
+    proc = subprocess.Popen(["bash", "-e", "-o", "pipefail", "-c", cmd], cwd=root,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            start_new_session=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=BUDGET_SECONDS if budget is None else budget)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+        raise
+    if proc.returncode != 0:
+        return cmd, proc.returncode, (stdout or "") + (stderr or "")
     return None
 
 
-def reason(path, cmd, code, output):
+def reason(path, cmd, code, output, heading=GATE_HEADING):
     tail = "\n".join(output.splitlines()[-TAIL_LINES:]).strip()
     return (
         f"The gate in {path.name} is red: `{cmd}` exited {code}.\n\n"
         f"{tail}\n\n"
-        "That command is the check block this repository defines under `## Gate`, run at the end "
+        f"That command is the check block this repository defines under `{heading}`, run at the end "
         "of a turn once files have changed. Fix it and finish. If it cannot pass for a reason "
         "outside this task, end your reply with a line that starts `" + DECLINE_MARKER + "` "
         "followed by why; that ends the turn as unverified. Any other finish is blocked again."
@@ -309,13 +374,14 @@ def live_sessions(state, now):
     return kept
 
 
-def release(path, session, note):
+def release(path, session, note, elapsed):
+    """Let the turn end unverified, recording why and how long the gate ran."""
     # Re-read: the gate can run for minutes, and another session may have recorded blocks meanwhile.
     sessions = live_sessions(read_state(path), time.time())
     sessions.pop(session, None)
     write_state(path, {"green_hash": None, "status": "unverified", "reason": note,
-                       "sessions": sessions})
-    sys.stderr.write("stop-gate: " + note + "\n")
+                       "elapsed_seconds": elapsed, "sessions": sessions})
+    sys.stderr.write("stop-gate: %s (gate ran %.1fs)\n" % (note, elapsed))
 
 
 def main():
@@ -329,7 +395,7 @@ def main():
     root = git_root(cwd)
     if not root:
         return
-    commands = gate_commands(root)
+    heading, commands = stop_commands(root)
     if not commands:
         return
     if not trusted(root, cwd):
@@ -347,19 +413,33 @@ def main():
         return
 
     session = payload.get("session_id") or ""
+    started = time.monotonic()
+
+    def ran(note=None):
+        """The log fields for this run: the block, its seconds and any release reason."""
+        fields = {"gate_block": heading,
+                  "elapsed_seconds": round(time.monotonic() - started, 1)}
+        if note:
+            fields["release_reason"] = note
+        return fields
+
+    def let_go(note, answer, outcome):
+        fields = ran(note)
+        release(path, session, note, fields["elapsed_seconds"])
+        log_gate(payload, root, commands, answer, outcome, fields)
+
     try:
         failure = run_gate(root, commands)
     except subprocess.TimeoutExpired:
-        release(path, session, f"gate ran past {BUDGET_SECONDS}s; letting the turn end")
-        log_gate(payload, root, commands, "released", "timeout")
+        let_go(f"gate ran past {BUDGET_SECONDS}s; letting the turn end", "released", "timeout")
         return
     if failure is None:
         if tree_hash(root) != current:
-            release(path, session, "working tree changed during the gate; result unverified")
-            log_gate(payload, root, commands, "released", "unverified")
+            let_go("working tree changed during the gate; result unverified", "released",
+                   "unverified")
             return
         write_state(path, {"green_hash": current, "status": "passed", "sessions": {}})
-        log_gate(payload, root, commands, "released", "passed")
+        log_gate(payload, root, commands, "released", "passed", ran())
         return
 
     now = time.time()
@@ -368,19 +448,18 @@ def main():
     if prior:
         why = stated_reason(final_message(payload))
         if why is not None:
-            release(path, session, "declined: " + why[:200])
-            log_gate(payload, root, commands, "declined", "failed")
+            let_go("declined: " + why[:200], "declined", "failed")
             return
     blocks = prior + 1
     if blocks >= MAX_BLOCKS:
-        release(path, session, f"released after {MAX_BLOCKS} blocks; gate still red")
-        log_gate(payload, root, commands, "released", "failed")
+        let_go(f"released after {MAX_BLOCKS} blocks; gate still red", "released", "failed")
         return
     sessions[session] = {"blocks": blocks, "seen": now}
     write_state(path, {"green_hash": None, "status": "failed", "sessions": sessions})
-    log_gate(payload, root, commands, "blocked", "failed")
+    log_gate(payload, root, commands, "blocked", "failed", ran())
     cmd, code, output = failure
-    print(json.dumps({"decision": "block", "reason": reason(gate_file(root), cmd, code, output)}))
+    print(json.dumps({"decision": "block",
+                      "reason": reason(gate_file(root), cmd, code, output, heading)}))
 
 
 if __name__ == "__main__":
