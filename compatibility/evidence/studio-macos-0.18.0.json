@@ -1,0 +1,40 @@
+{
+  "browser": {
+    "family": "chrome",
+    "version": "Google Chrome 154.0.8037.93",
+    "version_policy": "stable-channel"
+  },
+  "candidate_commit": "e55484bb86a6bba663beceebebf7c03c85a2a93f",
+  "cases": [
+    {
+      "name": "loopback-only-bind",
+      "status": "passed"
+    },
+    {
+      "name": "host-refusal",
+      "status": "passed"
+    },
+    {
+      "name": "token-refusal",
+      "status": "passed"
+    },
+    {
+      "name": "authenticated-ui-load",
+      "status": "passed"
+    },
+    {
+      "name": "clean-stop",
+      "status": "passed"
+    },
+    {
+      "name": "chrome-browser-flow",
+      "status": "passed"
+    }
+  ],
+  "environment": {
+    "machine": "arm64",
+    "platform": "darwin",
+    "python": "3.14.5"
+  },
+  "schema_version": 1
+}
