@@ -30,6 +30,8 @@ API_REPOSITORY = "JakeSelby/model-citizen"
 ARTIFACT_DIR = ROOT / "_bmad-output" / "implementation-artifacts"
 BEGIN = "<!-- bmad-traceability:start -->"
 END = "<!-- bmad-traceability:end -->"
+# A notice carrying this prefix prints as a warning: reported, never failing the audit.
+WARNING = "warning: "
 TEMPLATE_DIR = Path(__file__).resolve().parent / "bmad_story_templates"
 SYNC_BEGIN = "<!-- bmad-sync:begin -->"
 SYNC_END = "<!-- bmad-sync:end -->"
@@ -781,8 +783,13 @@ def within_grace(issue, grace_days, now):
     return (now or dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)) - opened < dt.timedelta(days=grace_days)
 
 
-def live_findings(manifest, live_issues, check_lifecycle=True, grace_days=0, now=None):
-    """Compare the manifest with GitHub without changing either; returns (findings, notices)."""
+def live_findings(manifest, live_issues, check_lifecycle=True, grace_days=0, now=None, check_unreserved=True):
+    """Compare the manifest with GitHub without changing either; returns (findings, notices).
+
+    With check_unreserved false, an accepted issue past its grace period without a BMad ID is a
+    notice starting with WARNING instead of a finding: the backlog stays visible without holding
+    every other finding class hostage to it.
+    """
     live = {issue["number"]: issue for issue in live_issues}
     mapped = {item["github_number"] for item in manifest["items"]}
     findings = []
@@ -791,7 +798,11 @@ def live_findings(manifest, live_issues, check_lifecycle=True, grace_days=0, now
         if accepted_for_delivery(live[number]) and within_grace(live[number], grace_days, now):
             notices.append("#{}: accepted, no BMad ID yet, inside the grace period".format(number))
         elif accepted_for_delivery(live[number]):
-            findings.append("#{}: accepted issue has no BMad ID; run reserve".format(number))
+            message = "#{}: accepted issue has no BMad ID; run reserve".format(number)
+            if check_unreserved:
+                findings.append(message)
+            else:
+                notices.append(WARNING + message)
         else:
             notices.append("#{}: awaiting triage, no BMad ID yet".format(number))
     by_number = {item["github_number"]: item for item in manifest["items"]}
@@ -1629,6 +1640,11 @@ def main(argv=None):
         "--ignore-lifecycle", action="store_true", help="with --live, report open/closed drift without failing"
     )
     audit_parser.add_argument(
+        "--warn-unreserved",
+        action="store_true",
+        help="with --live, report accepted issues without a BMad ID as warnings, not findings",
+    )
+    audit_parser.add_argument(
         "--grace-days", type=int, default=0, help="with --live, days an accepted issue may wait for its ID"
     )
     audit_parser.add_argument(
@@ -1708,13 +1724,19 @@ def main(argv=None):
             notices.append("live comparison skipped until the local findings below are fixed")
         if args.live and not errors:
             errors, notices = live_findings(
-                manifest, fetch_issues(API_REPOSITORY), not args.ignore_lifecycle, args.grace_days
+                manifest,
+                fetch_issues(API_REPOSITORY),
+                not args.ignore_lifecycle,
+                args.grace_days,
+                check_unreserved=not args.warn_unreserved,
             )
         for notice in notices:
-            print("notice: {}".format(notice))
+            print(notice if notice.startswith(WARNING) else "notice: {}".format(notice))
+        warnings = sum(1 for notice in notices if notice.startswith(WARNING))
         for error in errors:
             print(error)
-        print("audit: {} issue(s), {} finding(s)".format(len(manifest["items"]), len(errors)))
+        summary = "audit: {} issue(s), {} finding(s)".format(len(manifest["items"]), len(errors))
+        print(summary + (", {} warning(s)".format(warnings) if warnings else ""))
         return 1 if errors else 0
     if args.command == "refresh":
         errors = audit_manifest(manifest)
