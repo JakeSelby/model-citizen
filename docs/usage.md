@@ -620,7 +620,7 @@ copy, and replace the log with it once the counts look right:
 ```sh
 log=~/.local/state/agent-harness/decisions.jsonl
 jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head
-jq -c 'select((.session_id // "") | test("^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?$"))' \
+jq -c 'select((.session_id // "") | test("^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"))' \
   "$log" > "$log.clean"
 ```
 
