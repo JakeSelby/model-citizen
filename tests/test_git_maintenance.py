@@ -42,6 +42,18 @@ class SuiteEnvironmentTests(unittest.TestCase):
         self.assertEqual([(env["GIT_CONFIG_KEY_%d" % i], env["GIT_CONFIG_VALUE_%d" % i])
                           for i in (1, 2)], list(isolation.QUIET_GIT_CONFIG))
 
+    def test_a_later_value_that_turns_maintenance_back_on_is_overridden(self):
+        env = {"GIT_CONFIG_COUNT": "2",
+               "GIT_CONFIG_KEY_0": "maintenance.auto", "GIT_CONFIG_VALUE_0": "false",
+               "GIT_CONFIG_KEY_1": "maintenance.auto", "GIT_CONFIG_VALUE_1": "true"}
+        isolation.quiet_git_maintenance(env)
+        count = int(env["GIT_CONFIG_COUNT"])
+        last = {}
+        for i in range(count):
+            last[env["GIT_CONFIG_KEY_%d" % i]] = env["GIT_CONFIG_VALUE_%d" % i]
+        self.assertEqual(last["maintenance.auto"], "false")
+        self.assertEqual(last["gc.auto"], "0")
+
 
 class MaterializeTests(unittest.TestCase):
     def test_a_materialized_workspace_keeps_maintenance_off_in_its_own_config(self):

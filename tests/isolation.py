@@ -60,18 +60,20 @@ QUIET_GIT_CONFIG = (("maintenance.auto", "false"), ("gc.auto", "0"))
 def quiet_git_maintenance(env=None):
     """Add `QUIET_GIT_CONFIG` to `env` (default `os.environ`) as `GIT_CONFIG_KEY_n` entries.
 
-    Entries already in the environment are kept and these are appended after them; a setting
-    already present is not added twice. Returns the environment it changed.
+    Entries already in the environment are kept and these are appended after them. Git uses the
+    last value for a key, so a setting is skipped only when it is already that key's last value.
+    Returns the environment it changed.
     """
     env = os.environ if env is None else env
     try:
         count = int(env.get("GIT_CONFIG_COUNT", "0"))
     except ValueError:
         count = 0
-    present = set((env.get("GIT_CONFIG_KEY_%d" % i), env.get("GIT_CONFIG_VALUE_%d" % i))
-                  for i in range(count))
+    last = {}
+    for i in range(count):
+        last[env.get("GIT_CONFIG_KEY_%d" % i)] = env.get("GIT_CONFIG_VALUE_%d" % i)
     for key, value in QUIET_GIT_CONFIG:
-        if (key, value) not in present:
+        if last.get(key) != value:
             env["GIT_CONFIG_KEY_%d" % count] = key
             env["GIT_CONFIG_VALUE_%d" % count] = value
             count += 1
