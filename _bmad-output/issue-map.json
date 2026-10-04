@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 171,
+    "bug": 176,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -9004,6 +9004,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B170.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B175",
+      "github_number": 1238,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1238",
+      "title": "fix(benchmarks): summarise refuses a partial set with unequal trials",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B175.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

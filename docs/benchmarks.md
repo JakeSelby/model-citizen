@@ -299,8 +299,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
 - **SM-2 decides the result, from the saved rows alone.** Every row names its `task`, `arm`, trial
   (`rep`), `outcome` (`pass` or `fail`), `cost_usd` and `task_long`, so `summarise` re-derives
   every figure from `results.jsonl` without calling a model; rows that saved no pass or fail, as
-  the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, arm trial-set
-  mismatches across arms or tasks, contradictory outcomes, inconsistent long-task markers, boolean
+  the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, contradictory outcomes, inconsistent long-task markers, boolean
   costs and non-finite pooled costs or ratios are refused too. A replay exclusively creates its
   results file before probes or model calls; even an existing empty file is refused, so concurrent
   runs cannot mix cohorts. After an interrupted run, choose a fresh output path. It reports, per arm, Cost-of-Pass (the
@@ -323,6 +322,19 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   With no marked long-task subset, no saving is claimed. Fewer than five paired trials per task and
   arm remain available as an exploratory diagnostic, but are explicitly ineligible for an SM-2
   proof or saving claim. No task is marked yet.
+- **A partial set is balanced, not refused.** A run stopped at its spend cap can leave a task with
+  unequal trials in its two arms, or tasks holding different trial counts. `summarise` balances
+  each task down to the smaller arm's count by dropping the latest trials, ordered by `rep`, and
+  leaves a task out only when one arm has no trial; each balancing and each left-out task is
+  printed with its reason, and SM-2, the oracle metrics, the delegation verdict and the
+  reliability section all read the balanced rows, the detections of a dropped trial included.
+  Balancing was chosen over leaving every uneven task out because it keeps the trials both arms
+  share. The verdict then reads `partial`, with the count of cells (tasks) used of those the rows
+  name; a task neither arm reached is not in the rows and so not counted. A partial set supports
+  no claim unless the run is pre-registered and its plan's `Stopping rule` section says
+  `- **Partial set:** allowed`, read from the plan at its recorded commit; then the verdict reads
+  `partial: <SM-2's verdict>`. Otherwise a registered run's verdict reads `partial: no claim`. A
+  complete set reports exactly as before, and under `--json` a partial one adds a `partial` key.
 - **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.
 - **Whether delegation fired is reported under SM-2, as adherence, not as the result.** Each row

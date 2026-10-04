@@ -2090,8 +2090,12 @@ def cmd_summarise(args):
         raise SystemExit("cost-bench: --correction applies to an ablation run's arms only")
     if replay_pair.is_pair(rows):
         return summarise_pair(rows, path, args)
+    registered = delegation_verdict.registered(rows)
     try:
-        result = replay_stats.analyse(rows, args.seed, args.resamples)
+        result = replay_stats.analyse_set(rows, args.seed, args.resamples, registered,
+                                          registered and partial_claim_allowed(rows))
+        if result.get("partial"):  # every later section reads the same balanced rows
+            rows = replay_stats.balance(rows)[0]
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
@@ -2107,9 +2111,12 @@ def cmd_summarise(args):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
+    detections = replay_reliability.detections_beside(path)
+    if detections is not None and result.get("partial"):  # a dropped trial's detections went with it
+        kept = {(r["task"], r["arm"], r.get("rep", r.get("trial"))) for r in rows}
+        detections = [d for d in detections if (d.get("task"), d.get("arm"), d.get("rep", d.get("trial"))) in kept]
     try:
-        reliability, reliability_text = replay_reliability.reliability_section(
-            rows, replay_reliability.detections_beside(path))
+        reliability, reliability_text = replay_reliability.reliability_section(rows, detections)
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
     report = dict(result, delegation=delegation, reliability=reliability)
@@ -2119,6 +2126,25 @@ def cmd_summarise(args):
                  replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
                  + reliability_text)
     return 0
+
+
+PARTIAL_SET_FIELD = "Partial set"
+
+
+def partial_claim_allowed(rows):
+    """Whether the run's pre-registered stopping rule lets a partial set support a claim: its
+    `Stopping rule` section names `- **Partial set:** allowed`, read from the plan as committed at
+    the recorded commit. False when the field is absent, says anything else, or the plan cannot be
+    read, so the default is no claim."""
+    first = rows[0] if rows else {}
+    plan, commit = first.get("pre_registration"), first.get("pre_registration_commit")
+    if not plan or not commit:
+        return False
+    code, text = experiment_protocol._git(ROOT, "show", "%s:%s" % (commit, plan))
+    if code:
+        return False
+    rule = experiment_protocol.fields(experiment_protocol.sections(text).get("Stopping rule", ""))
+    return rule.get(PARTIAL_SET_FIELD, "").lower().startswith("allowed")
 
 
 def write_report(result, basis, as_json, text):
