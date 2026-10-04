@@ -10,6 +10,7 @@ Run: python3 -m unittest discover -s tests -p 'test_intent*'
 import json
 import os
 import unittest
+from unittest import mock
 
 import test_intents
 from test_intents import git, intents, lifecycle
@@ -123,6 +124,30 @@ class LandedClaimTests(test_intents.Base):
         git(self.main, "branch", "-q", "-D", "a")
         self.assertEqual(intents.sweep(self.env), [intents.slot("S", str(self.a))])
         self.assertEqual(self.held(), [])
+
+    def test_a_branch_left_in_place_while_its_worktree_moves_on_is_kept(self):
+        self.claim(self.a)
+        git(self.a, "checkout", "-q", "-b", "a-next")
+        self.assertFalse(intents.landed(str(self.a), "a"))
+        self.assertEqual(intents.sweep(self.env), [])
+        self.assertEqual(self.held(), [str(self.a)])
+
+    def test_a_failed_current_branch_query_keeps_the_claim(self):
+        self.claim(self.a)
+        git(self.a, "checkout", "-q", "--detach")
+        git(self.main, "branch", "-q", "-D", "a")
+        real = intents._run_git
+
+        def broken(cwd, *args):
+            return (128, "") if args[:1] == ("symbolic-ref",) else real(cwd, *args)
+
+        with mock.patch.object(intents, "_run_git", broken):
+            self.assertFalse(intents.landed(str(self.a), "a"))
+            self.assertEqual(intents.sweep(self.env), [])
+        with mock.patch.object(intents, "_run_git", lambda cwd, *args: (
+                (None, "") if args[:1] == ("symbolic-ref",) else real(cwd, *args))):
+            self.assertFalse(intents.landed(str(self.a), "a"))
+        self.assertTrue(intents.landed(str(self.a), "a"))
 
     def test_a_removed_worktree_is_swept(self):
         self.claim(self.a)

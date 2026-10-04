@@ -147,13 +147,19 @@ def overlap_variant(env=None):
 
 # ---- identity -------------------------------------------------------------------------------
 
-def _git(cwd, *args):
+def _run_git(cwd, *args):
+    """`(returncode, stdout)`, or `(None, "")` when git could not be run at all."""
     try:
         out = subprocess.run(["git", "-C", str(cwd)] + list(args), capture_output=True,
                              text=True, timeout=5)
     except (OSError, subprocess.SubprocessError):
-        return None
-    return out.stdout if out.returncode == 0 else None
+        return None, ""
+    return out.returncode, out.stdout
+
+
+def _git(cwd, *args):
+    code, out = _run_git(cwd, *args)
+    return out if code == 0 else None
 
 
 def _existing(path):
@@ -416,14 +422,23 @@ def landed(worktree, branch):
     """
     if not isinstance(branch, str) or not branch or branch == "HEAD":
         return False
-    out = _git(worktree, "for-each-ref", "--format=%(upstream:track)", "refs/heads/" + branch)
+    ref = "refs/heads/" + branch
+    out = _git(worktree, "for-each-ref", "--format=%(refname) %(upstream:track)", ref)
     if out is None:
         return False
-    if out.strip():
-        return out.strip() == "[gone]"
+    for line in out.splitlines():
+        name, _, track = line.partition(" ")
+        if name == ref:
+            # The branch exists; an empty track means no upstream, which is not landed.
+            return track.strip() == "[gone]"
     # No such branch. An unborn branch has no ref yet, but its worktree is still on it.
-    current = _git(worktree, "symbolic-ref", "--short", "-q", "HEAD")
-    return current is None or current.strip() != branch
+    # `symbolic-ref -q` exits 1 on a detached HEAD; any other failure is git unable to answer.
+    code, current = _run_git(worktree, "symbolic-ref", "--short", "-q", "HEAD")
+    if code == 1:
+        return True
+    if code != 0:
+        return False
+    return current.strip() != branch
 
 
 def _remove(path):
