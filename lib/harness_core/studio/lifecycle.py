@@ -24,6 +24,7 @@ START_TIMEOUT = 30.0
 STOP_TIMEOUT = 2.0
 CHILD_SESSION_ENV = "HARNESS_STUDIO_CHILD_SESSION"
 STARTUP_TRACE_ENV = "HARNESS_STUDIO_STARTUP_TRACE"
+TRACK_ENV = "HARNESS_STUDIO_TRACK_DIR"
 
 
 class InstanceError(RuntimeError):
@@ -167,6 +168,29 @@ def current(root: Path) -> Optional[Dict[str, object]]:
         raise InstanceError(str(exc)) from exc
 
 
+def _track(pid: int) -> None:
+    """Name a detached server to a supervisor that asked, so killing the supervisor reaches it.
+
+    Release qualification sets `HARNESS_STUDIO_TRACK_DIR`; a detached server leaves its
+    launcher's process group, so this file is the only way that supervisor can find it.
+    """
+    directory = os.environ.get(TRACK_ENV)
+    if directory and Path(directory).is_dir():
+        try:
+            Path(directory, str(int(pid))).write_text("")
+        except OSError:
+            pass
+
+
+def _untrack(pid: int) -> None:
+    directory = os.environ.get(TRACK_ENV)
+    if directory:
+        try:
+            Path(directory, str(int(pid))).unlink()
+        except OSError:
+            pass
+
+
 def serve(static_root: Path, root: Path, requested_port: int, ready=None,
           browser: bool = False) -> None:
     try:
@@ -181,6 +205,8 @@ def serve(static_root: Path, root: Path, requested_port: int, ready=None,
             server.run(static_root, store, requested_port, ready, browser=browser)
     except (OSError, StateError, RuntimeError) as exc:
         raise InstanceError(str(exc)) from exc
+    finally:
+        _untrack(os.getpid())
 
 
 def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict[str, object]:
@@ -203,6 +229,7 @@ def launch_detached(command: List[str], root: Path, requested_port: int) -> Dict
     except BaseException:
         startup_errors.close()
         raise
+    _track(process.pid)
     deadline = time.monotonic() + START_TIMEOUT
     last_error = None
     while time.monotonic() < deadline:

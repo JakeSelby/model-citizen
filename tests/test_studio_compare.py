@@ -91,7 +91,8 @@ class Runs:
 
     def show(self, run_id):
         if run_id not in self.records:
-            raise runs.RunError("unknown run")
+            # As the real supervisor reports a run with no state directory.
+            raise runs.RunError("run state directory is missing or unsafe") from FileNotFoundError(run_id)
         return {"run_id": run_id, "suite_id": "live-replay", "status": self.records[run_id][1]}
 
     @staticmethod
@@ -124,7 +125,10 @@ def sides(base, candidate):
 
 class Handler:
     def __init__(self, supervisor, body):
-        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO)
+        # Inline owner: the fixture supervisor has no thread-bound index (see
+        # test_studio_route_thread_ownership for the real one).
+        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO,
+                                      mutations=SimpleNamespace(call=lambda action: action()))
         self.request_json = body
         self.response = None
 

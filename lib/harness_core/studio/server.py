@@ -30,7 +30,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import eval_tiers, first_run, headless, rule_health
+from . import eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -851,7 +851,8 @@ def _replay_result(handler: Handler, route: Route) -> None:
 
 
 # A comparison that cannot be read is the client's to fix (400) or not there yet (404, 409).
-_COMPARE_STATUS = {"invalid_request": 400, "compare_not_found": 404}
+_COMPARE_STATUS = {"invalid_request": 400, "compare_not_found": 404,
+                   compare.UNREADABLE: 503, compare.UNAVAILABLE: 503}
 
 
 def _runs_compare(handler: Handler, route: Route) -> None:
@@ -860,9 +861,11 @@ def _runs_compare(handler: Handler, route: Route) -> None:
         return
     try:
         sides = compare.parse_request(request)
-        # Read-only and engine-bound, so it stays off the one mutation thread.
+        # The run index belongs to the mutation thread, so the reads go through it; the engine
+        # then runs here, off that thread.
         payload = compare.compare_runs(handler.server.run_supervisor,
-                                       handler.server.repo_root, sides)
+                                       handler.server.repo_root, sides,
+                                       owner=compare.executor_owner(handler.server.mutations.call))
     except compare.CompareError as exc:
         handler._error(_COMPARE_STATUS.get(exc.code, 409), exc.code)
         return
@@ -1020,11 +1023,17 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
         return
     try:
         supervisor = handler.server.run_supervisor
-        # Read-only: run records, replay results and the engine, off the one mutation thread.
+        # Each test's run state and native rows are read in one trip through the mutation
+        # thread, which owns the run index; the verdict cache and the engine run here, off it.
         payload = draft_tests.verdicts(supervisor, handler.server.repo_root,
-                                       supervisor.state_root, request["draft"])
+                                       supervisor.state_root, request["draft"],
+                                       owner=compare.executor_owner(handler.server.mutations.call))
     except draft_tests.DraftTestError as exc:
         _draft_test_error(handler, exc)
+        return
+    except compare.CompareError as exc:
+        # Only a retryable read failure reaches here; a refusal is the test's own verdict.
+        handler._error(_COMPARE_STATUS.get(exc.code, 503), exc.code)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -1886,6 +1895,24 @@ def _rule_health(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _trends(handler: Handler, route: Route) -> None:
+    # The run store reads run on the thread that owns its SQLite connection. The bundle verifier
+    # runs git subprocesses, so it runs here, off the serial mutation executor. No bundle starts
+    # once `trends.VERIFY_BUDGET_SECONDS` is spent, but one already started can still run each of
+    # its git calls to their 30-second timeout on this thread. A run store that fails leaves its
+    # sections unavailable, never the proof set.
+    if _required_request(handler, ()) is None:
+        return
+    try:
+        collected = handler.server.mutations.call(
+            lambda: trends.collect(handler.server.run_supervisor.history))
+    except run_store.RunStoreError as exc:
+        collected = trends.unavailable("the run index could not be read: %s" % exc)
+    payload = trends.report(handler.server.repo_root, collected)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _create_rule_draft(repo_root: Path, name: str) -> str:
     """`citizen draft create` for "Try without it"; "" or the failure code."""
     failure = _run_draft_create(repo_root, name)
@@ -2169,6 +2196,13 @@ RULE_HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("commands", "object"),
                                               ("findings", "array"),
                                               ("rows", "array")))
+TRENDS = ResponseSchema("json-object", (("schema_version", "integer"),
+                                         ("generated_at", "string"), ("ratio_note", "string"),
+                                         ("measures", "array"), ("lines", "array"),
+                                         ("static", "object"), ("not_tracked", "array"),
+                                         ("sections", "object"), ("max_records", "integer"),
+                                         ("proof", "object"),
+                                         ("commands", "object")))
 RULE_TRY_WITHOUT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("rule", "string"),
                                                    ("draft", "object"),
@@ -2387,6 +2421,8 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/rules/try-without", "application/json", RULE_TRY_WITHOUT,
           _rule_try_without, None, "application/json",
           ("citizen", "draft", "try-without", "{rule}", "--json")),
+    Route("POST", "/api/reports/trends", "application/json", TRENDS, _trends, None,
+          "application/json", trends.CLI_COMMAND),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

@@ -377,10 +377,11 @@ class VerdictTests(unittest.TestCase):
             (RUN_ONE, FIRST_REV, CHEAPER, "2026-10-01T00:00:00+00:00"),
             (RUN_TWO, SECOND_REV, NOISY, "2026-10-02T00:00:00+00:00"),
             (RUN_THREE, SECOND_REV, CHEAPER, "2026-10-03T00:00:00+00:00")])
-        with draft_at(SECOND_REV), mock.patch.object(compare, "compare_runs",
-                                                     wraps=compare.compare_runs) as counted:
+        # The engine (`compare.compare`) runs only on a cache miss.
+        with draft_at(SECOND_REV), mock.patch.object(compare, "compare",
+                                                     wraps=compare.compare) as counted:
             first = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
-            self.assertEqual(sorted(call.args[2]["base"][0] for call in counted.call_args_list),
+            self.assertEqual(sorted(call.args[0]["run_id"] for call in counted.call_args_list),
                              [RUN_ONE, RUN_THREE])
             second = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
             self.assertEqual(counted.call_count, 2)
@@ -394,7 +395,7 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(sorted(path.name.split(".")[0] for path in cache.iterdir()),
                          [RUN_ONE, RUN_THREE])
         # The cache is on disk, so another process (the CLI) reads it without comparing.
-        with draft_at(SECOND_REV), mock.patch.object(compare, "compare_runs",
+        with draft_at(SECOND_REV), mock.patch.object(compare, "compare",
                                                      side_effect=AssertionError("compared")):
             third = draft_tests.verdicts(supervisor, REPO, supervisor.state_root, "tuned")
         self.assertEqual(third["checkpoints"][1], first["checkpoints"][1])

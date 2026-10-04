@@ -173,10 +173,11 @@ class StudioLifecycleAcceptanceTests(unittest.TestCase):
                 [name + " (fixture) ... ok" for name in names]
                 + ["Ran {} tests in 0.1s".format(len(names)), "OK"]))
 
-        def run_with(outputs, version="Google Chrome 140.0.0.0"):
-            results = [subprocess.CompletedProcess([], 0, output, "") for output in outputs]
-            results.append(subprocess.CompletedProcess([], 0, version + "\n", ""))
-            with patch.object(MODULE, "command", side_effect=results), \
+        def run_with(outputs, version="Google Chrome 153.0.0.0"):
+            # The version is read first, so a wrong browser fails before ten minutes of suites.
+            read = subprocess.CompletedProcess([], 0, version + "\n", "")
+            with patch.object(MODULE, "command", return_value=read), \
+                    patch.object(MODULE, "run_suite", side_effect=list(outputs)), \
                     patch.object(MODULE, "supported_tuple", return_value={"stable_major": 153}):
                 return MODULE.browser_flow(REPO, os.sys.executable, "/fixture/chrome")
 
