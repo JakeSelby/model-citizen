@@ -4977,7 +4977,7 @@ def decision_report(days: int, json_output: bool = False, rescan: Optional[str] 
         raise SystemExit("this checkout has no claude/hooks/decisions.py; reinstall or re-clone it")
     path = state_dir() / "decisions.jsonl"
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(days, 0) * 86400))
-    rows = [r for r in module.joined(module.read_rows(path)) if (r.get("ts") or "") >= cutoff]
+    rows = [r for r in module.joined(module.read_rows(path, history=True)) if (r.get("ts") or "") >= cutoff]
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
         # A sampled allow is a negative nobody graded, so it groups apart from the judgments at
@@ -5972,7 +5972,7 @@ def cmd_decisions(args: argparse.Namespace) -> int:
     if not 0 < args.dev_share < 1:
         raise SystemExit("--dev-share is a fraction strictly between 0 and 1")
     log = Path(args.log) if args.log else state_dir() / "decisions.jsonl"
-    rows = module.joined(module.read_rows(log))
+    rows = module.joined(module.read_rows(log, history=True))
     out = Path(args.out) if args.out else state_dir() / DEFAULT_EVAL_REPORT
     cfg = load_config()
     try:

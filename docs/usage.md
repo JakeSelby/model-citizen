@@ -523,11 +523,13 @@ The fresh-session line is a recommendation, so saying it also appends an `emitte
 row holds a prompt, a tool call or the line's own text, and recording never changes what the feed
 says: a ledger it cannot write is skipped in silence.
 
-The response is read from the observation ledger (`observation.jsonl`). A session that ends
-within three prompts of the line followed it; one that carries on past them did not. Until the
-observation entry point is registered in live sessions, that ledger holds no rows, so every
-emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
-writes the answers that are due, one per emission, and says nothing about them.
+The response is read from the session's prompts and its end. A session that ends within three
+prompts of the line followed it; one that carries on past them did not. Those events come from
+the observation ledger (`observation.jsonl`) for a session it holds, and otherwise from
+`session-events.jsonl`, where the dispatcher records each prompt and session end, identifiers
+only, whether or not the observation entry point is registered. An emission neither can answer
+is `unknown` once it is a day old, with reason `unobserved`. Each session start writes the
+answers that are due, one per emission, and says nothing about them.
 
 `bin/citizen usage --by adherence` reports two figures per recommendation kind, in two sections
 that are never added together. **Adherence (Measured)** gives, per kind and profile fingerprint,

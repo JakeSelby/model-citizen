@@ -27,9 +27,15 @@ that is further on. Followed: one of the recommendation's `follow` events arrive
 before the window of `window` further prompts has passed. Not followed: the session's prompt
 `turn + window + 1` arrives first. Unknown: neither can be read yet. An emission is answered
 `unknown` for good only once it is `UNKNOWN_AFTER` old, with `reason` saying why:
-`unobserved` when the ledger holds no row for its turn, which is every emission until the
-observation entry point is registered in live sessions, and `window_open` otherwise. The
-lifecycle's session start calls `settle`, so a live session writes each answer once it is due.
+`unobserved` when no row covers its turn, and `window_open` otherwise. The lifecycle's session
+start calls `settle`, so a live session writes each answer once it is due.
+
+The observation entry point is an opt-in (`observation.enabled`), and with it off nothing
+writes `observation.jsonl`, which left every emission `unobserved`. So the dispatcher also
+records the two events a response reads, each prompt and each session end, in
+`session-events.jsonl` beside it (`note_event`), in the observation row's shape. A session the
+observation ledger holds is read from that ledger alone and any other session from this file,
+so a session is never counted twice when both are written.
 
 This module sits beside the hooks rather than in `lib/harness_core` for the reason `decisions.py`
 gives: a hook is reached through `~/.claude/hooks/harness` and nothing above that resolves.
@@ -53,6 +59,10 @@ SCHEMA_VERSION = 1
 FINGERPRINT_KEY = "profile_fingerprint"
 LEDGER = "adherence.jsonl"
 OBSERVATION = "observation.jsonl"
+EVENTS = "session-events.jsonl"
+# The events file holds a row per prompt, so it is capped: past this size it is moved to `.1`,
+# replacing the one before. A day of rows is all `settle` needs, and this is many days of them.
+EVENTS_MAX_BYTES = 2 * 1024 * 1024
 OUTCOMES = ("followed", "not_followed", "unknown")
 PROMPT = "UserPromptSubmit"
 # An emission that neither outcome has reached in a day is not going to be read: a session idle
@@ -91,6 +101,53 @@ def path(env=None):
 
 def observation_path(env=None):
     return state_dir(env) / OBSERVATION
+
+
+def events_path(env=None):
+    return state_dir(env) / EVENTS
+
+
+def noted():
+    """The events `note_event` keeps: a prompt, and every event a recommendation counts as acting."""
+    names = {PROMPT}
+    for spec in KINDS.values():
+        names.update(spec["follow"])
+    return names
+
+
+def note_event(event, session_id, runtime="", env=None, now=None):
+    """Record one prompt or session end for the response reading. Never raises; returns nothing.
+
+    Identifiers only, as an observation row: the event's name, the session, the runtime and the
+    time. Any other event is not written.
+    """
+    try:
+        if event not in noted() or not isinstance(session_id, str) or not session_id:
+            return
+        target = events_path(env)
+        try:
+            if os.path.getsize(str(target)) >= EVENTS_MAX_BYTES:
+                os.replace(str(target), str(target) + ".1")
+        except OSError:
+            pass
+        _append({"ts": now_ts(now), "event": event, "session_id": session_id,
+                 "runtime": runtime or "", "source": "lifecycle", SCHEMA_KEY: SCHEMA_VERSION},
+                target)
+    except Exception:
+        pass
+
+
+def observed_rows(env=None):
+    """The rows a response is read from: the observation ledger, then the events file.
+
+    A session with any row in the observation ledger is read from it alone, because there the
+    observation entry point saw every event; the events file answers for the rest.
+    """
+    observed = read_rows(observation_path(env))
+    covered = set(row.get("session_id") for row in observed)
+    target = events_path(env)
+    events = read_rows(str(target) + ".1") + read_rows(target)
+    return observed + [row for row in events if row.get("session_id") not in covered]
 
 
 def now_ts(now=None):
@@ -292,7 +349,7 @@ def _settle(env, now):
     now = datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else now
     rows = read_rows(path(env))
     answered = responses(rows)
-    observed = read_rows(observation_path(env))
+    observed = observed_rows(env)
     written = []
     for row in rows:
         ident = row.get("adherence_id")

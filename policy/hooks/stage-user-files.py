@@ -20,9 +20,14 @@ A file already inside, a missing path and a directory are left alone; the tool r
 error for a path it cannot send. A file past the call's byte or time budget, or one that cannot be
 copied, is left alone with a notice. This hook never denies: on any failure the call runs unchanged.
 
+Each call that stages or keeps a file is one `stage-user-files` row in the decision log:
+`staged`, `kept` or `staged+kept`, with the counts and the bytes copied, and the file names
+(never their paths) as its input.
+
 Test: echo '{"tool_name":"SendUserFile","cwd":"'"$PWD"'","tool_input":{"files":["/etc/hosts"]}}' | python3 stage-user-files.py
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -40,6 +45,19 @@ MAX_BYTES = 64 * 1024 * 1024
 DEADLINE_SECONDS = 4
 KEEP_DAYS = 14
 DIGEST = re.compile(r"[0-9a-f]{16}")
+
+
+def log_decision(answer, text, payload, fields=None):
+    """One `stage-user-files` row in the decision log (`decisions.py`). Never raises."""
+    try:
+        location = Path(os.path.realpath(__file__)).parent / "decisions.py"
+        spec = importlib.util.spec_from_file_location("harness_stage_user_files_decisions", str(location))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.record("stage-user-files", answer, text, payload if isinstance(payload, dict) else {},
+                      fields=fields)
+    except Exception:
+        pass
 
 
 def real(path):
@@ -145,6 +163,10 @@ def decide(payload):
                      % ", ".join(kept))
     if not notes:
         return None
+    answer = "+".join(name for name, count in (("staged", staged), ("kept", len(kept))) if count)
+    log_decision(answer, ", ".join(os.path.basename(str(s)) for s in sent if isinstance(s, str)),
+                 payload, {"staged": staged, "kept": len(kept), "files": len(files),
+                           "bytes_staged": MAX_BYTES - budget})
     result = {"systemMessage": "stage-user-files: " + "; ".join(notes) + "."}
     if staged:
         result["hookSpecificOutput"] = {"hookEventName": "PreToolUse",

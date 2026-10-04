@@ -6,11 +6,27 @@ Advisory only — never blocks a tool call, never rewrites its result. Subagent 
 already arrive wrapped in a notice of this shape; Bash, fetch and read results do not.
 Patterns match a once-lowercased copy, which is several times faster than scanning the
 original case-insensitively; only the uppercase directives need the original.
+
+The harness's own files are full of these shapes, since they are where its rules, hooks and
+settings are written, and they were most of what this flagged. Output read from them is not
+flagged: a file tool or `Grep` whose path is under a managed location, or a Bash command made
+only of plain readers (`READERS`) whose every existing path operand, or the working directory
+when it names none, is under one. A managed location is any harness checkout or worktree (a
+folder holding this hook's own `policy/hooks` file and `bin/harness`), the harness
+configuration folder, and the runtime files `sync` writes (`MANAGED`). Anything else, a
+substitution, a redirect, a network tool or a path outside them, is scanned as before.
+
+Every match is one `neutralize-tool-output` row in the decision log: `warn`, or `excluded` for a
+managed file, with the tool and the patterns that matched; the input is the tool's name.
 """
+import importlib.util
 import json
+import os
 import re
+import shlex
 import sys
 from collections import deque
+from pathlib import Path
 
 SCAN_CAP = 2_000_000
 LEAF_CAP = 20_000
@@ -86,6 +102,117 @@ def scan(text):
     return [name for name, test in PATTERNS if test(text, low)]
 
 
+# Under the home directory, the runtime files and folders `sync` manages, and the harness's
+# configuration folder. A transcript folder such as `~/.claude/projects` is not one: it holds
+# what other sessions read, from anywhere.
+MANAGED = (".claude/settings.json", ".claude/settings.local.json", ".claude/CLAUDE.md",
+           ".claude/CLAUDE.personal.md", ".claude/rules", ".claude/skills", ".claude/hooks",
+           ".claude/agents", ".claude/output-styles", ".codex/config.toml", ".codex/hooks.json",
+           ".codex/AGENTS.md", ".codex/skills", ".codex/agents", ".config/agent-harness")
+MARKER = Path("policy") / "hooks" / "neutralize-tool-output.py"
+FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob")
+# Commands that only print what they read. A command not named here is never excluded.
+READERS = {"cat", "head", "tail", "sed", "grep", "rg", "wc", "ls", "diff", "nl", "jq", "cd",
+           "sort", "uniq", "cut", "stat", "file"}
+GIT_READS = {"diff", "show", "log", "grep", "status", "blame", "ls-files"}
+SEPARATORS = {"|", "||", "&&", ";"}
+DEPTH = 12
+
+
+def home():
+    return Path(os.environ.get("HARNESS_HOME") or os.environ.get("HOME") or Path.home())
+
+
+def in_checkout(path):
+    """Whether `path` is inside a harness checkout or worktree."""
+    for folder in [path] + list(path.parents)[:DEPTH]:
+        if (folder / MARKER).is_file() and (folder / "bin" / "harness").is_file():
+            return True
+    return False
+
+
+def managed(path):
+    """Whether `path`, resolved, is one of the harness's own files."""
+    try:
+        resolved = Path(os.path.realpath(os.path.expanduser(str(path))))
+    except (OSError, ValueError):
+        return False
+    base = home()
+    for name in MANAGED:
+        root = Path(os.path.realpath(str(base / name)))
+        if resolved == root or root in resolved.parents:
+            return True
+    return in_checkout(resolved)
+
+
+def bash_reads_managed(command, cwd):
+    """Whether a Bash command only reads, and only from managed paths. See the module doc."""
+    if not isinstance(command, str) or "$" in command or "`" in command:
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if not tokens or not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return False
+    operands, first, verb = [], True, None
+    for index, token in enumerate(tokens):
+        if token in SEPARATORS:
+            first = True
+            continue
+        if set(token) <= set("|&;<>()"):
+            return False
+        if first:
+            first, verb = False, token
+            if token not in READERS and token != "git":
+                return False
+            if token == "git":
+                rest = [t for t in tokens[index + 1:] if t not in SEPARATORS][:3]
+                if not any(t in GIT_READS for t in rest):
+                    return False
+            continue
+        if token.startswith("-"):
+            continue
+        candidate = Path(os.path.expanduser(token))
+        candidate = candidate if candidate.is_absolute() else Path(cwd) / candidate
+        if os.path.lexists(str(candidate)):
+            operands.append(candidate)
+            if verb == "cd":
+                cwd = str(candidate)
+    return all(managed(p) for p in (operands or [Path(cwd)]))
+
+
+def own_output(payload):
+    """Whether this tool output was read from the harness's own files."""
+    tool = payload.get("tool_name")
+    inputs = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    try:
+        if tool in FILE_TOOLS:
+            target = inputs.get("file_path") or inputs.get("notebook_path") or inputs.get("path")
+            target = target or (payload.get("cwd") if tool in ("Grep", "Glob") else None)
+            return isinstance(target, str) and bool(target) and managed(target)
+        if tool == "Bash":
+            return bash_reads_managed(inputs.get("command"), payload.get("cwd"))
+    except Exception:
+        return False
+    return False
+
+
+def log_decision(answer, tool, names, payload):
+    """One `neutralize-tool-output` row in the decision log (`decisions.py`). Never raises."""
+    try:
+        location = Path(os.path.realpath(__file__)).parent / "decisions.py"
+        spec = importlib.util.spec_from_file_location("harness_neutralize_decisions", str(location))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.record("neutralize-tool-output", answer, tool, payload,
+                      fields={"tool": tool, "patterns": names})
+    except Exception:
+        pass
+
+
 def notice(tool, names):
     return (
         f"[harness: {tool} output matched instruction-shaped pattern(s): "
@@ -107,6 +234,10 @@ def main():
     if not names:
         return
     tool = str(payload.get("tool_name") or "tool")[:60]
+    if own_output(payload):
+        log_decision("excluded", tool, names, payload)
+        return
+    log_decision("warn", tool, names, payload)
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PostToolUse",

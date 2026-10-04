@@ -4,7 +4,10 @@
 
 Contract lives in the plan-authoring skill (~/.claude/skills/plan-authoring/SKILL.md).
 Advisory only — this never fails a write; it feeds a correction back to the agent.
+Each plan file checked is one `validate-plan-card` row in the decision log: `pass` or `fail`,
+with the number of problems, the card's line count and the file's name as its input.
 """
+import importlib.util
 import json
 import os
 import sys
@@ -14,6 +17,19 @@ CARD_CAP = 85
 REQUIRED = ["## At a glance", "## Steps", "## Decisions for the reviewer"]
 FORBIDDEN = ["## Context"]
 SKILL_DIR = Path.home() / ".claude" / "skills" / "plan-authoring"
+
+
+def log_decision(answer, text, payload, fields=None):
+    """One `validate-plan-card` row in the decision log (`decisions.py`). Never raises."""
+    try:
+        location = Path(os.path.realpath(__file__)).parent / "decisions.py"
+        spec = importlib.util.spec_from_file_location("harness_validate_plan_card_decisions", str(location))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.record("validate-plan-card", answer, text, payload if isinstance(payload, dict) else {},
+                      fields=fields)
+    except Exception:
+        pass
 
 
 def emit(problems, path):
@@ -112,6 +128,8 @@ def main():
                 "two-sentence verdict carries the why."
             )
 
+    log_decision("fail" if problems else "pass", os.path.basename(path), payload,
+                 {"problems": len(problems), "card_lines": len(card), "separator": end is not None})
     if problems:
         emit(problems, path)
 

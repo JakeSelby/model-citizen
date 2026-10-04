@@ -83,6 +83,32 @@ def settle_adherence():
         pass
 
 
+def note_adherence(runtime, event):
+    """Record a prompt or a session end for the adherence reading (`adherence.note_event`).
+
+    Observation, like `settle_adherence`: nothing it does or fails to do changes the answer.
+    """
+    try:
+        load("adherence").note_event(event.get("hook_event_name"), event.get("session_id"), runtime)
+    except Exception:
+        pass
+
+
+# The read-only allow answers on most Bash calls, so it is counted rather than logged a row at a
+# time: `decisions.tally`, one summary row per session at SessionEnd. READONLY_POINT names it.
+READONLY_POINT = "allow-readonly-bash"
+
+
+def tally_readonly(event, kind):
+    """Count one `allow-readonly-bash` answer of `kind` for the session. Never raises."""
+    try:
+        log = decisions()
+        if log is not None:
+            log.tally(READONLY_POINT, event.get("session_id"), kind)
+    except Exception:
+        pass
+
+
 def normalize(payload):
     event = dict(payload)
     name = str(event.get("tool_name", "")).rsplit(".", 1)[-1]
@@ -1396,10 +1422,13 @@ def _dispatch(runtime, payload):
             plan = readonly and investigating(runtime, event)
             if readonly and grade == 0:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow"}})
+                tally_readonly(event, "plan-read-only" if plan else "read-only")
             elif plan and not asked and grade == 1:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                     "permissionDecisionReason": "Plan-mode investigation, run at the permission posture you selected."}})
+                tally_readonly(event, "plan-investigation")
             elif plan and not asked and not confirmed and grade == 2:
+                tally_readonly(event, "plan-ask")
                 results.append({"hookSpecificOutput": {"permissionDecision": "ask",
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "
@@ -1476,6 +1505,7 @@ def _dispatch(runtime, payload):
             results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                 "permissionDecisionReason": "Plan-mode research tool named by plan_allow_tools, "
                 "run at the permission posture you selected."}})
+            tally_readonly(event, "plan-tool")
         return encode_pre(runtime, payload, event, results)
     if kind == "PostToolUse":
         contexts = []
@@ -1509,6 +1539,8 @@ def _dispatch(runtime, payload):
         if runtime != "claude-code":
             return {}
         if kind == "UserPromptSubmit":
+            # Before the feed runs, so a prompt that carries a nudge is stamped no later than it.
+            note_adherence(runtime, event)
             invoke("approvals", event)
         return invoke("usage-feed", event)
     if kind == "SessionStart":
@@ -1521,9 +1553,11 @@ def _dispatch(runtime, payload):
         # the command did not run. Done before the usage worker is spawned, and bounded by the
         # session's own rows, so the 1.5-second SessionEnd budget pays for one read of a file
         # that only a permission prompt writes to.
+        note_adherence(runtime, event)
         log = decisions()
         if log is not None:
             log.close_session(event.get("session_id") or "")
+            log.flush_tally(READONLY_POINT, event.get("session_id") or "", runtime)
         if not enabled("usage-log"):
             return {}
         module = load("usage-log")

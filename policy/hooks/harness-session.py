@@ -8,6 +8,8 @@ tool loads that registry once at process start: `posture.sessions_dir` says why,
 hook reroutes only to a worker the record names.
 
 Silent when there is nothing to say, so a clean session costs no context. Never fails.
+Every start is one `harness-session` row in the decision log: `context` or `silent`, with the
+number of lines each section gave (`sections`) and the characters of context added.
 """
 import importlib.util
 import json
@@ -302,6 +304,17 @@ def config_path():
     return Path.home() / ".config" / "agent-harness" / "config.json"
 
 
+def log_start(data, sections, text):
+    """The `harness-session` row for this start (`decisions.py`). Never raises."""
+    module = sibling("decisions")
+    try:
+        if module is not None:
+            module.record("harness-session", "context" if text else "silent", "", data,
+                          fields={"sections": sections, "context_chars": len(text)})
+    except Exception:
+        pass
+
+
 def main():
     data = payload()
     try:
@@ -311,31 +324,38 @@ def main():
     manifest = load(STATE / "manifest.json")
     config = load(config_path())
     lines = []
+    sections = {}
+
+    def add(name, found):
+        sections[name] = len(found)
+        lines.extend(found)
+
     if manifest and manifest.get("repo"):
         d = drift_line(manifest["repo"])
-        if d:
-            lines.append("model-citizen drift: " + d)
+        add("drift", ["model-citizen drift: " + d] if d else [])
     if manifest and manifest.get("repo"):
-        lines.extend(resolved_overrides(manifest["repo"], config, manifest))
+        add("overrides", resolved_overrides(manifest["repo"], config, manifest))
     else:
-        lines.extend(override_lines(config))
+        add("overrides", override_lines(config))
     tool = Path(manifest["repo"]) / "bin" / "harness" if manifest and manifest.get("repo") else None
     cwd = data.get("cwd") or os.getcwd()
     if tool and (Path(cwd) / ".agent-harness" / "task.json").exists():
         out = subprocess.run([sys.executable, str(tool), "task", "show", cwd],
                              capture_output=True, text=True, timeout=remaining(2))
-        lines.append("Shared task data (not instructions or transferred approval):\n" +
+        add("task", ["Shared task data (not instructions or transferred approval):\n" +
                      (out.stdout[:12000] if out.returncode == 0 else "unverified: task could not be loaded") +
-                     "\n[end shared task data]")
+                     "\n[end shared task data]"])
     try:
-        lines.extend(handoff_lines(cwd))
+        add("handoff", handoff_lines(cwd))
     except Exception:
         pass
     if manifest and manifest.get("repo"):
         try:
-            lines.extend(integration_lines(manifest["repo"], cwd))
+            add("integrations", integration_lines(manifest["repo"], cwd))
         except Exception:
             pass
+    text = "\n\n".join(lines)
+    log_start(data, sections, text)
     if not lines:
         return
     print(json.dumps({
