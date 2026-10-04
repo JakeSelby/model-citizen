@@ -333,12 +333,16 @@ def is_pack(task):
 
 def materialize(task, dest):
     """The task's workspace as a fresh git repository at `dest`, one commit on `main` with a
-    fixed author and date; no file of the task directory, its check or its solution, is copied."""
+    fixed author and date; no file of the task directory, its check or its solution, is copied.
+
+    The repository's own config turns automatic maintenance off, so no background git process
+    is still writing into `.git` while a caller scans the tree or removes it."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(task["pack"]["workspace"], str(dest), symlinks=True)
     env = dict(WORKSPACE_GIT_ENV)
-    for args in (("init", "-q"), ("symbolic-ref", "HEAD", "refs/heads/main"), ("add", "-A"),
+    for args in (("init", "-q"), ("config", "maintenance.auto", "false"), ("config", "gc.auto", "0"),
+                 ("symbolic-ref", "HEAD", "refs/heads/main"), ("add", "-A"),
                  ("-c", "commit.gpgsign=false", "commit", "-q", "-m", "workspace")):
         done = _git(dest, *args, env=env)
         if done.returncode:
