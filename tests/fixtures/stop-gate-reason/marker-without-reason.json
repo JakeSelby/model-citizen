@@ -1,0 +1,39 @@
+{
+ "about": "A finish whose decline line carries no reason. Hand-written Stop envelope in the shape of the recorded hook-calls fixtures; cwd and transcript_path are replaced at test time.",
+ "payload": {
+  "session_id": "s-reason",
+  "transcript_path": "/workspace/transcripts/session.jsonl",
+  "cwd": "/workspace/example-repo",
+  "permission_mode": "default",
+  "hook_event_name": "Stop",
+  "stop_hook_active": true
+ },
+ "transcript": [
+  {
+   "type": "user",
+   "message": {
+    "role": "user",
+    "content": "Fix the parser."
+   }
+  },
+  {
+   "type": "user",
+   "message": {
+    "role": "user",
+    "content": "Stop hook feedback:\nThe gate in AGENTS.md is red: `exit 4` exited 4."
+   }
+  },
+  {
+   "type": "assistant",
+   "message": {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "text",
+      "text": "Done.\nGate cannot pass:"
+     }
+    ]
+   }
+  }
+ ]
+}

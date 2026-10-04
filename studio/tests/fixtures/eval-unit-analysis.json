@@ -22,6 +22,7 @@
     }
   },
   "base_selection_sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+  "cache_basis": "shared",
   "cells": {
     "base": {
       "attempts": 10,

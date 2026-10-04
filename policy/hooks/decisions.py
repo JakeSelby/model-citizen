@@ -599,7 +599,7 @@ def _decision_row(point, answer, text, event, runtime, key, now, written=None):
 
 
 def record(point, answer, text="", event=None, runtime="", key=None, target=None, now=None,
-           transcript=None):
+           transcript=None, fields=None):
     """Log one judgment. Returns its `decision_id`, or None when nothing was written.
 
     Never raises. A failed write is counted and the caller carries on with the decision it had
@@ -609,14 +609,21 @@ def record(point, answer, text="", event=None, runtime="", key=None, target=None
     without having read the file; with none, the id is a fresh one nobody will join to.
 
     `transcript` is the file a completion claim is read from, and adds nothing to the row unless
-    the caller passes one and the switch is on: see `claim_fields`.
+    the caller passes one and the switch is on: see `claim_fields`. `fields` adds facts about
+    how the answer was reached, such as an approval offered or consumed or a grader that ran
+    past its deadline; a claim that cannot be read costs the claim, never the row.
     """
     try:
         if not enabled():
             return None
         text = text if isinstance(text, str) else ""
         row = _decision_row(point, answer, text, event, runtime, key, now)
-        row.update(claim_fields(transcript))
+        try:
+            row.update(claim_fields(transcript))
+        except Exception:
+            _ERRORS[0] += 1
+        for name, value in (fields or {}).items():
+            row.setdefault(name, value)
         identity = row["decision_id"]
         _append(row, target)
         return identity

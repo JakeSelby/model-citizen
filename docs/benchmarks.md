@@ -132,9 +132,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   version, Dockerfile, lister or effort), when their manifests differ in Claude Code, agent
   clients or roots, or when any manifest entry outside the harness component is not identical in
   both. The harness treatment is its checkout, links whose targets are inside that checkout, the
-  exact regular files its sync and trust commands generate, and only the parent directories needed
-  to reach those entries. Unrelated files and links remain part of pair parity even when they sit
-  under `.claude`, `.codex` or `.local/bin`.
+  exact regular files its sync and trust commands generate (the global git ignore file, the sync's
+  ownership record and its lock file, only while that is empty, among them), the empty plans
+  directory the sync makes, and only the parent directories needed to reach those entries. A
+  treatment file the bare arm holds is refused too. Unrelated files and links remain part of pair
+  parity even when they sit under `.claude`, `.codex` or `.local/bin`.
 - **Every run pins its reasoning effort.** `--effort` (`low`, `medium`, `high`, `xhigh` or `max`;
   default `high`) is recorded in each arm's declaration and passed to Claude Code as `--effort` on
   every launch, the pre-flight's included, so no arm takes its model's default, which differs by
@@ -260,6 +262,21 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   plan sign-in. Run order changes it, because a later run finds its prefix already cached, so each
   row also carries a cache-normalised cost that reprices every thread's first-turn cache reads as
   cache writes. It is empty when the CLI output does not carry per-turn usage.
+- **Every trial starts cold, and the report says so.** Reps of one task and arm send the same
+  prompt, so within the cache lifetime a later rep read the earlier one's session segment, the
+  first message after the system prompt that holds the memory files and the prompt, instead of
+  writing it. That favoured the arm with the larger segment: in the 2026-10-02 pilot's saved
+  streams every rep read the 23.6k-token system prompt and tools from cache, rep 1 wrote the rest
+  (3.9k bare, 14.4k harness) and reps 2 to 5 read it all, which put the Cost-of-Pass ratio at
+  1.42 against about 1.66 with every session paying its own write (#1174). Each trial now mounts
+  a one-line file holding its own nonce as Claude Code's managed memory file,
+  `/etc/claude-code/CLAUDE.md`, the first memory it loads, so the nonce opens the session segment
+  and every trial writes it, while the system prompt stays as cached as a real session finds it.
+  A nonce in the task prompt would not do: the prompt comes after the memory files. Both arms get
+  the file, so they still differ by image alone. Each row records `cache_nonce` and
+  `cache_basis: cold`; `summarise` states the basis on its first line and as `cache_basis` in
+  JSON, and reads rows without a distinct nonce on every row, any from before this change, as
+  `shared`.
 - **Beside it, `cache_miss_ratio`: how much of its prefix the run re-bought.**
   `cache_write / (cache_read + cache_write)` summed over every turn the run opened, subagent
   threads included, because a fan-out's fresh prefix is part of what the run cost. The
@@ -387,7 +404,7 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   every check and solution includes. The transcript check on `/opt/model-citizen` still applies.
 - **A set is chosen by tier.** `production` runs by default; `--tier micro` runs the `micro` set, or
   the set `--pack-set` names, at the model that set pins. `--pair` and `--tasks` are refused with
-  `--pack`.
+  `--pack`; `--ablations` takes one, as [Ablation runs](#ablation-runs) describes.
 - **Long tasks and absorbed calls.** A task's absorbed-call size is the median, over clean bare-arm
   runs, of its `gather_calls`: the `Read`, `Grep` and `Glob` calls in every thread. The bare arm
   never delegates, so that count is all the gathering a subagent could have absorbed. A task is
@@ -401,6 +418,36 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
   in its docstring.
+
+### Oracle metrics
+
+A task's check may return named numbers beside its pass or fail, so behaviour such as correctness,
+conciseness or format adherence lands on the same rows without changing how a run is scored.
+
+- **The task declares them.** `"metrics": {"<name>": "higher" | "lower"}` in a pack's `task.json`,
+  or a task of `benchmarks/tasks.json`, names each metric in lower snake case and which way it
+  improves. Loading refuses an empty or `null` declaration, any other direction and any other
+  name, and any declaration on an `issue` task, whose unit tests report no metrics.
+- **The check returns them.** `check(root)` returns the original verdict, a list of error strings
+  that passes when empty, or `{"pass": <bool>, "metrics": {"<name>": <number or null>},
+  "errors": [<str>]}`, with `metrics` and `errors` optional. Either form keeps working; a task that
+  declares no metrics writes rows byte-identical to before.
+- **A broken check is a check error, never a fail.** A `pass` that is not a boolean, an unknown
+  key, `metrics` that is not an object, or a metric the task does not declare makes the attempt
+  `error: true` with `error_kind` `check: ValueError`, as any check that cannot run does.
+- **A bad value is unknown, never 0.** Each row of a declaring task carries `metrics`, every
+  declared name to a number or `null`, `metric_directions` and `metric_errors`. A metric that is
+  not reported, not a number or not finite is `null` with its reason in `metric_errors`; an explicit
+  `null` is the check saying it could not measure, with no reason recorded. A run that errored
+  before it was scored has every metric `null`.
+- **`summarise` reports each metric per arm and per task:** its mean over known values, how many
+  were known and how many unknown. The harness-minus-bare difference uses the tasks with a known
+  value in both arms and carries the paired, task-clustered percentile interval SM-2 uses, with the
+  same seed and resamples. It reads `better` or `worse` by the declared direction when the interval
+  excludes zero, `inconclusive` otherwise, and never enters SM-2's verdict; a difference that is not
+  a finite number leaves it `unavailable`. Under `--json` it is the
+  `metrics` key, absent when no row carries metrics. Pair, ablation and two-by-two reports do not
+  read metrics yet.
 
 ### Pairs
 
@@ -461,6 +508,8 @@ against control. A schema-1 pair file given to `--ablations` runs exactly as `--
 ```sh
 python3 scripts/cost_bench.py replay --tasks tests/fixtures/ablation-tasks.json \
     --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --exploratory --dry-run
+python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack-digest <digest> \
+    --ablations benchmarks/ablations.json --tag <full commit> --model <exact id> --run-cap 0.10 --dry-run --exploratory
 python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni]
 ```
 
@@ -478,6 +527,13 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   variant the tag does not ship, a selection the tag's resolver refuses, more than one `--tag` or
   `--stance-cost`; then, once the images are built, an arm whose declaration differs from
   control's in anything but its selection, or whose selection resolves to control's profile.
+- **On an evaluator pack, the contamination control runs at control's commit,** the one `--tag`
+  resolves to and every arm installs, before any image is built or arm launched: `--dry-run`
+  prints one line per task and exits 2 when any is refused, and a real run stops with exit 2. A
+  registered run must pin `--pack-digest`, and every row carries `pack`, `pack_version`,
+  `pack_commit` and `pack_digest`. The micro tier and `--pair` stay refused with ablations.
+- **The worst-case cost is printed before the schedule:** every run at the run's `--run-cap`, or
+  the named default when none is given, and every preflight at its cap.
 - **The minimum detectable effect is printed before the schedule**, from the manifest's `cv` at
   80% power and 95% two-sided, alone and with Bonferroni over the arms. It is a planning figure
   from an assumption, not a measurement; an effect below it reads `inconclusive`.
@@ -564,7 +620,7 @@ python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [-
   and `rule_adherence` (scored, compliant, unknown, rate, interval) or `unmeasured`. The schema
   also holds `bare`, `effects.<metric>.<contrast>` (value, interval, undefined reason), `primary`,
   `verdict`, `reason`, `claim`, `sm2_eligible`, `limitation`, `estimand`, `method`, `seed`,
-  `resamples`, `indeterminate_resamples` and the post-run `parity`.
+  `resamples`, `indeterminate_resamples`, the post-run `parity` and `cache_basis`.
   `tests/fixtures/unit-economy/result.v1.json` is the committed example.
 - **Parity after the run.** `summarise` exits 1 when the rows hold two values of the model, Claude
   Code version, commit, effort, schedule seed or design record. It does the same when a row's
@@ -584,10 +640,14 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
     --pre-registration <plan>
 ```
 
-- **Its protocol is five reps, 0.10 USD per run, 0.05 USD per preflight and a 4.55 USD stop.**
-  Thirty scored runs and two preflights report 3.10 USD if every one reaches its cap; the per-run
-  cap is soft, so the stop is the binding limit. `--reps`, `--run-cap` and `--spend-cap` may change
-  them; `--model` may not, and `--pair` is refused. The dry run prints the set's ceiling.
+- **Its protocol is five reps, 0.25 USD per run, 0.15 USD per preflight and a 7.80 USD stop.**
+  Thirty scored runs and two preflights report 7.80 USD if every one reaches its cap; the per-run
+  cap is soft, so the stop is the binding limit. The caps are sized from the harness arm's measured
+  cold first turn, 0.0556 USD, so a truncated run does not bias a verdict against it; the arithmetic
+  sits beside the constants in `scripts/replay_micro.py`. `--reps`, `--run-cap` and `--spend-cap`
+  may change them; `--model` may not, and `--pair` is refused. The dry run prints the set's ceiling.
+- **A preflight its own budget stops is reported as a budget stop,** naming the arm, the
+  reported cost and the cap, and refuses the replay like any red preflight.
 - **Each run reports pass or fail, whether its mechanism fired, and its cost.** The oracle scores
   pass or fail as for any synthetic task. `mechanism_fired` on each row is `true`, `false` or
   `null`: delegation reads the row's `spawns`, the stop gate its Stop-hook `hook_blocks`, and the

@@ -36,6 +36,13 @@ ROWS = {
 }
 
 
+# Target 1's oracle also returns a named metric (#1143), so its analysis carries a `metrics`
+# section; every analysis carries `cache_basis` (#1174), `shared` here since no row has a nonce.
+for _index, _row in enumerate(ROWS[1]):
+    _row.update(metrics={"accuracy": round(0.5 + 0.05 * _index, 6)},
+                metric_directions={"accuracy": "higher"}, metric_errors=[])
+
+
 def target(ref, revision):
     return {"kind": "draft", "ref": ref, "revision": revision, "version": None, "draft": ref,
             "config_digest": replay.DEFAULT_CONFIG_DIGEST}
@@ -83,6 +90,9 @@ class AnalysisParityTests(unittest.TestCase):
         self.assertIsNone(undefined["ratio"])
         self.assertTrue(undefined["ratio_undefined"])
         self.assertIsNotNone(result["analysis"][0]["result"]["ratio_interval"])
+        self.assertIn("accuracy", result["analysis"][0]["result"]["metrics"]["metrics"])
+        self.assertNotIn("metrics", undefined)
+        self.assertEqual({entry["result"]["cache_basis"] for entry in result["analysis"]}, {"shared"})
 
     def test_a_run_without_a_recorded_analysis_reports_it_unknown(self):
         with tempfile.TemporaryDirectory() as tmp:

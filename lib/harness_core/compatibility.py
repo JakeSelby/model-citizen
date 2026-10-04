@@ -308,6 +308,37 @@ def freeze_record(root):
     return data
 
 
+def stale_freeze_errors(freeze, past_tag):
+    """Refuse a freeze record still naming the branch of a release whose tag is behind HEAD.
+
+    The tag is read from the record's own `release/vX.Y.Z` branch, not the catalog, so the record
+    is caught after the catalog moves on to the next version too. `past_tag(tag)` says whether the
+    tag exists and is a strict ancestor of the commit under test (`tag_behind_head`): the tagged
+    release commit is still frozen, and docs/releasing.md reopens the record in the next change.
+    """
+    branch = freeze.get("branch") or ""
+    if freeze.get("state") != "frozen" or not branch.startswith("release/v"):
+        return []
+    tag = branch[len("release/"):]
+    if not past_tag(tag):
+        return []
+    return ["compatibility/freeze.json is still frozen at " + branch + ", but " + tag
+            + " is already tagged behind this commit; return its state to open"]
+
+
+def tag_behind_head(root, tag):
+    """Whether `tag` exists in `root` and names a strict ancestor of HEAD. Reads no network."""
+    tagged = subprocess.run(["git", "-C", str(root), "rev-parse", "-q", "--verify",
+                             "refs/tags/" + tag + "^{commit}"], capture_output=True, text=True)
+    if tagged.returncode:
+        return False
+    commit = tagged.stdout.strip()
+    if commit == git_output(root, "rev-parse", "HEAD").strip():
+        return False
+    return subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", commit, "HEAD"],
+                          capture_output=True).returncode == 0
+
+
 def freeze_drift(root, data, ref="origin/main"):
     """Report runtime source drift between the frozen commit and `ref`.
 

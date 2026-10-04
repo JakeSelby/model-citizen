@@ -180,8 +180,6 @@ GRADE1 = [
     "rm -rf /tmp/build-cache",
     "rm -rf /private/tmp/scratch",
     "rm -rf /var/folders/zz/T/pytest-1",
-    "git restore --staged src/main.rs",
-    "git restore -S src/main.rs",
     "git clean -fn",
     "git clean --force --dry-run",
     "kubectl delete pod web --dry-run=client",
@@ -255,6 +253,8 @@ GRADE3 = [
     ("git clean --force -x", "git clean -f", ""),
     ("git checkout -- src/main.rs", "git checkout --", "src/main.rs"),
     ("git restore src/main.rs", "git restore", "src/main.rs"),
+    ("git restore --staged --worktree src/main.rs", "git restore", "src/main.rs"),
+    ("git restore -S -W src/main.rs", "git restore", "src/main.rs"),
     ("git branch -D topic", "git branch -D", "topic"),
     ("git stash drop", "git stash drop", ""),
     ("git stash clear", "git stash clear", ""),
@@ -429,6 +429,13 @@ GRADE3 = [
 
 
 class GradeTests(unittest.TestCase):
+    def setUp(self):
+        # The suite's own home is a temporary directory, which the grader rightly treats as
+        # scratch; `$HOME` here must stand for a user's real home, so it is one outside them.
+        patcher = mock.patch.dict(os.environ, {"HOME": "/home/grade-tests"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_read_only_commands_grade_zero(self):
         self.assertEqual([c for c in GRADE0 if grade(c) != 0], [])
 

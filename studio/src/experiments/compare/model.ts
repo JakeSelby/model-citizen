@@ -77,8 +77,9 @@ export const MEASURE_ORDER = [
  * shows as the engine's `null` with its reason. */
 export type Direction = "better" | "worse" | null;
 
-/** The engine's reading with the preferred direction from the route's one table: `lower (better)`,
- * `higher (worse)`, or the reading alone when it is inconclusive or the measure has no direction. */
+/** The engine's reading with the preferred direction from the route's table (a pack's declared
+ * metric directions over its static one): `lower (better)`, `higher (worse)`, or the reading alone
+ * when it is inconclusive or the measure has no direction. */
 export function verdictOf(reading: string, preferred: "lower" | "higher" | undefined): { label: string; direction: Direction } {
   if (!preferred || (reading !== "lower" && reading !== "higher")) return { label: reading, direction: null };
   const direction: Direction = reading === preferred ? "better" : "worse";
