@@ -400,9 +400,9 @@ development_status:
   ah-s335-behaviour-graders-a-graded-score-contract-for: ready-for-dev
   ah-s336-rule-targeted-tasks-one-per-layer-that-claims-a: backlog
   ah-s337-reliability-and-joint-compliance-metrics-pass-k: backlog
-  ah-s338-informative-nulls-equivalence-bounds-and-sizing: backlog
+  ah-s338-informative-nulls-equivalence-bounds-and-sizing: ready-for-dev
   ah-s339-multi-model-arms-as-separate-strata-in-a: backlog
-  ah-s340-a-third-arm-the-maintainer-s-real-configuration: backlog
+  ah-s340-a-third-arm-the-maintainer-s-real-configuration: ready-for-dev
   ah-s341-extended-layer-sweep-with-a-justification-rule: backlog
   ah-s342-diff-quality-judge-where-deterministic-graders: backlog
   ah-s343-layer-scorecard-generated-from-registered-rows: backlog
