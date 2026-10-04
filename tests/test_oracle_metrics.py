@@ -145,7 +145,9 @@ class ScoreTests(unittest.TestCase):
             task = pack_task(tmp, CHECK_WITH_METRICS, DECLARED)
             got = BENCH.score(task, tmp, None, "model-citizen-arm-bare:test", local_scorer)
         self.assertEqual(got, (True, "", {"metrics": {"correctness": 0.75, "lines_out_of_scope": None},
-                                          "metric_errors": ["lines_out_of_scope: nan is not a finite number"]}))
+                                          "metric_errors": ["lines_out_of_scope: nan is not a finite number",
+                                                            BENCH.NO_STREAM],
+                                          "metric_stream": False}))
 
     def test_a_fixture_check_returning_only_pass_scores_as_before(self):
         with tempfile.TemporaryDirectory() as tmp:
