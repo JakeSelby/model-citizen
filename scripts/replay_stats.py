@@ -38,6 +38,13 @@ def attempts(rows, arms=ARMS):
     intention to treat. The trial is the row's `rep`. `arms` is the `(reference, treatment)`
     pair the rows may name, bare and harness unless a caller compares another pair.
     """
+    rows = list(rows)  # read twice below, and a caller may pass a one-shot iterable
+    strata = sorted({str(row.get("stratum")) for row in rows if isinstance(row, dict)})
+    if len(strata) > 1:
+        # Each model of a multi-model run is its own stratum (`replay_strata`); pooling them is a
+        # pre-registered analysis that relabels the rows first, never a silent default.
+        raise ValueError("the rows hold %d strata (%s); SM-2 is computed per stratum"
+                         % (len(strata), ", ".join(strata)))
     out, seen, long_by_task = [], set(), {}
     for index, row in enumerate(rows, 1):
         missing = [k for k in ("task", "arm", "cost_usd") if k not in row]

@@ -157,6 +157,32 @@ unnamed spawn is routed to. All of it is data in a JSON sidecar beside the varia
   usage feed. Spawns still resolve on `balanced`'s table. It is the economy concern's off level in
   the unit-by-economy two-by-two ([benchmarks.md](benchmarks.md#unit-evals-the-two-by-two)).
 
+### When a session should hand off
+
+A long session's cost is mostly the context every further call re-reads. An exploratory audit of
+265 host sessions on 1M-token windows priced a main-thread call at about $0.13 from 50,000 to
+160,000 tokens of context, $0.17 from 160,000 to 200,000, $0.23 from 200,000 to 400,000 and
+$0.43 above 400,000; 57% of sessions passed 160,000, ran a median of six more turns, and 53% of
+all spend landed after that point. Host sessions are exploratory under the
+[evidence standard](evidence-standard.md), so these figures choose the defaults and prove nothing.
+
+So each variant names two thresholds and the curve:
+
+- **Soft, `session_nudge_at`: 160,000** in `balanced` and `frugal`. That is where the per-call cost
+  leaves its floor. Under it a call costs the same however full the context is, so handing off
+  earlier saves nothing per call, and no posture moves it. The feed says it once, with the
+  multiple: about 1.3× the floor there.
+- **Hard, `session_handoff_at`: 400,000 in `balanced`, 200,000 in `frugal`.** Past it, the turn's
+  end is blocked once with the hand-off instruction. `balanced` waits for the band where a call
+  costs about 3.3× the floor (a quarter of sessions, 37% of spend), so it interrupts only
+  the expensive tail. `frugal` stops at 1.7×, half the sessions. The next stop is released
+  whatever the turn did, so the block is never a trap.
+- **`context_cost_curve`: 1.3× from 160,000, 1.7× from 200,000, 3.3× from 400,000**, the
+  multiples the feed names, each that band's per-call cost over the floor's.
+
+`max` names neither threshold and `off` blocks nothing. Change either threshold per variant in its
+sidecar; [usage.md](usage.md#usage-feed) describes the line, the block and their adherence rows.
+
 Select one with `citizen config set stances.cost frugal`, or for a single session with
 `HARNESS_STANCE_COST=frugal claude`. To write your own, put a `.md` and a sidecar in your
 primitive root, `extends` a shipped variant and change only the cells you care about;

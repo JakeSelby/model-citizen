@@ -230,8 +230,13 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   in the directory, a one-policy pair's `reference` and `treatment` arms included, and writes `detections.jsonl` there: one row per run per detector, with the
   detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
   call, counted from 1, and a tool result takes the turn of the call that asked for it. A
-  subagent's own messages are not the run's, though its return is. Every detector runs in both
-  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  subagent's own messages are not the run's, though its return is. A detector's stance gate is
+  its applicability: a gated detector scores a run only when the selection its arm ran with
+  enables it, so the concise voice's `voice/scaffold-leak` never scores the default `scannable`
+  arm, and no gated detector scores the bare arm, which has no stances. The selection is the
+  row's `arm_config`, a pair row's `selection`, or the defaults for the harness arm; an arm whose
+  selection no row records leaves its gated detectors unknown. Such a row is `not_applicable`,
+  with `count` null: never a hit, never clean, and skipped by the all-rules-at-once rate. A stream
   with no model call, a stream that cannot be found, one found twice, and a detector that raised
   are rows with `count` null and the reason in `error`: unknown, never zero. An existing
   `detections.jsonl` is replaced only with `--overwrite`. With `--raw`, the replay does the same
@@ -363,7 +368,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   the all-rules-at-once rate: the share of runs in which no rule-violation detector fired, read
   from the `detections.jsonl` beside the rows, with a Wilson interval and each detector's own rate
   beside it. A run no detector could read is `unknown` and left out of the rate, never counted as
-  clean; `joint` is `null` when the set has no detections. The rules are in
+  clean, and a `not_applicable` row is skipped; `joint` is `null` when the set has no detections. The rules are in
   `scripts/replay_reliability.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
@@ -754,6 +759,34 @@ python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [-
   factor levels contradict its arm, or a cell loaded a surface that differs from `base`'s beyond
   its factors' entries. A grid writes no history row.
 
+### Strata: several models in one run
+
+```sh
+python3 scripts/cost_bench.py replay --model <id-a>,<id-b> --tag <full commit> --pre-registration <plan> --dry-run
+python3 scripts/cost_bench.py summarise --results benchmarks/<version>/<tag> [--json] [--pool]
+```
+
+- **Each model is its own stratum.** `--model` takes a comma list or repeats. The run goes through
+  once per model, in the order named, and each stratum gets its own schedule, run and spend caps,
+  preflight, arm builds, series and history row. Its rows carry `stratum` (the model id) and
+  `strata`, and land in `<tag>/<model>/results.jsonl`. One model writes no stratum, as before.
+  The micro tier pins its model and takes no strata.
+- **A failed stratum stops the run.** A refusal, an error or a stop at its spend cap ends the run at
+  that stratum with its exit status: the strata after it never start, the ones before it keep their
+  results, and the run prints what it has spent so far. A dry run spends nothing, so it lists every
+  stratum and exits with the worst status.
+- **The dry run lists and prices each stratum:** its schedule, and its worst case if every run and
+  preflight reaches its cap.
+- **`summarise` reports every section per stratum**, given a results file or the tag folder that
+  holds the strata. With `--json` the reports nest under `strata`. SM-2 refuses rows from two strata,
+  so a verdict is always one model's.
+- **Pooling is pre-registered or refused.** `--pool` adds a pooled report only when the plan every
+  row names fills **Pooled analysis** under Run with something other than "none"
+  ([template](pre-registration-template.md)); exploratory rows are refused. The pooled rows keep each
+  task-and-model pair as its own cluster, so no task is paired across models.
+- **An evidence bundle holds one stratum.** Its `design.strata` names every model of the run, and
+  every row's `stratum` must be the design's model ([evidence bundles](evidence-bundles.md)).
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
@@ -841,6 +874,63 @@ python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/p
   counting one half, with a task-clustered percentile bootstrap interval, and the dimensions left
   out. `summarise` does not call it yet; the one line that adds it is
   `out["judge"], text = replay_judge.judge_section(verdicts, key, calibration)`.
+
+### Layer scorecard
+
+`scripts/layer_scorecard.py` builds one report from the result directories a definitive evaluation
+leaves, each passed by its role. It reruns nothing and calls no model, and it writes
+`scorecard.json` and `scorecard.md` when given `--out`.
+
+```sh
+python3 scripts/layer_scorecard.py --production <dir> [...] --rules <dir> --long-session <dir> \
+  --sweep <dir> --judge <judge dir> [--plan <pre-registration>] [--allow-exploratory] --out <dir>
+```
+
+Each role is optional. A result directory is searched for every `results.jsonl` under it. A judge
+directory holds the `verdicts.jsonl`, `pairs.key.json` and `calibration.json` that `replay_judge.py`
+writes.
+
+- **Registered rows only, unless you say otherwise.** A row, or a judge verdict, whose `evidence`
+  is not `pre-registered` with a plan named is refused, and the error names each source. With
+  `--allow-exploratory`, the scorecard scores them anyway. It sets `exploratory: true`, lists the
+  reasons, opens the Markdown with **Exploratory: not evidence**, and labels every equivalence
+  verdict exploratory. A set passed twice is refused, because its rows would count twice.
+- **The headline is harness against bare, per stratum.** A row's `stratum` decides its stratum.
+  Rows from before strata existed are grouped by `model`, and the report says so. For each stratum
+  it gives:
+  - the Cost-of-Pass ratio and pass-rate difference, from `replay_stats.analyse`
+  - pass^k and the all-rules-at-once rate from `replay_reliability`, each as the mean per-task
+    difference with a task-clustered interval
+  - the judge's win rate on each admitted dimension, read as its excess over one half
+  - the mean long-session cost, harness over bare, with scenarios as the clusters
+
+  Each reading carries an `equivalence` verdict. The margins are the pre-registration template's
+  defaults: 0.85 to 1.1765 for the ratio, and ±0.125 for each difference and for the win rate's
+  excess over one half. A `--plan`'s Equivalence margins field overrides any metric it names, under
+  the names `pass^k difference`, `All-rules rate difference` and `Judge win rate over one half`.
+- **One card per layer.** The layers are every sweep arm, every `unbuilt` and `excluded` entry, and
+  each output style in `benchmarks/static.json`. Each card holds:
+  - **Prefix tokens and USD per run, by model.** The tokens are the median over harness rows of the
+    layer's entries in `context_attribution`, or the static figure where no row records them. A hook
+    holds none. The USD is the static figure's split, one cache write and a cache read on every
+    later turn, at `policy/prices.json` rates and the rows' mean turns.
+  - **Behaviour against bare and against the layer's own removal.** Both use the score reader
+    `justify` uses, on the layer's own tasks, and both read as the removed arm minus the harness.
+    Bare is the whole harness removed.
+  - **The outcome effect.** The removal's pass-rate difference on the outcome subset.
+  - **The cost effect, for a cost-control layer.** A cost-control layer is one scored on the
+    Cost-of-Pass ratio or run on long-session scenarios. The card gives the sweep's marginal cost
+    and the removal's mean session cost over the harness's on the arm's scenarios.
+  - **The verdict.** `justify`'s keep, trim or no evidence, run per stratum. It names the deciding
+    score, with its margin and interval, every score it rested on, and the sources, arms, tasks and
+    row count it came from. A layer with no arm reads no evidence, with the manifest's reason.
+- **What is absent is said, never zeroed.** A role not supplied, a long-session set whose rows
+  carry no `row_kind`, a production set with no `detections.jsonl` beside it, and a stratum with no
+  judge result are each reported as `not measured`, with the reason. A stratum whose rows SM-2
+  refuses reports that refusal.
+- **Deterministic.** The same rows, manifest, static figure, prices and seed give byte-identical
+  files. Sources are named by role, position and path inside their directory, never by an absolute
+  path. An evidence bundle may carry the scorecard (docs/evidence-bundles.md).
 
 ## Limits
 
