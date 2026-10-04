@@ -209,9 +209,16 @@ def summary_problems(rows, summary):
 
 
 def detections_beside(results_path):
-    """The `detections.jsonl` rows beside a `results.jsonl`, or None when the set has none."""
+    """The `detections.jsonl` rows beside a `results.jsonl`, or None when the set has none.
+    A file that exists but cannot be read gives no rows, so its runs report as unknown while
+    pass^k is still computed."""
     path = Path(results_path).parent / replay_detect.DETECTIONS
-    return replay_detect.read_jsonl(path) if path.is_file() else None
+    if not path.is_file():
+        return None
+    try:
+        return replay_detect.read_jsonl(path)
+    except OSError:
+        return []
 
 
 def _num(value):

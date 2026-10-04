@@ -6,6 +6,7 @@ import math
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from test_harness import REPO
@@ -199,6 +200,17 @@ class Section(unittest.TestCase):
             row = det("a", "bare", 1, "x/one", 0)
             (Path(tmp) / "detections.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
             self.assertEqual(REL.detections_beside(results), [row])
+
+    def test_unreadable_detections_leave_pass_k_and_report_runs_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp) / "results.jsonl"
+            (Path(tmp) / "detections.jsonl").write_text("{}\n", encoding="utf-8")
+            with mock.patch.object(REL.replay_detect, "read_jsonl", side_effect=PermissionError("denied")):
+                detections = REL.detections_beside(results)
+            self.assertEqual(detections, [])
+            section, _ = REL.reliability_section(rows_for({"a": {"bare": [True, True]}}), detections)
+            self.assertEqual(section["pass_k"]["arms"]["bare"]["all_passed"], 1)
+            self.assertEqual(section["joint"]["arms"]["bare"]["unknown"], 2)
 
 
 if __name__ == "__main__":
