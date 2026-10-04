@@ -1641,10 +1641,30 @@ class RunSupervisor:
                 if stopped is False:
                     record["reason"] = "process identity could not be stopped safely"
                     record["capacity_reserved"] = True
+                if stopped and record.get("cost_class") == "spends_usage":
+                    self._record_cancelled_spend_locked(record)
                 self._write(record)
+                if record.get("usage_ledger_state") == "pending":
+                    self._settle_usage_locked(record)
             with contextlib.suppress(RunError):
                 self._admit_locked()
             return self._public(self._read(run_id))
+
+    def _record_cancelled_spend_locked(self, record: Dict[str, Any]) -> None:
+        """Keep the spend a cancelled paid runner reported before it was stopped, if it did."""
+        descriptor = self._run_directory(record["run_id"])
+        try:
+            reported = spend_guard.read_result(descriptor, record["run_id"],
+                                               record["case_identities"])
+        except spend_guard.SpendGuardError:
+            return
+        finally:
+            os.close(descriptor)
+        record["spend_actual"] = reported["spend_usd"]
+        record["case_results"] = reported["cases"]
+        if reported["stop_reason"] is not None:
+            record["spend_stop_reason"] = reported["stop_reason"]
+        record["usage_ledger_state"] = "pending"
 
     def fail(self, run_id: str, reason: str) -> None:
         """Record a pre-launch worker failure and release its slot to the FIFO queue."""

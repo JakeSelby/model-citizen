@@ -368,7 +368,7 @@ development_status:
   ah-s302-spend-guard-estimate-confirm-and-cap-a-run-that: ready-for-dev
   ah-s303-run-native-acceptance-from-the-studio-case-by: ready-for-dev
   ah-s304-run-the-live-replay-benchmark-from-the-studio: ready-for-dev
-  ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: backlog
+  ah-s305-run-the-evaluation-tiers-and-unit-evals-from-the: ready-for-dev
   ah-s306-run-the-four-arm-bench-and-layer-swaps-from: backlog
   ah-s319-import-claude-plugin-eval-reports-into-the-run: ready-for-dev
   ah-s324-adapt-studio-to-the-landed-measured-evaluation: ready-for-dev

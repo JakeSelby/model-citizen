@@ -15,6 +15,9 @@ import type {
 } from "./native-acceptance/model";
 import { stateAfterStart } from "./native-acceptance/model";
 import { ComparePanel } from "./compare/ComparePanel";
+import { EvalTiersPanel } from "./evals/EvalTiersPanel";
+import { loadEvalCatalog } from "./evals/api";
+import type { EvalCatalog } from "./evals/model";
 import type { CompareInput } from "./compare/model";
 import { ReplayPanel } from "./replay/ReplayPanel";
 import { RunHistoryPanel } from "./history/RunHistoryPanel";
@@ -33,6 +36,7 @@ export function ExperimentsPage() {
   const [nativeSnapshot, setNativeSnapshot] = useState<NativeSnapshot | null>(null);
   const [nativeRun, setNativeRun] = useState<NativeRun | null>(null);
   const [replayCatalog, setReplayCatalog] = useState<ReplayCatalog | null>(null);
+  const [evalCatalog, setEvalCatalog] = useState<EvalCatalog | null>(null);
   const [replayRunId, setReplayRunId] = useState("");
   const [replayResult, setReplayResult] = useState<ReplayRunResult | null>(null);
   const firstComparison = replayResult?.result?.comparisons?.[0];
@@ -61,6 +65,8 @@ export function ExperimentsPage() {
       setNativeSelection(value.initial);
     }).catch(() => {});
     void loadReplayCatalog().then((value) => { if (active) setReplayCatalog(value); })
+      .catch(() => {});
+    void loadEvalCatalog().then((value) => { if (active) setEvalCatalog(value); })
       .catch(() => {});
     return () => { active = false; };
   }, []);
@@ -249,6 +255,8 @@ export function ExperimentsPage() {
         runStatus={replayResult?.run.status}
         onStarted={(runId) => { setReplayRunId(runId); setReplayResult(null); }}
       />}
+
+      {evalCatalog && <EvalTiersPanel catalog={evalCatalog} />}
 
       <ComparePanel key={compareInitial ? JSON.stringify(compareInitial) : "empty"} initial={compareInitial} />
 

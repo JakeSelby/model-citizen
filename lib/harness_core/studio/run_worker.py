@@ -188,7 +188,8 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
         stderr.close()
     paid_result = None
     paid_error = None
-    if record["cost_class"] == "spends_usage" and group_stopped and not timed_out:
+    # A cancelled or timed-out paid run still reports what it spent when its runner wrote a result.
+    if record["cost_class"] == "spends_usage" and group_stopped:
         descriptor = supervisor._run_directory(run_id)
         try:
             paid_result = spend_guard.read_result(descriptor, run_id,
@@ -208,10 +209,14 @@ def execute(supervisor: RunSupervisor, run_id: str, admission_token: str) -> int
                 record["status"] = "orphaned"
                 record["capacity_reserved"] = True
                 record["reason"] = "owned process group could not be stopped"
-            elif record["status"] == "cancel_requested":
-                record["status"] = "cancelled"
-            elif timed_out:
-                record["status"] = "timed_out"
+            elif record["status"] == "cancel_requested" or timed_out:
+                record["status"] = "cancelled" if record["status"] == "cancel_requested" \
+                    else "timed_out"
+                if paid_result is not None:
+                    record["spend_actual"] = paid_result["spend_usd"]
+                    record["case_results"] = paid_result["cases"]
+                    if paid_result["stop_reason"] is not None:
+                        record["spend_stop_reason"] = paid_result["stop_reason"]
             elif paid_error is not None:
                 record["status"] = "failed"
                 record["reason"] = paid_error

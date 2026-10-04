@@ -93,6 +93,161 @@
       "timeout_seconds": 21600,
       "targets": ["branch", "draft", "installed", "release", "worktree"],
       "cases": []
+    },
+    {
+      "id": "rule-detection",
+      "version": 1,
+      "argv": [
+        "python3",
+        "-m",
+        "harness_core.studio.eval_tiers",
+        "rule-detection",
+        "--root",
+        "{param:root}",
+        "--raw",
+        "{param:raw}"
+      ],
+      "parameters": {
+        "root": {
+          "kind": "pattern",
+          "pattern": "^/.+$",
+          "max_length": 4096
+        },
+        "raw": {
+          "kind": "pattern",
+          "pattern": "^/.+$",
+          "max_length": 4096
+        }
+      },
+      "cost_class": "free",
+      "expected_duration_seconds": 30,
+      "timeout_seconds": 600,
+      "targets": [
+        "installed"
+      ],
+      "cases": [
+        "rule-detection"
+      ]
+    },
+    {
+      "id": "hook-matrix",
+      "version": 1,
+      "argv": [
+        "python3",
+        "-m",
+        "harness_core.studio.eval_tiers",
+        "hook-matrix",
+        "--root",
+        "{param:root}"
+      ],
+      "parameters": {
+        "root": {
+          "kind": "pattern",
+          "pattern": "^/.+$",
+          "max_length": 4096
+        }
+      },
+      "cost_class": "free",
+      "expected_duration_seconds": 60,
+      "timeout_seconds": 600,
+      "targets": [
+        "installed"
+      ],
+      "cases": [
+        "hook-matrix"
+      ]
+    },
+    {
+      "id": "micro-tier",
+      "version": 1,
+      "argv": [
+        "python3",
+        "-m",
+        "harness_core.studio.eval_tiers",
+        "micro-tier",
+        "--repository",
+        "{param:repository}",
+        "--revision",
+        "{param:revision}"
+      ],
+      "parameters": {
+        "repository": {
+          "kind": "pattern",
+          "pattern": "^/.+$",
+          "max_length": 4096
+        },
+        "revision": {
+          "kind": "pattern",
+          "pattern": "^[0-9a-f]{40}$",
+          "max_length": 40
+        }
+      },
+      "cost_class": "spends_usage",
+      "expected_duration_seconds": 1800,
+      "timeout_seconds": 14400,
+      "targets": [
+        "branch",
+        "draft",
+        "installed",
+        "release",
+        "worktree"
+      ],
+      "cases": [
+        "micro-tier"
+      ]
+    },
+    {
+      "id": "unit-eval",
+      "version": 1,
+      "argv": [
+        "python3",
+        "-m",
+        "harness_core.studio.eval_tiers",
+        "unit-eval",
+        "--repository",
+        "{param:repository}",
+        "--revision",
+        "{param:revision}",
+        "--unit",
+        "{param:unit}",
+        "--model",
+        "{param:model}"
+      ],
+      "parameters": {
+        "repository": {
+          "kind": "pattern",
+          "pattern": "^/.+$",
+          "max_length": 4096
+        },
+        "revision": {
+          "kind": "pattern",
+          "pattern": "^[0-9a-f]{40}$",
+          "max_length": 40
+        },
+        "unit": {
+          "kind": "pattern",
+          "pattern": "^rules\\.[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+          "max_length": 134
+        },
+        "model": {
+          "kind": "pattern",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$",
+          "max_length": 200
+        }
+      },
+      "cost_class": "spends_usage",
+      "expected_duration_seconds": 3600,
+      "timeout_seconds": 43200,
+      "targets": [
+        "branch",
+        "draft",
+        "installed",
+        "release",
+        "worktree"
+      ],
+      "cases": [
+        "unit-eval"
+      ]
     }
   ]
 }

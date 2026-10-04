@@ -47,6 +47,22 @@ MAX_SUMMARY_BYTES = 4 * 1024 * 1024
 DEFAULT_CONFIG_DIGEST = targets._config_digest({})
 MEASURES = "source"
 NATIVE_COMMAND = ("python3", "scripts/cost_bench.py", "replay")
+FALLBACK_MODEL = "claude-haiku-4-5-20251001"
+# Exit codes cost_bench gives a settled run: done, stopped at its cap, refused or failed.
+SETTLED_EXITS = (0, 1, 2)
+
+
+def _pinned_model() -> str:
+    """The dated model the micro manifest pins, so the Studio's default never floats."""
+    try:
+        value = json.loads((Path(__file__).resolve().parents[3] / "benchmarks" / "micro"
+                            / "tasks.json").read_text(encoding="utf-8")).get("model")
+    except (OSError, ValueError, AttributeError):
+        return FALLBACK_MODEL
+    return value if isinstance(value, str) and value else FALLBACK_MODEL
+
+
+DEFAULT_MODEL = _pinned_model()
 
 
 class ReplayError(ValueError):
@@ -761,6 +777,10 @@ def _verify_target_output(request: ReplayRequest, target: ReplayTarget, native_o
                           returncode: int, remaining: str
                           ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Read and verify one target's native rows and spend sidecar, or raise ReplayError."""
+    if returncode not in SETTLED_EXITS:
+        # Killed by a signal, or any exit cost_bench never gives: its sidecar may predate the run
+        # in flight, so the spend is unknown and the remaining cap is charged.
+        raise ReplayError("replay exited %s, so its spend is unknown" % returncode)
     if not native_out.exists() and returncode != 0:
         raise _NothingSpent("replay target was refused before any spend (exit %s)" % returncode)
     result_path, spend_path = native_out / RESULTS_NAME, native_out / SPEND_NAME
@@ -1307,7 +1327,7 @@ def task_catalog(repository: Path) -> Dict[str, Any]:
                                            "tasks")} for item in found["packs"]]
     return {"schema_version": 1, "tasks": tasks, "packs": public,
             "default_pack": found["default_digest"], "target_kinds": sorted(TARGET_KINDS),
-            "default_model": "claude-haiku-4-5",
+            "default_model": DEFAULT_MODEL,
             "commands": {"run": " ".join(NATIVE_COMMAND)}}
 
 
