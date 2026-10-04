@@ -13,7 +13,9 @@ Schema version 1 has these top-level fields:
   dated prices, audits, report, the two arm records, and every full redacted trajectory. The task
   and plan references also name their repository paths; the plan names its registration commit.
 - `design`: pinned model, client version, effort, tasks, trials, arms, seeds, resample count, per-run
-  cap, and saved replay and verification commands.
+  cap, and saved replay and verification commands. A bundle from a multi-model run holds one
+  stratum and adds `strata`, every model of the run, its own among them; each row's `stratum` must
+  then be the pinned model, and a row naming a stratum the design omits fails item 3.
 - `statistics`: the bootstrap seed and resample count.
 - `published_figures`: `{name, pointer, value, estimand}` entries. `pointer` is a JSON pointer into
   the verifier's derived result; `value` must equal the re-derived value exactly.
@@ -74,6 +76,15 @@ and unknown counts, the rate and its Wilson interval, with no raw detections. Th
 that each arm's counts cover exactly the runs its rows hold and that the rate and interval are what
 those counts give, then reports the summary as `joint`; any disagreement fails item 5. The split
 between clean, hit and unknown is carried, not re-derived.
+
+The derived result's `scorecard` is `null` unless the bundle carries the optional
+`artifacts.scorecard` reference: the hashed `scorecard.json` that `scripts/layer_scorecard.py`
+writes (docs/benchmarks.md#layer-scorecard). The bundle carries a reference, not a re-derivation. A
+scorecard also reads sweep, rule-task, long-session and judge rows that a bundle does not hold, so
+the verifier cannot rebuild it. The verifier checks three things: that it is a schema-1
+`layer-scorecard`, that it is not exploratory, and that one of its production sources has this
+bundle's rows file digest. It then reports the scorecard's digest, its layer count and its strata.
+Any failure fails item 5.
 
 Synthetic bundles test the verifier. They are not proof sets and cannot support a product claim.
 Publishing proof set 1 remains a separate campaign: fresh registered trials, complete trajectories,

@@ -8997,6 +8997,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B170",
+      "github_number": 1229,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1229",
+      "title": "fix(security): grade-bash grades a read of the harness config as a write",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B170.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B174",
       "github_number": 1237,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1237",
