@@ -58,11 +58,13 @@
       },
       "hits": {
         "label": "exploratory",
-        "last_fired_within_days": 30,
+        "last_fired": {
+          "days": 30,
+          "state": "fired"
+        },
         "reason": "",
         "reliable": true,
         "status": "measured",
-        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -129,7 +131,7 @@
           }
         }
       },
-      "id": "rules/secrets@primitives",
+      "id": "primitives/rules/secrets.md",
       "kind": "rules",
       "module": "rules/secrets",
       "path": "primitives/rules/secrets.md",
@@ -172,11 +174,13 @@
       },
       "hits": {
         "label": "exploratory",
-        "last_fired_within_days": 7,
-        "reason": "voice/banned-opener is below the engine's 0.9 floor (precision 0.95, recall 0.6)",
+        "last_fired": {
+          "days": 7,
+          "state": "fired"
+        },
+        "reason": "voice/banned-opener is below the engine's 0.90 floor (precision 0.95, recall 0.60)",
         "reliable": false,
         "status": "measured",
-        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -222,7 +226,7 @@
           }
         }
       },
-      "id": "rules/voice-and-format@primitives",
+      "id": "primitives/rules/voice-and-format.md",
       "kind": "rules",
       "module": "rules/voice-and-format",
       "path": "primitives/rules/voice-and-format.md",
@@ -256,14 +260,16 @@
       },
       "hits": {
         "label": "exploratory",
-        "last_fired_within_days": null,
+        "last_fired": {
+          "days": null,
+          "state": "not measured"
+        },
         "reason": "a comment's redundancy is a judgment over the codebase, not a transcript pattern",
         "reliable": null,
         "status": "not measured",
-        "widest_measured_days": null,
         "windows": {}
       },
-      "id": "rules/conciseness@primitives",
+      "id": "primitives/rules/conciseness.md",
       "kind": "rules",
       "module": "rules/conciseness",
       "path": "primitives/rules/conciseness.md",
@@ -297,14 +303,16 @@
       },
       "hits": {
         "label": "exploratory",
-        "last_fired_within_days": null,
+        "last_fired": {
+          "days": null,
+          "state": "not measured"
+        },
         "reason": "no detector names it and it has no opt-out",
         "reliable": null,
         "status": "not measured",
-        "widest_measured_days": null,
         "windows": {}
       },
-      "id": "rules/working-style@primitives",
+      "id": "primitives/rules/working-style.md",
       "kind": "rules",
       "module": "rules/working-style",
       "path": "primitives/rules/working-style.md",
@@ -345,11 +353,13 @@
       },
       "hits": {
         "label": "exploratory",
-        "last_fired_within_days": null,
+        "last_fired": {
+          "days": 90,
+          "state": "not-fired"
+        },
         "reason": "autonomy/denied-by-grade has no measured precision",
         "reliable": false,
         "status": "measured",
-        "widest_measured_days": 90,
         "windows": {
           "30": {
             "detectors": {
@@ -395,7 +405,7 @@
           }
         }
       },
-      "id": "stances/autonomy@primitives",
+      "id": "primitives/stances/autonomy/execute.md",
       "kind": "stances",
       "module": "stances/autonomy",
       "path": "primitives/stances/autonomy/execute.md",
@@ -414,7 +424,7 @@
         "available": false,
         "reason": "a stance is changed by choosing another variant, not switched off"
       },
-      "unit": "execute"
+      "unit": "autonomy"
     }
   ],
   "schema_version": 1,

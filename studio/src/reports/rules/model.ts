@@ -18,8 +18,7 @@ export type RuleHits = {
   reason: string;
   reliable: boolean | null;
   windows: Record<string, HitWindow>;
-  last_fired_within_days: number | null;
-  widest_measured_days: number | null;
+  last_fired: { state: "fired" | "not-fired" | "not-reported" | "no-sessions" | "unavailable" | "not measured"; days: number | null };
 };
 
 export type DetectorPrecision = {
@@ -107,11 +106,24 @@ export function windowText(hits: RuleHits, days: number): string {
     group ? `${id} ${group.sessions}/${group.of} (${percent(group.share)})` : `${id}: not in the report`).join("; ");
 }
 
-/** "Not in N days" names only the widest window that was actually read. */
+/** The engine-backed last-fired state, each said plainly; "not in N days" only for a window read in full. */
 export function lastFiredText(hits: RuleHits): string {
-  if (hits.status !== "measured") return NOT_MEASURED;
-  if (hits.last_fired_within_days !== null) return `within ${hits.last_fired_within_days} days`;
-  return hits.widest_measured_days !== null ? `not in ${hits.widest_measured_days} days` : UNAVAILABLE;
+  const { state, days } = hits.last_fired;
+  if (hits.status !== "measured" || state === "not measured") return NOT_MEASURED;
+  if (state === "fired") return `within ${days} days`;
+  if (state === "not-fired") return `not in ${days} days`;
+  if (state === "not-reported") return `not reported: a detector is missing from every report up to ${days} days`;
+  if (state === "no-sessions") return `no measured sessions in ${days} days`;
+  return "unavailable: every window failed to read";
+}
+
+/** One line for the live region after "Try without it". */
+export function tryStatusLine(result: TryWithoutResult | null, error: string): string {
+  if (error) return `No draft was made. ${error}`;
+  if (!result) return "";
+  return result.status === "switched"
+    ? `Draft ${result.draft.name} created with ${result.rule} switched off.`
+    : `Draft ${result.draft.name} was created, but ${result.rule} is still on in it.`;
 }
 
 /** Whether the hit figures can be read at face value, with the engine's reason when not. */

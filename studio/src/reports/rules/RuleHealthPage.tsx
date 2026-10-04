@@ -1,5 +1,5 @@
 import { Anchor, Button, Group, Paper, Stack, Text, Title } from "@mantine/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 
 import { CommandChip, DataTable, EvidenceState, StatusBadge, type DataColumn } from "../../components/StudioKit";
@@ -7,7 +7,7 @@ import { DraftTest } from "../../configure/DraftTest";
 import { loadRuleHealth, tryWithout } from "./api";
 import {
   adviceText, effectText, lastFiredText, precisionText, reliability, sortRows, stateTone, summaryLine,
-  tokensText, tryWithoutErrorMessage, unavailableSources, windowText,
+  tokensText, tryStatusLine, tryWithoutErrorMessage, unavailableSources, windowText,
   type RuleHealth, type RuleRow, type TryWithoutResult,
 } from "./model";
 
@@ -81,13 +81,10 @@ export function RuleHealthReport({ health, onTry, trying }: {
 
 /** What "Try without it" leaves: the draft, its CLI steps and its test, ready to run. */
 export function TriedDraft({ result }: { result: TryWithoutResult }) {
-  const heading = useRef<HTMLHeadingElement>(null);
-  // Move focus to the outcome, so a screen-reader user hears what the button did.
-  useEffect(() => { heading.current?.focus(); }, [result.draft.name]);
   const switched = result.status === "switched";
   return <Paper p="lg" withBorder>
     <Stack gap="sm">
-      <Title order={2} ref={heading} tabIndex={-1}>Draft {result.draft.name}</Title>
+      <Title order={2}>Draft {result.draft.name}</Title>
       {switched
         ? <Text>{result.message} Test it against its base below, then decide in Configure whether to apply it.</Text>
         : <EvidenceState kind="refused" title={`Draft ${result.draft.name} was created, but the rule is still on in it`}>{result.message}</EvidenceState>}
@@ -136,10 +133,10 @@ export function RuleHealthPage() {
       </div>
       <Button variant="default" onClick={() => void refresh()} loading={loading}>Refresh</Button>
     </Group>
-    <div aria-live="polite">
-      {trying?.error && <EvidenceState kind="refused" title="No draft was made">{trying.error}</EvidenceState>}
-      {trying?.result && <TriedDraft result={trying.result} />}
-    </div>
+    {/* Only this one line is live, so the draft test's own updates are not read out. */}
+    <Text aria-live="polite" className="visually-hidden" component="p" role="status">{tryStatusLine(trying?.result ?? null, trying?.error ?? "")}</Text>
+    {trying?.error && <EvidenceState kind="refused" title="No draft was made">{trying.error}</EvidenceState>}
+    {trying?.result && <TriedDraft result={trying.result} />}
     {error && <EvidenceState kind="error" title="Rule health could not be read">{error}</EvidenceState>}
     {!health && loading && <EvidenceState kind="loading" title="Reading every rule's evidence" />}
     {health && <RuleHealthReport health={health} onTry={(rule) => void onTry(rule)} trying={trying} />}

@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { RuleHealthReport, TriedDraft } from "../src/reports/rules/RuleHealthPage.tsx";
 import {
-  effectText, hitLine, lastFiredText, reliability, sortRows, summaryLine, tokensText, tryWithoutErrorMessage, windowText,
+  effectText, hitLine, lastFiredText, reliability, sortRows, summaryLine, tokensText, tryStatusLine, tryWithoutErrorMessage, windowText,
   type RuleHealth, type RuleRow, type TryWithoutResult,
 } from "../src/reports/rules/model.ts";
 
@@ -40,7 +40,7 @@ test("every rule shows the status and reason the engine reported", () => {
 test("a detector under the precision floor marks the rule's hit figures unreliable", () => {
   const voice = row("voice-and-format");
   const check = reliability(voice.hits);
-  const reason = "voice/banned-opener is below the engine&#x27;s 0.9 floor (precision 0.95, recall 0.6)";
+  const reason = "voice/banned-opener is below the engine&#x27;s 0.90 floor (precision 0.95, recall 0.60)";
   assert.deepEqual(check, { label: "unreliable", tone: "danger", reason: reason.replace("&#x27;", "'") });
   const html = render(fixture);
   assert.ok(html.includes(`Hit figures unreliable: ${reason}`));
@@ -92,7 +92,6 @@ test("a tried draft shows its CLI steps and its draft test, ready to run", () =>
   for (const command of result.commands) assert.ok(html.includes(command));
   assert.ok(html.includes("Open drafts in Configure"));
   assert.ok(html.includes("Choose tasks, trials and the change worth detecting."), "the draft test renders, ready to run");
-  assert.ok(html.includes('tabindex="-1"'));
 });
 
 test("a switch that could not be saved names the kept draft and offers no test", () => {
@@ -111,17 +110,28 @@ test("a switch that could not be saved names the kept draft and offers no test",
 test("each window shows its own state, and a failed widest window is never claimed as read", () => {
   const hits = JSON.parse(JSON.stringify(row("secrets").hits)) as RuleRow["hits"];
   hits.windows["90"] = { status: "unavailable", reason: "citizen usage --rules --days 90 could not be read: timed out", measured_sessions: null, detectors: {} };
-  hits.last_fired_within_days = null;
-  hits.widest_measured_days = 30;
+  hits.last_fired = { state: "not-fired", days: 30 };
   assert.equal(windowText(hits, 90), "unavailable: citizen usage --rules --days 90 could not be read: timed out");
   assert.equal(lastFiredText(hits), "not in 30 days");
-  hits.widest_measured_days = null;
-  assert.equal(lastFiredText(hits), "unavailable");
+  hits.last_fired = { state: "unavailable", days: null };
+  assert.equal(lastFiredText(hits), "unavailable: every window failed to read");
+  hits.last_fired = { state: "no-sessions", days: 90 };
+  assert.equal(lastFiredText(hits), "no measured sessions in 90 days");
+  hits.last_fired = { state: "not-reported", days: 90 };
+  assert.equal(lastFiredText(hits), "not reported: a detector is missing from every report up to 90 days");
 });
 
 test("a corpus that could not be read says precision unavailable, not unmeasured", () => {
   const hits = { ...row("secrets").hits, reliable: null, reason: "precision unavailable (read failed)" };
   assert.deepEqual(reliability(hits), { label: "precision unavailable", tone: "warning", reason: "precision unavailable (read failed)" });
+});
+
+test("the live status is one line naming the draft", () => {
+  const base = { schema_version: 1, rule: "conciseness", changes: {}, commands: [], warning: "", message: "",
+    draft: { name: "without-conciseness-1", revision: "r" } };
+  assert.equal(tryStatusLine({ ...base, status: "switched" }, ""), "Draft without-conciseness-1 created with conciseness switched off.");
+  assert.equal(tryStatusLine({ ...base, status: "switch-failed" }, ""), "Draft without-conciseness-1 was created, but conciseness is still on in it.");
+  assert.equal(tryStatusLine(null, "refused"), "No draft was made. refused");
 });
 
 test("the page names the directory the statuses were read from", () => {

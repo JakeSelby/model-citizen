@@ -196,8 +196,8 @@ class Figures(unittest.TestCase):
         self.assertEqual(hits["windows"]["30"]["measured_sessions"], 40)
         self.assertEqual(hits["windows"]["30"]["detectors"]["voice/banned-opener"],
                          {"hits": 9, "sessions": 6, "of": 40, "share": 0.15, "note": ""})
-        self.assertEqual(hits["last_fired_within_days"], 7)
-        self.assertEqual(by_rule(fixture_report())["secrets"]["hits"]["last_fired_within_days"], 30)
+        self.assertEqual(hits["last_fired"], {"state": "fired", "days": 7})
+        self.assertEqual(by_rule(fixture_report())["secrets"]["hits"]["last_fired"], {"state": "fired", "days": 30})
 
     def test_a_detector_under_the_precision_floor_marks_its_rule_unreliable(self):
         """AC3."""
@@ -206,7 +206,7 @@ class Figures(unittest.TestCase):
         self.assertEqual(document["precision_floor"], 0.9)
         self.assertFalse(voice["hits"]["reliable"])
         self.assertEqual(voice["hits"]["reason"],
-                         "voice/banned-opener is below the engine's 0.9 floor (precision 0.95, recall 0.6)")
+                         "voice/banned-opener is below the engine's 0.90 floor (precision 0.95, recall 0.60)")
         self.assertTrue(voice["detectors"][0]["below_floor"])
         self.assertTrue(by_rule(document)["secrets"]["hits"]["reliable"])
 
@@ -282,7 +282,31 @@ class Figures(unittest.TestCase):
         document = fixture_report(fail=("hits-90",))
         secrets = by_rule(document)["secrets"]["hits"]
         self.assertEqual(secrets["windows"]["90"]["status"], "unavailable")
-        self.assertEqual(secrets["widest_measured_days"], 30)
+        self.assertEqual(secrets["last_fired"], {"state": "fired", "days": 30})
+        voice_hits, _precision, _cost = engine_documents()
+        for days in ("7", "30", "90"):
+            for item in voice_hits[days]["groups"]:
+                item["sessions"] = item["hits"] = 0
+        voice = by_rule(fixture_report(fail=("hits-90",), hits=voice_hits))["voice-and-format"]["hits"]
+        self.assertEqual(voice["last_fired"], {"state": "not-fired", "days": 30})
+
+    def test_every_window_failing_reads_unavailable(self):
+        voice = by_rule(fixture_report(fail=("hits-7", "hits-30", "hits-90")))["voice-and-format"]["hits"]
+        self.assertEqual(voice["last_fired"], {"state": "unavailable", "days": None})
+
+    def test_every_window_read_with_no_sessions_reads_no_sessions_not_unavailable(self):
+        hits = dict((days, hits_document(int(days), 0, [])) for days in ("7", "30", "90"))
+        voice = by_rule(fixture_report(hits=hits))["voice-and-format"]["hits"]
+        self.assertEqual([voice["windows"][d]["status"] for d in ("7", "30", "90")], ["not measured"] * 3)
+        self.assertEqual(voice["last_fired"], {"state": "no-sessions", "days": 90})
+
+    def test_a_detector_missing_from_every_report_is_never_called_not_fired(self):
+        hits, _precision, _cost = engine_documents()
+        for days in ("7", "30", "90"):
+            hits[days]["groups"] = [g for g in hits[days]["groups"] if g["id"] != "voice/banned-opener"]
+        voice = by_rule(fixture_report(hits=hits))["voice-and-format"]["hits"]
+        self.assertIsNone(voice["windows"]["90"]["detectors"]["voice/banned-opener"])
+        self.assertEqual(voice["last_fired"], {"state": "not-reported", "days": 90})
 
     def test_a_failed_adherence_read_is_named_in_the_sources(self):
         with mock.patch.object(rule_health, "_classified", return_value=fake_rules()), \
@@ -291,20 +315,36 @@ class Figures(unittest.TestCase):
         self.assertEqual(document["status"], "partial")
         self.assertEqual(document["sources"]["advice"], {"status": "unavailable", "message": "advice is unavailable"})
 
-    def test_a_shadowed_rule_is_its_own_row_and_borrows_nothing_from_its_owner(self):
-        rules, findings = fake_rules()
-        rules.append(Rule("secrets", "/repo/personal/rules/secrets.md", "unmeasured",
-                          rule_coverage.SHADOWED % "primitives/rules/secrets.md", []))
-        with mock.patch.object(rule_health, "_classified", return_value=(rules, findings)), \
+    def test_a_rule_the_engine_shadows_is_its_own_row_and_borrows_nothing(self):
+        """Through the real classify: `a.md` names itself `b` in front matter, after `b.md`."""
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        repo = Path(os.path.realpath(tmp.name))
+        rules_dir = repo / "primitives" / "rules"
+        rules_dir.mkdir(parents=True)
+        (rules_dir / "b.md").write_text("# B\n\nDo b.\n", encoding="utf-8")
+        (rules_dir / "a.md").write_text("---\nrule: b\n---\n# A\n\nDo a.\n", encoding="utf-8")
+        engine = rule_health.selection._harness_module(REPO).load_detectors()
+        classified = rule_coverage.classify([("b", rules_dir / "b.md"), ("a", rules_dir / "a.md")],
+                                            [], {}, {}, engine.read_rule_file)
+        self.assertTrue(rule_health._shadowed(classified[0][1]))
+        _hits, _precision, cost = engine_documents()
+        cost["rows"] += [{"module": "rules/b", "state": "on", "tokens": {"tokens": 50, "estimand": "soft estimate"},
+                          "effect": "unmeasured"},
+                         {"module": "rules/a", "state": "on", "tokens": {"tokens": 60, "estimand": "soft estimate"},
+                          "effect": "unmeasured"}]
+        with mock.patch.object(rule_health, "_classified", return_value=classified), \
                 mock.patch.object(rule_health, "_advice_modules", return_value={}):
-            document = rule_health.report(REPO, cwd=Path("/repo"), run=fake_runner())
-        rows = [row for row in document["rows"] if row["rule"] == "secrets"]
-        self.assertEqual([row["id"] for row in rows], ["rules/secrets@primitives", "rules/secrets@personal"])
-        self.assertEqual(len({row["id"] for row in document["rows"]}), len(document["rows"]))
+            document = rule_health.report(REPO, cwd=repo, run=fake_runner(cost=cost))
+        rows = document["rows"]
+        self.assertEqual([row["id"] for row in rows], ["primitives/rules/b.md", "primitives/rules/a.md"])
+        self.assertEqual([row["module"] for row in rows], ["rules/b", "rules/a"])
+        self.assertEqual(rows[0]["tokens"]["tokens"], 50)
         self.assertTrue(rows[0]["try_without"]["available"])
-        self.assertFalse(rows[1]["try_without"]["available"])
+        self.assertEqual(rows[1]["rule"], "b")
         self.assertEqual(rows[1]["tokens"]["status"], "not measured")
-        self.assertIn("primitives holds this name", rows[1]["tokens"]["reason"])
+        self.assertIn("shadowed: its name's detectors measure", rows[1]["tokens"]["reason"])
+        self.assertFalse(rows[1]["try_without"]["available"])
 
     def test_the_report_names_the_directory_it_read_from(self):
         self.assertEqual(fixture_report()["working_directory"], "/repo")
@@ -320,7 +360,7 @@ class Figures(unittest.TestCase):
         self.assertEqual(row["hits"]["windows"]["7"],
                          {"status": "not measured", "measured_sessions": 0, "detectors": {},
                           "reason": "no measured sessions in the last 7 day(s)"})
-        self.assertEqual(row["hits"]["last_fired_within_days"], 30)
+        self.assertEqual(row["hits"]["last_fired"], {"state": "fired", "days": 30})
 
     def test_try_without_is_offered_only_for_a_rule_switched_on(self):
         rows = by_rule(fixture_report())
@@ -351,15 +391,54 @@ class CorpusExitCodes(unittest.TestCase):
         return rule_health.command_runner(root)
 
     def test_exit_one_with_json_is_a_result_carrying_its_failures(self):
-        document = {"floor": 0.9, "below_floor": ["a/b"], "unscored": ["c/d"], "stale": [], "detectors": {}}
+        document = {"floor": 0.9, "below_floor": ["a/b"], "unscored": ["c/d"], "failed": ["a/b"], "stale": [],
+                    "detectors": {}}
         run = self.runner_with("print(%r)\nsys.exit(1)\n" % json.dumps(document))
         self.assertEqual(run(["scripts/detector_corpus.py", "--json"]), document)
 
-    def test_a_crash_is_a_failed_read_with_its_last_error_line(self):
+    def test_an_uncaught_exception_exits_one_and_is_a_failed_read_with_its_error(self):
+        run = self.runner_with("raise KeyError('x')\n")
+        with self.assertRaises(OSError) as caught:
+            run(["scripts/detector_corpus.py", "--json"])
+        self.assertEqual(str(caught.exception), "scripts/detector_corpus.py --json did not print JSON: KeyError: 'x'")
+
+    def test_exit_one_with_json_that_is_not_the_scripts_document_is_a_failed_read(self):
+        run = self.runner_with("print('{}')\nraise RuntimeError('half way')\n")
+        with self.assertRaises(OSError) as caught:
+            run(["scripts/detector_corpus.py", "--json"])
+        self.assertEqual(str(caught.exception), "scripts/detector_corpus.py --json exited 1 without its "
+                                                "result document: RuntimeError: half way")
+
+    def test_another_exit_code_is_a_failed_read_with_its_last_error_line(self):
         run = self.runner_with("sys.stderr.write('Traceback\\nKeyError: x\\n')\nsys.exit(2)\n")
         with self.assertRaises(OSError) as caught:
             run(["scripts/detector_corpus.py", "--json"])
         self.assertEqual(str(caught.exception), "scripts/detector_corpus.py --json exited 2: KeyError: x")
+
+    def test_the_real_script_reports_below_floor_and_the_studio_reads_that_field(self):
+        """Real `detector_corpus.py` output: at an unreachable floor every scored detector is below
+        it, the script exits 1, and the Studio reads the result and the engine's verdict."""
+        run = rule_health.command_runner(REPO)
+        document = run(["scripts/detector_corpus.py", "--json", "--floor", "1.01"])
+        self.assertLessEqual(rule_health.CORPUS_KEYS, set(document))
+        scored = sorted(did for did, score in document["detectors"].items() if score.get("scored"))
+        self.assertTrue(scored)
+        self.assertEqual(sorted(document["below_floor"]), scored)
+        verdict = rule_health._detector_precision(document, scored[0])
+        self.assertTrue(verdict["below_floor"])
+        self.assertIn("below the engine's 1.01 floor", rule_health._reliability([verdict], document["floor"])["reason"])
+        clean = run(["scripts/detector_corpus.py", "--json"])
+        self.assertIn("below_floor", clean)
+        self.assertEqual(rule_health._detector_precision(clean, scored[0])["below_floor"],
+                         scored[0] in clean["below_floor"])
+
+    def test_floor_and_scores_are_rounded_and_a_missing_floor_is_handled(self):
+        detector = {"id": "x/y", "status": "measured", "precision": 0.9444444444, "recall": None,
+                    "below_floor": True, "reason": ""}
+        self.assertEqual(rule_health._reliability([detector], None)["reason"],
+                         "x/y is below the engine's floor (precision 0.94, recall unknown)")
+        self.assertEqual(rule_health._reliability([detector], 0.9)["reason"],
+                         "x/y is below the engine's 0.90 floor (precision 0.94, recall unknown)")
 
     def test_output_that_is_not_json_is_a_failed_read(self):
         run = self.runner_with("print('table, not json')\nsys.exit(1)\n")
@@ -397,6 +476,20 @@ class TryWithoutKeptDraft(unittest.TestCase):
         self.assertEqual(result["draft"]["name"], "without-secrets-abc")
         self.assertIn("was created", result["message"])
         server.RULE_TRY_WITHOUT.validate(result)
+
+    def test_a_unit_holding_a_placeholder_word_never_rewrites_the_draft_name(self):
+        with mock.patch.object(rule_health, "_selected_rules", return_value={"API-KEY-hygiene": "on"}), \
+                mock.patch.object(rule_health.drafts, "find", return_value=(Path("/w"), {})), \
+                mock.patch.object(rule_health.drafts, "describe", return_value={"revision": "r" * 40}), \
+                mock.patch.object(rule_health.selection_editing, "save",
+                                  return_value={"saved": True, "result": {"revision": "s" * 40}}):
+            result = rule_health.try_without(REPO, "API-KEY-hygiene", lambda root, name: "", suffix="k")
+        name = "without-API-KEY-hygiene-k"
+        self.assertEqual(result["commands"][0], "citizen draft create %s --json" % name)
+        words = result["commands"][2].split()
+        self.assertEqual(words[4], name)
+        self.assertEqual(words[6], "r" * 40)
+        self.assertRegex(words[8], r"^[0-9a-f]{32}$")
 
     def test_the_server_create_clears_only_a_failed_partial_create(self):
         with mock.patch.object(server, "_run_draft_create", return_value="create-timeout"), \

@@ -78,6 +78,15 @@ def _environment() -> Dict[str, str]:
     return {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
 
 
+# The keys `detector_corpus.py --json` always prints (`scores_as_dict` plus the script's own).
+CORPUS_KEYS = frozenset(("floor", "detectors", "below_floor", "unscored", "failed"))
+
+
+def _failure(argv: Sequence[str], done: Any, what: str) -> str:
+    tail = (done.stderr or "").strip().splitlines()
+    return "%s %s%s" % (" ".join(argv), what, ": " + tail[-1] if tail else "")
+
+
 def command_runner(root: Path, cwd: Optional[Path] = None) -> Runner:
     """Run one engine command of checkout `root` in `cwd` and return its JSON document, or raise
     OSError. `cwd` matters: `usage --rules` loads the `.ruleprobe/detectors.yaml` found from it."""
@@ -97,15 +106,16 @@ def command_runner(root: Path, cwd: Optional[Path] = None) -> Runner:
         # a result carrying failures, printed in full. Only another exit, or no JSON, is a failure.
         accepted = (0, 1) if argv[0] == "scripts/detector_corpus.py" else (0,)
         if done.returncode not in accepted:
-            tail = done.stderr.strip().splitlines()
-            raise OSError("%s exited %d%s" % (" ".join(argv), done.returncode,
-                                              ": " + tail[-1] if tail else ""))
+            raise OSError(_failure(argv, done, "exited %d" % done.returncode))
         try:
             document = json.loads(done.stdout)
         except ValueError as exc:
-            raise OSError("%s did not print JSON" % " ".join(argv)) from exc
+            raise OSError(_failure(argv, done, "did not print JSON")) from exc
         if not isinstance(document, dict):
-            raise OSError("%s did not print a JSON object" % " ".join(argv))
+            raise OSError(_failure(argv, done, "did not print a JSON object"))
+        # An uncaught exception also exits 1; only the script's own document makes exit 1 a result.
+        if done.returncode == 1 and not CORPUS_KEYS <= set(document):
+            raise OSError(_failure(argv, done, "exited 1 without its result document"))
         return document
 
     return run
@@ -122,13 +132,24 @@ def _classified(root: Path, cwd: Optional[Path]):
 
 
 def _module_key(rule: Any) -> str:
-    # As `coverage_states` keys them: a stance's file sits under a `stances` directory.
-    kind = "stances" if "stances" in Path(str(rule.path)).parts[:-1] else "rules"
-    return "%s/%s" % (kind, rule.rule)
+    """The selection module a rule file is, as the scorecard and `config set` key it: `rules/<stem>`
+    for a rule (front matter may give the rule another name), `stances/<dimension>` for a stance."""
+    path = Path(str(rule.path))
+    if "stances" in path.parts[:-1]:
+        return "stances/%s" % path.parent.name
+    return "rules/%s" % path.stem
 
 
 def _unit(rule: Any) -> str:
-    return Path(str(rule.path)).stem
+    return _module_key(rule).split("/", 1)[1]
+
+
+SHADOWED_PREFIX = rule_coverage.SHADOWED.split("%s", 1)[0]
+
+
+def _shadowed(rule: Any) -> bool:
+    """The engine's verdict: `rule_coverage.classify` names a later file of a taken name shadowed."""
+    return rule.state == "unmeasured" and str(rule.reason).startswith(SHADOWED_PREFIX)
 
 
 def _root_of(rule: Any) -> Path:
@@ -200,6 +221,14 @@ def _detector_precision(precision: Any, detector_id: str) -> Dict[str, Any]:
             "below_floor": detector_id in set(precision.get("below_floor") or [])}
 
 
+def _score(value: Any) -> str:
+    return "%.2f" % value if isinstance(value, (int, float)) and not isinstance(value, bool) else "unknown"
+
+
+def _floor_text(floor: Any) -> str:
+    return "%s floor" % _score(floor) if isinstance(floor, (int, float)) and not isinstance(floor, bool) else "floor"
+
+
 def _reliability(detectors: List[Dict[str, Any]], floor: Any) -> Dict[str, Any]:
     """`reliable` False when a detector is below the floor or unscored; None when the corpus could
     not be read, since whether the figures can be trusted is then unknown, not settled."""
@@ -208,8 +237,8 @@ def _reliability(detectors: List[Dict[str, Any]], floor: Any) -> Dict[str, Any]:
     unread = [d for d in detectors if d["status"] == UNAVAILABLE]
     if under:
         return {"reliable": False, "reason": "; ".join(
-            "%s is below the engine's %s floor (precision %s, recall %s)"
-            % (d["id"], floor, d["precision"], d["recall"]) for d in under)}
+            "%s is below the engine's %s (precision %s, recall %s)"
+            % (d["id"], _floor_text(floor), _score(d["precision"]), _score(d["recall"])) for d in under)}
     if unscored:
         return {"reliable": False, "reason": "; ".join(
             "%s has no measured precision" % d["id"] for d in unscored)}
@@ -243,17 +272,32 @@ def _hits(results: Dict[str, Any], detector_ids: List[str]) -> Dict[str, Any]:
                 (key, group.get(key)) for key in ("hits", "sessions", "of", "share", "note"))
         windows[str(days)] = {"status": "measured", "measured_sessions": sessions, "reason": "",
                               "detectors": found}
-    measured = [days for days in WINDOWS if windows[str(days)]["status"] == "measured"]
-    last = None
-    for days in WINDOWS:
-        window = windows[str(days)]
+    return {"windows": windows, "last_fired": _last_fired(windows)}
+
+
+def _last_fired(windows: Dict[str, Any]) -> Dict[str, Any]:
+    """When a detector last fired, saying only what a read window supports.
+
+    `fired` within the narrowest window where one did; `not-fired` in the widest window that was
+    read, had sessions and reported every detector; `not-reported` when windows were read but some
+    detector was missing from each; `no-sessions` when every read window had none; `unavailable`
+    when no window could be read."""
+    states = [(days, windows[str(days)]) for days in WINDOWS]
+    for days, window in states:
         if window["status"] == "measured" and any(
                 (group or {}).get("sessions") for group in window["detectors"].values()):
-            last = days
-            break
-    # "Not in N days" may only name a window that was read.
-    return {"windows": windows, "last_fired_within_days": last,
-            "widest_measured_days": max(measured) if measured else None}
+            return {"state": "fired", "days": days}
+    complete = [days for days, window in states if window["status"] == "measured"
+                and all(group is not None for group in window["detectors"].values())]
+    if complete:
+        return {"state": "not-fired", "days": max(complete)}
+    read = [days for days, window in states if window["status"] == "measured"]
+    if read:
+        return {"state": "not-reported", "days": max(read)}
+    empty = [days for days, window in states if window["status"] == NOT_MEASURED]
+    if empty:
+        return {"state": "no-sessions", "days": max(empty)}
+    return {"state": UNAVAILABLE, "days": None}
 
 
 def _advice(results: Dict[str, Any], kinds: List[str]) -> Dict[str, Any]:
@@ -319,17 +363,15 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
     precision = results.get("precision")
     floor = precision.get("floor") if isinstance(precision, dict) else None
     rows = []
-    owners: Dict[str, str] = {}
     for rule, key in zip(rules, keys):
         kind = key.split("/", 1)[0]
         root_label = rule_coverage.short(str(_root_of(rule)), relative_to, home)
-        # A second file of one name is a row of its own: the module key alone would collide, and
-        # the cost, effect and switch the scorecard keys by name belong to the first, its owner.
-        owner = owners.setdefault(key, root_label)
-        shadowed = owner != root_label
+        # A file the engine shadows measures nothing of its own; the scorecard's cost, effect and
+        # switch for its module would describe another file, so it borrows none of them.
+        shadowed = _shadowed(rule)
         cost = _cost(results, key)
         if shadowed:
-            reason = "a rule of the same name in %s holds this name" % owner
+            reason = "shadowed: %s" % rule.reason
             cost = {"selection_state": None, "tokens": {"status": NOT_MEASURED, "reason": reason},
                     "effect": {"status": NOT_MEASURED, "reason": reason}}
         detectors = [_detector_precision(precision, did) for did in rule.detectors]
@@ -338,7 +380,7 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
                         **_reliability(detectors, floor))
         else:
             hits = {"status": NOT_MEASURED, "reason": rule.reason, "label": EXPLORATORY, "windows": {},
-                    "last_fired_within_days": None, "widest_measured_days": None, "reliable": None}
+                    "last_fired": {"state": NOT_MEASURED, "days": None}, "reliable": None}
         unit = _unit(rule)
         if shadowed:
             offer = {"available": False, "reason": cost["tokens"]["reason"]}
@@ -349,7 +391,8 @@ def report(root: Path, cwd: Optional[Path] = None, run: Optional[Runner] = None,
         else:
             offer = {"available": True, "reason": ""}
         rows.append({
-            "id": "%s@%s" % (key, root_label), "root": root_label,
+            # One row per file: the path is unique where a rule name or module may not be.
+            "id": rule_coverage.short(str(rule.path), relative_to, home), "root": root_label,
             "rule": rule.rule, "module": key, "kind": kind, "unit": unit,
             "path": rule_coverage.short(str(rule.path), relative_to, home),
             "state": rule.state, "reason": rule.reason, "detectors": detectors, "hits": hits,
@@ -398,6 +441,11 @@ def _home_short(path: str, home: Optional[str]) -> str:
     return path
 
 
+def _fill(template: Sequence[str], values: Dict[str, str]) -> str:
+    """A CLI template with each whole placeholder word replaced, so a value never rewrites another."""
+    return " ".join(values.get(word, word) for word in template)
+
+
 def _selected_rules(root: Path) -> Dict[str, Any]:
     posture = catalog.posture_module(root)
     if posture is None:
@@ -424,7 +472,7 @@ def try_without(root: Path, unit: str, create: Callable[[Path, str], str],
     if failure:
         raise RuleHealthError(failure, "the draft could not be created")
     change = {"rules.%s" % unit: "off"}
-    commands = [" ".join(CLI_COMMANDS["try_without"]).replace("{draft}", name)]
+    commands = [_fill(CLI_COMMANDS["try_without"], {"{draft}": name})]
 
     def kept(status: str, why: str, revision: str = "") -> Dict[str, Any]:
         # The draft exists from here on: every answer names it, so it can be found or discarded.
@@ -443,8 +491,7 @@ def try_without(root: Path, unit: str, create: Callable[[Path, str], str],
     key = uuid.uuid4().hex
     commands += [
         "printf '%%s\\n' %s > changes.json" % shlex.quote(json.dumps(change, sort_keys=True)),
-        " ".join(selection_editing.CLI_COMMANDS["save"]).replace("{draft}", name)
-        .replace("{revision}", revision).replace("KEY", key),
+        _fill(selection_editing.CLI_COMMANDS["save"], {"{draft}": name, "{revision}": revision, "KEY": key}),
     ]
     saved = selection_editing.save(root, name, revision, key, change)
     if not saved.get("saved"):
