@@ -37,6 +37,8 @@ BROWSER_SUITES = {
         "test_late_preview_cannot_update_a_switched_draft",
     ),
 }
+# Each suite runs whole; the module editor's 19 rendered flows take over six minutes on a loaded Mac.
+BROWSER_SUITE_TIMEOUT = 1200
 
 
 def command(*args, env=None, expected=0, timeout=30):
@@ -113,7 +115,7 @@ def browser_flow(root, python, executable):
     outputs = []
     for pattern, expected_cases in BROWSER_SUITES.items():
         result = command(python, "-m", "unittest", "discover", "-s", "tests", "-p",
-                         pattern, "-v", env=env, timeout=300)
+                         pattern, "-v", env=env, timeout=BROWSER_SUITE_TIMEOUT)
         output = result.stdout + result.stderr
         count = re.search(r"Ran ([0-9]+) tests? in", output)
         if count is None or int(count.group(1)) < len(expected_cases):
