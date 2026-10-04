@@ -913,7 +913,7 @@ class ModuleEditingTests(unittest.TestCase):
         self.assertNotEqual(first, second)
 
     def test_real_checkpoint_matrix_has_cli_parity_conflicts_and_canonical_retry(self):
-        name = "module-matrix-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("module-matrix-")
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / "home"
             config_path = home / ".config" / "agent-harness" / "config.json"
@@ -1099,7 +1099,7 @@ class ModuleEditingTests(unittest.TestCase):
                            if not key.startswith("HARNESS_")}
             environment.update({"HARNESS_HOME": str(home),
                                 "HARNESS_WORKTREE_ROOT": str(base / "drafts")})
-            name = "linked-resolution-" + uuid.uuid4().hex[:8]
+            name = draft_support.draft_name("linked-resolution-")
             created = subprocess.run(
                 [sys.executable, str(linked / "bin" / "harness"),
                  "draft", "create", name, "--json"],
@@ -1163,7 +1163,7 @@ class ModuleEditingTests(unittest.TestCase):
             self.assertEqual(removed.returncode, 0, removed.stderr or removed.stdout)
 
     def test_real_save_lints_with_changed_draft_config_instead_of_installed_profile(self):
-        name = "module-config-lint-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("module-config-lint-")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             home = base / "home"
@@ -1226,7 +1226,7 @@ class ModuleEditingTests(unittest.TestCase):
                 draft_support.discard_draft(self, name, environment)
 
     def test_real_skill_and_layer_selected_stance_save_with_external_runtime_input(self):
-        name = "module-kinds-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("module-kinds-")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             home = base / "home"
@@ -1492,7 +1492,7 @@ class ModuleEditingTests(unittest.TestCase):
 
     @contextmanager
     def real_draft(self, prefix, extra_environment=None):
-        name = prefix + "-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name(prefix + "-")
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             home = base / "home"

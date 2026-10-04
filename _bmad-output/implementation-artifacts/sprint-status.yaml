@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-10-01"
+generated: "2026-10-03"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -356,7 +356,7 @@ development_status:
   ah-s293-hand-edit-a-rule-skill-or-stance-in-a-draft-with: backlog
   ah-s294-add-your-own-module-from-a-template-or-fork-a: ready-for-dev
   ah-s295-review-and-apply-a-draft-through-the-governed: ready-for-dev
-  ah-s296-roll-back-an-applied-draft: backlog
+  ah-s296-roll-back-an-applied-draft: ready-for-dev
   ah-s325-configure-composition-slots-and-superpowers-in: ready-for-dev
 
   ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress
@@ -376,13 +376,15 @@ development_status:
 
   ah-e025-judge-in-the-studio-whether-a-change-helped: in-progress
   ah-s307-compare-two-runs-with-paired-intervals: ready-for-dev
-  ah-s308-test-a-draft-run-it-against-its-base-and-report: backlog
+  ah-s308-test-a-draft-run-it-against-its-base-and-report: ready-for-dev
   ah-s309-trends-across-versions-and-dates-beside-the: backlog
   ah-s310-rule-health-measurement-status-adherence-and: backlog
   ah-s311-spend-and-usage-from-the-local-ledger: backlog
   ah-s312-proposals-review-evidence-backed-stance: backlog
   ah-s326-show-calibrated-compliance-judge-evidence-in: ready-for-dev
   ah-s328-report-field-and-codex-evaluation-evidence-in: ready-for-dev
+  ah-s345-show-and-launch-the-definitive-evaluation-in-the: backlog
+  ah-s346-pre-register-a-draft-test-so-it-can-say-whether: backlog
 
   ah-e026-adopt-the-studio-from-install-to-a-tuned-harness: in-progress
   ah-s313-first-run-in-the-studio-from-install-to-an: ready-for-dev

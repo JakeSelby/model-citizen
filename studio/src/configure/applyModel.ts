@@ -27,6 +27,7 @@ export type ApplyReview = {
   } | null;
   interrupted: {
     apply_id: string; draft: string; started: string; recover_command: string; abandon_command: string;
+    kind?: "apply" | "rollback";
   } | null;
   refusals: ApplyRefusal[];
   can_apply: boolean;
@@ -89,11 +90,20 @@ export function shown(value: unknown): string {
 
 /** The headline the live region announces after an apply. */
 export function resultHeadline(result: ApplyResult): string {
+  if (result.status === "recovered" && result.error_code === "interrupted-rollback") {
+    return "An interrupted rollback was undone and synced. Nothing of this draft was applied.";
+  }
   if (result.status === "recovered") return "An interrupted apply was rolled back and synced. Review the draft again.";
+  if (result.status === "abandoned" && result.error_code === "interrupted-rollback") {
+    return "The interrupted rollback was abandoned. What it wrote was kept.";
+  }
   if (result.status === "abandoned") return "The interrupted apply was abandoned. Its changes were kept.";
   if (result.applied) return result.doctor.status === "attention"
     ? "Applied. The doctor checks need attention."
     : "Applied. The doctor checks ran.";
+  if (result.error_code === "interrupted-rollback") {
+    return "Not applied: an earlier rollback was interrupted. Restore or abandon it first. Nothing changed.";
+  }
   if (result.error_code === "busy") return result.holder
     ? `Not applied: ${result.holder} holds the sync lock. Nothing changed.`
     : "Not applied: another operation holds the sync lock. Nothing changed.";

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { loadDraft, loadSchema, previewDraft, saveDraft, type Preview } from "./api";
 import { CommandChip } from "../components/StudioKit";
 import { DraftApply } from "./DraftApply";
+import { DraftTest } from "./DraftTest";
 import { DraftSelectionEditor } from "./DraftSelectionEditor";
 import { ModuleAuthoring } from "./ModuleAuthoring";
 import { ModuleEditor } from "./ModuleEditor";
@@ -309,6 +310,8 @@ export function ConfigurePage() {
       {loadedDraft && baseRevision && (
         <ModuleAuthoring draft={loadedDraft} revision={baseRevision} onRevision={setBaseRevision} />
       )}
+
+      {loadedDraft && baseRevision && <DraftTest draft={loadedDraft} revision={baseRevision} />}
 
       {loadedDraft && baseRevision && (
         <DraftApply draft={loadedDraft} revision={baseRevision}

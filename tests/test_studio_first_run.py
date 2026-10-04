@@ -139,7 +139,7 @@ class FirstRunDraftTests(unittest.TestCase):
     @contextmanager
     def first_run_draft(self, config=None, tools=()):
         # A unique name: draft branches live in the shared repository every worktree sees.
-        name = "first-run-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("first-run-")
         with tempfile.TemporaryDirectory() as temporary:
             home = Home(temporary, "home", self.initial if config is None else config)
             if tools:
@@ -438,7 +438,7 @@ class ClearPartialTests(unittest.TestCase):
         return subprocess.run(["git", *args], capture_output=True, text=True, **kwargs)
 
     def _leftover(self, temporary, commit=False, lock=False):
-        name = "first-run-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("first-run-")
         path = Path(temporary) / ("draft-" + name)
         self._git("-C", str(ROOT), "worktree", "add", "-q", "-b", "draft/" + name, str(path), "HEAD",
                   check=True)

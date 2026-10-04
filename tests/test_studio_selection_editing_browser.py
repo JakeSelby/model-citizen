@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 import subprocess
 import sys
 import time
@@ -32,7 +31,7 @@ class SelectionEditingBrowserTests(unittest.TestCase):
         self.config_path.parent.mkdir(parents=True)
         self.config_path.write_bytes((browser_support.REPO / "config.example.json").read_bytes())
         self.live_before = self.config_path.read_bytes()
-        self.draft = "selection-browser-" + secrets.token_hex(4)
+        self.draft = draft_support.draft_name("selection-browser-")
         created = subprocess.run(
             [sys.executable, str(CLI), "draft", "create", self.draft, "--json"],
             env=self.env, capture_output=True, text=True, timeout=15,
@@ -620,7 +619,7 @@ class SelectionEditingBrowserTests(unittest.TestCase):
         self.assertNotIn("build", saved["config"].get("workflows", {}))
 
     def test_draft_switch_intent_cancels_pending_selection_debounce_before_load(self):
-        other = "selection-pending-other-" + secrets.token_hex(4)
+        other = draft_support.draft_name("selection-pending-other-")
         created = subprocess.run(
             [sys.executable, str(CLI), "draft", "create", other, "--json"],
             env=self.env, capture_output=True, text=True, timeout=15,
@@ -684,7 +683,7 @@ class SelectionEditingBrowserTests(unittest.TestCase):
         )
 
     def test_switching_drafts_ignores_an_old_save_response(self):
-        other = "selection-other-" + secrets.token_hex(4)
+        other = draft_support.draft_name("selection-other-")
         created = subprocess.run(
             [sys.executable, str(CLI), "draft", "create", other, "--json"],
             env=self.env, capture_output=True, text=True, timeout=15,

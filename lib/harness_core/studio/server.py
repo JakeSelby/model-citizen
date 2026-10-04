@@ -24,11 +24,12 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (activity, auth, compare, drafts, free_suites, live_updates, module_authoring,
-               module_editing, module_library,
+from . import (activity, auth, compare, draft_tests, drafts, free_suites, live_updates,
+               module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
 from . import eval_tiers, first_run
+from . import rollback as draft_rollback
 from .mutations import MutationExecutor
 from .state import PROTOCOL_VERSION, SCHEMA_VERSION, Store
 
@@ -818,6 +819,96 @@ def _runs_compare(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+# A draft that is not there is 404; a request that names the wrong draft or checkpoint is the
+# client's to plan again (409); every other refusal is the client's to fix (400).
+_DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft_unavailable": 409,
+                      "draft_test_unchanged": 409, "draft_test_records_unsafe": 409}
+
+
+def _draft_test_error(handler: Handler, exc: Exception) -> None:
+    code = getattr(exc, "code", None) or "draft_test_refused"
+    if isinstance(exc, draft_tests.DraftTestError):
+        handler._error(_DRAFT_TEST_STATUS.get(code, 400), code)
+    else:
+        handler._error(400, code if isinstance(exc, replay.ReplayRefusal) else "replay_refused")
+
+
+def _draft_test_plan(handler: Handler, route: Route) -> None:
+    """Power and spend before a draft test: nothing starts here."""
+    request = _required_request(handler, ("draft", "request", "effect", "cv"))
+    if request is None:
+        return
+    try:
+        planned = draft_tests.parse_plan(request["effect"], request["cv"])
+        draft = draft_tests.identity(handler.server.repo_root, request["draft"])
+        form = draft_tests.replay_form(draft, request["request"])
+        # Power needs only the task count and trials, so it answers before any target build.
+        power = draft_tests.power(handler.server.repo_root,
+                                  *draft_tests.form_size(form), planned)
+        admission = _replay_admission(handler)
+        resolved = admission.resolve(form)
+        draft_tests.check_request(draft, resolved)
+        preview = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
+    except (draft_tests.DraftTestError, replay.ReplayError) as exc:
+        _draft_test_error(handler, exc)
+        return
+    payload = {"schema_version": draft_tests.SCHEMA_VERSION, "draft": draft, "power": power,
+               "power_line": draft_tests.power_line(power),
+               "evidence_note": draft_tests.EXPLORATORY_NOTE, "preview": preview}
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_test_start(handler: Handler, route: Route) -> None:
+    """Start the planned pair after its spend confirmation, and record it against the draft."""
+    request = _required_request(handler, ("draft", "request", "confirmation_token", "effect", "cv"))
+    if request is None:
+        return
+    if not isinstance(request["confirmation_token"], str):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        planned = draft_tests.parse_plan(request["effect"], request["cv"])
+        draft = draft_tests.identity(handler.server.repo_root, request["draft"])
+        selected = replay.ReplayRequest.parse(request["request"])
+        draft_tests.check_request(draft, selected)
+        power = draft_tests.power(handler.server.repo_root, len(selected.tasks),
+                                  selected.repetitions, planned)
+        admission = _replay_admission(handler)
+        confirmed = admission.confirm(request["request"])
+        started = handler.server.mutations.call(lambda: admission.start_confirmed(
+            confirmed, request["confirmation_token"]))
+    except (draft_tests.DraftTestError, replay.ReplayError) as exc:
+        _draft_test_error(handler, exc)
+        return
+    try:
+        recorded = draft_tests.record(handler.server.run_supervisor.state_root, started["run_id"],
+                                      draft, confirmed, power)
+    except (OSError, draft_tests.DraftTestError):
+        # The run is admitted and keeps running; only its link to the draft failed.
+        handler._error(500, "draft_test_unrecorded")
+        return
+    payload = {"run_id": started["run_id"], "status": started["status"], "record": recorded}
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_test_verdicts(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("draft",))
+    if request is None:
+        return
+    try:
+        supervisor = handler.server.run_supervisor
+        # Read-only: run records, replay results and the engine, off the one mutation thread.
+        payload = draft_tests.verdicts(supervisor, handler.server.repo_root,
+                                       supervisor.state_root, request["draft"])
+    except draft_tests.DraftTestError as exc:
+        _draft_test_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
     return eval_tiers.EvalAdmission(
         handler.server.repo_root, handler.server.store.path,
@@ -1498,6 +1589,52 @@ def _draft_recover(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _run_draft_rollback(repo_root: Path, apply_id: str, draft: str) -> Dict[str, object]:
+    """Run `citizen draft rollback` itself, under the CLI's own locks."""
+    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "rollback", apply_id,
+               "--draft", draft, "--via-studio", "--json"]
+    try:
+        done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
+                              text=True, timeout=1800)
+        payload = json.loads(done.stdout.strip().splitlines()[-1])
+        if not isinstance(payload, dict):
+            raise ValueError("rollback did not answer with an object")
+        return payload
+    except (OSError, IndexError, ValueError, subprocess.SubprocessError):
+        return draft_apply._result("failed", "rollback-unavailable",
+                                   "citizen draft rollback did not report a result; check Activity "
+                                   "and `citizen doctor` before retrying")
+
+
+def _draft_rollback_preview(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("apply_id",))
+    if request is None:
+        return
+    if not isinstance(request["apply_id"], str) or not draft_rollback.APPLY_ID.match(request["apply_id"]):
+        handler._error(400, "invalid_request")
+        return
+    payload = draft_rollback.preview(request["apply_id"])
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _draft_rollback(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("apply_id", "confirm"))
+    if request is None:
+        return
+    if not isinstance(request["apply_id"], str) or not draft_rollback.APPLY_ID.match(request["apply_id"]) \
+            or not isinstance(request["confirm"], str) or not request["confirm"]:
+        handler._error(400, "invalid_request")
+        return
+    # `confirm` is the applied draft's name, typed back; the CLI refuses any other draft.
+    payload = handler.server.mutations.call(lambda: _run_draft_rollback(
+        handler.server.repo_root, request["apply_id"], request["confirm"],
+    ))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _draft_apply(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("draft", "revision", "confirm"))
     if request is None:
@@ -1746,6 +1883,13 @@ APPLY_RESULT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                ("holder", "string"), ("apply_id", "string"),
                                                ("review", "object"), ("doctor", "object"),
                                                ("restored", "boolean"), ("log", "array")))
+ROLLBACK_PREVIEW = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("apply", "object"), ("destination", "string"),
+                                                   ("config", "array"), ("files", "array"),
+                                                   ("commands", "array"), ("refusals", "array"),
+                                                   ("can_rollback", "boolean"),
+                                                   ("rollback_command", "string"),
+                                                   ("nothing_changed", "boolean")))
 LIBRARY = ResponseSchema("json-object", (("schema_version", "integer"),
                                           ("repository", "string"),
                                           ("modules", "array"), ("summary", "object")))
@@ -1880,6 +2024,20 @@ RUNS_COMPARE = ResponseSchema("json-object", (("schema_version", "integer"),
                                                 ("preferred", "object"),
                                                 ("result", "object-or-null"),
                                                 ("error", "string-or-null")))
+DRAFT_TEST_PLAN = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("draft", "object"), ("power", "object"),
+                                                   ("power_line", "string"),
+                                                   ("evidence_note", "string"),
+                                                   ("preview", "object")))
+DRAFT_TEST_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),
+                                                  ("record", "object")))
+DRAFT_TEST_VERDICTS = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                       ("draft", "string"), ("revision", "string"),
+                                                       ("base_revision", "string"),
+                                                       ("evidence_note", "string"),
+                                                       ("tests", "array"),
+                                                       ("checkpoints", "array"),
+                                                       ("unreadable_records", "integer")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -1943,6 +2101,10 @@ ROUTES = RouteRegistry((
           _first_run_status, None, "application/json", first_run.CLI_COMMANDS["status"]),
     Route("POST", "/api/first-run/start", "application/json", FIRST_RUN,
           _first_run_start, None, "application/json", first_run.CLI_COMMANDS["start"]),
+    Route("POST", "/api/configure/apply/rollback/preview", "application/json", ROLLBACK_PREVIEW,
+          _draft_rollback_preview, None, "application/json", draft_rollback.CLI_COMMANDS["preview"]),
+    Route("POST", "/api/configure/apply/rollback", "application/json", APPLY_RESULT,
+          _draft_rollback, None, "application/json", draft_rollback.CLI_COMMANDS["rollback"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,
@@ -2012,6 +2174,15 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/runs/compare", "application/json",
           RUNS_COMPARE, _runs_compare, None, "application/json",
           ("citizen", "runs", "compare")),
+    Route("POST", "/api/configure/test/plan", "application/json",
+          DRAFT_TEST_PLAN, _draft_test_plan, None, "application/json",
+          ("citizen", "runs", "spend-preview")),
+    Route("POST", "/api/configure/test/start", "application/json",
+          DRAFT_TEST_RUN, _draft_test_start, None, "application/json",
+          ("citizen", "runs", "start")),
+    Route("POST", "/api/configure/test/verdicts", "application/json",
+          DRAFT_TEST_VERDICTS, _draft_test_verdicts, None, "application/json",
+          ("citizen", "draft", "test")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),
