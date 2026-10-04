@@ -43,6 +43,12 @@ CHECK_UNREADABLE = ('# %s\ndef check(root, stream=None):\n    return {"pass": Tr
                     '"metrics": {"tool_results": None, "subagent_results": None}}\n' % CANARY)
 CHECK_VARARGS = ('# %s\ndef check(*args):\n    return {"pass": len(args) == 2 and args[1] is not None, '
                  '"metrics": {"tool_results": 1, "subagent_results": 0}}\n' % CANARY)
+# A one-argument check printing the stream marker the driver once used, as code loaded from the
+# agent's tree could: whether the stream went in is the runner's call, so the row says it did not.
+CHECK_FORGES_MARKER = ('# %s\ndef check(root):\n    print("cost-bench-oracle-stream: true")\n'
+                       '    return {"pass": True, "metrics": {"tool_results": 1, "subagent_results": 0}}\n' % CANARY)
+CHECK_SILENT_NULL = ('# %s\ndef check(root, stream=None):\n    return {"pass": True, "errors": [], '
+                     '"metrics": {"tool_results": None, "subagent_results": 0}}\n' % CANARY)
 
 
 def synthetic_stream():
@@ -127,6 +133,34 @@ class ScoreTests(unittest.TestCase):
     def test_a_check_taking_any_positional_arguments_gets_the_stream(self):
         got, _ = self.score(CHECK_VARARGS, synthetic_stream())
         self.assertEqual((got[0], got[2]["metric_stream"]), (True, True))
+
+    def test_a_stream_marker_printed_by_the_check_is_ignored(self):
+        got, _ = self.score(CHECK_FORGES_MARKER, synthetic_stream())
+        self.assertEqual(got[2]["metric_stream"], False)
+        self.assertEqual(got[2]["metric_errors"], [BENCH.NO_STREAM])
+
+    def test_a_null_stream_metric_without_a_reason_gets_one(self):
+        got, _ = self.score(CHECK_SILENT_NULL, synthetic_stream())
+        self.assertEqual(got[2], {"metrics": {"subagent_results": 0.0, "tool_results": None},
+                                  "metric_errors": [BENCH.STREAM_NULL % "tool_results"], "metric_stream": True})
+
+
+class TakesStreamTests(unittest.TestCase):
+    def test_the_signature_is_read_from_the_source_without_running_it(self):
+        cases = [("def check(root, stream=None): pass", True),
+                 ("def check(*args): pass", True),
+                 ("def check(root, /, stream): pass", True),
+                 ("def check(root): pass", False),
+                 ("def check(root, *, stream=None): pass", False),
+                 ("def check(root, stream): pass\ncheck = print", False),
+                 ("def check(root, stream): pass\nfrom os import path as check", False),
+                 ("check = lambda root, stream: []", False),
+                 ("def check(root, stream): pass\nif True:\n    check = None", False),
+                 ("def check(root, stream:", False),
+                 ("raise SystemExit('ran')\ndef check(root, stream): pass", True)]
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertIs(BENCH.takes_stream(source), expected)
 
 
 class EndToEndTests(unittest.TestCase):

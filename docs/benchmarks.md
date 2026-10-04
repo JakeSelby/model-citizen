@@ -435,12 +435,15 @@ conciseness or format adherence lands on the same rows without changing how a ru
 - **A check may read the session.** A check written `check(root, stream=None)`, or any check
   taking a second positional argument, is called with the path of the scored run's whole
   stream-json, subagent messages included; a one-argument `check(root)` is called as before. The
-  signature is read inside the check container, and the stream is written beside the run's tree
+  runner reads the signature from the check's source without running it, so `check` must be a
+  top-level `def`; nothing the check prints can change that call or `metric_stream`. The stream is
+  written beside the run's tree
   and mounted there read-only at `/session-stream.jsonl`, whether or not `--raw` keeps a copy.
   `--verify-tasks` passes no stream. A declaring task's rows carry `metric_stream`, true only when
   the stream reached the check. Without it, `metric_errors` says so and the check's stream metrics
   are `null`; with it, the check's own errors beginning `stream metrics unknown` are copied into
-  `metric_errors`, so a `null` stream metric always carries its reason.
+  `metric_errors`, or, when it gave none, `stream metrics unknown: the check gave no reason for null`
+  and the metric names, so a `null` stream metric always carries its reason.
 - **A broken check is a check error, never a fail.** A `pass` that is not a boolean, an unknown
   key, `metrics` that is not an object, or a metric the task does not declare makes the attempt
   `error: true` with `error_kind` `check: ValueError`, as any check that cannot run does.

@@ -16,6 +16,7 @@ usage. `arms` builds and checks the arm images without calling a model, and `det
 rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
+import ast
 import datetime
 import hashlib
 import importlib.util
@@ -1179,34 +1180,41 @@ def _oracle(repo, name):
 
 # The last line a check container prints for a synthetic task: the oracle's errors as JSON.
 ORACLE_MARK = "cost-bench-oracle-errors: "
-# Printed before it: whether the run's stream went to the check as its second argument.
-STREAM_MARK = "cost-bench-oracle-stream: "
-# A check taking a second positional argument, `check(root, stream=None)`, gets the path of the
-# run's saved stream-json, or None when there is none; a one-argument `check(root)` is called as
-# before. The signature is read inside the container, since the check never runs on this machine.
+# The driver calls `check(root, stream)` when `takes_stream` says so, else `check(root)`. That
+# decision is made here and sent in, never read back from the container: anything the check, or
+# code it loads from the agent's tree, prints is untrusted.
 ORACLE_DRIVER = """
-import inspect as _inspect
 import json as _json
 from pathlib import Path as _Path
-
-def _takes_stream(function):
-    try:
-        params = list(_inspect.signature(function).parameters.values())
-    except (TypeError, ValueError):
-        return False
-    if any(p.kind == p.VAR_POSITIONAL for p in params):
-        return True
-    return sum(p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD) for p in params) >= 2
-
-_stream = %r
-_takes = _takes_stream(check)
-print(%r + _json.dumps(_takes and _stream is not None))
-print(%r + _json.dumps(check(_Path(%r), _stream) if _takes else check(_Path(%r))))
+print(%r + _json.dumps(check(_Path(%r), %r) if %r else check(_Path(%r))))
 """
 # Why a declared metric may be null when no stream reached the check; the check's own notes
-# beginning with STREAM_NOTE say why when one did (the pack's contract).
+# beginning with STREAM_NOTE say why when one did (the pack's contract), and STREAM_NULL stands
+# in when a null metric came back from a stream-reading check with no reason at all.
 NO_STREAM = "stream: no session stream was passed to the check"
 STREAM_NOTE = "stream metrics unknown"
+STREAM_NULL = STREAM_NOTE + ": the check gave no reason for null %s"
+
+
+def takes_stream(source):
+    """Whether the check in `source` takes the stream: its last top-level binding of `check` is a
+    `def` with a second positional parameter or `*args`. Read from the syntax tree, so the check
+    never runs on this machine; any other binding, or source that does not parse, takes none."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    found = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check":
+            args = node.args
+            found = args.vararg is not None or len(getattr(args, "posonlyargs", [])) + len(args.args) >= 2
+        elif any(isinstance(n, ast.Name) and n.id == "check" and isinstance(n.ctx, ast.Store)
+                 for n in ast.walk(node)) or (
+                isinstance(node, (ast.Import, ast.ImportFrom))
+                and any((a.asname or a.name) == "check" for a in node.names)):
+            found = False
+    return found
 
 
 def _copy_held_back(task, workdir, repo):
@@ -1252,20 +1260,25 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=N
         source = (replay_pack.check_source(task) if task["kind"] == "pack" else
                   (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8"))
         mounted = arms.SESSION_STREAM if stream is not None else None
-        stdin = source + ORACLE_DRIVER % (mounted, STREAM_MARK, ORACLE_MARK, arms.WORKDIR, arms.WORKDIR)
+        takes = takes_stream(source)
+        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR, mounted, takes, arms.WORKDIR)
         done = run_check(launch, image, workdir, ["python3", "-"], {}, name, session_stream=stream, input=stdin)
-        lines = (done.stdout or "").splitlines()
-        marks = [line for line in lines if line.startswith(ORACLE_MARK)]
+        marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
         value = json.loads(marks[-1][len(ORACLE_MARK):])
         passed, detail, recorded = oracle_metrics.verdict(value, task.get("metrics"))
         if recorded is None:
             return passed, detail
-        recorded["metric_stream"] = any(line == STREAM_MARK + "true" for line in lines)
-        notes = value.get("errors", []) if isinstance(value, dict) else value
-        recorded["metric_errors"] += ([n for n in notes if n.startswith(STREAM_NOTE)]
-                                      if recorded["metric_stream"] else [NO_STREAM])
+        recorded["metric_stream"] = takes and stream is not None
+        if not recorded["metric_stream"]:
+            recorded["metric_errors"].append(NO_STREAM)
+            return passed, detail, recorded
+        notes = [n for n in (value.get("errors", []) if isinstance(value, dict) else value)
+                 if n.startswith(STREAM_NOTE)]
+        explained = {e.split(":", 1)[0] for e in recorded["metric_errors"]}
+        unexplained = [m for m, v in sorted(recorded["metrics"].items()) if v is None and m not in explained]
+        recorded["metric_errors"] += notes or ([STREAM_NULL % ", ".join(unexplained)] if unexplained else [])
         return passed, detail, recorded
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
