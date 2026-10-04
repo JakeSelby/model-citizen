@@ -979,9 +979,8 @@ class ReplayReviewFixTests(unittest.TestCase):
     def test_advertised_commands_exist_and_parse_as_the_native_replay(self):
         route = next(item for item in server.ROUTES.entries
                      if item.path == "/api/runs/replay/catalog")
-        self.assertEqual(route.cli_command, ("python3", "scripts/cost_bench.py", "replay",
-                                             "--help"))
-        self.assertTrue((REPO / route.cli_command[1]).is_file())
+        self.assertEqual(route.cli_command, ("citizen", "runs", "replay", "catalog", "--json"))
+        self.assertTrue((REPO / replay.NATIVE_COMMAND[1]).is_file())
         self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
                          "python3 scripts/cost_bench.py replay")
         parsed = replay.ReplayRequest.parse(dict(request(), evidence="pre-registered"))

@@ -46,7 +46,8 @@ VERIFY_BUDGET_SECONDS = 60.0
 NOT_FROM_REGISTERED = "exploratory, not from a registered run"  # `delegation_verdict.heading`
 EXPLORATORY = "exploratory"
 PREREGISTERED = "pre-registered"
-CLI_COMMAND = ("citizen", "runs", "history", "--json")
+# The route's own document from the shell; COMMANDS names the sources each section reads.
+CLI_COMMAND = ("citizen", "reports", "trends", "--json")
 COMMANDS = {
     "history": "citizen runs history --json (suite cost-benchmark-history), after citizen runs reindex",
     "static": "citizen runs history --json (suite static-cost), after citizen runs reindex",

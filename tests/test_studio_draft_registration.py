@@ -642,7 +642,9 @@ class RouteTests(unittest.TestCase):
     def test_the_register_route_names_its_citizen_command(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}
         self.assertEqual(commands["/api/configure/test/register"],
-                         ("citizen", "draft", "test", "--register"))
+                         ("citizen", "draft", "test", "{draft}", "--register", "--model", "{model}",
+                          "--repetitions", "{repetitions}", "--task", "{task}", "--pack", "{pack}",
+                          "--pack-digest", "{pack_digest}", "--effect", "{effect}", "--json"))
 
 
 class CliTests(unittest.TestCase):
@@ -668,7 +670,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0, text)
             self.assertEqual(spy.call_args.args[2:], ("tuned", SPEC, 0.15, None))
             payload = json.loads(out)
-            self.assertEqual((payload["revision"], payload["tasks"]), (FIRST_REV, ["a", "b", "c"]))
+            # The register route's own object: the registration and its power line.
+            self.assertEqual(sorted(payload), ["power_line", "registration"])
+            registered = payload["registration"]
+            self.assertEqual((registered["revision"], registered["tasks"]),
+                             (FIRST_REV, ["a", "b", "c"]))
             self.assertIn("registered ", text)
             self.assertIn("plan: benchmarks/preregistrations/", text)
             with draft_at():
@@ -685,7 +691,7 @@ class CliTests(unittest.TestCase):
                                           "--task", "a", "--task", "b", "--task", "c",
                                           "--effect", "0.15", "--json"], Path(tmp))
             self.assertEqual(code, 2)
-            self.assertEqual(json.loads(out)["error"]["code"], "draft_test_underpowered")
+            self.assertEqual(json.loads(out), {"error": "draft_test_underpowered"})
 
 
 class RegisterRouteSecurityTests(studio_security.StudioSecurityFixture):

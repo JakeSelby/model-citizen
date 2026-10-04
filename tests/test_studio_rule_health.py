@@ -182,10 +182,11 @@ class StatusParity(unittest.TestCase):
 
     def test_the_route_names_usage_rules_as_its_command(self):
         routes = dict((route.path, route) for route in server.ROUTES.entries)
-        self.assertEqual(routes["/api/rules/health"].cli_command, ("citizen", "usage", "--rules", "--json"))
+        self.assertEqual(routes["/api/rules/health"].cli_command,
+                         ("citizen", "usage", "--rules", "--health", "--json"))
         self.assertIsNone(routes["/api/rules/health"].parity_exemption)
         self.assertEqual(routes["/api/rules/try-without"].cli_command,
-                         ("citizen", "draft", "create", "{draft}", "--json"))
+                         ("citizen", "draft", "try-without", "{rule}", "--json"))
 
 
 class Figures(unittest.TestCase):

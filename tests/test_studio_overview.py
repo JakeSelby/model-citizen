@@ -167,7 +167,7 @@ class OverviewRouteTests(unittest.TestCase):
         route = server.ROUTES.resolve("GET", "/api/overview")
         self.assertIsNotNone(route)
         self.assertIsNone(route.parity_exemption)
-        self.assertEqual(route.cli_command, ("citizen", "doctor"))
+        self.assertEqual(route.cli_command, ("citizen", "doctor", "--json"))
         self.assertIsNone(server.ROUTES.resolve("POST", "/api/overview"))
 
     def test_route_validates_and_returns_the_installed_source(self):

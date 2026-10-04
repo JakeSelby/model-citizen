@@ -125,7 +125,7 @@ class ModuleLibraryTests(unittest.TestCase):
     def test_library_route_is_registered_and_emits_the_versioned_inventory(self):
         route = server.ROUTES.resolve("GET", "/api/library")
         self.assertIsNotNone(route)
-        self.assertEqual(route.cli_command, ("citizen", "catalog", "--json"))
+        self.assertEqual(route.cli_command, ("citizen", "catalog", "--library", "--json"))
         handler = mock.Mock()
         handler.server.repo_root = ROOT
         payload = {"schema_version": 1, "modules": [],

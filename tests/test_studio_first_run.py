@@ -258,7 +258,8 @@ class FirstRunRouteRegistryTests(unittest.TestCase):
     def test_both_routes_map_to_their_citizen_commands(self):
         routes = {(route.method, route.path): route for route in server.ROUTES.entries}
         self.assertEqual(routes[("POST", "/api/first-run")].cli_command, first_run.CLI_COMMANDS["status"])
-        self.assertEqual(routes[("POST", "/api/first-run/start")].cli_command, first_run.CLI_COMMANDS["start"])
+        self.assertEqual(routes[("POST", "/api/first-run/start")].cli_command,
+                         ("citizen", "draft", "first-run", "{draft}", "--start", "--json"))
         for path in ("/api/first-run", "/api/first-run/start"):
             self.assertIsNone(routes[("POST", path)].parity_exemption)
 

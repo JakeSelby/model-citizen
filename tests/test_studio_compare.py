@@ -410,11 +410,13 @@ class CompareTests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             code = harness.main(["runs", "compare", FIRST_RUN, FIRST_RUN + ":2", "--json"])
         self.assertEqual(code, 2)
-        self.assertIn("base must be RUN_ID:TARGET", json.loads(output.getvalue())["error"])
+        # The route's code on stdout; the reason, naming the side, goes to stderr.
+        self.assertEqual(json.loads(output.getvalue()), {"error": "compare_invalid"})
 
     def test_the_route_names_its_citizen_command(self):
         route = next(item for item in server.ROUTES.entries if item.path == "/api/runs/compare")
-        self.assertEqual((route.method, route.cli_command), ("POST", ("citizen", "runs", "compare")))
+        self.assertEqual((route.method, route.cli_command),
+                         ("POST", ("citizen", "runs", "compare", "{base}", "{candidate}", "--json")))
 
 
 class CompareRouteSecurityTests(studio_security.StudioSecurityFixture):

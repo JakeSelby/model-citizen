@@ -274,8 +274,11 @@ class StudioSpendGuardTests(unittest.TestCase):
     def test_cli_shows_subscription_estimate_and_caps_before_confirming(self):
         self.write_suite("raise SystemExit('must not run')")
         output = io.StringIO()
+        # The paid fixture suite is not one the Studio's free start admits; set that refusal
+        # aside to read the confirmation the CLI shows before any paid start.
         with mock.patch.object(harness, "state_dir", return_value=self.root), \
              mock.patch.object(runs, "default_catalog_path", return_value=self.catalog), \
+             mock.patch.object(harness.studio_free_suites, "start_refusal", return_value=None), \
              contextlib.redirect_stdout(output):
             code = harness.main([
                 "runs", "start", "paid-suite", "--target-kind", "installed",

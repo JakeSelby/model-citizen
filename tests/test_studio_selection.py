@@ -94,7 +94,9 @@ class StudioSelectionTests(unittest.TestCase):
         route = server.ROUTES.resolve("POST", "/api/selection")
         self.assertIsNotNone(route)
         self.assertIsNone(route.parity_exemption)
-        self.assertEqual(route.cli_command, ("citizen", "selection", "--json"))
+        self.assertEqual(route.cli_command, ("citizen", "selection", "--report", "--repository",
+                                             "{repository}", "--project-file", "{project_file}",
+                                             "--json"))
         self.assertEqual(route.request_media_type, "application/json")
 
         handler = mock.Mock()
