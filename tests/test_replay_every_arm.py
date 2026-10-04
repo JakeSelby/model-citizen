@@ -192,9 +192,55 @@ class SummariseEveryArmTests(unittest.TestCase):
                      "pre_registration_commit": commit}]
             self.assertEqual(BENCH.primary_comparisons(rows, repo)[1], ())
 
+    def test_a_field_that_names_no_comparison_is_refused(self):
+        for value in ("`Frugal vs bare`", "`frugal versus bare`"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
+                repo = Path(tmp)
+                subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+                today = datetime.date.today().isoformat()
+                text = re.sub(r"- \*\*Primary arm comparisons:\*\*.*\n(  .*\n)*",
+                              "- **Primary arm comparisons:** %s, because the claim is frugal's\n" % value,
+                              filled_plan(today))
+                plan = commit_plan(repo, "%s-arms.md" % today, text)
+                commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                                        stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+                rows = [{"evidence": "pre-registered", "pre_registration": plan.relative_to(repo).as_posix(),
+                         "pre_registration_commit": commit}]
+                with self.assertRaises(SystemExit) as caught:
+                    BENCH.primary_comparisons(rows, repo)
+                self.assertIn(value, str(caught.exception))
+
     def test_exploratory_rows_name_no_primary_comparison_and_read_no_plan(self):
         rows = [{"evidence": "exploratory", "pre_registration": None, "pre_registration_commit": None}]
         self.assertEqual(BENCH.primary_comparisons(rows, "/nonexistent"), (None, ()))
+
+
+class TaskIdTests(unittest.TestCase):
+    """A task id becomes a file name under `--raw` (`diff_name`), so a custom manifest cannot reach
+    outside that folder through it."""
+
+    def test_an_id_with_a_path_part_is_refused(self):
+        for bad in ("../x", "a/b", "..", ".hidden", "-x", "a\\b", "", 7):
+            with self.subTest(id=bad), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "tasks.json"
+                path.write_text(json.dumps({"tasks": [dict(TASK, id=bad)]}), encoding="utf-8")
+                with self.assertRaises(SystemExit):
+                    BENCH.load_tasks(path)
+
+    def test_every_shipped_task_id_is_a_plain_name(self):
+        root = Path(__file__).resolve().parents[1]
+        ids = []
+        for manifest in ("benchmarks/tasks.json", "benchmarks/micro/tasks.json",
+                         "tests/fixtures/ablation-tasks.json"):
+            document = json.loads((root / manifest).read_text(encoding="utf-8"))
+            ids += [t["id"] for t in document.get("tasks", [])]
+            ids += [e["task"]["id"] for e in document.get("retired", [])]
+        self.assertGreater(len(ids), 10)
+        self.assertEqual([i for i in ids if not BENCH.TASK_ID.match(i)], [])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.json"
+            path.write_text(json.dumps({"tasks": [dict(TASK, id="link-alias.v2_1")]}), encoding="utf-8")
+            self.assertEqual(BENCH.load_tasks(path)[0]["id"], "link-alias.v2_1")
 
 
 class AgentEdits(Launch):

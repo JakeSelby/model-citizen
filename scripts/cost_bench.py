@@ -314,6 +314,10 @@ def check(root=ROOT, now=None):
 # --------------------------------------------------------------------------- replay
 
 
+# A task id names files under `--raw` and containers, so it is a plain name: no separator, no `..`.
+TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
 def load_tasks(path):
     """The manifest's tasks, or SystemExit naming the first malformed one."""
     tasks = json.loads(Path(path).read_text(encoding="utf-8"))["tasks"]
@@ -322,6 +326,9 @@ def load_tasks(path):
                    if k not in task]
         if missing or task["kind"] not in ("issue", "synthetic", "pack"):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
+        if not isinstance(task["id"], str) or not TASK_ID.match(task["id"]):
+            raise SystemExit("task %r is malformed: an id is letters, digits, '.', '_' and '-', "
+                             "starting with a letter or digit" % task["id"])
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
         if "metrics" not in task:
@@ -2198,7 +2205,8 @@ def primary_comparisons(rows, root=None):
     """`(plan path or None, labels)`: the config-arm comparisons the rows' pre-registration names
     primary in its **Primary arm comparisons** field under Run, each as `<arm> vs bare` or `<arm> vs
     harness`. Rows that are not all one pre-registered plan name none, so every config comparison
-    is secondary. SystemExit when a named plan cannot be read at its commit."""
+    is secondary. SystemExit when a named plan cannot be read at its commit, or when its field is
+    neither none nor names any comparison."""
     plans = {(r.get("evidence"), r.get("pre_registration"), r.get("pre_registration_commit")) for r in rows}
     if len(plans) != 1:
         return None, ()
@@ -2214,7 +2222,11 @@ def primary_comparisons(rows, root=None):
     value = experiment_protocol.fields(experiment_protocol.sections(done.stdout).get(section, "")).get(name, "")
     if not value or experiment_protocol.PLACEHOLDER.search(value) or value.lower().startswith("none"):
         return plan, ()
-    return plan, tuple(dict.fromkeys("%s vs %s" % pair for pair in COMPARISON.findall(value)))
+    labels = tuple(dict.fromkeys("%s vs %s" % pair for pair in COMPARISON.findall(value)))
+    if not labels:  # a typo or a capitalised arm would otherwise mark every comparison secondary
+        raise SystemExit("cost-bench: the pre-registration %s names %r in Primary arm comparisons, which "
+                         "is neither none nor any `<arm> vs bare` or `<arm> vs harness`" % (plan, value))
+    return plan, labels
 
 
 def summarise_arms(rows, path, args, detections=BESIDE):
