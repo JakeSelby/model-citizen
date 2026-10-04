@@ -863,6 +863,11 @@ OBSERVATION_MOUNT = "/observations"
 MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
 # Where a check container sees the scored run's saved stream-json, read-only (`check_command`).
 SESSION_STREAM = "/session-stream.jsonl"
+# Where the image's CLI keeps its session transcripts: the `agent` user's home in both arms. A
+# long-session run mounts one empty host directory here for each session, so a later turn's fresh
+# container can `--resume` the session an earlier one wrote.
+AGENT_HOME = "/home/agent"
+SESSION_STORE = AGENT_HOME + "/.claude/projects"
 OBSERVATION_MARKER = ".model-citizen-benchmark-output"
 
 
@@ -884,7 +889,8 @@ def observation_mount(path):
 
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
-                observation_dir=None, keep=False, managed_memory=None, session_stream=None):
+                observation_dir=None, keep=False, managed_memory=None, session_stream=None,
+                session_store=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -896,8 +902,9 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
     it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
     `MANAGED_MEMORY`, the per-trial cache nonce; `session_stream` a run's saved stream mounted
-    read-only as `SESSION_STREAM`, for the check that scores it."""
-    sources = [str(p) for p in (workdir, managed_memory, session_stream) if p is not None]
+    read-only as `SESSION_STREAM`, for the check that scores it; `session_store` one session's
+    transcript directory mounted writable as `SESSION_STORE`, so the next turn can resume it."""
+    sources = [str(p) for p in (workdir, managed_memory, session_stream, session_store) if p is not None]
     reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
@@ -916,6 +923,8 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
     if session_stream is not None:
         command += ["-v", "%s:%s:ro" % (session_stream, SESSION_STREAM)]
+    if session_store is not None:
+        command += ["-v", "%s:%s" % (session_store, SESSION_STORE)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):
