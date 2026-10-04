@@ -157,7 +157,16 @@ class TakesStreamTests(unittest.TestCase):
                  ("check = lambda root, stream: []", False),
                  ("def check(root, stream): pass\nif True:\n    check = None", False),
                  ("def check(root, stream:", False),
-                 ("raise SystemExit('ran')\ndef check(root, stream): pass", True)]
+                 ("raise SystemExit('ran')\ndef check(root, stream): pass", True),
+                 ("def check(root, stream): pass\ndef helper():\n    check = None", True),
+                 ("def check(root, stream): pass\nclass Helper:\n    check = None", True),
+                 ("def check(root, stream): pass\nfound = [check for check in ()]", True),
+                 ("def check(root, stream): pass\nfound = [(check := x) for x in ()]", False),
+                 ("def check(root, stream): pass\ndef helper():\n    global check\n    check = None", False),
+                 ("def check(root, stream): pass\nclass check: pass", False),
+                 ("def check(root, stream): pass\nif True:\n    def check(root): pass", False),
+                 ("def check(root, stream): pass\nif True:\n    import check", False),
+                 ("def check(root, stream): pass\ndel check", False)]
         for source, expected in cases:
             with self.subTest(source=source):
                 self.assertIs(BENCH.takes_stream(source), expected)

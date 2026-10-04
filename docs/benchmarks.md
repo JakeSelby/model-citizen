@@ -185,10 +185,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   API without the proxy does not resolve.
 - **No check runs on your machine.** The held-back test files are written into the snapshot from
   this repository's history, then the check runs in a fresh container of the bare image with the
-  snapshot as its only mount, the image's own HOME, no network and no credential; an oracle is
-  sent on stdin. `--verify-tasks` runs each task's gate and both of its checks the same way,
-  building the bare arm first unless `--check-image` names one: on your machine an older
-  snapshot's code reads your live configuration through HOME and goes red for that.
+  snapshot mounted, plus the scored run's session stream read-only when the run supplies one, and
+  nothing else; the image's own HOME, no network and no credential; an oracle is sent on stdin.
+  `--verify-tasks` runs each task's gate and both of its checks the same way, building the bare
+  arm first unless `--check-image` names one: on your machine an older snapshot's code reads your
+  live configuration through HOME and goes red for that.
 - **The stop gate can fire.** The stop-gate hook runs a gate only in a trusted root, so the harness
   image trusts `/work`, where every snapshot is mounted, when it is built. No run writes a trust
   file anywhere.
@@ -395,8 +396,9 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
 - **An arm sees only the task's workspace.** It is copied into a fresh git repository with one
   commit; no check, solution or pack file goes with it. The check is sent on stdin to the scorer, a
   fresh container of the bare image with no network and no credential that mounts only the agent's
-  tree, as every synthetic check is. `--verify-tasks` runs each workspace's own gate, then proves
-  the check fails on the workspace and passes after the reference solution.
+  tree and, for a scored run, its session stream read-only, as every synthetic check is.
+  `--verify-tasks` runs each workspace's own gate, then proves the check fails on the workspace
+  and passes after the reference solution.
 - **The contamination control checks every pack task at the exact harness commit,** before any
   model call and in `--dry-run`, which prints one line per task and exits 2 when any is refused.
   A task is refused when any commit in the installed checkout's history holds the exact bytes of

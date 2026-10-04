@@ -1199,7 +1199,8 @@ STREAM_NULL = STREAM_NOTE + ": the check gave no reason for null %s"
 def takes_stream(source):
     """Whether the check in `source` takes the stream: its last top-level binding of `check` is a
     `def` with a second positional parameter or `*args`. Read from the syntax tree, so the check
-    never runs on this machine; any other binding, or source that does not parse, takes none."""
+    never runs on this machine; any later module-scope binding of `check`, or source that does
+    not parse, takes none, while a helper's local `check` leaves the top-level one in place."""
     try:
         tree = ast.parse(source)
     except (SyntaxError, ValueError):
@@ -1209,12 +1210,42 @@ def takes_stream(source):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check":
             args = node.args
             found = args.vararg is not None or len(getattr(args, "posonlyargs", [])) + len(args.args) >= 2
-        elif any(isinstance(n, ast.Name) and n.id == "check" and isinstance(n.ctx, ast.Store)
-                 for n in ast.walk(node)) or (
-                isinstance(node, (ast.Import, ast.ImportFrom))
-                and any((a.asname or a.name) == "check" for a in node.names)):
+        elif "check" in _module_bindings(node):
             found = False
     return found
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _module_bindings(node, in_comprehension=False):
+    """The names `node` binds in the module scope. A nested function or class binds its own name
+    there, and anything it declares `global`; its locals stay its own. A comprehension's loop
+    variables are local to it; an assignment expression inside one binds the enclosing scope."""
+    names = set()
+    if isinstance(node, _SCOPES):
+        if not isinstance(node, ast.Lambda):
+            names.add(node.name)
+        declared = {n for sub in ast.walk(node) if isinstance(sub, ast.Global) for n in sub.names}
+        if declared:
+            names |= declared & {sub.id for sub in ast.walk(node)
+                                 if isinstance(sub, ast.Name) and not isinstance(sub.ctx, ast.Load)}
+        return names
+    if isinstance(node, _COMPREHENSIONS):
+        in_comprehension = True
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        names.update((a.asname or a.name).split(".")[0] for a in node.names)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        names.add(node.name)
+    elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and not in_comprehension:
+        names.add(node.id)
+    elif isinstance(node, ast.NamedExpr):
+        names.add(node.target.id)
+        return names | _module_bindings(node.value, in_comprehension)
+    for child in ast.iter_child_nodes(node):
+        names |= _module_bindings(child, in_comprehension)
+    return names
 
 
 def _copy_held_back(task, workdir, repo):
@@ -1250,9 +1281,10 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=N
     compile or load it. An agent's tree is code nobody reviewed, and even this repository's own
     older trees read the configuration under whatever HOME they are given, so a check on this
     machine would score the owner's live profile along with the task. So every check runs in a
-    container of the bare image, with the tree mounted as the only path, the image's own HOME, no
-    network and no credential. The held-back test files are written into the tree from this
-    repository's history first; an oracle is sent on stdin, so nothing else is mounted."""
+    container of the bare image, with the tree mounted, plus the scored run's session stream
+    read-only when one is given, the image's own HOME, no network and no credential. The held-back
+    test files are written into the tree from this repository's history first; an oracle is sent
+    on stdin, so nothing else is mounted."""
     workdir = Path(workdir)
     tests = task["tests"]
     name = name or container_name("check", task["id"])
