@@ -30,6 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_acceptance import CLIENTS, redact
+import studio_lifecycle_acceptance
 
 NOT_QUALIFICATION = ("smoke tier: deterministic pre-qualification checks, no model turn; "
                      "a green run is not native client qualification")
@@ -38,6 +39,8 @@ NOT_QUALIFICATION = ("smoke tier: deterministic pre-qualification checks, no mod
 GUARDED = (Path("compatibility") / "evidence", Path("compatibility") / "catalog.json")
 TAIL = 600
 GIT_TIMEOUT = 30
+# Headroom over the Studio qualification's own worst case, so its bounds fire before this one.
+STUDIO_MARGIN = 120
 
 
 def unittest_argv(pattern):
@@ -72,7 +75,8 @@ def steps(work, targets=None):
          "how": "start, authenticate, load and stop Studio in Chrome on this host",
          "argv": [sys.executable, str(ROOT / "scripts" / "studio_lifecycle_acceptance.py"),
                   "--output", str(work / "studio-lifecycle.json")],
-         "timeout": 600, "clean_tree": True},
+         "timeout": studio_lifecycle_acceptance.worst_case_seconds() + STUDIO_MARGIN,
+         "clean_tree": True},
         {"name": "disposable-home-lifecycle",
          "how": "install, sync, upgrade, roll back and uninstall in disposable homes",
          "argv": [sys.executable, str(ROOT / "scripts" / "lifecycle_acceptance.py"),

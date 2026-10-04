@@ -7,6 +7,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -37,8 +38,22 @@ BROWSER_SUITES = {
         "test_late_preview_cannot_update_a_switched_draft",
     ),
 }
-# Each suite runs whole; the module editor's 19 rendered flows take over six minutes on a loaded Mac.
+# Each suite runs whole under its own budget; the module editor's 19 rendered flows take over six
+# minutes on a loaded Mac.
 BROWSER_SUITE_TIMEOUT = 1200
+STARTUP_TIMEOUT = 45
+# Git reads, the HTTP refusal probes, the version read and the stop, each individually bounded.
+LIFECYCLE_OVERHEAD = 120
+# The browser the suites must use, so the recorded version is the one that ran.
+CHROME_ENV = "HARNESS_STUDIO_CHROME"
+# Set by the hosted workflow to the runner image's own Chrome before it installs current stable.
+IMAGE_CHROME_ENV = "HARNESS_STUDIO_IMAGE_CHROME"
+CHROME_VERSION = re.compile(r"Google Chrome ([0-9]+)(?:\.[0-9]+){3}")
+
+
+def worst_case_seconds():
+    """The longest a qualification can take before one of its own bounds stops it."""
+    return STARTUP_TIMEOUT + LIFECYCLE_OVERHEAD + BROWSER_SUITE_TIMEOUT * len(BROWSER_SUITES)
 
 
 def command(*args, env=None, expected=0, timeout=30):
@@ -110,13 +125,51 @@ def request(port, host, method, path, headers=None, body=None):
         connection.close()
 
 
+def run_suite(python, pattern, env, timeout=BROWSER_SUITE_TIMEOUT):
+    """Run one rendered suite in its own process group, killing the group if it overruns.
+
+    The suite's Chrome is its child; killing only the interpreter would leave that browser
+    holding its debugging port and profile across the next attempt.
+    """
+    process = subprocess.Popen(
+        [python, "-m", "unittest", "discover", "-s", "tests", "-p", pattern, "-v"],
+        cwd=str(ROOT), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+        process.communicate()
+        raise AssertionError("Studio browser suite {} exceeded {} seconds".format(pattern, timeout))
+    if process.returncode != 0:
+        raise AssertionError("command returned {}, expected 0: {}".format(
+            process.returncode, (stdout + stderr).strip()))
+    return stdout + stderr
+
+
+def observed_chrome(root, executable):
+    """The version of the Chrome the suites will drive, refused unless it is the pinned major."""
+    version = command(executable, "--version", timeout=10).stdout.strip()
+    match = CHROME_VERSION.fullmatch(version)
+    if match is None:
+        raise AssertionError("Studio browser is not the declared Google Chrome stable channel")
+    expected_major = supported_tuple(root)["stable_major"]
+    if int(match.group(1)) != expected_major:
+        raise AssertionError("Studio browser is not pinned stable Chrome major {}".format(
+            expected_major))
+    return version
+
+
 def browser_flow(root, python, executable):
+    version = observed_chrome(root, executable)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+    env[CHROME_ENV] = executable
     outputs = []
     for pattern, expected_cases in BROWSER_SUITES.items():
-        result = command(python, "-m", "unittest", "discover", "-s", "tests", "-p",
-                         pattern, "-v", env=env, timeout=BROWSER_SUITE_TIMEOUT)
-        output = result.stdout + result.stderr
+        output = run_suite(python, pattern, env)
         count = re.search(r"Ran ([0-9]+) tests? in", output)
         if count is None or int(count.group(1)) < len(expected_cases):
             raise AssertionError("Studio browser qualification discovered no complete suite for "
@@ -128,15 +181,17 @@ def browser_flow(root, python, executable):
     combined = "\n".join(outputs)
     if "skipped=" in combined or "OK (skipped=" in combined:
         raise AssertionError("Studio browser qualification skipped a case")
-    version = command(executable, "--version", timeout=10).stdout.strip()
-    if not re.fullmatch(r"Google Chrome [0-9]+(?:\.[0-9]+){3}", version):
-        raise AssertionError("Studio browser is not the declared Google Chrome stable channel")
-    observed_major = int(version.split()[2].split(".", 1)[0])
-    expected_major = supported_tuple(root)["stable_major"]
-    if observed_major != expected_major:
-        raise AssertionError("Studio browser is not pinned stable Chrome major {}".format(
-            expected_major))
     return version
+
+
+def image_chrome():
+    """The hosted image's own Chrome version, when the workflow replaced it; else None."""
+    value = os.environ.get(IMAGE_CHROME_ENV, "").strip()
+    if not value:
+        return None
+    if not CHROME_VERSION.fullmatch(value):
+        raise AssertionError(IMAGE_CHROME_ENV + " is not a Google Chrome version")
+    return value
 
 
 def launch_record(started, state_path):
@@ -194,7 +249,7 @@ def lifecycle(root=ROOT, python=sys.executable):
         env = dict(os.environ, HOME=str(home), HARNESS_HOME=str(home),
                    PYTHONDONTWRITEBYTECODE="1", HARNESS_STUDIO_STARTUP_TRACE="1")
         started = command(python, str(root / "bin" / "harness"), "studio", "--detach",
-                          "--no-open", "--json", env=env, timeout=45)
+                          "--no-open", "--json", env=env, timeout=STARTUP_TIMEOUT)
         state_path = home / ".local/state/agent-harness/studio/instance.json"
         cases = []
         try:
@@ -249,12 +304,17 @@ def lifecycle(root=ROOT, python=sys.executable):
 
 
 def run(root=ROOT, python=sys.executable, browser_runner=browser_flow):
+    image = image_chrome()
     cases = lifecycle(root, python)
     support = supported_tuple(root)
     executable = chrome(root)
     browser_version = browser_runner(root, python, executable)
     cases.append({"name": "chrome-browser-flow", "status": "passed"})
     commit = command("git", "-C", str(root), "rev-parse", "HEAD").stdout.strip()
+    browser = {"family": "chrome", "version": browser_version,
+               "version_policy": support["version_policy"]}
+    if image is not None:
+        browser["image_version"] = image
     return {
         "schema_version": 1,
         "candidate_commit": commit,
@@ -263,8 +323,7 @@ def run(root=ROOT, python=sys.executable, browser_runner=browser_flow):
             "machine": platform.machine().lower(),
             "python": platform.python_version(),
         },
-        "browser": {"family": "chrome", "version": browser_version,
-                    "version_policy": support["version_policy"]},
+        "browser": browser,
         "cases": cases,
     }
 
@@ -309,9 +368,13 @@ def evidence_errors(root, source_commit):
         if record.get("browser", {}).get("version_policy") != support.get("version_policy"):
             errors.append(relative + ": browser version policy does not match the supported tuple")
         browser_version = record.get("browser", {}).get("version", "")
-        match = re.fullmatch(r"Google Chrome ([0-9]+)(?:\.[0-9]+){3}", browser_version)
+        match = CHROME_VERSION.fullmatch(browser_version)
         if match is None or int(match.group(1)) != support.get("stable_major"):
             errors.append(relative + ": browser does not match the pinned stable Chrome major")
+        image_version = record.get("browser", {}).get("image_version")
+        if image_version is not None and (not isinstance(image_version, str)
+                                          or CHROME_VERSION.fullmatch(image_version) is None):
+            errors.append(relative + ": hosted image Chrome version is malformed")
         named = [name for name in names if isinstance(name, str)]
         unknown = sorted(set(named) - REQUIRED_CASES)
         duplicates = sorted(name for name in set(named) if named.count(name) > 1)

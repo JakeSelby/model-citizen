@@ -21,6 +21,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      # The hosted macOS image ships Chrome on its own schedule, often a major behind stable.
+      # Record the image's version, then qualify Google's current stable build instead.
+      - name: Install current stable Chrome on macOS
+        if: runner.os == 'macOS'
+        run: |
+          app="/Applications/Google Chrome.app"
+          echo "HARNESS_STUDIO_IMAGE_CHROME=$("$app/Contents/MacOS/Google Chrome" --version | xargs)" >> "$GITHUB_ENV"
+          dmg="$RUNNER_TEMP/googlechrome.dmg"
+          curl --fail --location --silent --show-error --output "$dmg" \
+            https://dl.google.com/chrome/mac/universal/stable/GGRO/googlechrome.dmg
+          mount="$(hdiutil attach -nobrowse -readonly "$dmg" | awk -F'\t' '/\/Volumes\//{print $NF}')"
+          codesign --verify --deep --strict "$mount/Google Chrome.app"
+          codesign --display --verbose=2 "$mount/Google Chrome.app" 2>&1 | grep -qx 'TeamIdentifier=EQHXZ8M8AV'
+          sudo rm -rf "$app"
+          sudo ditto "$mount/Google Chrome.app" "$app"
+          hdiutil detach "$mount"
+          "$app/Contents/MacOS/Google Chrome" --version
       - name: Qualify lifecycle, security and Chrome flows
         run: |
           python3 scripts/studio_lifecycle_acceptance.py \
