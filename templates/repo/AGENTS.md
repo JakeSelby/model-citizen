@@ -26,7 +26,9 @@ attributable: `<paste the final line, e.g. "All checks passed!", and the test co
 ```
 
 The `stop-gate` hook runs this block when the tree has changed since its last green run,
-blocks the turn while it is red, and releases after eight consecutive blocks.
+blocks the turn while it is red, and releases after eight consecutive blocks. When this block
+takes longer than four minutes, add a `## Stop gate` block with a faster subset: the hook runs
+that one instead, and this block stays the gate run before a push.
 
 ## Conventions
 

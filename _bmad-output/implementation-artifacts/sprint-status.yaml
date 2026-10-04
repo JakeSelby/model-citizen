@@ -527,10 +527,13 @@ development_status:
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: ready-for-dev
   ah-b161-fix-benchmarks-the-delegation-verdict-ignores: ready-for-dev
   ah-b162-fix-cost-the-price-table-has-no-entry-for-claude: ready-for-dev
+  ah-b163-fix-tests-the-test-suite-writes-to-the-real-hook: ready-for-dev
   ah-b164-fix-security-grade-bash-flags-quoted-text-misses: ready-for-dev
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: ready-for-dev
   ah-b166-fix-ci-the-bmad-traceability-workflow-is-red-on: ready-for-dev
+  ah-b167-fix-coordination-intent-overlap-refusals-are: ready-for-dev
   ah-b168-fix-usage-feed-finished-subagent-spend-reads: ready-for-dev
+  ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done

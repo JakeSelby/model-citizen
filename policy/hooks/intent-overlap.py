@@ -8,7 +8,8 @@ this file only turns an overlap into a PreToolUse answer and a decision-log row.
 
 Under `deny`, the default, the first hit on a path in a session warns and the second denies;
 under `warn` every hit warns. A warning is context for the agent and a notice for the user,
-never a permission decision, so the user's own permission flow still answers for the edit.
+never a permission decision, so the user's own permission flow still answers for the edit. The
+session's own claim in another worktree only ever warns; the rule is in `intents.py`.
 Shell-mediated writes are `grade-bash`'s to judge, not this file's.
 
 Silent, and never failing the edit, when nothing overlaps or anything here cannot be loaded.
@@ -59,9 +60,12 @@ def judge(event, intents, env=None):
     found = intents.overlaps(path, session or None, pid, event.get("cwd"), env, subagent)
     if not found:
         return None
-    first = found[0]
     variant = intents.overlap_variant(env)
     target_root = (intents.repository(path) or {}).get("root", "")
+    others, siblings = intents.split(found, session, target_root)
+    if not others:
+        return sibling_warning(siblings[0], event, session, variant, intents)
+    first = others[0]
     worktree = intents.editor_root(event.get("cwd"), target_root, subagent) or ""
     answer = intents.answer_for(intents.hit(session, worktree, first[2], env), variant)
     intents.log_overlap(answer, first, str(event.get("tool_name")), session, variant,
@@ -80,6 +84,20 @@ def judge(event, intents, env=None):
                 + ("in this session is denied" if variant == "deny" else "is warned again")
                 + ". Prefer a new file or leave it to that session, and report the overlap to "
                 "whoever assigned the work."}}
+
+
+def sibling_warning(found, event, session, variant, intents):
+    """This session's claim in another worktree: always a warning, never counted toward a denial."""
+    intents.log_overlap("warn", found, str(event.get("tool_name")), session, variant,
+                        os.environ.get("HARNESS_RUNTIME", ""), same_session=True)
+    what = intents.describe(found)
+    return {"systemMessage": "intent-overlap: " + what + ", this session's own claim in another "
+            "worktree.",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": "intent-overlap warning: " + what + ". That claim is this "
+                "session's own, in another worktree, so the two copies meet only at the merge; "
+                "the edit is not refused. Report the shared path to whoever assigned the work."}}
 
 
 def main():
