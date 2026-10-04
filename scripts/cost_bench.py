@@ -1961,6 +1961,8 @@ def _replay(tasks, opts, launch, sink):
                 return rows, True
             session = run_long_session(task, rep, arm, opts, launch)
             spent += session[-1]["cost_usd"]
+            if ledger is not None:
+                ledger.append(session[-1]["cost_usd"])
             rows += session
             if sink is not None:
                 for row in session:

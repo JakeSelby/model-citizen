@@ -8,9 +8,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import test_replay_long_session as long_session
-from test_cost_bench import BENCH
+from test_cost_bench import BENCH, Launch, options
 from test_cost_bench_tags import harness_repo
 
 OTHER = "claude-opus-4-1"
@@ -77,6 +78,30 @@ class LongSessionStrataSummaryTests(unittest.TestCase):
         for report in document["strata"].values():
             self.assertEqual(report["tier"], "long-session")
             self.assertEqual(report["reliability"]["pass_k"]["arms"]["harness"]["all_passed"], 3)
+
+
+class LongSessionSpendLedgerTests(unittest.TestCase):
+    def test_each_session_cost_enters_the_strata_ledger(self):
+        # `replay_strata` reports the ledger's sum as "Spent so far" when a stratum stops.
+        with tempfile.TemporaryDirectory() as tmp:
+            item = long_session.workspace_scenario(tmp)
+            ledger = []
+
+            def driver(number, prompt, budget, resume):
+                return {"stdout": long_session.turn_stream(0.25), "returncode": 0}
+
+            opts = options(tmp, model=long_session.MAIN, run_cap=None, reps=1, spend_cap=20.0,
+                           session_driver=driver, spend_ledger=ledger,
+                           stamp={"date": "2026-01-01", "model": long_session.MAIN},
+                           session_scorer=lambda task, workdir, repo, stream: (True, "", None))
+            with mock.patch.object(BENCH, "probe_workdirs"), mock.patch.object(BENCH.arms, "admit"), \
+                    mock.patch.object(BENCH.arms, "admit_pair"):
+                rows, stopped = BENCH.replay([item], opts, Launch([]))
+        self.assertFalse(stopped)
+        sessions = [row for row in rows if row["row_kind"] == BENCH.replay_session.SESSION]
+        self.assertEqual(len(sessions), 2)  # one session per arm
+        self.assertEqual(ledger, [row["cost_usd"] for row in sessions])
+        self.assertGreater(sum(ledger), 0)
 
 
 if __name__ == "__main__":
