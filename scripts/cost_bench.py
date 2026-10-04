@@ -1820,8 +1820,12 @@ def _replay(tasks, opts, launch, sink):
         raise SystemExit(2)
     probe_workdirs(tasks, opts, launch)
     rows, spent = [], 0.0
+    # A strata run's running record of what was spent, so a stratum that stops can report it.
+    ledger = opts.get("spend_ledger")
     if not opts.get("skip_preflight"):
         checks, spent = preflight(tasks, opts, launch)
+        if ledger is not None:
+            ledger.append(spent)
         red = [c for c in checks if not c["passed"]]
         for check in red:
             if check.get("budget_stop"):
@@ -1845,7 +1849,10 @@ def _replay(tasks, opts, launch, sink):
         surface = surface_of(row)
         if surface is not None:
             row["surface_drift"] = surface_drift(firsts.setdefault(arm, surface), surface)
-        spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
+        cost = opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
+        spent += cost
+        if ledger is not None:
+            ledger.append(cost)
         rows.append(row)
         if sink is not None:
             sink.write(json.dumps(row, sort_keys=True) + "\n")
@@ -2439,21 +2446,46 @@ def cmd_replay(args):
 
 def replay_strata(args, models):
     """Every model `--model` names as its own stratum (`replay_strata`): the whole replay once per
-    model, with its own schedule, caps, preflight, results folder and history row. Strata run in
-    the order named; the exit status is the worst of them."""
+    model, with its own schedule, caps, preflight, results folder and history row, in the order
+    named. A stratum that fails, by a refusal, an error or a stop at its spend cap, stops the run:
+    the strata after it never start, the ones before it keep their results, what has been spent
+    is reported, and its exit status is the run's. A dry run spends nothing, so it lists every
+    stratum and exits with the worst status."""
     if (getattr(args, "tier", None) or micro.PRODUCTION) == micro.MICRO:
         raise SystemExit("cost-bench: --tier micro pins its manifest's one model; it takes no strata")
     print("%d strata, each run and reported on its own: %s" % (len(models), ", ".join(models)))
-    status = 0
+    ledger, worst = [], 0
     for number, model in enumerate(models, 1):
         print("stratum %d of %d: model %s" % (number, len(models), model))
-        one = argparse.Namespace(**dict(vars(args), model=model, stratum=model, strata=list(models)))
+        one = argparse.Namespace(**dict(vars(args), model=model, stratum=model, strata=list(models),
+                                        spend_ledger=ledger))
         pack = open_pack_for(one)
         try:
-            status = max(status, _cmd_replay(one, pack) or 0)
+            status = _cmd_replay(one, pack) or 0
+        except SystemExit as stop:
+            status = stratum_exit(stop)
         finally:
             replay_pack.close_pack(pack)
-    return status
+        worst = max(worst, status)
+        if status and not args.dry_run:
+            print("cost-bench: stratum %d of %d (model %s) failed with exit %d; stopping the run. Not run: "
+                  "%s. Spent so far: %.4f USD, a run with no readable cost counted at its run cap; the "
+                  "strata already run keep their results"
+                  % (number, len(models), model, status, ", ".join(models[number:]) or "none", sum(ledger)),
+                  file=sys.stderr)
+            return status
+    return worst
+
+
+def stratum_exit(stop):
+    """The exit status a stratum's `SystemExit` carries, its message printed as the interpreter
+    would print it: a message exits 1, as it does when nothing catches it."""
+    if stop.code is None:
+        return 0
+    if isinstance(stop.code, int):
+        return stop.code
+    print(stop.code, file=sys.stderr)
+    return 1
 
 
 def _cmd_replay(args, pack):
@@ -2903,6 +2935,7 @@ def replay_tag(tag, args, common, harness):
                 "stance_cost": args.stance_cost, "raw": args.raw, "streams": streams, "tmp": args.tmp,
                 "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
                 "preflight_cap": micro.PREFLIGHT_CAP_USD if is_micro else PREFLIGHT_CAP_USD,
+                "spend_ledger": getattr(args, "spend_ledger", None),
                 "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
                           "cli_version": common["cli_version"],
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,

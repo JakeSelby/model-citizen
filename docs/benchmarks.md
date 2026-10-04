@@ -709,6 +709,10 @@ python3 scripts/cost_bench.py summarise --results benchmarks/<version>/<tag> [--
   preflight, arm builds, series and history row. Its rows carry `stratum` (the model id) and
   `strata`, and land in `<tag>/<model>/results.jsonl`. One model writes no stratum, as before.
   The micro tier pins its model and takes no strata.
+- **A failed stratum stops the run.** A refusal, an error or a stop at its spend cap ends the run at
+  that stratum with its exit status: the strata after it never start, the ones before it keep their
+  results, and the run prints what it has spent so far. A dry run spends nothing, so it lists every
+  stratum and exits with the worst status.
 - **The dry run lists and prices each stratum:** its schedule, and its worst case if every run and
   preflight reaches its cap.
 - **`summarise` reports every section per stratum**, given a results file or the tag folder that
