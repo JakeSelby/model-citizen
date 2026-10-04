@@ -24,8 +24,8 @@ from typing import Callable, Dict, Iterable, Optional, Tuple
 
 from harness_core import overview, workers
 
-from . import (activity, auth, compare, draft_tests, drafts, free_suites, live_updates,
-               module_authoring, module_editing, module_library,
+from . import (activity, auth, compare, draft_registration, draft_tests, drafts, free_suites,
+               live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
 from . import eval_tiers, first_run
@@ -822,7 +822,15 @@ def _runs_compare(handler: Handler, route: Route) -> None:
 # A draft that is not there is 404; a request that names the wrong draft or checkpoint is the
 # client's to plan again (409); every other refusal is the client's to fix (400).
 _DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft_unavailable": 409,
-                      "draft_test_unchanged": 409, "draft_test_records_unsafe": 409}
+                      "draft_test_unchanged": 409, "draft_test_records_unsafe": 409,
+                      "draft_test_registration_not_found": 404,
+                      "draft_test_registration_stale": 409,
+                      "draft_test_registration_mismatch": 409,
+                      "draft_test_registration_used": 409,
+                      "draft_test_underpowered": 409, "draft_test_effect_too_large": 400,
+                      "draft_test_cv_not_declared": 400, "draft_test_registration_subset": 400,
+                      "draft_test_variance_undeclared": 409,
+                      "draft_test_registration_failed": 500}
 
 
 def _draft_test_error(handler: Handler, exc: Exception) -> None:
@@ -834,8 +842,11 @@ def _draft_test_error(handler: Handler, exc: Exception) -> None:
 
 
 def _draft_test_plan(handler: Handler, route: Route) -> None:
-    """Power and spend before a draft test: nothing starts here."""
-    request = _required_request(handler, ("draft", "request", "effect", "cv"))
+    """Power and spend before a draft test, and how it departs from the registration it names:
+    nothing starts here, and nothing is claimed."""
+    body = getattr(handler, "request_json", {})
+    request = _required_request(handler, ("draft", "request", "effect", "cv") + (
+        ("registration",) if isinstance(body, dict) and "registration" in body else ()))
     if request is None:
         return
     try:
@@ -848,20 +859,54 @@ def _draft_test_plan(handler: Handler, route: Route) -> None:
         admission = _replay_admission(handler)
         resolved = admission.resolve(form)
         draft_tests.check_request(draft, resolved)
+        registration, deviations = draft_tests.start_registration(
+            handler.server.run_supervisor.state_root, handler.server.repo_root, draft, resolved,
+            request.get("registration"))
         preview = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
     payload = {"schema_version": draft_tests.SCHEMA_VERSION, "draft": draft, "power": power,
                "power_line": draft_tests.power_line(power),
-               "evidence_note": draft_tests.EXPLORATORY_NOTE, "preview": preview}
+               "evidence_note": draft_tests.EXPLORATORY_NOTE, "preview": preview,
+               "registration": None if registration is None else {
+                   "registration_id": registration, "deviations": deviations}}
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
 
+def _draft_test_register(handler: Handler, route: Route) -> None:
+    """Pre-register a test of the draft's current checkpoint (`citizen draft test --register`);
+    nothing runs here, and a registration is never edited afterwards."""
+    request = _required_request(handler, ("draft", "request", "effect", "cv"))
+    if request is None:
+        return
+    try:
+        root = handler.server.run_supervisor.state_root
+        registration = handler.server.mutations.call(lambda: draft_registration.register(
+            root, handler.server.repo_root, request["draft"], request["request"],
+            request["effect"], request["cv"]))
+    except draft_tests.DraftTestError as exc:
+        _draft_test_error(handler, exc)
+        return
+    except OSError:
+        handler._error(500, "draft_test_registration_failed")
+        return
+    payload = {"registration": registration,
+               "power_line": draft_tests.power_line(registration["power"])}
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+_START_KEYS = ("draft", "request", "confirmation_token", "effect", "cv")
+
+
 def _draft_test_start(handler: Handler, route: Route) -> None:
-    """Start the planned pair after its spend confirmation, and record it against the draft."""
-    request = _required_request(handler, ("draft", "request", "confirmation_token", "effect", "cv"))
+    """Start the planned pair after its spend confirmation, and record it against the draft,
+    with the registration it was started under, if any."""
+    body = getattr(handler, "request_json", {})
+    request = _required_request(handler, _START_KEYS + (
+        ("registration",) if isinstance(body, dict) and "registration" in body else ()))
     if request is None:
         return
     if not isinstance(request["confirmation_token"], str):
@@ -874,16 +919,41 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
         draft_tests.check_request(draft, selected)
         power = draft_tests.power(handler.server.repo_root, len(selected.tasks),
                                   selected.repetitions, planned)
+        registration, deviations = draft_tests.start_registration(
+            handler.server.run_supervisor.state_root, handler.server.repo_root, draft, selected,
+            request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
-        started = handler.server.mutations.call(lambda: admission.start_confirmed(
-            confirmed, request["confirmation_token"]))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
+    root = handler.server.run_supervisor.state_root
+    try:
+        # Single use: claimed before the run exists; a claim that exists or fails refuses the start.
+        if registration is not None:
+            draft_registration.claim(root, registration)
+        try:
+            started = handler.server.mutations.call(lambda: admission.start_confirmed(
+                confirmed, request["confirmation_token"]))
+        except BaseException:
+            if registration is not None:
+                try:
+                    draft_registration.release(root, registration)
+                except (OSError, draft_tests.DraftTestError):
+                    pass  # stays claimed: never reusable, which is the safe side
+            raise
+    except (draft_tests.DraftTestError, replay.ReplayError) as exc:
+        _draft_test_error(handler, exc)
+        return
+    if registration is not None:
+        try:
+            draft_registration.bind(root, registration, started["run_id"])
+        except (OSError, draft_tests.DraftTestError):
+            # The registration stays claimed, so it cannot be reused; this run never counts.
+            deviations = deviations + ["the run could not be recorded against its registration"]
     try:
         recorded = draft_tests.record(handler.server.run_supervisor.state_root, started["run_id"],
-                                      draft, confirmed, power)
+                                      draft, confirmed, power, registration, deviations)
     except (OSError, draft_tests.DraftTestError):
         # The run is admitted and keeps running; only its link to the draft failed.
         handler._error(500, "draft_test_unrecorded")
@@ -2028,7 +2098,10 @@ DRAFT_TEST_PLAN = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("draft", "object"), ("power", "object"),
                                                    ("power_line", "string"),
                                                    ("evidence_note", "string"),
-                                                   ("preview", "object")))
+                                                   ("preview", "object"),
+                                                   ("registration", "object-or-null")))
+DRAFT_TEST_REGISTER = ResponseSchema("json-object", (("registration", "object"),
+                                                       ("power_line", "string")))
 DRAFT_TEST_RUN = ResponseSchema("json-object", (("run_id", "string"), ("status", "string"),
                                                   ("record", "object")))
 DRAFT_TEST_VERDICTS = ResponseSchema("json-object", (("schema_version", "integer"),
@@ -2037,6 +2110,7 @@ DRAFT_TEST_VERDICTS = ResponseSchema("json-object", (("schema_version", "integer
                                                        ("evidence_note", "string"),
                                                        ("tests", "array"),
                                                        ("checkpoints", "array"),
+                                                       ("registrations", "array"),
                                                        ("unreadable_records", "integer")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -2177,6 +2251,9 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/configure/test/plan", "application/json",
           DRAFT_TEST_PLAN, _draft_test_plan, None, "application/json",
           ("citizen", "runs", "spend-preview")),
+    Route("POST", "/api/configure/test/register", "application/json",
+          DRAFT_TEST_REGISTER, _draft_test_register, None, "application/json",
+          ("citizen", "draft", "test", "--register")),
     Route("POST", "/api/configure/test/start", "application/json",
           DRAFT_TEST_RUN, _draft_test_start, None, "application/json",
           ("citizen", "runs", "start")),

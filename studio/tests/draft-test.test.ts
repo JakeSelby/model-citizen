@@ -134,6 +134,7 @@ function plan(enough: boolean): DraftTestPlan {
     evidence_note: fixture.evidence_note,
     preview: { valid: true, errors: [], estimate: { amount_usd: null, basis: "", sample_count: 0 },
       caps: { max_budget_usd: "2", spend_cap_usd: "20" }, command: "", request: {} as never },
+    registration: null,
   };
 }
 

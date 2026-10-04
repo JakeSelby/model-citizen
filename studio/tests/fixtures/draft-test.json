@@ -17,7 +17,9 @@
           "command": "citizen runs compare 00000000-0000-4000-8000-000000000011:1 00000000-0000-4000-8000-000000000011:2"
         },
         "created_at": "2026-10-01T00:00:00+00:00",
-        "headline": "Exploratory: no claim. A draft test is exploratory: the draft runs unregistered, so its result is never cited as evidence and the Studio does not say whether the draft helped.",
+        "deviations": [],
+        "evidence": "exploratory",
+        "headline": "Exploratory: no claim. A draft test is exploratory unless it is pre-registered before it runs: an unregistered result is never cited as evidence and the Studio does not say whether the draft helped. A run that matches its registration exactly may.",
         "power": {
           "attempts_per_side": 6,
           "confidence": 0.95,
@@ -85,6 +87,7 @@
           "the candidate is exploratory",
           "the engine marks candidate exploratory"
         ],
+        "registration": null,
         "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "run_id": "00000000-0000-4000-8000-000000000011",
         "spend_usd": 21.25,
@@ -99,7 +102,8 @@
     }
   ],
   "draft": "tuned",
-  "evidence_note": "A draft test is exploratory: the draft runs unregistered, so its result is never cited as evidence and the Studio does not say whether the draft helped.",
+  "evidence_note": "A draft test is exploratory unless it is pre-registered before it runs: an unregistered result is never cited as evidence and the Studio does not say whether the draft helped. A run that matches its registration exactly may.",
+  "registrations": [],
   "revision": "dddddddddddddddddddddddddddddddddddddddd",
   "schema_version": 1,
   "tests": [

@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack, Text, TextInput, Title,
+  Alert, Badge, Button, Checkbox, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack, Text, TextInput, Title,
 } from "@mantine/core";
 import { useEffect, useRef, useState } from "react";
 
@@ -9,10 +9,11 @@ import { compareRuns } from "../experiments/compare/api";
 import type { CompareResult } from "../experiments/compare/model";
 import { loadReplayCatalog } from "../experiments/replay/api";
 import { initialPack, packOptions, tasksFor, type ReplayCatalog } from "../experiments/replay/model";
-import { loadDraftVerdicts, planDraftTest, startDraftTest } from "./draftTestApi";
+import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
-  draftTestErrorMessage, initialForm, planBody, readingLines, spendLine, validateDraftTest, verdictBadge,
-  withNeededTrials, type DraftTestForm, type DraftTestPlan, type DraftTestVerdict, type DraftTestVerdicts,
+  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, planBody, readingLines, registerBody,
+  spendLine, startBlocked, startedMessage, validateDraftTest, verdictBadge, withNeededTrials,
+  type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
 type Props = { draft: string; revision: string };
@@ -24,6 +25,7 @@ function message(error: unknown, fallback: string): string {
 /** One checkpoint's latest verdict: badge, headline, staleness, readings, spend and the comparison. */
 export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; current: boolean; count: number }) {
   const badge = verdictBadge(test.verdict);
+  const evidence = evidenceBadge(test);
   const [comparison, setComparison] = useState<CompareResult | null>(null);
   const [error, setError] = useState("");
   async function open() {
@@ -40,6 +42,7 @@ export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; 
         <Group gap="xs">
           <Text fw={650} size="sm">Checkpoint <Code>{test.revision.slice(0, 12)}</Code>{current ? " (current)" : ""}</Text>
           <Badge color={badge.color} variant={badge.variant}>{badge.label}</Badge>
+          <Badge color="gray" variant={evidence.variant}>{evidence.label}</Badge>
           {test.stale && <Badge color="yellow" variant="outline">Verdict stale</Badge>}
         </Group>
         <Text size="sm">{test.headline}</Text>
@@ -74,6 +77,29 @@ export function PowerNotice({ plan, onUseTrials }: { plan: DraftTestPlan; onUseT
   );
 }
 
+/** Every registration of the draft, newest first: a stale or altered one stays listed, marked. */
+export function RegistrationList({ registrations }: { registrations: DraftTestRegistration[] }) {
+  if (registrations.length === 0) return <Text c="dimmed" size="sm">No registrations of this draft yet.</Text>;
+  return (
+    <Stack gap="xs">
+      {registrations.map((item) => (
+        <Paper key={item.registration_id} p="sm" withBorder>
+          <Group gap="xs">
+            <Text size="sm">Registered checkpoint <Code>{item.revision.slice(0, 12)}</Code>: {item.tasks.length} task(s), {item.repetitions} trial(s) per task, {item.model}, a {(item.effect * 100).toFixed(1)}% change</Text>
+            {item.stale && <Badge color="yellow" variant="outline">Stale</Badge>}
+            {item.problems.length > 0 && <Badge color="red" variant="outline">Not intact</Badge>}
+            {item.used_by && <Badge color="gray" variant="light">Used</Badge>}
+          </Group>
+          {item.stale_reason && <Text c="dimmed" size="xs">Stale: {item.stale_reason}; register the test again.</Text>}
+          {item.problems.map((problem) => <Text c="red" key={problem} size="xs">{problem}</Text>)}
+          {item.used_by && <Text c="dimmed" size="xs">Backs run <Code>{item.used_by}</Code>; a registration backs one run.</Text>}
+          <Text c="dimmed" size="xs">Plan <Code>{item.plan}</Code> at <Code>{item.plan_commit.slice(0, 12)}</Code></Text>
+        </Paper>
+      ))}
+    </Stack>
+  );
+}
+
 /** The latest verdict of every tested checkpoint, newest first. */
 export function CheckpointList({ verdicts }: { verdicts: DraftTestVerdicts | null }) {
   if (!verdicts) return null;
@@ -96,7 +122,13 @@ export function DraftTest({ draft, revision }: Props) {
   const [verdicts, setVerdicts] = useState<DraftTestVerdicts | null>(null);
   const [status, setStatus] = useState("Choose tasks, trials and the change worth detecting.");
   const [busy, setBusy] = useState(false);
+  const [preRegister, setPreRegister] = useState(false);
   const errors = validateDraftTest(form);
+  const registration = currentRegistration(verdicts);
+  const blocked = startBlocked(preRegister, registration);
+  // The server's deviations, for the registration this plan named; never recomputed here.
+  const deviations = plan?.registration && plan.registration.registration_id === registration?.registration_id
+    ? plan.registration.deviations : null;
 
   useEffect(() => {
     let active = true;
@@ -136,11 +168,27 @@ export function DraftTest({ draft, revision }: Props) {
     if (errors.length) return;
     setBusy(true);
     try {
-      const value = await planDraftTest(planBody(draft, form));
+      const under = preRegister && registration ? { registration: registration.registration_id } : {};
+      const value = await planDraftTest({ ...planBody(draft, form), ...under });
       setPlan(value);
       setStatus("Power and spend are ready. Nothing has started.");
     } catch (error) {
       setStatus(message(error, "The plan could not be made."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function register() {
+    if (!plan?.power.enough) return;
+    setBusy(true);
+    try {
+      await registerDraftTest(registerBody(draft, form));
+      setPlan(null);
+      setStatus("Registered. It backs one run and is fixed; any edit to the draft makes it stale. Check power and spend again.");
+      await refresh();
+    } catch (error) {
+      setStatus(message(error, "The test could not be registered."));
     } finally {
       setBusy(false);
     }
@@ -151,9 +199,10 @@ export function DraftTest({ draft, revision }: Props) {
     setBusy(true);
     try {
       const body = planBody(draft, form);
-      const value = await startDraftTest(draft, plan.preview.request, plan.preview.confirmation_token, body.effect, body.cv);
+      const under = preRegister && registration ? registration.registration_id : null;
+      const value = await startDraftTest(draft, plan.preview.request, plan.preview.confirmation_token, body.effect, body.cv, under);
       setPlan(null);
-      setStatus(`Test started as run ${value.run_id}. Refresh to follow its verdict.`);
+      setStatus(startedMessage(value));
       await refresh();
     } catch (error) {
       setStatus(message(error, "The test could not start."));
@@ -210,9 +259,33 @@ export function DraftTest({ draft, revision }: Props) {
             <Code block>{plan.preview.command}</Code>
           </Stack>
         )}
+        <Checkbox checked={preRegister} disabled={busy} label="Pre-register this test"
+          description="Optional. A run that matches its registration exactly may read helped or worse; any other run stays exploratory."
+          onChange={(event) => { setPreRegister(event.currentTarget.checked); setPlan(null); }} />
+        {preRegister && (
+          <Stack gap="xs">
+            {registration && deviations === null && <Text c="dimmed" size="sm">Registered. Check power and spend to see whether this test matches it.</Text>}
+            {registration && deviations !== null && (
+              <Alert color={deviations.length ? "yellow" : "blue"} title={deviations.length ? "Differs from the registration" : "Matches the registration"}>
+                {deviations.length
+                  ? <ul className="message-list">{deviations.map((item) => <li key={item}>{item}</li>)}</ul>
+                  : "This test matches the current registration exactly."}
+                {deviations.length > 0 && <Text size="sm">It would run exploratory.</Text>}
+              </Alert>
+            )}
+            {!registration && <Text c="dimmed" size="sm">No current registration. Check power, then register before you start.</Text>}
+            {form.cv.trim() !== "" && <Text c="dimmed" size="sm">A registration plans from the repository's declared variance; clear the coefficient of variation to register.</Text>}
+            <Group justify="flex-end">
+              <Button variant="light" disabled={busy || !plan?.power.enough || form.cv.trim() !== ""} loading={busy} onClick={register}>Register this test</Button>
+            </Group>
+            {verdicts && <RegistrationList registrations={verdicts.registrations} />}
+          </Stack>
+        )}
+        {/* Always mounted, so a screen reader announces the text when it changes. */}
+        <Text aria-live="polite" c="dimmed" size="sm">{blocked ?? ""}</Text>
         <Group justify="flex-end">
           <Button variant="light" disabled={busy || errors.length > 0} loading={busy} onClick={check}>Check power and spend</Button>
-          <Button disabled={busy || !plan?.preview.valid || !plan.preview.confirmation_token} loading={busy} onClick={start}>Confirm and test</Button>
+          <Button disabled={busy || blocked !== null || !plan?.preview.valid || !plan.preview.confirmation_token} loading={busy} onClick={start}>Confirm and test</Button>
         </Group>
         <Group justify="space-between">
           <Title order={3}>Verdicts by checkpoint</Title>
