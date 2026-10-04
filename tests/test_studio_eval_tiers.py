@@ -187,7 +187,9 @@ class CatalogTests(unittest.TestCase):
         pinned = json.loads((REPO / "benchmarks" / "micro" / "tasks.json").read_text())["model"]
         self.assertRegex(pinned, r"-[0-9]{8}$")
         self.assertEqual((replay.DEFAULT_MODEL, eval_tiers.DEFAULT_MODEL), (pinned, pinned))
-        self.assertEqual(replay.task_catalog(REPO)["default_model"], pinned)
+        # No packs: discovery beside this checkout would read the user's own repositories.
+        with mock.patch.object(replay.packs, "discover", return_value={"packs": [], "default_digest": None, "skipped": []}):
+            self.assertEqual(replay.task_catalog(REPO)["default_model"], pinned)
         self.assertEqual(eval_tiers.catalog(REPO)["unit_model"], pinned)
         with mock.patch.object(replay.Path, "read_text", side_effect=OSError):
             self.assertEqual(replay._pinned_model(), "claude-haiku-4-5-20251001")

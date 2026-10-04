@@ -982,8 +982,10 @@ class ReplayReviewFixTests(unittest.TestCase):
         self.assertEqual(route.cli_command, ("python3", "scripts/cost_bench.py", "replay",
                                              "--help"))
         self.assertTrue((REPO / route.cli_command[1]).is_file())
-        self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
-                         "python3 scripts/cost_bench.py replay")
+        # No packs: discovery beside this checkout would read the user's own repositories.
+        with mock.patch.object(replay.packs, "discover", return_value={"packs": [], "default_digest": None, "skipped": []}):
+            self.assertEqual(replay.task_catalog(REPO)["commands"]["run"],
+                             "python3 scripts/cost_bench.py replay")
         parsed = replay.ReplayRequest.parse(dict(request(), evidence="pre-registered"))
         text = replay.preview_payload([], parsed)["command"]
         self.assertNotIn("citizen", text)

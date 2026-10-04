@@ -21,6 +21,8 @@ import atexit
 import os
 import pwd
 import shutil
+import subprocess
+import sys
 import tempfile
 
 CONFIG_DIR = "CLAUDE_CONFIG_DIR"
@@ -116,3 +118,76 @@ def isolate_suite():
 REAL_HOME = real_home()
 SUITE_HOME = isolate_suite()
 quiet_git_maintenance()
+
+# Studio tests read only their own fixtures (#1211). An audit hook records every path a Studio
+# test opens or lists under the real home outside this checkout, its Git directory and the
+# interpreter; `test_studio_zz_home_guard` fails on any record. A Studio test that found an
+# evaluator pack beside the checkout read the user's `~/repos/model-citizen-evals` this way.
+CHECKOUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STUDIO_TEST_PREFIX = "test_studio"
+STUDIO_HOME_TOUCHES = []  # (test file, event, path)
+
+
+def _git_common_dir(root):
+    try:
+        done = subprocess.run(["git", "-C", root, "rev-parse", "--path-format=absolute",
+                               "--git-common-dir"], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, universal_newlines=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout.strip() if done.returncode == 0 and done.stdout.strip() else None
+
+
+def _allowed_roots():
+    roots = [CHECKOUT, _git_common_dir(CHECKOUT), sys.prefix, sys.base_prefix,
+             sys.exec_prefix, os.path.dirname(os.path.abspath(sys.executable))]
+    roots += [entry for entry in sys.path if entry and os.path.isabs(entry)
+              and not entry.startswith(CHECKOUT)]
+    return tuple(sorted({os.path.realpath(root) for root in roots if root}))
+
+
+ALLOWED_ROOTS = _allowed_roots()
+_HOME_PREFIXES = tuple(sorted({REAL_HOME.rstrip(os.sep) + os.sep,
+                               os.path.realpath(REAL_HOME).rstrip(os.sep) + os.sep}))
+
+
+def outside_fixtures(path):
+    """True when `path` is under the real home but outside the checkout, its Git directory and
+    the interpreter: somewhere a Studio test has no business reading."""
+    full = os.path.abspath(path)
+    if not (full + os.sep).startswith(_HOME_PREFIXES):
+        return False
+    full = os.path.realpath(full)
+    return not any(full == root or full.startswith(root.rstrip(os.sep) + os.sep)
+                   for root in ALLOWED_ROOTS)
+
+
+def _studio_test_on_stack():
+    frame = sys._getframe(2)
+    while frame is not None:
+        name = os.path.basename(frame.f_code.co_filename)
+        if name.startswith(STUDIO_TEST_PREFIX) and name.endswith(".py"):
+            return name
+        frame = frame.f_back
+    return None
+
+
+def _audit(event, args):
+    if event not in ("open", "os.listdir", "os.scandir") or not args:
+        return
+    try:
+        path = args[0]
+        if isinstance(path, bytes):
+            path = os.fsdecode(path)
+        elif hasattr(path, "__fspath__"):
+            path = os.fspath(path)
+        if not isinstance(path, str) or not outside_fixtures(path):
+            return
+        test = _studio_test_on_stack()
+        if test is not None:
+            STUDIO_HOME_TOUCHES.append((test, event, path))
+    except Exception:  # an audit hook must never break the operation it watches
+        return
+
+
+sys.addaudithook(_audit)
