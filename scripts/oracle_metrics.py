@@ -33,9 +33,8 @@ BETTER, WORSE = "better", "worse"
 
 
 def declaration_errors(declared, where):
-    """Why a task's `metrics` declaration is unusable, or []. Absent is fine."""
-    if declared is None:
-        return []
+    """Why a present `metrics` declaration is unusable, or []. An omitted key is fine, so callers
+    check for it first; a present null is not a declaration and is refused here."""
     if not isinstance(declared, dict) or not declared:
         return ["%s: metrics must be a non-empty object of name to higher or lower" % where]
     errors = []
@@ -104,7 +103,14 @@ def row_fields(declared):
 
 
 def _mean(values):
-    return sum(values) / len(values) if values else None
+    """The mean, or None when there are no values. Finite values never overflow to infinity here:
+    on overflow the sum is taken over each value divided by the count."""
+    if not values:
+        return None
+    try:
+        return math.fsum(values) / len(values)
+    except OverflowError:
+        return math.fsum(v / len(values) for v in values)
 
 
 def _round(value):
@@ -162,15 +168,19 @@ def _metric(direction, by_task, arms, seed, resamples):
                     reason="no task has a known value in both arms")
     rng = random.Random(seed)
     alpha = (1 - replay_stats.CONFIDENCE) / 2
+    point = _difference(by_task, paired, arms)
     samples = sorted(_difference(by_task, [paired[rng.randrange(len(paired))] for _ in paired], arms)
                      for _ in range(resamples))
+    if not all(_finite(v) for v in [point] + samples):  # finite means whose difference overflows
+        return dict(out, difference=None, difference_interval=None, reading="unavailable",
+                    reason="the difference between the arms is not a finite number")
     interval = [_round(replay_stats._rank(samples, alpha)), _round(replay_stats._rank(samples, 1 - alpha))]
     if interval[0] <= 0 <= interval[1]:
         reading, reason = replay_stats.INCONCLUSIVE, "the interval spans no difference"
     else:
         up = interval[0] > 0
         reading, reason = (BETTER if up == (direction == "higher") else WORSE), None
-    return dict(out, difference=_round(_difference(by_task, paired, arms)), difference_interval=interval,
+    return dict(out, difference=_round(point), difference_interval=interval,
                 reading=reading, reason=reason)
 
 

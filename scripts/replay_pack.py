@@ -262,7 +262,8 @@ def task_errors(spec, task_dir, document):
                       % (where, str(spec["long"]).lower(), calls,
                          "above" if calls > document["break_even_calls"] else "at or below",
                          document["break_even_calls"]))
-    errors.extend(oracle_metrics.declaration_errors(spec.get("metrics"), where))
+    if "metrics" in spec:
+        errors.extend(oracle_metrics.declaration_errors(spec["metrics"], where))
     for name in (CHECK_FILE, SOLUTION_FILE):
         path = task_dir / name
         if not path.is_file():

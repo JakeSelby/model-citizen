@@ -44,7 +44,8 @@ def pack_task(task_dir, source, metrics=None):
 
 class DeclarationTests(unittest.TestCase):
     def test_a_declaration_names_each_metric_and_a_known_direction(self):
-        self.assertEqual(METRICS.declaration_errors(None, "t"), [])
+        self.assertEqual(METRICS.declaration_errors(None, "t"),
+                         ["t: metrics must be a non-empty object of name to higher or lower"])
         self.assertEqual(METRICS.declaration_errors(DECLARED, "t"), [])
         self.assertEqual(METRICS.declaration_errors({}, "t"),
                          ["t: metrics must be a non-empty object of name to higher or lower"])
@@ -75,6 +76,32 @@ class DeclarationTests(unittest.TestCase):
                 BENCH.load_tasks(path)
             path.write_text(json.dumps({"tasks": [dict(TASK, metrics=DECLARED)]}), encoding="utf-8")
             self.assertEqual(BENCH.load_tasks(path)[0]["metrics"], DECLARED)
+
+    def test_the_in_repository_manifest_refuses_a_null_declaration_and_keeps_an_omitted_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.json"
+            path.write_text(json.dumps({"tasks": [dict(TASK, metrics=None)]}), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "metrics must be a non-empty object"):
+                BENCH.load_tasks(path)
+            path.write_text(json.dumps({"tasks": [TASK]}), encoding="utf-8")
+            self.assertNotIn("metrics", BENCH.load_tasks(path)[0])
+
+    def test_an_issue_task_may_not_declare_metrics_its_unit_tests_cannot_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "tasks.json"
+            path.write_text(json.dumps({"tasks": [dict(TASK, kind="issue", metrics=DECLARED)]}), encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "an issue task's unit tests report no metrics"):
+                BENCH.load_tasks(path)
+            path.write_text(json.dumps({"tasks": [dict(TASK, kind="issue")]}), encoding="utf-8")
+            self.assertEqual(BENCH.load_tasks(path)[0]["kind"], "issue")
+
+    def test_the_pack_refuses_a_null_declaration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            pack = PACK.open_pack(make_pack(Path(tmp) / "null", tasks=[task_spec("short-one", metrics=None)]),
+                                  harness_root=Path(tmp) / "harness")
+            self.addCleanup(PACK.close_pack, pack)
+            with self.assertRaisesRegex(SystemExit, "metrics must be a non-empty object"):
+                PACK.load_set(pack, "production", "production")
 
 
 class VerdictTests(unittest.TestCase):
@@ -192,6 +219,16 @@ class SummaryTests(unittest.TestCase):
         metric = METRICS.summarise(rows, resamples=50)["metrics"]["tokens_read"]
         self.assertEqual((metric["difference"], metric["reading"]), (None, "unavailable"))
 
+    def test_finite_values_whose_mean_or_difference_overflows_stay_unknown(self):
+        self.assertEqual(METRICS._mean([1e308, 1e308]), 1e308)
+        rows = metric_rows({"t%d" % t: {"bare": [-1e308, -1e308], "harness": [1e308, 1e308]} for t in range(2)})
+        metric = METRICS.summarise(rows, resamples=50)["metrics"]["tokens_read"]
+        self.assertEqual(metric["arms"]["harness"]["mean"], 1e308)
+        self.assertEqual((metric["difference"], metric["difference_interval"], metric["reading"]),
+                         (None, None, "unavailable"))
+        self.assertEqual(metric["reason"], "the difference between the arms is not a finite number")
+        json.dumps(metric, allow_nan=False)  # nothing non-finite reaches the report
+
     def test_rows_without_metrics_have_no_report_and_a_bad_row_is_refused(self):
         self.assertIsNone(METRICS.summarise([{"task": "t", "arm": "bare", "rep": 1}]))
         self.assertEqual(METRICS.render(None), "")
@@ -223,3 +260,37 @@ class SummaryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifyTests(unittest.TestCase):
+    """`verify_tasks` on a task declaring metrics: the check's pass decides, the metrics do not."""
+
+    def verify(self, tmp, verdicts):
+        tasks = [task_spec("short-one", metrics=DECLARED)]
+        pack = PACK.open_pack(make_pack(Path(tmp) / "pack", tasks=tasks), harness_root=Path(tmp) / "harness")
+        self.addCleanup(PACK.close_pack, pack)
+        task = PACK.load_set(pack, "production", "production")[0][0]
+        answers = [json.dumps(v) for v in verdicts]
+
+        def launch(command, **kwargs):
+            if command[-2:] == ["python3", "-"] and BENCH.SOLVED_MARK in kwargs["input"]:
+                return types.SimpleNamespace(stdout=BENCH.SOLVED_MARK + "ok\n", returncode=0)
+            if command[-2:] == ["python3", "-"]:
+                return types.SimpleNamespace(stdout=BENCH.ORACLE_MARK + answers.pop(0) + "\n", returncode=0)
+            return types.SimpleNamespace(stdout="", returncode=0)
+
+        errors = BENCH.verify_tasks([task], None, Path(tmp) / "verify", "model-citizen-arm-bare:test", [], launch)
+        self.assertEqual(answers, [])
+        return errors
+
+    def test_a_metric_bearing_check_fails_before_and_passes_on_the_known_good_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = self.verify(tmp, [{"pass": False, "metrics": {"correctness": 0}, "errors": ["no answer"]},
+                                       {"pass": True, "metrics": {"correctness": 1, "lines_out_of_scope": None}}])
+        self.assertEqual(errors, [])
+
+    def test_a_metric_bearing_check_failing_on_the_known_good_tree_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            errors = self.verify(tmp, [{"pass": False, "metrics": {"correctness": 0}},
+                                       {"pass": False, "metrics": {"correctness": 1}, "errors": ["still wrong"]}])
+        self.assertEqual(errors, ["short-one: the check fails on the known-good tree (still wrong)"])

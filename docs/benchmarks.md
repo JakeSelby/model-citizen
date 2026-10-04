@@ -426,7 +426,8 @@ conciseness or format adherence lands on the same rows without changing how a ru
 
 - **The task declares them.** `"metrics": {"<name>": "higher" | "lower"}` in a pack's `task.json`,
   or a task of `benchmarks/tasks.json`, names each metric in lower snake case and which way it
-  improves. Loading refuses an empty declaration, any other direction and any other name.
+  improves. Loading refuses an empty or `null` declaration, any other direction and any other
+  name, and any declaration on an `issue` task, whose unit tests report no metrics.
 - **The check returns them.** `check(root)` returns the original verdict, a list of error strings
   that passes when empty, or `{"pass": <bool>, "metrics": {"<name>": <number or null>},
   "errors": [<str>]}`, with `metrics` and `errors` optional. Either form keeps working; a task that
@@ -443,7 +444,8 @@ conciseness or format adherence lands on the same rows without changing how a ru
   were known and how many unknown. The harness-minus-bare difference uses the tasks with a known
   value in both arms and carries the paired, task-clustered percentile interval SM-2 uses, with the
   same seed and resamples. It reads `better` or `worse` by the declared direction when the interval
-  excludes zero, `inconclusive` otherwise, and never enters SM-2's verdict. Under `--json` it is the
+  excludes zero, `inconclusive` otherwise, and never enters SM-2's verdict; a difference that is not
+  a finite number leaves it `unavailable`. Under `--json` it is the
   `metrics` key, absent when no row carries metrics. Pair, ablation and two-by-two reports do not
   read metrics yet.
 

@@ -319,7 +319,12 @@ def load_tasks(path):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
-        problems = oracle_metrics.declaration_errors(task.get("metrics"), "task %r" % task.get("id"))
+        if "metrics" not in task:
+            continue
+        if task["kind"] == "issue":  # its unit tests return no metric, so each would stay null
+            raise SystemExit("task %r is malformed: an issue task's unit tests report no metrics"
+                             % task.get("id"))
+        problems = oracle_metrics.declaration_errors(task["metrics"], "task %r" % task.get("id"))
         if problems:
             raise SystemExit("task is malformed: " + "; ".join(problems))
     return tasks
