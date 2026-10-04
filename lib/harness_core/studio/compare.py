@@ -43,6 +43,19 @@ _ENGINE_MODULE = None
 Staleness = Callable[[Path, "replay.ReplayTarget"], Tuple[bool, Optional[str]]]
 
 
+UNREADABLE = "compare_run_unreadable"
+UNAVAILABLE = "studio_unavailable"
+# Codes that say "try again", never "this run does not exist".
+RETRYABLE = frozenset((UNREADABLE, UNAVAILABLE))
+
+
+def unknown_run(exc: BaseException) -> bool:
+    """True only when the supervisor says the run is not there: its state directory is missing or
+    the id is not a run id. An index, lock or I/O failure is a read that failed, not a missing run."""
+    return (isinstance(exc, FileNotFoundError) or isinstance(exc.__cause__, FileNotFoundError)
+            or str(exc) == "invalid run id")
+
+
 class CompareError(ValueError):
     """A comparison that cannot be read; `code` is the route's error name."""
 
@@ -95,7 +108,10 @@ def load_side(supervisor: runs.RunSupervisor, repository: Path, run_id: str,
     try:
         run = supervisor.show(run_id)
     except (runs.RunError, OSError) as exc:
-        raise CompareError("run %s is not known" % run_id, "compare_not_found") from exc
+        if unknown_run(exc):
+            raise CompareError("run %s is not known" % run_id, "compare_not_found") from exc
+        raise CompareError("run %s could not be read now (%s); try again" % (run_id, exc),
+                           UNREADABLE) from exc
     if run.get("suite_id") != REPLAY_SUITE:
         raise CompareError("run %s is not a live replay" % run_id, "compare_not_replay")
     if run.get("status") not in runs.TERMINAL:
@@ -277,6 +293,33 @@ def direct(read: Callable[[], Any]) -> Any:
     return read()
 
 
+def executor_owner(call: Callable[[Callable[[], Any]], Any]) -> Callable[[Callable[[], Any]], Any]:
+    """An owner that runs reads through the Studio's mutation executor `call`. The executor's own
+    refusal (closed as the Studio stops) becomes a retryable `studio_unavailable`; whatever the
+    read itself raised passes through unchanged."""
+    def owner(read: Callable[[], Any]) -> Any:
+        started = []
+
+        def operation() -> Any:
+            started.append(True)
+            return read()
+        try:
+            return call(operation)
+        except RuntimeError as exc:
+            if started:
+                raise
+            raise CompareError("the Studio is stopping; try again", UNAVAILABLE) from exc
+    return owner
+
+
+def load_sides(supervisor: runs.RunSupervisor, repository: Path,
+               sides: Mapping[str, Tuple[str, int]],
+               staleness: Optional[Staleness] = None) -> Dict[str, Dict[str, Any]]:
+    """Both sides, read on the caller's thread: run this inside the owner."""
+    return {name: load_side(supervisor, repository, *sides[name], staleness=staleness)
+            for name in SIDES}
+
+
 def compare_runs(supervisor: runs.RunSupervisor, repository: Path,
                  sides: Mapping[str, Tuple[str, int]],
                  staleness: Optional[Staleness] = None,
@@ -286,8 +329,7 @@ def compare_runs(supervisor: runs.RunSupervisor, repository: Path,
     Both sides are read through `owner`, which in the served Studio is the mutation executor:
     the supervisor's run index is a SQLite connection that only its creating thread may use.
     The engine then runs on the caller's thread, so a slow bootstrap holds no mutation."""
-    loaded = owner(lambda: {name: load_side(supervisor, repository, *sides[name],
-                                            staleness=staleness) for name in SIDES})
+    loaded = owner(lambda: load_sides(supervisor, repository, sides, staleness))
     return compare(loaded[BASE], loaded[CANDIDATE])
 
 

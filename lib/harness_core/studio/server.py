@@ -851,7 +851,8 @@ def _replay_result(handler: Handler, route: Route) -> None:
 
 
 # A comparison that cannot be read is the client's to fix (400) or not there yet (404, 409).
-_COMPARE_STATUS = {"invalid_request": 400, "compare_not_found": 404}
+_COMPARE_STATUS = {"invalid_request": 400, "compare_not_found": 404,
+                   compare.UNREADABLE: 503, compare.UNAVAILABLE: 503}
 
 
 def _runs_compare(handler: Handler, route: Route) -> None:
@@ -864,7 +865,7 @@ def _runs_compare(handler: Handler, route: Route) -> None:
         # then runs here, off that thread.
         payload = compare.compare_runs(handler.server.run_supervisor,
                                        handler.server.repo_root, sides,
-                                       owner=handler.server.mutations.call)
+                                       owner=compare.executor_owner(handler.server.mutations.call))
     except compare.CompareError as exc:
         handler._error(_COMPARE_STATUS.get(exc.code, 409), exc.code)
         return
@@ -1022,13 +1023,17 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
         return
     try:
         supervisor = handler.server.run_supervisor
-        # Supervisor reads go through the mutation thread, which owns the run index; record
-        # files and the engine are read here, off it.
+        # Each test's run state and native rows are read in one trip through the mutation
+        # thread, which owns the run index; the verdict cache and the engine run here, off it.
         payload = draft_tests.verdicts(supervisor, handler.server.repo_root,
                                        supervisor.state_root, request["draft"],
-                                       owner=handler.server.mutations.call)
+                                       owner=compare.executor_owner(handler.server.mutations.call))
     except draft_tests.DraftTestError as exc:
         _draft_test_error(handler, exc)
+        return
+    except compare.CompareError as exc:
+        # Only a retryable read failure reaches here; a refusal is the test's own verdict.
+        handler._error(_COMPARE_STATUS.get(exc.code, 503), exc.code)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)

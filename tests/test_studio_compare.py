@@ -91,7 +91,8 @@ class Runs:
 
     def show(self, run_id):
         if run_id not in self.records:
-            raise runs.RunError("unknown run")
+            # As the real supervisor reports a run with no state directory.
+            raise runs.RunError("run state directory is missing or unsafe") from FileNotFoundError(run_id)
         return {"run_id": run_id, "suite_id": "live-replay", "status": self.records[run_id][1]}
 
     @staticmethod
