@@ -124,6 +124,16 @@ untouched; do not move or replace either tag.
    stops the round before any paid target when it fails. Release preflight also rebuilds `studio/`
    from the exact lockfile and refuses any path, size or digest that differs from `studio/dist/`.
 
+   Generate these records only once `VERSION` names the release and the catalog names the frozen
+   qualification source: preflight reads `studio-<platform>-<VERSION>.json` and refuses a record
+   whose `candidate_commit` is not that source, so a record from an earlier development commit can
+   never be carried into a release and is not committed. Run the macOS record on a Mac checkout of
+   the frozen commit. For Linux, run the `studio-qualification` workflow on the frozen commit and
+   commit the record its Linux job prints. The macOS job installs Google's current stable Chrome over
+   the runner image's and records the image's own version as `browser.image_version`. When current
+   stable moves to a new major, update that platform's `stable_major` in `compatibility/studio.json`
+   before regenerating.
+
 5. Tag the verified commit with the matching immutable `v<version>` tag and push that tag.
    The release workflow repeats qualification and source gates before publishing. Never move an
    existing tag to repair a failed release; fix the source and use a new version.
