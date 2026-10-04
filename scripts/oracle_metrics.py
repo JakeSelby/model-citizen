@@ -12,6 +12,8 @@ reported by a task that declares none is a broken check, so `verdict` raises and
 recorded as a check error. A declared metric that is null, not reported, not a number or not
 finite is unknown: recorded as null, with the reason in `metric_errors` for every case but an
 explicit null, and never as 0. A task that declares no metrics gets no metric field on its rows.
+A check written `check(root, stream=None)` also gets the run's saved stream-json, and its row's
+`metric_stream` says whether it did (`cost_bench.ORACLE_DRIVER`).
 
 `summarise` reports each metric per arm and per task, and the difference between the arms with
 the paired, task-clustered percentile bootstrap SM-2 uses (`replay_stats`). Contract and reading:
@@ -99,7 +101,7 @@ def row_fields(declared):
     if not declared:
         return {}
     return {"metrics": {name: None for name in sorted(declared)},
-            "metric_directions": dict(sorted(declared.items())), "metric_errors": []}
+            "metric_directions": dict(sorted(declared.items())), "metric_errors": [], "metric_stream": False}
 
 
 def _mean(values):

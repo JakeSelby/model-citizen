@@ -755,9 +755,10 @@ class SafetyTests(Fixture):
     def test_an_unreadable_transcript_still_journals_the_stop(self):
         # An agent whose stop never landed would count as running for the rest of the session,
         # and the width line would then fire falsely forever.
+        self.start("nowhere")
         self.assertEqual(self.stop("nowhere"), [])
-        self.assertEqual([(r["t"], r["output"], r["tool_calls"]) for r in self.journal()],
-                         [("stop", None, None)])
+        self.assertEqual([(r["t"], r["output"], r["tool_calls"]) for r in self.journal()
+                          if r["t"] == "stop"], [("stop", None, None)])
         append(self.transcript, [assistant("m1", 60)])
         lines = self.submit()
         self.assertEqual(lines[1], "usage-feed: unknown finished, spend unknown, "

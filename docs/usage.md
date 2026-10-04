@@ -420,6 +420,12 @@ found for agent a1b2c3` — and is fed once a session for that agent. It carries
 nothing will ever reconcile it, so repeating it turn after turn, which a session whose reader
 state was rebuilt used to do, only spends the orchestrator's context on a fact it has read.
 
+Claude Code also fires a `SubagentStop` for its own end-of-turn agent, seconds after most
+main-session `Stop`s, with no `SubagentStart` before it, no agent type and no transcript written
+anywhere. The feed journals that stop as `internal` and neither reports nor counts it; before it
+did, such stops were most of the `spend unknown` lines. A stop with no type and no transcript whose
+start was journalled is still a spawned agent, and still says `spend unknown`.
+
 A synchronous return can also arrive before the agent's last response is on disk: one API
 response is written as several records, the early ones carrying a partial streaming count and
 the last one a `stop_reason`. So the return polls the transcript's tail for up to a second,
@@ -609,6 +615,26 @@ worse than no log — and `telemetry.decisions: false` in `config.json` turns th
 after which no row, no file and no directory is written. See
 [telemetry.md](telemetry.md#the-decision-log-switch).
 
+### Rows the test suite wrote
+
+Before 0.15.0 some of this repository's tests ran hooks against the real home, so a machine that
+ran the suite may hold rows no session produced. The test rows carry short made-up ids, and
+their outcome rows carry the same id. Count the ids first and note which ones the suite wrote;
+in the rows seen so far they were `s`, `x`, `probe` and ids starting `pid-`. Then drop only those
+in a copy, and replace the log with it once the counts look right. A runtime may name a session
+with an id that is not a UUID, so filter on the test ids you found, never on an id's shape:
+
+```sh
+log=~/.local/state/agent-harness/decisions.jsonl
+jq -r '.session_id // ""' "$log" | sort | uniq -c | sort -rn | head -20
+jq -c 'select((.session_id // "") as $id
+  | ($id == "s" or $id == "x" or $id == "probe" or ($id | startswith("pid-"))) | not)' \
+  "$log" > "$log.clean"
+```
+
+The suite now runs on a disposable home, and a guard test fails if a hook's row reaches the
+real one.
+
 ### Sampled allows
 
 One Bash command in twenty that the harness **allowed** is written as a `grade-bash` row of its
@@ -697,7 +723,9 @@ that happened to be labelled is not evidence about the point.
 An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
 `coordination.repeat_overlap` in `config.json` chooses whether a repeated overlap is denied
-(`deny`, the default) or only warned (`warn`); `bin/citizen intent --help` has the commands.
+(`deny`, the default) or only warned (`warn`). A claim the editing session made itself in another
+worktree only ever warns, and its row carries `same_session: true`; `bin/citizen intent --help` has
+the commands.
 
 ```sh
 bin/citizen usage --conflicts          # landing merge conflicts and intent overlaps per week

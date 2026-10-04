@@ -88,6 +88,8 @@ class UnknownLineTests(Fixture):
     """`spend unknown` names the agent it is about, and is fed once rather than every turn."""
 
     def test_the_line_names_the_agent_whose_spend_is_unknown(self):
+        # Started, so it is a spawned agent and not Claude Code's own end-of-turn one.
+        self.start("missing")
         self.stop("missing")
         append(self.transcript, [assistant("m1", 60)])
         lines = self.submit()
@@ -97,6 +99,7 @@ class UnknownLineTests(Fixture):
         self.assertNotIn(MEASURE, lines)
 
     def test_a_reader_that_lost_its_record_still_says_it_only_once(self):
+        self.start("missing")
         self.stop("missing")
         append(self.transcript, [assistant("m1", 60)])
         self.assertIn("spend unknown", "\n".join(self.submit()))
