@@ -8893,6 +8893,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B173",
+      "github_number": 1197,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1197",
+      "title": "fix(cost): the fresh-session thresholds are ignored on 1M-token windows",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B173.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B171",
       "github_number": 1198,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1198",
