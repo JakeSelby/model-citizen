@@ -68,6 +68,15 @@ two tasks, fewer than two trials per task, unequal cluster sizes, missing cost, 
 variance. These figures are descriptive and never change the paired SM-2 decision. Source:
 [Shrout and Fleiss (1979), *Intraclass correlations: uses in assessing rater reliability*](https://doi.org/10.1037/0033-2909.86.2.420).
 
+The derived result's `reliability` holds the same pass^k reading `cost_bench summarise` reports,
+re-derived from the bundled rows. Its all-rules-at-once reading, `joint`, is `null` unless the
+bundle carries the optional `artifacts.joint_compliance` reference: a hashed JSON file holding
+`replay_reliability.joint_summary` of the run's detections, per arm the run count, the clean, hit
+and unknown counts, the rate and its Wilson interval, with no raw detections. The verifier checks
+that each arm's counts cover exactly the runs its rows hold and that the rate and interval are what
+those counts give, then reports the summary as `joint`; any disagreement fails item 5. The split
+between clean, hit and unknown is carried, not re-derived.
+
 Synthetic bundles test the verifier. They are not proof sets and cannot support a product claim.
 Publishing proof set 1 remains a separate campaign: fresh registered trials, complete trajectories,
 the structural audits required by the evidence standard, and a report with a `What we do not claim`

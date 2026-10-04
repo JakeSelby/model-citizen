@@ -344,6 +344,15 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   reading that closes #429 is #1104. The mean cost of spawning and non-spawning runs is shown beside the verdict and is
   descriptive, not causal. The same block is in each history row under `delegation`. The rules
   are in `scripts/delegation_verdict.py`.
+- **Reliability and joint rule compliance follow, under `--json` as a `reliability` key.**
+  `pass_k` gives, per task and arm, whether every trial passed and the unbiased pass^k estimate
+  C(c, k) / C(n, k) from its n trials and c passes, with k the fewest trials any cell ran; per arm
+  it gives the share of tasks whose every trial passed, the mean estimate and pass^1. `joint` is
+  the all-rules-at-once rate: the share of runs in which no rule-violation detector fired, read
+  from the `detections.jsonl` beside the rows, with a Wilson interval and each detector's own rate
+  beside it. A run no detector could read is `unknown` and left out of the rate, never counted as
+  clean; `joint` is `null` when the set has no detections. The rules are in
+  `scripts/replay_reliability.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
   days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.

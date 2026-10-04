@@ -57,6 +57,7 @@ import ablations  # noqa: E402  the N-arm ablation manifest: one declared-select
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
 import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
+import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -2078,10 +2079,14 @@ def _span(interval):
         "undefined" if v is None else "%.3f" % v for v in interval)
 
 
-def cmd_summarise(args, rows=None):
+BESIDE = object()  # cmd_summarise reads the detections saved beside its results file
+
+
+def cmd_summarise(args, rows=None, detections=BESIDE):
     """SM-2's report from a saved `results.jsonl` alone, then the delegation verdict per task
     (`delegation_verdict`), which SM-2's analysis never reads; calls no model. Rows from several
-    strata are reported per stratum (`summarise_strata`), which passes each stratum's `rows` in."""
+    strata are reported per stratum (`summarise_strata`), which passes each stratum's `rows` and
+    `detections` in."""
     path = Path(args.results).expanduser()
     path = path / RESULTS if path.is_dir() else path
     if rows is None:
@@ -2117,11 +2122,17 @@ def cmd_summarise(args, rows=None):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    report = dict(result, delegation=delegation)
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(
+            rows, replay_reliability.detections_beside(path) if detections is BESIDE else detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, delegation=delegation, reliability=reliability)
     if metrics is not None:  # a set without metrics reports exactly as before
         report["metrics"] = metrics
     write_report(report, cache_basis(rows), args.json,
-                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
+                 + reliability_text)
     return 0
 
 
@@ -2137,13 +2148,14 @@ def summarise_strata(rows, path, args, root=ROOT):
         raise SystemExit("cost-bench: --plot draws one stratum; summarise each stratum's own results file")
     pooled = strata.pool(rows, root) if getattr(args, "pool", False) else None  # refused before any output
     reports, status = {}, 0
+    found = dict((name, stratum_detections(path, name)) for name in grouped)
     parts = list(grouped.items()) + ([(strata.POOLED, pooled[1])] if pooled else [])
     for name, mine in parts:
         own = path.parent / strata.directory(str(name)) / RESULTS  # a pair's decisions sit beside its rows
         one = argparse.Namespace(**dict(vars(args), pool=False, results=str(own if own.is_file() else path)))
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):
-            status = max(status, cmd_summarise(one, mine) or 0)
+            status = max(status, cmd_summarise(one, mine, found.get(name, pooled_detections(found))) or 0)
         if args.json:
             reports[str(name)] = json.loads(captured.getvalue())
         else:
@@ -2158,6 +2170,22 @@ def summarise_strata(rows, path, args, root=ROOT):
     elif not pooled:
         print("not pooled: strata are reported apart unless the pre-registration names a pooled analysis")
     return status
+
+
+def stratum_detections(path, name):
+    """One stratum's detection rows, from its own folder; None when it has none. Rows in one
+    shared file carry no stratum, so their detections cannot be told apart and are not read."""
+    own = path.parent / strata.directory(str(name)) / RESULTS
+    return replay_reliability.detections_beside(own) if own.is_file() else None
+
+
+def pooled_detections(found):
+    """Every stratum's detection rows keyed as `replay_strata.pool` keys its tasks; None when no
+    stratum has any."""
+    if all(rows is None for rows in found.values()):
+        return None
+    return [dict(row, task="%s/%s" % (name, row.get("task")))
+            for name, rows in found.items() for row in rows or ()]
 
 
 def write_report(result, basis, as_json, text):

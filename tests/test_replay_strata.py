@@ -243,6 +243,45 @@ class PoolingTests(unittest.TestCase):
         self.assertIsNone(replay_strata.pooled_field(template))
 
 
+def detections(rows, hit_task):
+    return [{"task": r["task"], "arm": r["arm"], "rep": r["rep"], "detector": "d1", "rule": "r1",
+             "count": 1 if r["task"] == hit_task else 0} for r in rows]
+
+
+class StratumReliabilityTests(unittest.TestCase):
+    def test_each_stratum_reports_pass_k_and_its_own_folders_joint_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for model, hit in (("claude-a", "t1"), ("claude-b", "nothing")):
+                write_rows(Path(tmp) / model / BENCH.RESULTS, stratum_rows(model))
+                write_rows(Path(tmp) / model / BENCH.replay_detect.DETECTIONS, detections(stratum_rows(model), hit))
+            _, out = summarise(summarise_args(tmp, json=True))
+            _, text = summarise(summarise_args(tmp))
+        document = json.loads(out)["strata"]
+        for model in MODELS:
+            self.assertEqual(document[model]["reliability"]["pass_k"]["arms"]["harness"]["all_passed"], 2)
+        self.assertEqual(document["claude-a"]["reliability"]["joint"]["arms"]["bare"]["hit"], 5)
+        self.assertEqual(document["claude-b"]["reliability"]["joint"]["arms"]["bare"]["clean"], 10)
+        self.assertEqual(text.count("Reliability: pass^5"), 2)
+
+    def test_strata_in_one_shared_file_report_no_joint_rate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            results = Path(tmp) / BENCH.RESULTS
+            rows = stratum_rows("claude-a") + stratum_rows("claude-b")
+            write_rows(results, rows)
+            write_rows(Path(tmp) / BENCH.replay_detect.DETECTIONS, detections(rows, "t1"))
+            _, out = summarise(summarise_args(results, json=True))
+        for report in json.loads(out)["strata"].values():
+            self.assertIsNone(report["reliability"]["joint"])
+            self.assertEqual(report["reliability"]["pass_k"]["k"], 5)
+
+    def test_the_pooled_report_reads_every_strata_detections_under_pooled_tasks(self):
+        found = {"claude-a": detections(stratum_rows("claude-a"), "t1"), "claude-b": None}
+        pooled = BENCH.pooled_detections(found)
+        self.assertEqual(len(pooled), 20)
+        self.assertEqual({row["task"] for row in pooled}, {"claude-a/t1", "claude-a/t2"})
+        self.assertIsNone(BENCH.pooled_detections({"claude-a": None, "claude-b": None}))
+
+
 class BundleStrataTests(unittest.TestCase):
     def setUp(self):
         self.base = bundle_tests.EvidenceBundleTest("test_valid_bundle_rederives_figures_cards_and_descriptive_statistics")

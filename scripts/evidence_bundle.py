@@ -23,6 +23,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import experiment_protocol  # noqa: E402
 import replay_arms  # noqa: E402
+import replay_reliability  # noqa: E402
 import replay_stats  # noqa: E402
 
 SCHEMA_VERSION = 1
@@ -50,6 +51,8 @@ PARITY_CLAIM = re.compile(
     re.IGNORECASE)
 ARTIFACT_KEYS = ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report",
                  "arms", "trajectories")
+# Optional: the all-rules-at-once summary (`replay_reliability.joint_summary`), never raw detections.
+OPTIONAL_ARTIFACT_KEYS = ("joint_compliance",)
 INDEX_KEYS = ("schema_version", "bundle_id", "repository", "artifacts", "design", "statistics",
               "published_figures", "evidence_cards", "items")
 
@@ -91,11 +94,11 @@ def _finite_json(value):
     return True
 
 
-def _keys(value, required, label):
+def _keys(value, required, label, optional=()):
     if not isinstance(value, dict):
         raise StrictJSONError("%s is not an object" % label)
     missing = sorted(set(required) - set(value))
-    extra = sorted(set(value) - set(required))
+    extra = sorted(set(value) - set(required) - set(optional))
     if missing or extra:
         raise StrictJSONError("%s keys differ (missing %s; unexpected %s)" %
                               (label, missing, extra))
@@ -297,13 +300,16 @@ def load_bundle(directory):
     repo = _safe_path(root, index["repository"]["path"], "repository", directory=True)
     _repository_objects(repo)
     artifacts = index["artifacts"]
-    _keys(artifacts, ARTIFACT_KEYS, "artifacts")
+    _keys(artifacts, ARTIFACT_KEYS, "artifacts", OPTIONAL_ARTIFACT_KEYS)
     loaded = {"root": root, "index": index, "repository": repo, "raw": {}}
     metadata = {"plan": ("git_path", "commit"), "tasks": ("git_path",)}
     for name in ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report"):
         path, data = _read_ref(root, artifacts[name], "artifact %s" % name,
                                metadata.get(name, ()))
         loaded["raw"][name] = (path, data)
+    if "joint_compliance" in artifacts:
+        loaded["raw"]["joint_compliance"] = _read_ref(root, artifacts["joint_compliance"],
+                                                      "artifact joint_compliance")
     if not isinstance(artifacts["arms"], list) or len(artifacts["arms"]) != 2:
         raise StrictJSONError("artifacts.arms must contain two records")
     loaded["raw"]["arms"] = [_read_ref(root, ref, "arm record %d" % number)
@@ -896,6 +902,18 @@ def _verify_loaded(bundle, git):
                              for arm, cost, rate, status in replay_stats.pareto(derived["sm2"])]
     except (KeyError, TypeError, ValueError, StrictJSONError) as exc:
         _error(errors, 5, "SM-2 derivation failed: %s" % exc)
+    try:
+        derived["reliability"] = replay_reliability.reliability_section(priced_rows)[0]
+        if "joint_compliance" in raw:
+            # A carried summary, checked against the rows and its own counts; not re-derived.
+            summary = strict_json(raw["joint_compliance"][1].decode("utf-8"), "joint compliance")
+            problems = replay_reliability.summary_problems(priced_rows, summary)
+            for problem in problems:
+                _error(errors, 5, problem)
+            if not problems:
+                derived["reliability"]["joint"] = summary
+    except (UnicodeError, ValueError) as exc:
+        _error(errors, 5, "reliability derivation failed: %s" % exc)
     derived["icc"] = {arm: {field: _icc(priced_rows, arm, field) for field in ("pass", "cost")}
                       for arm in ARMS}
     planned = {arm: len(tasks) * trials_per_task for arm in ARMS}
