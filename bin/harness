@@ -94,6 +94,7 @@ from harness_core import instruction_surface, scorecard
 from harness_core.studio import apply as studio_apply
 from harness_core.studio import first_run as studio_first_run
 from harness_core.studio import headless as studio_headless
+from harness_core.studio import rule_health as studio_rule_health
 from harness_core.studio import module_library as studio_module_library
 from harness_core.studio import rollback as studio_rollback
 from harness_core import decision as decisions_provider
@@ -3264,6 +3265,16 @@ def cmd_selection(args: argparse.Namespace) -> int:
 
     The JSON is a selection document, so it reads back unchanged as a `HARNESS_SESSION_CONFIG`.
     """
+    if getattr(args, "report", False):
+        from harness_core.studio import selection as studio_selection
+        try:
+            payload = studio_selection.report(REPO, args.repository, args.project_file)
+        except studio_selection.SelectionError as exc:
+            print(json.dumps({"error": str(exc)}, sort_keys=True) if args.json
+                  else "selection: " + str(exc), file=sys.stdout if args.json else sys.stderr)
+            return 2
+        print(json.dumps(payload, sort_keys=True) if args.json else json.dumps(payload, indent=2))
+        return 0
     data = load_selection()
     if args.json:
         print(json.dumps(data, indent=2))
@@ -6244,6 +6255,13 @@ def cmd_usage(args: argparse.Namespace) -> int:
     it is not free, and a zero would say it was.
     """
     json_output = bool(getattr(args, "json", False))
+    if getattr(args, "health", False):
+        # The Studio's rule-health document: detector hits, coverage and lint, as one object.
+        if not args.rules:
+            raise SystemExit("usage: --health needs --rules")
+        payload = studio_rule_health.report(REPO)
+        print(json.dumps(payload, sort_keys=True) if json_output else json.dumps(payload, indent=2))
+        return 0
     if getattr(args, "action", None) == "export":
         if json_output:
             print("usage export does not support --json", file=sys.stderr)
@@ -7018,11 +7036,12 @@ def cmd_runs(args: argparse.Namespace) -> int:
             result = supervisor.catalog(REPO)
         elif args.runs_action == "start":
             if args.suite in studio_headless.ADMITTED_SUITES:
-                group = studio_headless.ADMITTED_SUITES[args.suite]
+                admissions = " or ".join(
+                    "`citizen runs %s %s`" % (group, studio_headless.START_ACTIONS[group])
+                    for group in studio_headless.ADMITTED_SUITES[args.suite])
                 raise studio.runs.RunError(
-                    "%s starts only through `citizen runs %s preview` and `citizen runs %s start`, "
-                    "which resolve and check its targets as the Studio does"
-                    % (args.suite, group, group))
+                    "%s starts only through %s after its preview, which resolve and check its "
+                    "targets as the Studio does" % (args.suite, admissions))
             parameters = studio.runs.parse_parameters(args.param)
             preview = supervisor.spend_preview(
                 args.suite, parameters, args.target_kind, args.target_ref,
@@ -7154,7 +7173,9 @@ def cmd_runs_studio(args: argparse.Namespace) -> int:
         detail = ""
         try:
             status, result = studio_headless.call(REPO, state_dir() / "studio", group, action, request)
-        except OSError:
+        except studio.runs.RunError as exc:
+            status, result = 409, {"error": str(exc)}
+        except (OSError, ValueError):
             status, result = 500, {"error": "run_state_unavailable"}
     if args.json:
         print(json.dumps(result, sort_keys=True))
@@ -7241,6 +7262,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_stances)
 
     p = sub.add_parser("selection", help="show every unit of every kind with its value and the layer that set it")
+    p.add_argument("--report", action="store_true",
+                   help="print the Studio's selection report: values, origins, budgets and commands")
+    p.add_argument("--repository", default="", help="with --report, the repository it resolves for")
+    p.add_argument("--project-file", default="", help="with --report, that repository's project file")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_selection)
 
@@ -7290,6 +7315,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="with --by stance, the dimension whose variants group the tokens")
     p.add_argument("--rules", action="store_true",
                    help="report rule-detector hits instead of tokens (--by rule, repo or stance)")
+    p.add_argument("--health", action="store_true",
+                   help="with --rules, the Studio's rule-health document: hits, coverage and lint")
     p.add_argument("--surface", action="store_true",
                    help="list every loaded instruction source by owner, with soft token estimates or unmeasured")
     p.add_argument("--rescan", action="store_true", help="re-read transcripts from the window first, then report")

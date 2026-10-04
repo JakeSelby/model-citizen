@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 """Agents run the Studio loop from `citizen`: every domain route names a command that parses and
 prints JSON, the commands answer as the routes do, and a headless loop applies what the Studio
-applies. Run: python3 -m unittest tests.test_studio_agent_loop"""
+applies. Run: python3 -m unittest discover -s tests -p test_agent_studio_loop.py"""
 from __future__ import annotations
 
 import argparse
@@ -19,19 +19,26 @@ from unittest import mock
 
 from test_harness import REPO, harness
 from harness_core.studio import apply as draft_apply
-from harness_core.studio import headless, server
+from harness_core.studio import draft_tests, eval_tiers, headless, native_acceptance, server
 
 import draft_support
+from studio_target_support import FixtureTargetService
+from test_studio_replay import fixture_tasks
+from test_studio_security import StudioSecurityFixture
 
 SKILL = REPO / "primitives" / "skills" / "studio-loop" / "SKILL.md"
 SWITCHED = "cache-hygiene"
+
+
+# Placeholders that must parse as numbers; every other placeholder takes a word.
+NUMERIC = {"repetitions": "3", "effect": "0.1"}
 
 
 def _filled(command):
     """A route's shown command with each placeholder given a value, as argv after `citizen`."""
     argv = []
     for word in command[1:]:
-        word = re.sub(r"\{[a-z_]+\}", "value", word)
+        word = re.sub(r"\{([a-z_]+)\}", lambda match: NUMERIC.get(match.group(1), "value"), word)
         argv.append(word[1:-1] if word.startswith("[") and word.endswith("]") else word)
     return argv
 
@@ -115,8 +122,9 @@ class ParityTests(unittest.TestCase):
         catalog = json.loads((REPO / "policy" / "studio" / "suites.json").read_text(encoding="utf-8"))
         paid = {suite["id"] for suite in catalog["suites"] if suite["cost_class"] == "spends_usage"}
         self.assertEqual(paid, set(headless.ADMITTED_SUITES))
-        for group in headless.ADMITTED_SUITES.values():
-            self.assertIn("start", headless.ROUTES[group])
+        for groups in headless.ADMITTED_SUITES.values():
+            for group in groups:
+                self.assertIn("start", headless.ROUTES[group])
 
 
 class CommandShapeTests(unittest.TestCase):
@@ -151,6 +159,17 @@ class CommandShapeTests(unittest.TestCase):
         code, printed = self.cli("doctor", "--json")
         self.assertEqual(code, 0)
         server.ROUTES.resolve("GET", "/api/overview").response_schema.validate(printed)
+        # A real reading, not the fallback the route sends when its sources fail.
+        self.assertNotEqual(printed["doctor"]["status"], "failed", printed["doctor"])
+        self.assertNotEqual(printed["doctor"].get("message"), "Overview sources are unavailable.")
+        self.assertTrue(printed["doctor"]["checks"])
+        self.assertTrue(any(str(REPO) in check["message"] for check in printed["doctor"]["checks"]))
+
+    def test_a_run_state_refusal_is_printed_as_json(self):
+        with mock.patch.object(headless.runs, "RunSupervisor",
+                               side_effect=headless.runs.RunError("run state is unsafe")):
+            code, printed = self.cli("runs", "eval", "catalog", "--json")
+        self.assertEqual((code, printed), (2, {"error": "run state is unsafe"}))
 
     def test_headless_commands_print_the_route_answer_and_its_refusals(self):
         code, printed = self.cli("runs", "eval", "catalog", "--json")
@@ -170,25 +189,90 @@ class CommandShapeTests(unittest.TestCase):
         self.assertEqual(self.cli("runs", "replay", "start", "--json"),
                          (2, {"error": "invalid_request"}))
 
-    def test_a_paid_start_without_the_previewed_token_is_refused(self):
-        """The spend guard: a start must carry the token its own preview issued."""
-        request = {"request": {"targets": []}, "confirmation_token": "not-issued"}
-        code, printed = self.cli("runs", "replay", "start", "--request", "-", "--json",
-                                 stdin=json.dumps(request))
-        self.assertEqual(code, 2)
-        self.assertEqual(printed, self.route("POST", "/api/runs/replay/start", request)[1])
-        self.assertIn("error", printed)
+    def test_a_paid_start_needs_the_token_its_own_preview_issued(self):
+        """The spend guard: the skill's preview example previews, and a start is refused with a
+        token that was never issued, or with an issued token for a request changed since."""
+        body = request_examples()[("replay", "preview")]
+        with fixture_tasks("link-alias"), mock.patch.object(
+                headless.targets, "TargetService", lambda _repository: FixtureTargetService()):
+            code, preview = self.cli("runs", "replay", "preview", "--request", "-", "--json",
+                                     stdin=json.dumps(body))
+            self.assertEqual(code, 0, preview)
+            self.assertTrue(preview["confirmation_required"], preview)
+            self.assertEqual(len(preview["request"]["targets"]), 2)
+            forged = {"request": preview["request"], "confirmation_token": "f" * 64}
+            changed = {"request": dict(preview["request"], spend_cap_usd="21"),
+                       "confirmation_token": preview["confirmation_token"]}
+            for refused in (forged, changed):
+                code, printed = self.cli("runs", "replay", "start", "--request", "-", "--json",
+                                         stdin=json.dumps(refused))
+                self.assertEqual(code, 2, printed)
+                self.assertEqual(printed, {"error": "replay_refused"})
+                self.assertEqual(self.route("POST", "/api/runs/replay/start", refused),
+                                 (400, {"error": "replay_refused"}))
+            self.assertFalse(any((self.state / "studio" / "runs").glob("*.json")))
 
     def test_runs_start_refuses_a_suite_that_has_its_own_admission(self):
         """A generic start would skip the target checks the Studio's admission makes."""
-        for suite, group in sorted(headless.ADMITTED_SUITES.items()):
+        for suite, groups in sorted(headless.ADMITTED_SUITES.items()):
             with self.subTest(suite=suite):
                 code, printed = self.cli("runs", "start", suite, "--target-kind", "installed",
                                          "--target-ref", str(REPO), "--json")
                 self.assertEqual(code, 2)
-                self.assertIn("citizen runs %s preview" % group, printed["error"])
+                for group in groups:
+                    self.assertIn("`citizen runs %s %s`" % (group, headless.START_ACTIONS[group]),
+                                  printed["error"])
         self.assertFalse((self.state / "studio" / "runs").exists()
                          and any((self.state / "studio" / "runs").iterdir()))
+
+
+REQUESTS = REPO / "primitives" / "skills" / "studio-loop" / "requests.md"
+EXAMPLE = re.compile(r"`citizen runs ([a-z-]+) ([a-z]+) --request FILE --json`.*?\n```json\n(.*?)```", re.S)
+
+
+def request_examples():
+    """(group, action) -> the request body requests.md shows for that command."""
+    return {(group, action): json.loads(body)
+            for group, action, body in EXAMPLE.findall(REQUESTS.read_text(encoding="utf-8"))}
+
+
+class RequestExampleTests(unittest.TestCase):
+    """Every `--request` example is the body its route takes."""
+
+    def test_every_request_command_has_an_example(self):
+        wanted = {(group, action) for group, actions in headless.ROUTES.items()
+                  for action, (method, _path) in actions.items()
+                  if method == "POST" and (group, action) != ("eval", "catalog")}
+        self.assertEqual(set(request_examples()), wanted)
+
+    def test_each_example_has_exactly_the_keys_its_route_requires(self):
+        for (group, action), body in sorted(request_examples().items()):
+            with self.subTest(command="%s %s" % (group, action)):
+                route = server.ROUTES.resolve(*headless.ROUTES[group][action])
+                if (group, action) == ("eval", "run"):  # checked inline by its handler
+                    self.assertIn(set(body), ({"suite"}, {"suite", "raw"}))
+                    continue
+                required = []
+                handler = mock.Mock(request_json=body)
+
+                def record(_handler, names):
+                    required.append(set(names))
+                    return None
+
+                with mock.patch.object(server, "_required_request", side_effect=record):
+                    route.handler(handler, route)
+                self.assertEqual(required[:1], [set(body)])
+
+    def test_the_inner_requests_parse_as_their_admissions_parse_them(self):
+        examples = request_examples()
+        eval_tiers.PaidRequest.parse(examples[("eval", "preview")]["request"])
+        native_acceptance.SpendRequest.parse(examples[("native", "preview")]["spend"])
+        plan = examples[("draft-test", "plan")]
+        self.assertEqual(set(plan["request"]), set(draft_tests.FORM_KEYS))
+        draft_tests.parse_plan(plan["effect"], plan["cv"])
+        start = examples[("draft-test", "start")]
+        self.assertEqual(set(start) - {"confirmation_token", "request"},
+                         set(plan) - {"request"})
 
 
 class Home:
@@ -212,89 +296,105 @@ class Home:
                               env=self.env, capture_output=True, text=True, timeout=600)
         return done.returncode, json.loads(done.stdout.strip().splitlines()[-1])
 
-    def route(self, path, request):
-        with mock.patch.dict(os.environ, self.env, clear=True):
-            return headless.call_route(REPO, self.state / "studio", "POST", path, request)
-
     def normalized(self, relative):
         path = self.path / relative
         return (path.read_text(encoding="utf-8").replace(str(self.path), "<HOME>")
                 if path.is_file() else None)
 
 
-class HeadlessLoopTests(unittest.TestCase):
+class HeadlessLoopTests(StudioSecurityFixture):
+    """AC3: the same choices through `citizen` and through a running Studio over HTTP."""
+
+    def _post(self, path, payload):
+        body = json.dumps(payload).encode("utf-8")
+        status, _headers, response = self.request("POST", path, dict(self.trusted, **{
+            "Content-Type": "application/json", "Content-Length": str(len(body))}), body)
+        return status, json.loads(response)
+
     def test_the_headless_loop_applies_and_rolls_back_what_the_studio_does(self):
-        """AC3: the same choices through `citizen` and through the Studio routes."""
+        _issued, status, headers, _body = self.bootstrap(origin="null")
+        self.assertEqual(status, 200)
+        cookie = self.cookie(headers)
+        status, _headers, body = self.request("GET", "/api/session", {"Cookie": cookie})
+        self.assertEqual(status, 200)
+        self.trusted = {"Cookie": cookie, "Origin": self.record["url"].rstrip("/"),
+                        "X-Studio-CSRF": json.loads(body)["csrf_token"]}
+
         initial = json.loads((REPO / "config.example.json").read_text(encoding="utf-8"))
         initial["primitive_roots"] = []
-        with tempfile.TemporaryDirectory() as base:
-            agent, studio = Home(base, "agent", initial), Home(base, "studio", initial)
-            names = {}
-            try:
-                for side, home in (("agent", agent), ("studio", studio)):
-                    draft = draft_support.draft_name("loop-%s-" % side)
-                    names[side] = draft
-                    code, created = home.cli("draft", "create", draft, "--json")
-                    self.assertEqual(code, 0, created)
-                    names[side + "-revision"] = created["revision"]
-                changes = {"rules." + SWITCHED: "off"}
-                changes_file = Path(base) / "changes.json"
-                changes_file.write_text(json.dumps(changes), encoding="utf-8")
+        agent = Home(self.home.parent, "agent", initial)
+        # The Studio side is the running server's own home.
+        studio = Home(self.home.parent, "unused", initial)
+        studio.path, studio.config = self.home, draft_apply.config_file(self.home)
+        studio.config.parent.mkdir(parents=True, exist_ok=True)
+        studio.config.write_text(json.dumps(initial, indent=2) + "\n", encoding="utf-8")
+        studio.env.update(HOME=str(self.home), HARNESS_HOME=str(self.home))
+        names = {}
+        for side, home in (("agent", agent), ("studio", studio)):
+            draft = draft_support.draft_name("loop-%s-" % side)
+            names[side] = draft
+            code, created = home.cli("draft", "create", draft, "--json")
+            self.assertEqual(code, 0, created)
+            draft_support.register_draft_cleanup(self, draft, home.env)
+            names[side + "-revision"] = created["revision"]
+        changes = {"rules." + SWITCHED: "off"}
+        changes_file = self.home.parent / "changes.json"
+        changes_file.write_text(json.dumps(changes), encoding="utf-8")
 
-                # The agent: save, review, apply, all through citizen.
-                name = names["agent"]
-                code, saved = agent.cli("draft", "selection", "save", name, "--base-revision",
-                                        names["agent-revision"], "--idempotency-key",
-                                        uuid.uuid4().hex, "--changes", str(changes_file), "--json")
-                self.assertEqual(code, 0, saved)
-                self.assertTrue(saved["saved"], saved)
-                code, reviewed = agent.cli("draft", "review", name, "--json")
-                self.assertTrue(reviewed["can_apply"], reviewed)
-                code, applied = agent.cli("draft", "apply", name, "--revision",
-                                          reviewed["draft"]["revision"], "--json")
-                self.assertEqual((code, applied["status"]), (0, "applied"), applied)
+        # The agent: save, review, apply, all through citizen.
+        name = names["agent"]
+        code, saved = agent.cli("draft", "selection", "save", name, "--base-revision",
+                                names["agent-revision"], "--idempotency-key", uuid.uuid4().hex,
+                                "--changes", str(changes_file), "--json")
+        self.assertEqual(code, 0, saved)
+        self.assertTrue(saved["saved"], saved)
+        code, reviewed = agent.cli("draft", "review", name, "--json")
+        self.assertEqual(code, 0, reviewed)
+        self.assertTrue(reviewed["can_apply"], reviewed)
+        code, applied = agent.cli("draft", "apply", name, "--revision",
+                                  reviewed["draft"]["revision"], "--json")
+        self.assertEqual((code, applied["status"]), (0, "applied"), applied)
 
-                # The Studio: the same choices through its routes.
-                name = names["studio"]
-                status, saved_s = studio.route("/api/configure/selection/save", {
-                    "draft": name, "base_revision": names["studio-revision"],
-                    "idempotency_key": uuid.uuid4().hex, "changes": changes})
-                self.assertEqual(status, 200, saved_s)
-                self.assertTrue(saved_s["saved"], saved_s)
-                status, reviewed_s = studio.route("/api/configure/apply/review", {"draft": name})
-                self.assertTrue(reviewed_s["can_apply"], reviewed_s)
-                status, applied_s = studio.route("/api/configure/apply", {
-                    "draft": name, "revision": reviewed_s["draft"]["revision"], "confirm": name})
-                self.assertEqual((status, applied_s["status"]), (200, "applied"), applied_s)
+        # The Studio: the same choices through its HTTP routes.
+        name = names["studio"]
+        status, saved_s = self._post("/api/configure/selection/save", {
+            "draft": name, "base_revision": names["studio-revision"],
+            "idempotency_key": uuid.uuid4().hex, "changes": changes})
+        self.assertEqual(status, 200, saved_s)
+        self.assertTrue(saved_s["saved"], saved_s)
+        status, reviewed_s = self._post("/api/configure/apply/review", {"draft": name})
+        self.assertEqual(status, 200, reviewed_s)
+        self.assertTrue(reviewed_s["can_apply"], reviewed_s)
+        status, applied_s = self._post("/api/configure/apply", {
+            "draft": name, "revision": reviewed_s["draft"]["revision"], "confirm": name})
+        self.assertEqual((status, applied_s["status"]), (200, "applied"), applied_s)
 
-                # One result shape, and one applied state.
-                self.assertEqual(sorted(saved), sorted(saved_s))
-                self.assertEqual(sorted(reviewed), sorted(reviewed_s))
-                self.assertEqual(sorted(applied), sorted(applied_s))
-                self.assertEqual([row["key"] for row in reviewed["config"]],
-                                 [row["key"] for row in reviewed_s["config"]])
-                config = ".config/agent-harness/config.json"
-                self.assertEqual(agent.normalized(config), studio.normalized(config))
-                self.assertEqual(json.loads(agent.config.read_text(encoding="utf-8"))["rules"][SWITCHED],
-                                 "off")
-                ledger = ".local/state/agent-harness/ownership.json"
-                self.assertEqual(agent.normalized(ledger), studio.normalized(ledger))
+        # One result, apart from the names and revisions that differ by draft.
+        self.assertEqual(sorted(saved), sorted(saved_s))
+        self.assertEqual(sorted(reviewed), sorted(reviewed_s))
+        self.assertEqual(sorted(applied), sorted(applied_s))
+        self.assertEqual([(row["key"], row["action"], row["after"]) for row in reviewed["config"]],
+                         [(row["key"], row["action"], row["after"]) for row in reviewed_s["config"]])
+        self.assertEqual(reviewed["checks"]["status"], reviewed_s["checks"]["status"])
+        self.assertEqual([item["step"] for item in reviewed["commands"]],
+                         [item["step"] for item in reviewed_s["commands"]])
+        config = agent.config.relative_to(agent.path)
+        self.assertEqual(agent.normalized(config), studio.normalized(config))
+        self.assertEqual(json.loads(agent.config.read_text(encoding="utf-8"))["rules"][SWITCHED],
+                         "off")
+        ledger = Path(".local") / "state" / "agent-harness" / "ownership.json"
+        self.assertEqual(agent.normalized(ledger), studio.normalized(ledger))
 
-                # Rolling back restores the starting configuration on both sides.
-                code, rolled = agent.cli("draft", "rollback", applied["apply_id"], "--draft",
-                                         names["agent"], "--json")
-                self.assertEqual(code, 0, rolled)
-                status, rolled_s = studio.route("/api/configure/apply/rollback", {
-                    "apply_id": applied_s["apply_id"], "confirm": names["studio"]})
-                self.assertEqual(status, 200, rolled_s)
-                self.assertEqual((rolled["status"], sorted(rolled)),
-                                 (rolled_s["status"], sorted(rolled_s)))
-                for home in (agent, studio):
-                    self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), initial)
-            finally:
-                for side, home in (("agent", agent), ("studio", studio)):
-                    if side in names:
-                        draft_support.discard_draft(self, names[side], home.env)
+        # Rolling back restores the starting configuration on both sides.
+        code, rolled = agent.cli("draft", "rollback", applied["apply_id"], "--draft",
+                                 names["agent"], "--json")
+        self.assertEqual(code, 0, rolled)
+        status, rolled_s = self._post("/api/configure/apply/rollback", {
+            "apply_id": applied_s["apply_id"], "confirm": names["studio"]})
+        self.assertEqual(status, 200, rolled_s)
+        self.assertEqual((rolled["status"], sorted(rolled)), (rolled_s["status"], sorted(rolled_s)))
+        for home in (agent, studio):
+            self.assertEqual(json.loads(home.config.read_text(encoding="utf-8")), initial)
 
 
 class SkillTests(unittest.TestCase):

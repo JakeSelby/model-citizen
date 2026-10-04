@@ -51,7 +51,7 @@ UNIT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 EXPLORATORY_NOTE = ("Detector hits come from this machine's own sessions, which are exploratory "
                     "under docs/evidence-standard.md item 11 and cannot be cited as evidence.")
 CLI_COMMANDS = {
-    "status": ("citizen", "usage", "--rules", "--json"),
+    "status": ("citizen", "usage", "--rules", "--health", "--json"),
     "try_without": ("citizen", "draft", "create", "{draft}", "--json"),
 }
 SOURCES = {

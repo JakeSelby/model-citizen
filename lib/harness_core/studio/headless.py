@@ -12,6 +12,7 @@ CLI is the user's own process.
 from __future__ import annotations
 
 import json
+import socket
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,8 +51,11 @@ ROUTES = OrderedDict((
 
 # Paid catalog suites that only these admissions may start. `citizen runs start` refuses them,
 # because starting one there would skip the target resolution and refusals the Studio applies.
-ADMITTED_SUITES = {"live-replay": "replay", "native-acceptance": "native",
-                   "micro-tier": "eval", "unit-eval": "eval"}
+# A draft test is a live replay of the draft against its base, so both admissions start one.
+ADMITTED_SUITES = {"live-replay": ("replay", "draft-test"), "native-acceptance": ("native",),
+                   "micro-tier": ("eval",), "unit-eval": ("eval",)}
+START_ACTIONS = {"replay": "preview|start", "draft-test": "plan|start", "native": "preview|start",
+                 "eval": "preview|start"}
 
 
 def cli_command(group: str, action: str) -> Tuple[str, ...]:
@@ -78,12 +82,26 @@ class _Server:
             self.mutations.close()
             raise
 
+    def close(self) -> None:
+        """Release the supervisor's descriptors and index connection, then the executor."""
+        try:
+            self.mutations.call(self.run_supervisor.close)
+        finally:
+            self.mutations.close()
+
 
 class _Handler:
     def __init__(self, server: _Server, request: Mapping[str, Any]):
         self.server = server
         self.request_json = dict(request)
         self.answer = None  # type: Optional[Tuple[int, Dict[str, Any]]]
+        # Long reads poll whether their client left; the CLI's caller stays for the answer.
+        self.connection, self._peer = socket.socketpair()
+        self.close_connection = False
+
+    def close(self) -> None:
+        self.connection.close()
+        self._peer.close()
 
     def _json(self, code: int, payload: Dict[str, Any]) -> None:
         self.answer = (code, json.loads(json.dumps(payload, sort_keys=True)))
@@ -112,9 +130,12 @@ def call_route(repo_root: Path, state_directory: Path, method: str, path: str,
     server = _Server(repo_root, state_directory)
     try:
         handler = _Handler(server, request or {})
-        route.handler(handler, route)
+        try:
+            route.handler(handler, route)
+        finally:
+            handler.close()
     finally:
-        server.mutations.close()
+        server.close()
     if handler.answer is None:
         raise RuntimeError("Studio route %s %s sent no JSON answer" % (method, path))
     return handler.answer

@@ -33,7 +33,10 @@ Each save takes the revision the last read or save returned and a fresh idempote
 revision is refused, so read again rather than retrying blind. Free checks run with
 `citizen runs start SUITE --target-kind installed --target-ref REPO --param root=REPO --json`;
 `citizen runs catalog --json` lists them. Evals, replays and native acceptance have their own
-`citizen runs eval|replay|native` actions; `--request` takes the JSON body the Studio would send.
+`citizen runs eval|replay|native` actions. `--request FILE` (or `-` for stdin) takes the JSON body
+the Studio sends; [requests.md](requests.md) gives the shape of each, with an example. A start
+sends back the `request` its preview or plan returned, unchanged, with that preview's
+`confirmation_token`, never the body you previewed with.
 `citizen usage --json`, `citizen activity --json` and `citizen runs evidence RUN_ID ARTIFACT --json`
 read what a run spent, what changed and what a run left behind.
 
