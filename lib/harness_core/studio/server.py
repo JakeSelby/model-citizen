@@ -1888,16 +1888,17 @@ def _rule_health(handler: Handler, route: Route) -> None:
 
 
 def _trends(handler: Handler, route: Route) -> None:
-    # The run store reads run on the thread that owns its SQLite connection; the bundle
-    # verifier reads only local files, so it runs here, off the serial mutation executor.
+    # The run store reads run on the thread that owns its SQLite connection. The bundle verifier
+    # runs git subprocesses, bounded by `trends.VERIFY_BUDGET_SECONDS`, so it runs here, off the
+    # serial mutation executor. A run store that fails leaves its sections unavailable, never
+    # the proof set.
     if _required_request(handler, ()) is None:
         return
     try:
         collected = handler.server.mutations.call(
             lambda: trends.collect(handler.server.run_supervisor.history))
-    except run_store.RunStoreError:
-        handler._error(503, "trends_unavailable")
-        return
+    except (run_store.RunStoreError, AttributeError) as exc:
+        collected = trends.unavailable("the run index could not be read: %s" % exc)
     payload = trends.report(handler.server.repo_root, collected)
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -2190,7 +2191,8 @@ TRENDS = ResponseSchema("json-object", (("schema_version", "integer"),
                                          ("generated_at", "string"), ("ratio_note", "string"),
                                          ("measures", "array"), ("lines", "array"),
                                          ("static", "object"), ("not_tracked", "array"),
-                                         ("truncated", "boolean"), ("proof", "object"),
+                                         ("sections", "object"), ("max_records", "integer"),
+                                         ("proof", "object"),
                                          ("commands", "object")))
 RULE_TRY_WITHOUT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("rule", "string"),

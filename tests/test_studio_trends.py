@@ -11,6 +11,7 @@ Regenerate it with:
 import copy
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,7 +20,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_harness import REPO  # noqa: E402
-from harness_core.studio import run_store, trends  # noqa: E402
+import test_evidence_bundle as bundle_tests  # noqa: E402  a module import keeps its tests out
+from harness_core.studio import run_store, runs, trends  # noqa: E402
 
 FIXTURE = REPO / "studio" / "tests" / "fixtures" / "trends.json"
 GENERATED_AT = "2026-10-04T00:00:00Z"
@@ -47,6 +49,8 @@ def history_row(date, version, ratio, normalised, **extra):
                 "sm2_eligible": True, "limitation": None, "verdict": "inconclusive",
                 "reason": "the ratio interval spans 1"},
         "delegation": {"label": "adherence, descriptive, not causal", "registered": False,
+                       "break_even": 7.6, "break_even_source": "FR-34, hypothetical", "min_runs": 4,
+                       "fired_share": 0.75, "absorbable": ["Read", "Grep"], "tasks": {},
                        "verdicts": {"fired": 2, "declined-below-break-even": 1,
                                     "missed-above-break-even": 0, "not-offered": 0, "unknown": 1}},
     }
@@ -61,8 +65,12 @@ def fixture_rows():
                               change_note="cold cache per trial",
                               # Fields a later engine adds are read past, never refused.
                               metrics={"task": {"lines": 3}}, cache_basis="cold")
+    exploratory["sm2"].update(ratio=None, ratio_interval=None, ratio_undefined="bare passed nothing",
+                              verdict="supported", reason="both conditions of the decision rule hold",
+                              claim="the harness costs less per pass")
     labelled = history_row("2026-10-01", "0.15.0", 0.91, 0.9, evidence="pre-registered",
                            pre_registration="docs/plans/registered.md")
+    labelled["delegation"]["registered"] = True
     no_sm2 = history_row("2026-09-21", "0.13.0", 0.8, 0.79, series="micro-v1")
     no_sm2["sm2"] = {"unavailable": "the rows saved no pass or fail"}
     return [registered, exploratory, labelled, no_sm2]
@@ -162,10 +170,27 @@ class TrendLineTests(Fixture):
         self.assertEqual(micro["sm2"]["unavailable"], "the rows saved no pass or fail")
 
     def test_sm2_verdict_and_reason_are_the_rows_own(self):
-        point = by_line(self.report())["replay-v2"]["points"][0]
-        self.assertEqual((point["sm2"]["verdict"], point["sm2"]["reason"]),
+        points = by_line(self.report())["replay-v2"]["points"]
+        self.assertEqual((points[0]["sm2"]["verdict"], points[0]["sm2"]["reason"]),
                          ("inconclusive", "the ratio interval spans 1"))
-        self.assertEqual(point["delegation"]["verdicts"]["fired"], 2)
+        self.assertEqual(points[0]["sm2"]["text"], "SM-2 eligibility: eligible. verdict: inconclusive, "
+                         "because the ratio interval spans 1")
+        self.assertEqual(points[0]["delegation"]["verdicts"]["fired"], 2)
+
+    def test_an_exploratory_verdict_carries_the_engines_own_qualifier(self):
+        point = by_line(self.report())["replay-v2"]["points"][1]
+        self.assertEqual(point["evidence"]["label"], "exploratory")
+        self.assertEqual(point["sm2"]["text"], "SM-2 eligibility: eligible. verdict: supported "
+                         "(exploratory, not from a registered run), because both conditions of the "
+                         "decision rule hold; claim: the harness costs less per pass")
+        self.assertIn("exploratory, not from a registered run", point["delegation"]["heading"])
+        registered = by_line(self.report())["replay-v2"]["points"][0]
+        self.assertIn("(adherence, descriptive, not causal; registered)", registered["delegation"]["heading"])
+
+    def test_an_undefined_ratio_shows_sm2s_stored_reason(self):
+        figure = by_line(self.report())["replay-v2"]["points"][1]["measures"]["ratio_sm2"]
+        self.assertEqual((figure["value"], figure["interval"], figure["undefined"]),
+                         (None, None, "bare passed nothing"))
 
     def test_each_point_is_labelled_and_an_exploratory_line_says_so(self):
         lines = by_line(self.report())
@@ -183,6 +208,19 @@ class TrendLineTests(Fixture):
         self.assertEqual(trends.evidence_label({"delegation": {"registered": "yes"}})["label"], "exploratory")
         self.assertEqual(trends.evidence_label({"evidence": "maybe"})["label"], "exploratory")
 
+    def test_pre_registered_needs_the_engines_rule_on_every_record(self):
+        label = trends.evidence_label
+        named = {"evidence": "pre-registered", "pre_registration": "docs/plan.md"}
+        self.assertEqual(label(named)["label"], "pre-registered")
+        # The engine's rule needs the pre-registration named as well as the label.
+        self.assertEqual(label({"evidence": "pre-registered"})["label"], "exploratory")
+        # The delegation block's stored reading is never overridden by the label.
+        conflict = dict(named, delegation={"registered": False})
+        self.assertEqual(label(conflict)["label"], "exploratory")
+        self.assertIn("the delegation block", label(conflict)["reason"])
+        self.assertEqual(label(dict(named, delegation={"registered": True}))["label"], "pre-registered")
+        self.assertEqual(label({"delegation": {"registered": True}})["label"], "pre-registered")
+
     def test_new_row_fields_are_read_past(self):
         point = by_line(self.report())["replay-v2"]["points"][1]
         self.assertEqual(point["cache_basis"], "cold")
@@ -199,6 +237,32 @@ class TrendLineTests(Fixture):
         self.assertEqual(static["points"][0]["harness_version"], "0.15.0")
         self.assertEqual(static["points"][0]["value"], 3000)
 
+    def test_versions_sort_as_releases_not_as_text(self):
+        for version in ("0.9.0", "0.10.0", "0.9.1"):
+            self.store.upsert(run_store._benchmark_static("benchmarks/static.json",
+                                                          dict(STATIC, harness_version=version)))
+        versions = [p["harness_version"] for p in self.report()["static"]["points"]]
+        self.assertEqual(versions, ["0.9.0", "0.9.1", "0.10.0", "0.15.0"])
+        self.assertLess(trends.version_key("v0.9.0"), trends.version_key("0.10.0"))
+        points = [{"date": "2026-01-01", "harness_version": v, "harness_sha": "", "series": "s",
+                   "bucket": "", "evidence": {"label": "exploratory"}} for v in ("0.10.0", "0.9.0")]
+        self.assertEqual([p["harness_version"] for p in trends.lines(points)[0]["points"]],
+                         ["0.9.0", "0.10.0"])
+
+    def test_a_reindex_drops_a_static_record_whose_file_moved_on(self):
+        root = Path(self.tmp.name).resolve()
+        (self.repository / "benchmarks").mkdir()
+        catalog = root / "suites.json"
+        catalog.write_text(json.dumps({"schema_version": 1, "suites": []}))
+        supervisor = runs.RunSupervisor(root / "supervisor", catalog)
+        self.addCleanup(supervisor.close)
+        static = self.repository / "benchmarks" / "static.json"
+        for version in ("0.9.0", "0.10.0"):
+            static.write_text(json.dumps(dict(STATIC, harness_version=version)))
+            supervisor.reindex(self.repository)
+        document = trends.report(self.repository, trends.collect(supervisor.history), fake_verify(VERIFIED))
+        self.assertEqual([p["harness_version"] for p in document["static"]["points"]], ["0.10.0"])
+
     def test_measures_with_no_history_say_so_rather_than_show_a_line(self):
         names = [item["measure"] for item in self.report()["not_tracked"]]
         self.assertEqual(names, ["Detector precision", "Rule adherence"])
@@ -210,9 +274,38 @@ class TrendLineTests(Fixture):
             collected = trends.collect(self.store)
         finally:
             trends.PAGE, trends.MAX_RECORDS = original
-        self.assertEqual(len(collected["history"]), 2)
-        self.assertTrue(collected["truncated"])
-        self.assertFalse(trends.collect(self.store)["truncated"])
+        self.assertEqual(len(collected["history"]["records"]), 2)
+        self.assertTrue(collected["history"]["truncated"])
+        self.assertFalse(trends.collect(self.store)["history"]["truncated"])
+        self.assertEqual(self.report()["sections"]["history"],
+                         {"status": "ready", "reason": None, "unreadable": 0, "truncated": False})
+
+    def test_an_unreadable_record_is_counted_and_the_rest_still_show(self):
+        real = self.store.get
+        bad = trends.collect(self.store)["history"]["records"][0]["run_id"]
+
+        def get(run_id):
+            if run_id == bad:
+                raise run_store.RunStoreError("indexed run record is corrupt")
+            return real(run_id)
+        self.store.get = get
+        document = self.report()
+        self.assertEqual(document["sections"]["history"]["unreadable"], 1)
+        self.assertEqual(sum(len(line["points"]) for line in document["lines"]), 3)
+
+    def test_a_run_store_that_fails_leaves_the_proof_set_standing(self):
+        def broken(**_filters):
+            raise run_store.RunStoreError("run history read failed")
+        self.store.history = broken
+        self.bind([{"field": "/a", "text": "t", "bundle": "proof/one", "card": "ratio"}])
+        document = self.report()
+        self.assertEqual(document["sections"]["history"]["status"], "unavailable")
+        self.assertIn("run history read failed", document["sections"]["static"]["reason"])
+        self.assertEqual(document["lines"], [])
+        self.assertEqual(document["proof"]["bundles"][0]["status"], "verified")
+        whole = trends.report(self.repository, trends.unavailable("no index"), fake_verify(VERIFIED))
+        self.assertEqual(whole["sections"]["history"]["reason"], "no index")
+        self.assertEqual(whole["proof"]["claims"][0]["status"], "verified")
 
 
 class ProofSetTests(Fixture):
@@ -238,11 +331,13 @@ class ProofSetTests(Fixture):
         cards = {card["id"]: card for card in bundle["cards"]}
         self.assertEqual((cards["ratio"]["figure"], cards["ratio"]["interval"]), (0.82, [0.7, 0.95]))
         self.assertTrue(cards["ratio"]["verify_status"])
+        self.assertTrue(cards["ratio"]["verified"])
         self.assertEqual(cards["ratio"]["published"], {"field": "/hero/line", "text": "Observed cost ratio 0.82"})
         self.assertFalse(cards["passes"]["verify_status"])
         self.assertIsNone(cards["passes"]["published"])
         self.assertEqual(proof["claims"], [{"field": "/hero/line", "text": "Observed cost ratio 0.82",
-                                            "bundle": "proof/one", "card": "ratio", "verify_status": True}])
+                                            "bundle": "proof/one", "card": "ratio", "status": "verified",
+                                            "reason": None}])
 
     def test_a_failed_or_crashing_verifier_never_reads_verified(self):
         self.bind([{"field": "/a", "text": "t", "bundle": "proof/one", "card": "ratio"}])
@@ -250,31 +345,104 @@ class ProofSetTests(Fixture):
         proof = self.report(fake_verify(failed))["proof"]
         self.assertEqual(proof["bundles"][0]["status"], "failed")
         self.assertEqual(proof["bundles"][0]["errors"], ["item 3: plan is missing"])
-        self.assertFalse(proof["claims"][0]["verify_status"])
+        # The card's own status stays the verifier's, but it never reads verified in a failed bundle.
+        card = proof["bundles"][0]["cards"][0]
+        self.assertEqual((card["verify_status"], card["verified"]), (True, False))
+        self.assertEqual((proof["claims"][0]["status"], proof["claims"][0]["reason"]),
+                         ("failed", "its bundle failed verification"))
 
         def boom(_path):
             raise OSError("unreadable")
         proof = self.report(boom)["proof"]
         self.assertEqual(proof["bundles"][0]["status"], "failed")
         self.assertIn("unreadable", proof["bundles"][0]["errors"][0])
-        self.assertFalse(proof["claims"][0]["verify_status"])
+        self.assertEqual(proof["claims"][0]["status"], "failed")
 
-    def test_the_status_equals_what_citizen_evidence_verify_json_prints(self):
-        """The real verifier and the real CLI, on a bundle that cannot verify."""
-        (self.repository / "proof" / "one").mkdir(parents=True)
-        self.bind([{"field": "/a", "text": "t", "bundle": "proof/one", "card": "ratio"}])
-        bundle = trends.report(self.repository, trends.collect(self.store))["proof"]["bundles"][0]
+    def test_a_claim_no_check_ran_on_reads_not_checked_never_failed(self):
+        cards = [{"field": "/f%d" % n, "text": "t", "bundle": "proof/b%d" % n, "card": "ratio"}
+                 for n in range(trends.MAX_BUNDLES + 1)]
+        cards.append({"field": "/outside", "text": "t", "bundle": "../elsewhere", "card": "ratio"})
+        self.bind(cards)
+        verify = fake_verify(VERIFIED)
+        proof = self.report(verify)["proof"]
+        self.assertEqual(len(verify.calls), trends.MAX_BUNDLES)
+        last = proof["bundles"][-1]
+        self.assertEqual((last["status"], last["reason"]), ("not checked", "past the page's limit of 16 bundles"))
+        by_field = {claim["field"]: claim for claim in proof["claims"]}
+        self.assertEqual(by_field["/f16"]["status"], "not checked")
+        self.assertEqual(by_field["/outside"]["status"], "not checked")
+        self.assertIn("leaves the repository", by_field["/outside"]["reason"])
+
+    def test_no_bundle_starts_once_the_verification_budget_is_spent(self):
+        self.bind([{"field": "/f%d" % n, "text": "t", "bundle": "proof/b%d" % n, "card": "ratio"} for n in range(3)])
+        ticks = iter([0.0, 0.0, trends.VERIFY_BUDGET_SECONDS - 1, trends.VERIFY_BUDGET_SECONDS])
+        verify = fake_verify(VERIFIED)
+        proof = trends.proof_set(self.repository, verify, clock=lambda: next(ticks))
+        self.assertEqual([b["status"] for b in proof["bundles"]], ["verified", "verified", "not checked"])
+        self.assertIn("budget ran out", proof["bundles"][2]["reason"])
+        self.assertEqual(len(verify.calls), 2)
+
+    def cli(self, bundle):
         environment = {k: v for k, v in os.environ.items() if k != "HARNESS_QUIET"}
         completed = subprocess.run(
-            [sys.executable, str(REPO / "bin" / "harness"), "evidence", "verify", "--json",
-             str(self.repository / "proof" / "one")],
-            capture_output=True, text=True, env=environment, timeout=120)
-        self.assertEqual(completed.returncode, 1, completed.stderr)
-        printed = json.loads(completed.stdout)
-        self.assertFalse(printed["ok"])
-        self.assertEqual(bundle["status"], "failed")
-        self.assertEqual(bundle["errors"], printed["errors"])
-        self.assertEqual(bundle["bundle_id"], printed["bundle_id"])
+            [sys.executable, str(REPO / "bin" / "harness"), "evidence", "verify", "--json", str(bundle)],
+            capture_output=True, text=True, env=environment, timeout=300)
+        return completed.returncode, json.loads(completed.stdout)
+
+    def assert_matches_cli(self, bundle, printed):
+        """Every field the page shows, against what the CLI printed for the same bundle."""
+        self.assertEqual(bundle["status"], "verified" if printed["ok"] is True else "failed")
+        for name in ("bundle_id", "errors", "unknown", "checks"):
+            self.assertEqual(bundle[name], printed[name], name)
+        self.assertEqual(len(bundle["cards"]), len(printed["cards"]))
+        for shown, card in zip(bundle["cards"], printed["cards"]):
+            self.assertEqual((shown["id"], shown["claim"], shown["estimand"]),
+                             (card["id"], card["claim"], card["estimand"]))
+            self.assertEqual(shown["figure"], card["figure"]["value"])
+            self.assertEqual(shown["interval"], card["interval"]["value"])
+            self.assertIs(shown["verify_status"], card["verify_status"])
+            self.assertIs(shown["verified"], card["verify_status"] and printed["ok"] is True)
+
+    def real_bundle(self):
+        fixture = bundle_tests.EvidenceBundleTest(
+            methodName="test_valid_bundle_rederives_figures_cards_and_descriptive_statistics")
+        fixture.setUp()
+        self.addCleanup(fixture.tearDown)
+        shutil.copytree(str(fixture.root), str(self.repository / "proof"), symlinks=True)
+        fixture.root = self.repository / "proof"
+        return fixture
+
+    def test_a_real_verified_bundle_shows_every_field_as_the_cli_prints_it(self):
+        self.real_bundle()
+        printed_index = json.loads((self.repository / "proof" / "bundle.json").read_text())
+        card_id = printed_index["evidence_cards"][0]["id"]
+        self.bind([{"field": "/headline", "text": "x", "bundle": "proof", "card": card_id}])
+        bundle = trends.report(self.repository, trends.collect(self.store))["proof"]["bundles"][0]
+        code, printed = self.cli(self.repository / "proof")
+        self.assertEqual(code, 0)
+        self.assertIs(printed["ok"], True)
+        self.assertTrue(bundle["cards"])
+        self.assert_matches_cli(bundle, printed)
+        claim = trends.proof_set(self.repository)["claims"][0]
+        self.assertEqual(claim["status"], "verified")
+
+    def test_a_real_contradicted_bundle_shows_every_field_as_the_cli_prints_it(self):
+        fixture = self.real_bundle()
+        fixture._mutate_rows(lambda value: value.update(model="another-model"))
+        self.bind([{"field": "/headline", "text": "x", "bundle": "proof", "card": "card"}])
+        bundle = trends.report(self.repository, trends.collect(self.store))["proof"]["bundles"][0]
+        code, printed = self.cli(self.repository / "proof")
+        self.assertEqual(code, 1)
+        self.assertIs(printed["ok"], False)
+        self.assert_matches_cli(bundle, printed)
+
+    def test_an_unloadable_bundle_shows_the_cli_errors(self):
+        (self.repository / "empty").mkdir()
+        self.bind([{"field": "/a", "text": "t", "bundle": "empty", "card": "ratio"}])
+        bundle = trends.report(self.repository, trends.collect(self.store))["proof"]["bundles"][0]
+        code, printed = self.cli(self.repository / "empty")
+        self.assertEqual(code, 1)
+        self.assert_matches_cli(bundle, printed)
 
 
 def fixture_report():

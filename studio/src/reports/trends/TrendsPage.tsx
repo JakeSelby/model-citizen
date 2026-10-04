@@ -6,7 +6,7 @@ import { CommandChip, DataTable, EvidenceState, StatusBadge, type DataColumn } f
 import { loadTrends } from "./api";
 import {
   cardValue, delegationText, evidenceText, extent, figureText, numberText, pointLabel, proofSummary, sm2Text,
-  type Bundle, type Card, type Line, type Measure, type Point, type StaticPoint, type Trends,
+  statusText, statusTone, type Bundle, type Card, type Line, type Measure, type Point, type StaticPoint, type Trends,
 } from "./model";
 
 const WIDTH = 640;
@@ -77,20 +77,30 @@ function BundlePanel({ bundle }: { bundle: Bundle }) {
     { key: "estimand", heading: "Estimand", cell: (card) => <Text size="xs">{card.estimand ?? "not stated"}</Text> },
     { key: "figure", heading: "Figure", cell: (card) => <Text size="sm">{cardValue(card.figure)}</Text> },
     { key: "interval", heading: "Interval", cell: (card) => <Text size="sm">{cardValue(card.interval)}</Text> },
-    { key: "status", heading: "Verify status", cell: (card) => <StatusBadge tone={card.verify_status ? "success" : "danger"}>{card.verify_status ? "verified" : "not verified"}</StatusBadge> },
+    { key: "status", heading: "Verify status", cell: (card) => <StatusBadge tone={card.verified ? "success" : "danger"}>{card.verified ? "verified" : card.verify_status ? "not verified (bundle failed)" : "not verified"}</StatusBadge> },
     { key: "published", heading: "Published", cell: (card) => <Text size="xs">{card.published ? `${card.published.field}: ${card.published.text}` : "in the bundle, not published"}</Text> },
   ];
   return <Stack gap="xs">
     <Group gap="sm">
       <Text fw={600}>{bundle.bundle}</Text>
-      <StatusBadge tone={bundle.status === "verified" ? "success" : "danger"}>{bundle.status}</StatusBadge>
+      <StatusBadge tone={statusTone(bundle.status)}>{bundle.status === "not checked" ? statusText(bundle.status) : bundle.status}</StatusBadge>
       {bundle.bundle_id && <Text c="dimmed" size="xs">bundle {bundle.bundle_id}</Text>}
     </Group>
+    {bundle.reason && <Text size="xs">{bundle.reason}</Text>}
     <CommandChip command={bundle.command} />
     {bundle.errors.map((error) => <Text key={error} size="xs">{error}</Text>)}
     {bundle.unknown.map((item) => <Text key={item} size="xs">unknown, not verified: {item}</Text>)}
     <DataTable caption={`Cards in ${bundle.bundle}`} columns={columns} rows={bundle.cards} rowKey={(card) => card.id ?? card.claim ?? ""} empty="The verifier reported no card" />
   </Stack>;
+}
+
+function SectionState({ name, section, maximum }: { name: "history" | "static"; section: Trends["sections"]["history"]; maximum: number }) {
+  const label = name === "history" ? "Benchmark history" : "Static context";
+  if (section.status === "unavailable") return <EvidenceState kind="error" title={`${label} could not be read; the rest of the page still shows`}>{section.reason}</EvidenceState>;
+  return <>
+    {section.truncated && <EvidenceState kind="error" title={`${label}: only the newest ${maximum} records are shown`}>Older records in the run index are left out.</EvidenceState>}
+    {section.unreadable > 0 && <EvidenceState kind="error" title={`${label}: ${section.unreadable} record(s) could not be read and are left out`} />}
+  </>;
 }
 
 export function ProofSet({ proof }: { proof: Trends["proof"] }) {
@@ -99,10 +109,9 @@ export function ProofSet({ proof }: { proof: Trends["proof"] }) {
       <Title order={2}>The project's proof set</Title>
       <Text>{proofSummary(proof)}</Text>
       {proof.claims.map((claim) => <Text key={claim.field} size="sm">
-        <StatusBadge tone={claim.verify_status ? "success" : "danger"}>{claim.verify_status ? "verified" : "not verified"}</StatusBadge> {claim.field}: {claim.text}
+        <StatusBadge tone={statusTone(claim.status)}>{statusText(claim.status)}</StatusBadge> {claim.field}: {claim.text}{claim.reason ? ` (${claim.reason})` : ""}
       </Text>)}
       {proof.bundles.map((bundle) => <BundlePanel bundle={bundle} key={bundle.bundle} />)}
-      {proof.unverified_bundles.length > 0 && <Text size="sm">Not verified here, over the page's bundle limit: {proof.unverified_bundles.join(", ")}</Text>}
     </Stack>
   </Paper>;
 }
@@ -119,13 +128,13 @@ export function TrendsReport({ trends, measure, onMeasure }: { trends: Trends; m
       <Stack gap="xs">
         <Text>{trends.ratio_note}</Text>
         <Text c="dimmed" size="sm">Each point and interval is the row's own, from benchmarks/history.jsonl through the run index. A hollow point is exploratory; the table beside each chart says so in words.</Text>
-        {trends.truncated && <EvidenceState kind="error" title="Only the newest records are shown">The run index holds more records than the page reads.</EvidenceState>}
+        {(["history", "static"] as const).map((name) => <SectionState key={name} name={name} section={trends.sections[name]} maximum={trends.max_records} />)}
         <NativeSelect aria-label="Measure" value={chosen?.id} onChange={(event) => onMeasure(event.currentTarget.value)}
           data={trends.measures.map((item) => ({ value: item.id, label: item.label }))} />
         {chosen && <Text c="dimmed" size="sm">{chosen.note}</Text>}
       </Stack>
     </Paper>
-    {!trends.lines.length && <EvidenceState kind="empty" title="No benchmark history is indexed">Run citizen runs reindex after a pre-registered replay writes benchmarks/history.jsonl.</EvidenceState>}
+    {!trends.lines.length && trends.sections.history.status === "ready" && <EvidenceState kind="empty" title="No benchmark history is indexed">Run citizen runs reindex after a pre-registered replay writes benchmarks/history.jsonl.</EvidenceState>}
     {chosen && trends.lines.map((line) => <LinePanel key={line.id} line={line} measure={chosen} />)}
     <DataTable caption={trends.static.measure.label + " by version"} columns={staticColumns} rows={trends.static.points}
       rowKey={(point) => point.harness_version} empty="No static figure is indexed" />

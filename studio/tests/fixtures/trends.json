@@ -19,6 +19,7 @@
           "cli_version": "2.1.0",
           "date": "2026-09-21",
           "delegation": {
+            "heading": "Delegation (adherence, descriptive, not causal; exploratory, not from a registered run): break-even 7.6 absorbed calls (FR-34, hypothetical), fired at a spawn in 75% of harness runs (at least 4 clean runs), absorbable Read, Grep",
             "label": "adherence, descriptive, not causal",
             "verdicts": {
               "declined-below-break-even": 1,
@@ -31,7 +32,7 @@
           "evidence": {
             "label": "exploratory",
             "pre_registration": null,
-            "reason": "the row records no pre-registration, so it reads exploratory"
+            "reason": "the delegation block does not record a pre-registered run"
           },
           "harness_sha": "0130013001300130013001300130013001300130",
           "harness_version": "0.13.0",
@@ -39,31 +40,37 @@
             "pass_rate_bare": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": null
             },
             "pass_rate_difference": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": null
             },
             "pass_rate_harness": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": null
             },
             "ratio": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.8
             },
             "ratio_cache_normalised": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.79
             },
             "ratio_sm2": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": null
             }
           },
@@ -72,10 +79,13 @@
           "run_id": "a1484b65-4d9d-517c-92ed-c7e137350b52",
           "series": "micro-v1",
           "sm2": {
+            "claim": null,
             "confidence": null,
             "eligible": null,
             "limitation": null,
+            "ratio_undefined": null,
             "reason": null,
+            "text": null,
             "unavailable": "the rows saved no pass or fail",
             "verdict": null
           },
@@ -102,6 +112,7 @@
           "cli_version": "2.1.0",
           "date": "2026-09-20",
           "delegation": {
+            "heading": "Delegation (adherence, descriptive, not causal; registered): break-even 7.6 absorbed calls (FR-34, hypothetical), fired at a spawn in 75% of harness runs (at least 4 clean runs), absorbable Read, Grep",
             "label": "adherence, descriptive, not causal",
             "verdicts": {
               "declined-below-break-even": 1,
@@ -114,7 +125,7 @@
           "evidence": {
             "label": "pre-registered",
             "pre_registration": null,
-            "reason": "the row's delegation block records every run of its set as pre-registered"
+            "reason": "the delegation block records a pre-registered run"
           },
           "harness_sha": "0130013001300130013001300130013001300130",
           "harness_version": "0.13.0",
@@ -125,6 +136,7 @@
                 0.9
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.8
             },
             "pass_rate_difference": {
@@ -133,6 +145,7 @@
                 0.2
               ],
               "interval_kind": "SM-2",
+              "undefined": null,
               "value": 0.05
             },
             "pass_rate_harness": {
@@ -141,16 +154,19 @@
                 0.95
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.85
             },
             "ratio": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 1.052
             },
             "ratio_cache_normalised": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.98
             },
             "ratio_sm2": {
@@ -159,6 +175,7 @@
                 1.142
               ],
               "interval_kind": "SM-2",
+              "undefined": null,
               "value": 1.042
             }
           },
@@ -167,10 +184,13 @@
           "run_id": "35044ca4-ab9d-5de5-91f1-4552ca5414a9",
           "series": "replay-v2",
           "sm2": {
+            "claim": null,
             "confidence": 0.95,
             "eligible": true,
             "limitation": null,
+            "ratio_undefined": null,
             "reason": "the ratio interval spans 1",
+            "text": "SM-2 eligibility: eligible. verdict: inconclusive, because the ratio interval spans 1",
             "unavailable": null,
             "verdict": "inconclusive"
           },
@@ -188,6 +208,7 @@
           "cli_version": "2.1.0",
           "date": "2026-09-27",
           "delegation": {
+            "heading": "Delegation (adherence, descriptive, not causal; exploratory, not from a registered run): break-even 7.6 absorbed calls (FR-34, hypothetical), fired at a spawn in 75% of harness runs (at least 4 clean runs), absorbable Read, Grep",
             "label": "adherence, descriptive, not causal",
             "verdicts": {
               "declined-below-break-even": 1,
@@ -200,7 +221,7 @@
           "evidence": {
             "label": "exploratory",
             "pre_registration": null,
-            "reason": "the row records no pre-registration, so it reads exploratory"
+            "reason": "the delegation block does not record a pre-registered run"
           },
           "harness_sha": "0140014001400140014001400140014001400140",
           "harness_version": "0.14.0",
@@ -211,6 +232,7 @@
                 0.9
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.8
             },
             "pass_rate_difference": {
@@ -219,6 +241,7 @@
                 0.2
               ],
               "interval_kind": "SM-2",
+              "undefined": null,
               "value": 0.05
             },
             "pass_rate_harness": {
@@ -227,25 +250,26 @@
                 0.95
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.85
             },
             "ratio": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.97
             },
             "ratio_cache_normalised": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.93
             },
             "ratio_sm2": {
-              "interval": [
-                0.86,
-                1.06
-              ],
-              "interval_kind": "SM-2",
-              "value": 0.96
+              "interval": null,
+              "interval_kind": null,
+              "undefined": "bare passed nothing",
+              "value": null
             }
           },
           "model": "claude-haiku-4-5",
@@ -253,12 +277,15 @@
           "run_id": "04b48129-66f1-571c-a571-ae7ba468c716",
           "series": "replay-v2",
           "sm2": {
+            "claim": "the harness costs less per pass",
             "confidence": 0.95,
             "eligible": true,
             "limitation": null,
-            "reason": "the ratio interval spans 1",
+            "ratio_undefined": "bare passed nothing",
+            "reason": "both conditions of the decision rule hold",
+            "text": "SM-2 eligibility: eligible. verdict: supported (exploratory, not from a registered run), because both conditions of the decision rule hold; claim: the harness costs less per pass",
             "unavailable": null,
-            "verdict": "inconclusive"
+            "verdict": "supported"
           },
           "source": {
             "line": 2,
@@ -274,6 +301,7 @@
           "cli_version": "2.1.0",
           "date": "2026-10-01",
           "delegation": {
+            "heading": "Delegation (adherence, descriptive, not causal; registered): break-even 7.6 absorbed calls (FR-34, hypothetical), fired at a spawn in 75% of harness runs (at least 4 clean runs), absorbable Read, Grep",
             "label": "adherence, descriptive, not causal",
             "verdicts": {
               "declined-below-break-even": 1,
@@ -286,7 +314,7 @@
           "evidence": {
             "label": "pre-registered",
             "pre_registration": "docs/plans/registered.md",
-            "reason": "the row is labelled pre-registered"
+            "reason": "the row's own label and the delegation block records each a pre-registered run"
           },
           "harness_sha": "0150015001500150015001500150015001500150",
           "harness_version": "0.15.0",
@@ -297,6 +325,7 @@
                 0.9
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.8
             },
             "pass_rate_difference": {
@@ -305,6 +334,7 @@
                 0.2
               ],
               "interval_kind": "SM-2",
+              "undefined": null,
               "value": 0.05
             },
             "pass_rate_harness": {
@@ -313,16 +343,19 @@
                 0.95
               ],
               "interval_kind": "descriptive",
+              "undefined": null,
               "value": 0.85
             },
             "ratio": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.91
             },
             "ratio_cache_normalised": {
               "interval": null,
               "interval_kind": null,
+              "undefined": null,
               "value": 0.9
             },
             "ratio_sm2": {
@@ -331,6 +364,7 @@
                 1.0
               ],
               "interval_kind": "SM-2",
+              "undefined": null,
               "value": 0.9
             }
           },
@@ -339,10 +373,13 @@
           "run_id": "db2b8635-d2e4-5b4f-b2e4-0a9dde6fc343",
           "series": "replay-v2",
           "sm2": {
+            "claim": null,
             "confidence": 0.95,
             "eligible": true,
             "limitation": null,
+            "ratio_undefined": null,
             "reason": "the ratio interval spans 1",
+            "text": "SM-2 eligibility: eligible. verdict: inconclusive, because the ratio interval spans 1",
             "unavailable": null,
             "verdict": "inconclusive"
           },
@@ -357,6 +394,7 @@
       "series": "replay-v2"
     }
   ],
+  "max_records": 2000,
   "measures": [
     {
       "id": "ratio_sm2",
@@ -426,6 +464,7 @@
               "field": "/hero/line",
               "text": "Observed cost ratio 0.82"
             },
+            "verified": true,
             "verify_status": true
           },
           {
@@ -438,6 +477,7 @@
               0.1
             ],
             "published": null,
+            "verified": false,
             "verify_status": false
           }
         ],
@@ -457,6 +497,7 @@
         },
         "command": "citizen evidence verify --json proof/one",
         "errors": [],
+        "reason": null,
         "status": "verified",
         "unknown": [
           "reasoning effort for the bare arm"
@@ -468,15 +509,29 @@
         "bundle": "proof/one",
         "card": "ratio",
         "field": "/hero/line",
-        "text": "Observed cost ratio 0.82",
-        "verify_status": true
+        "reason": null,
+        "status": "verified",
+        "text": "Observed cost ratio 0.82"
       }
     ],
-    "statement": null,
-    "unverified_bundles": []
+    "statement": null
   },
   "ratio_note": "Each ratio is harness over bare on the same day and model. Compare ratios across days, never dollars. A new series means the task set or the model changed.",
   "schema_version": 1,
+  "sections": {
+    "history": {
+      "reason": null,
+      "status": "ready",
+      "truncated": false,
+      "unreadable": 0
+    },
+    "static": {
+      "reason": null,
+      "status": "ready",
+      "truncated": false,
+      "unreadable": 0
+    }
+  },
   "static": {
     "measure": {
       "id": "static_tokens",
@@ -492,6 +547,5 @@
         "value": 3000
       }
     ]
-  },
-  "truncated": false
+  }
 }

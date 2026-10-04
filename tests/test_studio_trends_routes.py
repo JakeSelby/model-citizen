@@ -4,10 +4,11 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_studio_security as studio_security  # noqa: E402
-from harness_core.studio import server, trends  # noqa: E402
+from harness_core.studio import run_store, server, trends  # noqa: E402
 
 TRENDS = "/api/reports/trends"
 
@@ -59,6 +60,38 @@ class TrendsRouteSecurityTests(studio_security.StudioSecurityFixture):
     def test_the_route_names_its_cli_equivalent(self):
         route = {item.path: item for item in server.ROUTES.entries}[TRENDS]
         self.assertEqual((route.method, route.cli_command), ("POST", trends.CLI_COMMAND))
+
+
+class FailingStoreHandlerTests(unittest.TestCase):
+    """The handler itself, in process: a run store that fails answers 200 with the proof set."""
+
+    def test_a_failing_run_store_leaves_the_proof_set_and_answers_200(self):
+        sent = {}
+
+        class Mutations:
+            @staticmethod
+            def call(action):
+                return action()
+
+        class Supervisor:
+            @property
+            def history(self):
+                raise run_store.RunStoreError("run index read failed")
+
+        handler = mock.Mock()
+        handler.request_json = {}
+        handler.server.mutations = Mutations()
+        handler.server.run_supervisor = Supervisor()
+        handler.server.repo_root = Path(__file__).resolve().parents[1]
+        handler._json.side_effect = lambda status, payload: sent.update(status=status, payload=payload)
+        route = {item.path: item for item in server.ROUTES.entries}[TRENDS]
+        server._trends(handler, route)
+        self.assertEqual(sent["status"], 200)
+        document = sent["payload"]
+        self.assertEqual(document["sections"]["history"]["status"], "unavailable")
+        self.assertIn("run index read failed", document["sections"]["static"]["reason"])
+        self.assertEqual(document["lines"], [])
+        self.assertIn("statement", document["proof"])
 
 
 if __name__ == "__main__":
