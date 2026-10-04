@@ -45,7 +45,10 @@ PACK_FILE = "pack.json"
 TASK_FILE = "task.json"
 CHECK_FILE = "check.py"
 SOLUTION_FILE = "solution.py"
-TIERS = ("production", "micro")
+LONG_SESSION = "long-session"
+TIERS = ("production", "micro", LONG_SESSION)
+SCENARIO_FILE = "scenario.json"
+DIRECTIONS = ("higher", "lower")
 GATE_GREEN = r"^OK\b"
 # A workspace name or task id becomes one path component under the pack's root.
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -217,12 +220,14 @@ def document_errors(document):
         errors.append("sets is not a non-empty object")
     else:
         for name, spec in sorted(sets.items()):
-            ids = (spec or {}).get("tasks")
-            if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
-                errors.append("set %s has no list of unique task ids" % name)
-            elif not all(isinstance(i, str) and NAME.match(i) for i in ids):
-                errors.append("set %s names a task id that is not a plain directory name" % name)
             tier = set_tier(name, spec or {})
+            # A long-session set lists scenarios; every other set lists tasks.
+            kind = "scenarios" if tier == LONG_SESSION else "tasks"
+            ids = (spec or {}).get(kind)
+            if not isinstance(ids, list) or not ids or len(set(ids)) != len(ids):
+                errors.append("set %s has no list of unique %s ids" % (name, kind[:-1]))
+            elif not all(isinstance(i, str) and NAME.match(i) for i in ids):
+                errors.append("set %s names a %s id that is not a plain directory name" % (name, kind[:-1]))
             if tier not in TIERS:
                 errors.append("set %s names no tier of %s" % (name, ", ".join(TIERS)))
             elif tier == "micro" and (not isinstance((spec or {}).get("model"), str) or not spec["model"]):
@@ -328,7 +333,167 @@ def load_set(pack, set_name, tier):
 
 
 def is_pack(task):
-    return task.get("kind") == "pack"
+    """Whether `task` comes from a pack: a task, or a long-session scenario."""
+    return task.get("kind") in ("pack", "scenario")
+
+
+def is_scenario(task):
+    return task.get("kind") == "scenario"
+
+
+def _positive_int(value):
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def scenario_errors(spec, scenario_dir, document):
+    """Why one scenario directory cannot run, or []: the format the pack's README describes and
+    its `tools/verify_scenarios.py` checks, less the 20-to-60-turn design range, which is the
+    pack's to keep. Every check and solution must exist and carry the canary."""
+    where = "scenario %r" % spec.get("id")
+    errors = []
+    if spec.get("id") != scenario_dir.name:
+        errors.append("%s is in directory %s" % (where, scenario_dir.name))
+    if spec.get("workspace") not in (document.get("workspaces") or {}):
+        errors.append("%s names no declared workspace" % where)
+    elif not (scenario_dir.parent.parent / "workspaces" / spec["workspace"]).is_dir():
+        errors.append("%s: workspace %s is missing" % (where, spec["workspace"]))
+    caps = spec.get("caps") if isinstance(spec.get("caps"), dict) else {}
+    for key in ("max_user_turns", "max_agent_turns_per_user_turn"):
+        if not _positive_int(caps.get(key)):
+            errors.append("%s: caps.%s is not a positive integer" % (where, key))
+    hint = caps.get("max_cost_usd_hint")
+    if not isinstance(hint, (int, float)) or isinstance(hint, bool) or hint <= 0:
+        errors.append("%s: caps.max_cost_usd_hint is not a positive number" % where)
+    turns = spec.get("turns")
+    checkpoints = spec.get("checkpoints") if isinstance(spec.get("checkpoints"), dict) else {}
+    if not isinstance(turns, list) or not turns:
+        errors.append("%s has no turns" % where)
+        turns = []
+    elif _positive_int(caps.get("max_user_turns")) and len(turns) > caps["max_user_turns"]:
+        errors.append("%s: %d turns, more than max_user_turns %d" % (where, len(turns), caps["max_user_turns"]))
+    seen = []
+    for number, turn in enumerate(turns, 1):
+        if not isinstance(turn, dict):
+            errors.append("%s turn %d is not an object" % (where, number))
+            continue
+        prompt, branch = turn.get("prompt"), turn.get("branch")
+        if (prompt is None) == (branch is None):
+            errors.append("%s turn %d needs exactly one of prompt and branch" % (where, number))
+        elif branch is not None:
+            if not isinstance(branch, dict) or branch.get("on") not in seen:
+                errors.append("%s turn %d branches on %r, not an earlier checkpoint"
+                              % (where, number, (branch or {}).get("on") if isinstance(branch, dict) else branch))
+            elif not all(isinstance(branch.get(k), str) and branch[k] for k in ("pass", "fail")):
+                errors.append("%s turn %d: a branch needs a pass and a fail prompt" % (where, number))
+        elif not (isinstance(prompt, str) and prompt):
+            errors.append("%s turn %d has an empty prompt" % (where, number))
+        if "checkpoint" in turn:
+            name = turn["checkpoint"]
+            if not isinstance(name, str) or name not in checkpoints or name in seen:
+                errors.append("%s turn %d: checkpoint %r is undeclared or repeated" % (where, number, name))
+            else:
+                seen.append(name)
+    unrun = sorted(set(checkpoints) - set(seen))
+    if unrun:
+        errors.append("%s declares checkpoints no turn runs: %s" % (where, ", ".join(unrun)))
+    if not checkpoints:
+        errors.append("%s declares no checkpoints" % where)
+    for name, cp in sorted(checkpoints.items()):
+        if not isinstance(name, str) or not NAME.match(name):
+            errors.append("%s: checkpoint name %r is not a plain file name" % (where, name))
+            continue
+        metrics = (cp or {}).get("metrics") if isinstance(cp, dict) else None
+        if not isinstance(metrics, dict) or not metrics:
+            errors.append("%s: checkpoint %s declares no metrics" % (where, name))
+        else:
+            errors.extend(oracle_metrics.declaration_errors(metrics, "%s checkpoint %s" % (where, name)))
+        for folder in ("checks", "solutions"):
+            path = scenario_dir / folder / (name + ".py")
+            if not path.is_file():
+                errors.append("%s has no %s/%s.py" % (where, folder, name))
+            elif document["canary"] not in path.read_text(encoding="utf-8"):
+                errors.append("%s: %s/%s.py does not carry the pack's canary" % (where, folder, name))
+    return errors
+
+
+def held_back_files(task):
+    """Every file of a pack task or scenario an arm must never see: its checks and solutions."""
+    if is_scenario(task):
+        root = Path(task["pack"]["task_dir"])
+        return [root / folder / (name + ".py") for name in task["checkpoint_order"]
+                for folder in ("checks", "solutions")]
+    task_dir = Path(task["pack"]["task_dir"])
+    return [task_dir / CHECK_FILE, task_dir / SOLUTION_FILE]
+
+
+def load_scenarios(pack, set_name):
+    """`(scenarios, manifest)` for one long-session set: one dict per scenario, shaped like a pack
+    task where the runner shares code with it (`id`, `kind`, `pack` with its workspace, gate and
+    canary), plus its caps, turns and checkpoints. Refused before anything runs: a set of another
+    tier, a scenario that is a link or holds one, a malformed `scenario.json`, and a workspace that
+    carries the canary. The checks and solutions stay where they are; only the workspace is ever
+    copied for an arm (`materialize`)."""
+    document = pack["document"]
+    spec = (document.get("sets") or {}).get(set_name)
+    if spec is None:
+        raise PackError("pack %s %s has no set %s; it has %s" % (pack["name"], pack["version"], set_name,
+                                                                ", ".join(sorted(document["sets"]))))
+    if set_tier(set_name, spec) != LONG_SESSION:
+        raise PackError("set %s is a %s set, not %s; pass --tier %s"
+                        % (set_name, set_tier(set_name, spec), LONG_SESSION, set_tier(set_name, spec)))
+    root = Path(pack["root"])
+    scenarios, errors = [], []
+    for scenario_id in spec["scenarios"]:
+        folder = root / "scenarios" / scenario_id
+        if not _contained(folder, root):
+            errors.append("scenario %r is a link or holds one; nothing is read through a link" % scenario_id)
+            continue
+        if not (folder / SCENARIO_FILE).is_file():
+            errors.append("scenario %r has no %s" % (scenario_id, SCENARIO_FILE))
+            continue
+        try:
+            body = json.loads((folder / SCENARIO_FILE).read_text(encoding="utf-8"))
+        except ValueError as exc:
+            errors.append("scenario %r: %s is not JSON: %s" % (scenario_id, SCENARIO_FILE, exc))
+            continue
+        if not isinstance(body, dict):
+            errors.append("scenario %r: %s is not an object" % (scenario_id, SCENARIO_FILE))
+            continue
+        problems = scenario_errors(body, folder, document)
+        workspace = root / "workspaces" / str(body.get("workspace"))
+        if not problems and not _contained(workspace, root):
+            problems.append("scenario %r: its workspace is a link or holds one; nothing is read through a link"
+                            % scenario_id)
+        if not problems and any(document["canary"] in p.read_text(encoding="utf-8", errors="replace")
+                                for p in workspace.rglob("*") if p.is_file()):
+            problems.append("scenario %r: its workspace carries the canary" % scenario_id)
+        errors.extend(problems)
+        if problems:
+            continue
+        order = [t["checkpoint"] for t in body["turns"] if "checkpoint" in t]
+        scenarios.append({
+            "id": scenario_id, "kind": "scenario", "source": body.get("source", ""),
+            "parent_sha": None, "good_sha": None, "caps": dict(body["caps"]), "turns": list(body["turns"]),
+            "checkpoints": {name: {"metrics": dict(body["checkpoints"][name]["metrics"]),
+                                   "check_file": str(folder / "checks" / (name + ".py"))} for name in order},
+            "checkpoint_order": order, "max_turns": body["caps"]["max_agent_turns_per_user_turn"],
+            "tests": {"oracle": scenario_id},
+            "pack": {"task_dir": str(folder), "workspace": str(workspace),
+                     "gate": document["workspaces"][body["workspace"]]["gate"],
+                     "canary": document["canary"], "name": pack["name"], "source": pack["source"]}})
+    if errors:
+        raise PackError("pack %s %s, set %s:\n  %s" % (pack["name"], pack["version"], set_name, "\n  ".join(errors)))
+    manifest = {"tier": LONG_SESSION, "set": set_name, "tasks": scenarios}
+    if "model" in spec:
+        manifest["model"] = spec["model"]
+    return scenarios, manifest
+
+
+def checkpoint_task(scenario, name):
+    """One checkpoint of `scenario` as the scorer reads a pack task: its check file and metrics."""
+    cp = scenario["checkpoints"][name]
+    return {"id": "%s/%s" % (scenario["id"], name), "kind": "pack", "metrics": cp["metrics"],
+            "tests": {"oracle": name}, "pack": dict(scenario["pack"], check_file=cp["check_file"])}
 
 
 def materialize(task, dest):
@@ -353,7 +518,8 @@ def materialize(task, dest):
 
 def check_source(task):
     """The held-back check, as the scorer sends it on stdin."""
-    return (Path(task["pack"]["task_dir"]) / CHECK_FILE).read_text(encoding="utf-8")
+    path = task["pack"].get("check_file") or Path(task["pack"]["task_dir"]) / CHECK_FILE
+    return Path(path).read_text(encoding="utf-8")
 
 
 def solution_source(task):
@@ -389,11 +555,11 @@ def contamination_errors(task, checkout, cache=None):
     task_dir = Path(task["pack"]["task_dir"])
     if _inside(task["pack"]["source"], checkout) or _inside(task_dir, checkout):
         errors.append("%s: the pack sits inside the installed checkout" % task["id"])
-    for name in (CHECK_FILE, SOLUTION_FILE):
-        blob = git_blob_id((task_dir / name).read_bytes())
+    for path in held_back_files(task):
+        blob = git_blob_id(path.read_bytes())
         if _git(checkout, "cat-file", "-e", blob).returncode == 0:
             errors.append("%s: the installed checkout's history holds the exact bytes of its %s"
-                          % (task["id"], name))
+                          % (task["id"], path.relative_to(task_dir).as_posix()))
     files, commits = _canary_hits(checkout, task["pack"]["canary"], cache)
     if files:
         errors.append("%s: the installed checkout carries the pack's canary in %s"
