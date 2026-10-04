@@ -122,6 +122,18 @@
       "dependencies": [],
       "conflicts": []
     },
+    "steer-polling": {
+      "claims": [
+        "Notes a foreground sleep or polling loop with the background-notification or Monitor alternative, and denies a foreground sleep past five minutes."
+      ],
+      "surface": [
+        "hook-events"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
     "stop-gate": {
       "claims": [
         "Blocks the end of a turn while the repository's gate is red on a changed tree."

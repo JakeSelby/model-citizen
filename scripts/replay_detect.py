@@ -7,10 +7,13 @@ turn here is the run's model call, counted from 1 in the order the stream report
 headless run has one prompt and the transcript's own turn counter would put every firing on it.
 A tool result takes the turn of the call that asked for it.
 
-Two readings are deliberate. Every detector runs whatever its stance gate says, because the
-bare arm has no stances and a gated detector would measure only one arm. A subagent's own
-messages, which the stream tags with `parent_tool_use_id`, are that agent's work, not the run's,
-so they make no event; its return still does, as the spawning call's tool result.
+Two readings are deliberate. A detector's stance gate is its applicability: a run is scored by
+a gated detector only when the selection its arm ran with enables it, so a rule one variant
+states is never held against an arm that selected another, nor against the bare arm, which has
+no stances. Such a row is `not_applicable`, with no count: never a hit and never clean. A
+detector with no gate applies to every run. A subagent's own messages, which the stream tags with
+`parent_tool_use_id`, are that agent's work, not the run's, so they make no event; its return
+still does, as the spawning call's tool result.
 
 `cost_bench.py detect` is the command line; reading and limits are in docs/benchmarks.md.
 """
@@ -37,6 +40,52 @@ def load_detectors(path=DETECTORS_PATH):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# `stances` for a caller that scores every detector whatever its gate, as before applicability.
+ALWAYS = object()
+NOT_APPLICABLE = "not_applicable"
+
+
+def applicability(module, registry, stances):
+    """`{detector_id: True, False or the reason it is unknown}` for one run whose arm ran with
+    `stances`, a `{dimension: variant}` dict: `{}` for the bare arm, None when the run's
+    selection is not recorded, `ALWAYS` to score everything. The gate is the one `module`
+    registers, since `registry` is the ungated copy that runs. An ungated detector always applies;
+    a gated one never applies to a run with no stances, and otherwise as its gate reads them."""
+    out = {}
+    for detector in registry:
+        detector = module.DETECTORS.get(detector.id, detector)
+        if stances is ALWAYS or detector.gate is None:
+            out[detector.id] = True
+        elif stances is None:
+            out[detector.id] = "applicability unknown: the run's stance selection is not recorded"
+        elif not stances:
+            out[detector.id] = False
+        else:
+            try:
+                out[detector.id] = bool(detector.enabled(stances))
+            except Exception as exc:  # a callable gate reads files; its failure is one unknown
+                out[detector.id] = "applicability unknown: %s" % type(exc).__name__
+    return out
+
+
+def is_not_applicable(row):
+    return bool(row.get(NOT_APPLICABLE))
+
+
+def _applied(row, applies):
+    """`row` as its run's applicability leaves it: unchanged, not applicable, or unknown. Any
+    `error` the stream gave is kept: on a not-applicable row it says nothing about the rule, and
+    on an unknown one it is the first reason the row is unknown."""
+    if applies is True:
+        return row
+    if applies is False:
+        row[NOT_APPLICABLE] = True
+    elif "error" not in row:
+        row["error"] = applies
+    row.update(count=None, turns=None)
+    return row
 
 
 def ungated(module):
@@ -129,10 +178,12 @@ def detect_messages(messages, module, registry=None):
     return out
 
 
-def run_rows(identity, text, reader, module, registry=None):
+def run_rows(identity, text, reader, module, registry=None, stances=ALWAYS):
     """One run's rows, one per detector. A stream that cannot be read, or a detector that
-    raised, is a row with `count` null and the reason in `error`: unknown, never zero."""
+    raised, is a row with `count` null and the reason in `error`: unknown, never zero. A detector
+    `stances` does not enable is `not_applicable` (`applicability`)."""
     registry = registry or ungated(module)
+    applies = applicability(module, registry, stances)
     try:
         found = detect_messages(reader(text)[0], module, registry)
     except (TypeError, ValueError) as exc:
@@ -145,22 +196,27 @@ def run_rows(identity, text, reader, module, registry=None):
             row.update(count=len(value), turns=value)
         else:
             row.update(count=None, turns=None, error=value)
-        rows.append(row)
+        rows.append(_applied(row, applies[detector.id]))
     return rows
 
 
-def missing_rows(identity, reason, registry):
-    return [dict(identity, detector=d.id, rule=d.rule, count=None, turns=None, error=reason)
-            for d in registry]
+def missing_rows(identity, reason, registry, module, stances=ALWAYS):
+    applies = applicability(module, registry, stances)
+    return [_applied(dict(identity, detector=d.id, rule=d.rule, count=None, turns=None, error=reason),
+                     applies[d.id]) for d in registry]
 
 
-def path_rows(identity, path, reader, module, registry):
+def path_rows(identity, path, reader, module, registry, stances=ALWAYS):
     """One existing raw path as detector rows; an I/O failure remains an unknown run."""
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        return missing_rows(identity, "unreadable: %s" % type(exc).__name__, registry)
-    return run_rows(identity, text, reader, module, registry)
+        return missing_rows(identity, "unreadable: %s" % type(exc).__name__, registry, module, stances)
+    return run_rows(identity, text, reader, module, registry, stances)
+
+
+def _always(*_):
+    return ALWAYS
 
 
 def raw_name(task, arm, rep):
@@ -175,8 +231,9 @@ def parse_name(name, arms):
     return (match.group(1), match.group(2), int(match.group(3))) if match else None
 
 
-def detect_dir(raw_dir, arms, reader, module):
-    """(rows, runs) for every run file directly in `raw_dir`, in name order."""
+def detect_dir(raw_dir, arms, reader, module, stances_of=_always):
+    """(rows, runs) for every run file directly in `raw_dir`, in name order. `stances_of(task, arm,
+    rep)` is the selection that run's arm ran with (`applicability`)."""
     registry = ungated(module)
     rows, runs = [], 0
     for path in sorted(Path(raw_dir).iterdir()):
@@ -186,7 +243,7 @@ def detect_dir(raw_dir, arms, reader, module):
         task, arm, rep = parsed
         runs += 1
         rows.extend(path_rows({"task": task, "arm": arm, "rep": rep, "source": path.name},
-                              path, reader, module, registry))
+                              path, reader, module, registry, stances_of(task, arm, rep)))
     return rows, runs
 
 
@@ -208,59 +265,66 @@ def _identity(row):
     return dict((key, row.get(key)) for key in IDENTITY if key in row)
 
 
-def detect_rows(rows, raw_dirs, reader, module, shared=None):
+def detect_rows(rows, raw_dirs, reader, module, shared=None, stances_of=_always):
     """The rows for a set's `results.jsonl` rows, each run's stream found in `raw_dirs`.
 
     A run whose stream is in none of them, in more than one, or in a directory `shared` maps to
     the number of sets that search it, gets error rows rather than a guess: stream names carry no
     tag, so two files of one name are two different runs, and one file where two sets look may
-    be either set's."""
+    be either set's. `stances_of(row)` is the selection the row's arm ran with."""
     registry = ungated(module)
     shared = shared or {}
     out = []
     for row in rows:
         identity = _identity(row)
+        stances = stances_of(row)
         found = raw_candidates(raw_dirs, row)
         if len(found) != 1:
             reason = "no raw output" if not found else "ambiguous raw output: %d files" % len(found)
-            out.extend(missing_rows(identity, reason, registry))
+            out.extend(missing_rows(identity, reason, registry, module, stances))
             continue
         if found[0].parent in shared:
             out.extend(missing_rows(identity, "ambiguous raw output: %s is searched by %d sets"
-                                    % (found[0].parent.name, shared[found[0].parent]), registry))
+                                    % (found[0].parent.name, shared[found[0].parent]), registry, module,
+                                    stances))
             continue
         identity["source"] = found[0].name
-        out.extend(path_rows(identity, found[0], reader, module, registry))
+        out.extend(path_rows(identity, found[0], reader, module, registry, stances))
     return out
 
 
-def detect_saved(rows, streams, reader, module):
+def detect_saved(rows, streams, reader, module, stances_of=_always):
     """The rows for a replay's own set, each run read only from the stream it saved itself:
     `streams` maps `(task, arm, rep)` to `(path, sha256)`, as `cost_bench.save_stream` records
     them. A run that saved none, a timeout among them, or whose file has changed since, gets
-    error rows: another run's stream under the same name is never read."""
+    error rows: another run's stream under the same name is never read. `stances_of(row)` is the
+    selection the row's arm ran with."""
     registry = ungated(module)
     out = []
     for row in rows:
         identity = _identity(row)
+        stances = stances_of(row)
         saved = streams.get((row.get("task"), row.get("arm"), row.get("rep")))
         if saved is None:
             reason = "no stream saved by this run"
             if row.get("error_kind"):
                 reason += " (%s)" % row["error_kind"]
-            out.extend(missing_rows(identity, reason, registry))
+            out.extend(missing_rows(identity, reason, registry, module, stances))
             continue
         path, digest = Path(saved[0]), saved[1]
         identity["source"] = path.name
         try:
             data = path.read_bytes()
         except OSError as exc:
-            out.extend(missing_rows(identity, "unreadable: %s" % type(exc).__name__, registry))
+            out.extend(missing_rows(identity, "unreadable: %s" % type(exc).__name__, registry, module,
+                                    stances))
             continue
         if hashlib.sha256(data).hexdigest() != digest:
-            out.extend(missing_rows(identity, "stream changed since this run saved it", registry))
+            out.extend(missing_rows(identity, "stream changed since this run saved it", registry, module,
+                                    stances))
             continue
-        out.extend(run_rows(identity, data.decode("utf-8", errors="replace"), reader, module, registry))
+        out.extend(run_rows(identity, data.decode("utf-8", errors="replace"), reader, module, registry,
+                            stances))
     return out
 
 
@@ -324,19 +388,22 @@ def write_jsonl(path, rows):
 
 def unreadable(rows, key):
     """How many runs, grouped by `key`, had no readable stream: every one of their rows is unknown.
-    A run where one detector raised still read its stream, so it is not counted."""
+    A run where one detector raised still read its stream, so it is not counted, and a
+    not-applicable row says nothing about the stream either way."""
     missing = {}
     for row in rows:
-        missing.setdefault(key(row), []).append(row.get("count") is None)
-    return sum(1 for flags in missing.values() if all(flags))
+        flags = missing.setdefault(key(row), [])
+        if not is_not_applicable(row):
+            flags.append(row.get("count") is None)
+    return sum(1 for flags in missing.values() if flags and all(flags))
 
 
-def backfill(root, reader, module, overwrite=False):
+def backfill(root, reader, module, overwrite=False, stances_of=_always):
     """Write `detections.jsonl` beside every `results.jsonl` under `root`; read the results
     and never write them, and leave an existing `detections.jsonl` alone unless `overwrite`.
     A stream directory another set also searches, a sibling set sharing `../raw` for one, is
     ambiguous for both. Returns `[(detections path, runs, runs without a stream)]`, the counts
-    None for a set left alone."""
+    None for a set left alone. `stances_of(row)` is the selection a result row's arm ran with."""
     report = []
     for results in results_files(root):
         target = results.parent / DETECTIONS
@@ -351,7 +418,7 @@ def backfill(root, reader, module, overwrite=False):
             sets = claimants(place) | claimants(directory) | {own}
             if len(sets) > 1:
                 shared[directory] = len(sets)
-        detections = detect_rows(rows, dirs, reader, module, shared)
+        detections = detect_rows(rows, dirs, reader, module, shared, stances_of)
         write_jsonl(target, detections)
         unread = unreadable(detections, lambda r: (r.get("task"), r.get("arm"), r.get("rep")))
         report.append((target, len(rows), unread))
@@ -361,13 +428,16 @@ def backfill(root, reader, module, overwrite=False):
 def mechanisms(detections, arm="harness"):
     """Per task, which detectors fired in `arm` and how often across its reps:
     total runs, each firing detector's measured denominator, and every detector error. Unknown
-    detector rows remain in the total and error counts rather than shrinking a denominator."""
+    detector rows remain in the total and error counts rather than shrinking a denominator; a
+    not-applicable row is neither measured nor an error."""
     runs, measured, fired, errors = {}, {}, {}, {}
     for row in detections:
         if row.get("arm") != arm:
             continue
         task, detector, rep = row.get("task"), row.get("detector"), row.get("rep")
         runs.setdefault(task, set()).add(row.get("rep"))
+        if is_not_applicable(row):
+            continue
         if row.get("count") is None:
             reason = str(row.get("error") or "unknown")
             cell = errors.setdefault(task, {}).setdefault(detector, {"runs": set(), "reasons": {}})

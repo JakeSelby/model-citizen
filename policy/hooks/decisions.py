@@ -67,6 +67,7 @@ POINT_MODULES = {
     "workflow-launch": None,
     "integration-descriptor": "hooks/tier-agent-spawns",
     "intent-overlap": "hooks/intent-overlap",
+    "steer-polling": "hooks/steer-polling",
     # `citizen intent merge` records a landing from the command line; no hook makes it.
     "landing-merge": None,
     # One row per decision `grade-bash` asks the configured decision provider for.
