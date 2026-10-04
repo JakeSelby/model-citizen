@@ -642,7 +642,7 @@ class RouteTests(unittest.TestCase):
     def test_the_register_route_names_its_citizen_command(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}
         self.assertEqual(commands["/api/configure/test/register"],
-                         ("citizen", "draft", "test", "--register"))
+                         ("citizen", "draft", "test", "{draft}", "--register", "--json"))
 
 
 class CliTests(unittest.TestCase):

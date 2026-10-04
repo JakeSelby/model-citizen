@@ -410,7 +410,8 @@ class CompareTests(unittest.TestCase):
 
     def test_the_route_names_its_citizen_command(self):
         route = next(item for item in server.ROUTES.entries if item.path == "/api/runs/compare")
-        self.assertEqual((route.method, route.cli_command), ("POST", ("citizen", "runs", "compare")))
+        self.assertEqual((route.method, route.cli_command),
+                         ("POST", ("citizen", "runs", "compare", "{base}", "{candidate}", "--json")))
 
 
 class CompareRouteSecurityTests(studio_security.StudioSecurityFixture):

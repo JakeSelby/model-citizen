@@ -389,7 +389,7 @@ development_status:
 
   ah-e026-adopt-the-studio-from-install-to-a-tuned-harness: in-progress
   ah-s313-first-run-in-the-studio-from-install-to-an: ready-for-dev
-  ah-s314-agents-drive-the-studio-loop-from-the-cli-with-a: backlog
+  ah-s314-agents-drive-the-studio-loop-from-the-cli-with-a: ready-for-dev
   ah-s315-accessibility-and-phone-width-layouts-to-wcag-2: backlog
   ah-s316-end-to-end-and-performance-checks-for-the-studio: backlog
   ah-s317-document-the-studio-and-add-it-to-the-product: backlog

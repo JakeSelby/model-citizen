@@ -42,6 +42,8 @@ SKILL_TRIGGERS = {
     "spike-contract": ("\"spike\"", "\"prototype to find out\"", "\"de-risk\"",
                        "\"check whether X is feasible\"", "numeric exit criterion",
                        "spikes section of a plan or README"),
+    "studio-loop": ("tune, try out or measure a rule, stance, setting or module change",
+                    "roll an apply back", "wants to see a draft, a review or a comparison"),
     "transcript-hygiene": ("briefing a subagent", "reading large output"),
     "upstream-contribution": ("repository you do not own", "`upstream` remote",
                               "\"open a PR against <someone else's repo>\"",

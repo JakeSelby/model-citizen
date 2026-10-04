@@ -582,9 +582,12 @@ class RouteTests(unittest.TestCase):
 
     def test_the_routes_name_their_citizen_commands(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}
-        self.assertEqual(commands["/api/configure/test/plan"], ("citizen", "runs", "spend-preview"))
-        self.assertEqual(commands["/api/configure/test/start"], ("citizen", "runs", "start"))
-        self.assertEqual(commands["/api/configure/test/verdicts"], ("citizen", "draft", "test"))
+        self.assertEqual(commands["/api/configure/test/plan"],
+                         ("citizen", "runs", "draft-test", "plan", "--request", "request.json", "--json"))
+        self.assertEqual(commands["/api/configure/test/start"],
+                         ("citizen", "runs", "draft-test", "start", "--request", "request.json", "--json"))
+        self.assertEqual(commands["/api/configure/test/verdicts"],
+                         ("citizen", "draft", "test", "{draft}", "--json"))
 
     def test_the_verdicts_route_and_citizen_draft_test_agree(self):
         with draft_at(SECOND_REV):

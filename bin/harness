@@ -93,6 +93,8 @@ from harness_core import rule_coverage
 from harness_core import instruction_surface, scorecard
 from harness_core.studio import apply as studio_apply
 from harness_core.studio import first_run as studio_first_run
+from harness_core.studio import headless as studio_headless
+from harness_core.studio import module_library as studio_module_library
 from harness_core.studio import rollback as studio_rollback
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
@@ -2307,6 +2309,14 @@ def governance_lines(cfg: Dict[str, Any]) -> List[str]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
+    if getattr(args, "json", False):
+        # The Studio Overview, as `GET /api/overview` answers it: doctor, drift, catalog and runs.
+        try:
+            payload = _studio_overview()
+        except Exception:
+            payload = overview_core.unavailable("Overview sources are unavailable.")
+        print(json.dumps(payload, sort_keys=True))
+        return 0
     say(f"model-citizen {VERSION}")
     say(f"  repo: {REPO}")
     say(f"  checkout: {_checkout_state()}")
@@ -3184,7 +3194,14 @@ def cmd_lint(args: argparse.Namespace) -> int:
 
 
 def cmd_catalog(args: argparse.Namespace) -> int:
-    print(json.dumps(primitive_catalog.catalog(REPO), indent=2))
+    if getattr(args, "library", False):
+        # The Studio Library's inventory, as `GET /api/library` answers it.
+        payload = studio_module_library.inventory(REPO)
+        payload["repository"] = str(REPO.resolve())
+    else:
+        payload = primitive_catalog.catalog(REPO)
+    print(json.dumps(payload, sort_keys=True) if getattr(args, "json", False)
+          else json.dumps(payload, indent=2))
     return 0
 
 
@@ -7000,6 +7017,12 @@ def cmd_runs(args: argparse.Namespace) -> int:
         if args.runs_action == "catalog":
             result = supervisor.catalog(REPO)
         elif args.runs_action == "start":
+            if args.suite in studio_headless.ADMITTED_SUITES:
+                group = studio_headless.ADMITTED_SUITES[args.suite]
+                raise studio.runs.RunError(
+                    "%s starts only through `citizen runs %s preview` and `citizen runs %s start`, "
+                    "which resolve and check its targets as the Studio does"
+                    % (args.suite, group, group))
             parameters = studio.runs.parse_parameters(args.param)
             preview = supervisor.spend_preview(
                 args.suite, parameters, args.target_kind, args.target_ref,
@@ -7109,6 +7132,42 @@ def cmd_runs(args: argparse.Namespace) -> int:
     return 3 if confirmation_pending else 0
 
 
+def cmd_runs_studio(args: argparse.Namespace) -> int:
+    """Answer one paid-run Studio route through its own handler; see `studio.headless`."""
+    group, action = args.studio_group, args.studio_action
+    method, _path = studio_headless.ROUTES[group][action]
+    request = None
+    if args.request is not None:
+        try:
+            text = (sys.stdin.read() if args.request == "-"
+                    else Path(args.request).read_text(encoding="utf-8"))
+            request = json.loads(text)
+        except (OSError, ValueError):
+            request = "unreadable"
+    elif method == "POST" and action not in ("catalog",):
+        request = "missing"
+    if isinstance(request, str):
+        status, result = 400, {"error": "invalid_request"}
+        detail = ("--request is required" if request == "missing"
+                  else "--request is not a readable JSON object")
+    else:
+        detail = ""
+        try:
+            status, result = studio_headless.call(REPO, state_dir() / "studio", group, action, request)
+        except OSError:
+            status, result = 500, {"error": "run_state_unavailable"}
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif status == 200:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print("runs %s %s: %s%s" % (group, action, result.get("error"),
+                                    "; " + detail if detail else ""), file=sys.stderr)
+    if status == 200:
+        return 0
+    return 1 if status >= 500 else 2
+
+
 def cmd_evidence(args: argparse.Namespace) -> int:
     """Re-derive a local evidence bundle; saved commands and cached success are never trusted."""
     if args.action != "verify":
@@ -7144,7 +7203,8 @@ def program_name(argv0: Optional[str] = None) -> str:
     return name if name in ("citizen", "harness") else "citizen"
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
+    """Every `citizen` command; the Studio parity test parses each route's command with it."""
     parser = argparse.ArgumentParser(prog=program_name(), description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"model-citizen {VERSION}")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -7167,6 +7227,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_sync, print_only=False)
 
     p = sub.add_parser("catalog", help="emit the shared primitive catalog as JSON")
+    p.add_argument("--library", action="store_true",
+                   help="emit the module library inventory the Studio Library shows instead")
+    p.add_argument("--json", action="store_true", help="print one compact JSON document")
     p.set_defaults(func=cmd_catalog)
 
     p = sub.add_parser("generate", help="regenerate native source projections from shared primitives")
@@ -7195,6 +7258,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.set_defaults(func=cmd_diff)
 
     p = sub.add_parser("doctor", help="versions, logins, links, drift")
+    p.add_argument("--json", action="store_true",
+                   help="print the Studio Overview: doctor, drift, catalog and runs as one JSON object")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("upgrade", help="move a Claude Code plugin install from its pre-rename ID to the current one")
@@ -7309,6 +7374,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     reindex = runs_sub.add_parser("reindex", help="rebuild run history from durable result files")
     reindex.add_argument("--json", action="store_true")
     reindex.set_defaults(func=cmd_runs)
+    for group, help_text in (
+            ("replay", "preview, start and read a paired live replay, as the Studio does"),
+            ("eval", "list, preview, start and read an eval tier, as the Studio does"),
+            ("native", "preview, start, follow and retry native acceptance, as the Studio does"),
+            ("draft-test", "plan and start a draft's paired test, as the Studio does")):
+        command = runs_sub.add_parser(group, help=help_text)
+        command.add_argument("studio_action", choices=list(studio_headless.ROUTES[group]))
+        command.add_argument("--request", metavar="FILE",
+                             help="the request body the Studio would send, as JSON; - reads stdin")
+        command.add_argument("--json", action="store_true")
+        command.set_defaults(func=cmd_runs_studio, studio_group=group)
 
     p = sub.add_parser("scorecard", help="one row per module: its instruments, tokens and measured effect")
     p.add_argument("--results", help="an ablation run's results.jsonl, or its directory, to fill each "
@@ -7710,7 +7786,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("action", choices=["check"])
     p.set_defaults(func=cmd_tiers)
 
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
     return args.func(args)
 
 
