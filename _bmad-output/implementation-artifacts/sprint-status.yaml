@@ -391,7 +391,7 @@ development_status:
   ah-s313-first-run-in-the-studio-from-install-to-an: ready-for-dev
   ah-s314-agents-drive-the-studio-loop-from-the-cli-with-a: backlog
   ah-s315-accessibility-and-phone-width-layouts-to-wcag-2: backlog
-  ah-s316-end-to-end-and-performance-checks-for-the-studio: backlog
+  ah-s316-end-to-end-and-performance-checks-for-the-studio: ready-for-dev
   ah-s317-document-the-studio-and-add-it-to-the-product: backlog
   ah-s318-qualify-the-studio-in-every-release: ready-for-dev
   ah-sp018-spike-reach-the-studio-from-a-phone-without: ready-for-dev
