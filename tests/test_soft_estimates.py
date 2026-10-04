@@ -86,6 +86,11 @@ def run(rows, sessions, adherence=ADHERENCE):
     return soft.report(rows, adherence, intervals, sessions.get, TABLE, PRICING, context)
 
 
+def fresh(groups):
+    """The `fresh-session` groups: every kind the adherence log knows gets a group of its own."""
+    return [group for group in groups if group.get("kind") == "fresh-session"]
+
+
 def rendered(result):
     lines = []
     soft.render(result, lines.append)
@@ -272,7 +277,7 @@ class ReportTests(unittest.TestCase):
         return {"s1": POSITIVE, "s2": NEGATIVE, "s4": unpriced}
 
     def test_only_not_followed_emissions_are_priced(self):
-        group, = run(self.rows(), self.sessions())["if_followed"]
+        group, = fresh(run(self.rows(), self.sessions())["if_followed"])
         figures = group["figures"]
         self.assertEqual(group["estimator"], soft.ESTIMATOR)
         self.assertEqual(group["assumption"], soft.ASSUMPTION)
@@ -292,7 +297,7 @@ class ReportTests(unittest.TestCase):
 
     def test_nothing_priced_is_unknown_not_zero(self):
         rows = [emitted("n1", session="gone"), response("n1", "not_followed")]
-        group, = run(rows, {})["if_followed"]
+        group, = fresh(run(rows, {})["if_followed"])
         self.assertIsNone(group["figures"]["saving"].value)
         self.assertEqual(group["figures"]["transcript_missing"].value, 1)
 
@@ -332,12 +337,12 @@ class JsonTests(unittest.TestCase):
         self.assertEqual(document["schema_version"], harness.USAGE_JSON_VERSION)
         self.assertEqual((document["report"], document["by"], document["days"]),
                          ("adherence", "adherence", 30))
-        sections = [group["section"] for group in document["groups"]]
+        sections = [group["section"] for group in fresh(document["groups"])]
         self.assertEqual(sections, ["adherence", "if_followed"])
         for group in document["groups"]:
             for figure in group["figures"].values():
                 self.assertIn(figure["label"], soft.LABELS)
-        adherence_group, estimate = document["groups"]
+        adherence_group, estimate = fresh(document["groups"])
         self.assertEqual(adherence_group["figures"]["rate"]["value"], 0.0)
         self.assertIsNotNone(adherence_group["figures"]["rate"]["interval"])
         # The one not-followed emission has no transcript: its saving is null, never 0.
