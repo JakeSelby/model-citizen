@@ -76,7 +76,7 @@ class DraftApplyTests(unittest.TestCase):
 
     @contextmanager
     def real_draft(self, prefix):
-        name = prefix + "-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name(prefix + "-")
         with tempfile.TemporaryDirectory() as temporary:
             home = Home(temporary, "home", self.initial)
             created = home.cli("draft", "create", name, "--json", timeout=60)

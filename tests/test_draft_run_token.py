@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import draft_support
 
@@ -69,13 +70,43 @@ class RunTokenTests(unittest.TestCase):
         self._branch(own)
         self.assertEqual(draft_support.leaked_drafts(PREFIXES, repo=self.repo), [own])
 
-    def test_an_invalid_inherited_token_is_replaced(self):
-        env = dict(os.environ, **{draft_support.RUN_TOKEN_ENV: "bad/token"})
-        shown = subprocess.run(
+    def _child_token(self, value: str) -> subprocess.CompletedProcess:
+        env = dict(os.environ, **{draft_support.RUN_TOKEN_ENV: value})
+        return subprocess.run(
             [sys.executable, "-c", "import draft_support; print(draft_support.RUN_TOKEN)"],
-            cwd=TESTS, env=env, check=True, capture_output=True, text=True, timeout=30,
+            cwd=TESTS, env=env, capture_output=True, text=True, timeout=30,
         )
-        self.assertRegex(shown.stdout.strip(), r"^run[0-9a-f]{8}$")
+
+    def test_a_token_minted_by_the_parent_is_inherited(self):
+        shown = self._child_token(self.token)
+        self.assertEqual(shown.returncode, 0, shown.stderr)
+        self.assertEqual(shown.stdout.strip(), self.token)
+
+    def test_a_fixed_or_foreign_inherited_token_is_refused(self):
+        for value in ("bad/token", "run1234abcd", "", "p1r0123abcd", "p%dr%s" % (1, "0" * 8)):
+            with self.subTest(value=value):
+                shown = self._child_token(value)
+                self.assertNotEqual(shown.returncode, 0, shown.stdout)
+                self.assertRegex(shown.stderr, "run token|minted by process")
+
+    def test_an_explicit_token_is_validated(self):
+        for value in ("", "bad", "run1234abcd", "p12rXYZ"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    draft_support.draft_name("x-", value)
+                with self.assertRaises(ValueError):
+                    draft_support.leaked_drafts(PREFIXES, value, self.repo)
+
+    def test_tokens_carry_this_process_id_and_differ_per_call(self):
+        self.assertRegex(self.token, r"^p%dr[0-9a-f]{8}$" % os.getpid())
+        self.assertNotEqual(self.token, draft_support.new_run_token())
+
+    def test_names_are_recorded_when_a_log_is_set(self):
+        log = self.repo.parent / "names"
+        with mock.patch.dict(os.environ, {draft_support.NAME_LOG_ENV: str(log)}):
+            first = draft_support.draft_name("x-")
+            second = draft_support.draft_name("y-", self.token)
+        self.assertEqual(log.read_text(encoding="utf-8").split(), [first, second])
 
 
 if __name__ == "__main__":

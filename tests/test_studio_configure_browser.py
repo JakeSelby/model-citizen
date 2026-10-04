@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 import subprocess
 import sys
 import time
@@ -30,7 +29,7 @@ class ConfigureBrowserTests(unittest.TestCase):
         config_path = self.home / ".config" / "agent-harness" / "config.json"
         config_path.parent.mkdir(parents=True)
         config_path.write_bytes((browser_support.REPO / "config.example.json").read_bytes())
-        self.draft = "configure-browser-" + secrets.token_hex(4)
+        self.draft = draft_support.draft_name("configure-browser-")
         created = subprocess.run(
             [sys.executable, str(CLI), "draft", "create", self.draft, "--json"],
             env=self.env, capture_output=True, text=True, timeout=10,

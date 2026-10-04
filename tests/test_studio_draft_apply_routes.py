@@ -7,7 +7,6 @@ import json
 import os
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -94,7 +93,7 @@ class DraftApplyRouteTests(StudioSecurityFixture):
                if not key.startswith("HARNESS_") and key != "CLAUDE_CONFIG_DIR"}
         env.update(HOME=str(self.home), HARNESS_HOME=str(self.home),
                    HARNESS_WORKTREE_ROOT=str(self.home.parent / "worktrees"))
-        name = "apply-route-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("apply-route-")
         created = subprocess.run([sys.executable, str(CLI), "draft", "create", name, "--json"],
                                  cwd=ROOT, env=env, capture_output=True, text=True, timeout=60)
         self.assertEqual(created.returncode, 0, created.stderr or created.stdout)

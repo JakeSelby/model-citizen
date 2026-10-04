@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import sys
-import uuid
 from pathlib import Path
 
 from test_studio_security import StudioSecurityFixture
@@ -66,7 +65,7 @@ class FirstRunRouteTests(StudioSecurityFixture):
     def test_start_creates_the_draft_through_the_cli_and_a_second_start_resumes_it(self):
         cookie, csrf = self._session()
         trusted = {"Cookie": cookie, "Origin": self.record["url"].rstrip("/"), "X-Studio-CSRF": csrf}
-        name = "first-run-" + uuid.uuid4().hex[:10]
+        name = draft_support.draft_name("first-run-")
         draft_support.register_draft_cleanup(self, name, self._environment(), missing_ok=True)
 
         status, body = self._post("/api/first-run/start", {"draft": name}, **trusted)

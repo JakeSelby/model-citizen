@@ -13,7 +13,6 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
-import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -283,7 +282,7 @@ class HttpBoundaryTests(StudioSecurityFixture):
         config = json.loads((REPO / "config.example.json").read_text(encoding="utf-8"))
         config["primitive_roots"] = [str(REPO / "developer-primitives")]
         config_path.write_text(json.dumps(config), encoding="utf-8")
-        name = "security-module-route-" + uuid.uuid4().hex[:8]
+        name = draft_support.draft_name("security-module-route-")
         created = subprocess.run(
             [sys.executable, str(CLI), "draft", "create", name, "--json"],
             env=self.env, capture_output=True, text=True, timeout=30, check=True,
