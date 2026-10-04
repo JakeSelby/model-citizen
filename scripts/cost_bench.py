@@ -2097,11 +2097,7 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
     path = Path(args.results).expanduser()
     path = path / RESULTS if path.is_dir() else path
     if rows is None:
-        # A multi-model run keeps each stratum's rows in its own folder under the tag's.
-        folders = sorted(path.parent.glob("*/" + RESULTS)) if not path.is_file() and path.parent.is_dir() else []
-        if not path.is_file() and not folders:
-            raise SystemExit("cost-bench: %s does not exist" % path)
-        rows = read_jsonl(path) if path.is_file() else [row for folder in folders for row in read_jsonl(folder)]
+        rows = read_jsonl(path) if path.is_file() else stratum_folder_rows(path)
         if strata.is_stratified(rows) or getattr(args, "pool", False):
             return summarise_strata(rows, path, args)
     if unit_economy.is_design(rows):
@@ -2143,6 +2139,18 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
     return 0
 
 
+def stratum_folder_rows(path):
+    """A multi-model run keeps each stratum's rows in its own folder under the tag's, with no
+    `results.jsonl` of its own. Subfolder rows count only when every one names its stratum: any
+    other nested set (per-tag folders under a version, say) would merge unrelated runs, so the
+    path stays missing whatever the flags."""
+    folders = sorted(path.parent.glob("*/" + RESULTS)) if path.parent.is_dir() else []
+    rows = [row for folder in folders for row in read_jsonl(folder)]
+    if not rows or any(row.get(strata.KEY) is None for row in rows):
+        raise SystemExit("cost-bench: %s does not exist" % path)
+    return rows
+
+
 def summarise_strata(rows, path, args, root=ROOT):
     """Every section of the report once per stratum, in the order the rows name them, then the
     pooled report only when `--pool` is given and the run's pre-registration names a pooled
@@ -2150,7 +2158,8 @@ def summarise_strata(rows, path, args, root=ROOT):
     The exit status is the worst of them."""
     grouped = strata.groups(rows)
     if not strata.is_stratified(rows):
-        raise SystemExit("cost-bench: --pool needs rows from two or more strata; %s holds one" % path)
+        raise SystemExit("cost-bench: --pool needs rows from two or more strata; %s holds one, so there "
+                         "is nothing to pool" % path)
     if args.plot:
         raise SystemExit("cost-bench: --plot draws one stratum; summarise each stratum's own results file")
     pooled = strata.pool(rows, root) if getattr(args, "pool", False) else None  # refused before any output
