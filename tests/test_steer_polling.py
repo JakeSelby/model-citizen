@@ -39,14 +39,23 @@ NOTED = {
     "gh pr checks --watch=true": "gh pr checks --watch",
     "gh run watch 991": "gh run watch",
     "docker wait builder": "docker wait",
+    "sleep 60 & wait $!": "wait",
+    "gh run watch 991 & wait": "gh run watch",
+    "while true; do sleep 5 & wait; done": "while",
+    "for x in a; do echo \"$x\"; done; sleep 60": "sleep 60",
+    "sleep 600 | cat & sleep 60": "sleep 60",
 }
 DENIED = ("sleep 301", "sleep 600", "sleep 6m", "sleep 1h", "sleep infinity", "X=1 sleep 400",
-          "sleep 200; sleep 200", "while true; do sleep 400; done")
+          "sleep 200; sleep 200", "while true; do sleep 400; done", "sleep 600 & wait $!",
+          "sleep 600 & wait", "(sleep 400; echo) & wait", "for x in a; do echo \"$x\"; done; sleep 600",
+          "while x; do for y in z; do echo; done; sleep 1; done; sleep 600")
 # Near misses: none of these waits in the foreground long enough, or at all.
 SILENT = ("sleep 5", "sleep 30", "sleep 0.5", "sleep $N", "ls -la", "gh pr checks 12",
           "gh run view 991", "docker run --rm img", "timeout 600 gh pr checks 12 --watch",
           "gtimeout 120 docker wait builder", "echo 'sleep 600'", 'git commit -m "sleep 600"',
-          "echo hi # sleep 600", "sleep 600 &", "sleep 600 & wait $!",
+          "echo hi # sleep 600", "sleep 600 &", "sleep 600 & sleep 5 & wait $!",
+          "sleep 600 | cat &", "sleep 600 && echo done &", "{ sleep 600; } &",
+          "while true; do sleep 5; done &", "until test -f x; do sleep 600; done | cat &",
           "while read line; do echo $line; done < f", "for f in *.py; do wc -l $f; done",
           "echo 'unbalanced")
 
@@ -88,6 +97,16 @@ class Patterns(unittest.TestCase):
     def test_a_loop_is_reported_once_however_often_it_sleeps(self):
         _, findings = hook.judge("while true; do sleep 5; curl x; sleep 5; done")
         self.assertEqual(findings, ["a `while` loop that sleeps"])
+
+    def test_a_trailing_ampersand_backgrounds_the_whole_job(self):
+        parts = hook.segments("sleep 1; sleep 600 | cat && echo & while x; do sleep 5; done & ls")
+        self.assertEqual([job for _, job in parts], [None, 1, 1, 1, 2, 2, 2, None])
+        parts = hook.segments("while x; do sleep 600 & done")
+        self.assertEqual([job for _, job in parts], [None, 1, None])
+
+    def test_a_loop_is_reported_again_once_a_later_loop_sleeps(self):
+        _, findings = hook.judge("until a; do sleep 5; done; while b; do sleep 5; done")
+        self.assertEqual(findings, ["a `until` loop that sleeps", "a `while` loop that sleeps"])
 
     def test_the_note_names_both_alternatives_and_decides_nothing(self):
         result, logged = hook.answer_for({"tool_input": {"command": "sleep 60"}})

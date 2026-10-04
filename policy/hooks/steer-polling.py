@@ -15,8 +15,9 @@ Three shapes are a foreground wait:
 
 Each one gets a note in the agent's context naming the alternative, and no permission decision,
 so the rest of the Bash path still answers. Only a foreground sleep past WAIT_DENY seconds, alone
-or summed across one command, is denied. A command run with `run_in_background`, and a segment
-the shell itself backgrounds with `&`, are never judged. Every note, denial and exempted
+or summed across one command, is denied. A command run with `run_in_background` is never judged,
+and a job the shell itself backgrounds with `&` is judged only through a foreground `wait` that
+holds the call open for it, as in `sleep 600 & wait $!`. Every note, denial and exempted
 background wait is a `steer-polling` row in the decision log; a command with no wait in it
 writes nothing.
 
@@ -44,6 +45,11 @@ LOOPS = ("until", "while", "for")
 # Words that may stand before a command's name without being it.
 PREFIXES = {"do", "then", "else", "elif", "!", "{", "time", "exec", "nohup", "command"}
 SEPARATORS = {";", "&", "&&", "|", "||", "|&", ";;", "\n", "(", ")"}
+# Separators that end a shell job; `&&`, `||` and the pipes join commands into one.
+JOB_ENDS = {";", "&", ";;", "\n"}
+# Words that open or close a compound command when they stand where a command's name would.
+OPENERS = {"until", "while", "for", "select", "if", "case"}
+CLOSERS = {"done", "fi", "esac", "}"}
 ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 DURATION = re.compile(r"^(\d+(?:\.\d*)?|\.\d+)([smhd]?)$")
 UNITS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -56,8 +62,24 @@ ALTERNATIVE = ("Run the wait with run_in_background and a command that exits whe
                "Monitor tool.")
 
 
+def nesting(words):
+    """How many groups `words` opens, and whether it closes one, from its command position."""
+    k, opened = 0, 0
+    while k < len(words) and (words[k] in PREFIXES or ASSIGNMENT.match(words[k])):
+        opened += words[k] == "{"
+        k += 1
+    if k < len(words) and words[k] in OPENERS:
+        opened += 1
+    return opened, k < len(words) and words[k] in CLOSERS
+
+
 def segments(command):
-    """The command's simple commands as `(words, backgrounded)`, or None when it cannot be split."""
+    """The command's simple commands as `(words, job)`, or None when it cannot be split.
+
+    `job` numbers the shell job a trailing `&` sends to the background, or is None in the
+    foreground. The `&` covers the whole job before it, back to the last `;` or newline at its
+    own depth, so `sleep 600 | cat &` and a loop ending `done &` are background throughout.
+    """
     # `2>&1` names a descriptor, not an argument: drop the number before the lexer splits it off.
     command = FD_REDIRECT.sub(r"\1", command)
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
@@ -69,21 +91,45 @@ def segments(command):
     except ValueError:
         return None
     out, words, target = [], [], False
-    for token in tokens:
+    # pending[d] holds the segments of the job open at depth d; a nested segment is in each.
+    pending, jobs = [[]], 0
+
+    def flush():
+        if not words:
+            return
+        opened, closes = nesting(words)
+        for job in pending:
+            job.append(len(out))
+        out.append([words, None])
+        if closes and len(pending) > 1:
+            pending.pop()
+        for _ in range(opened):
+            pending.append([])
+
+    for token in tokens + ["\n"]:
         if target:
             target = False
         elif ("<" in token or ">" in token) and not token.strip("<>&|"):
             # A redirection operator; its target is the next word, and neither is an argument.
             target = True
         elif token in SEPARATORS:
-            if words:
-                out.append((words, token == "&"))
+            flush()
             words = []
+            if token == "(":
+                pending.append([])
+            elif token == ")":
+                if len(pending) > 1:
+                    pending.pop()
+            elif token in JOB_ENDS:
+                if token == "&":
+                    jobs += 1
+                    for index in pending[-1]:
+                        if out[index][1] is None:
+                            out[index][1] = jobs
+                pending[-1] = []
         else:
             words.append(token)
-    if words:
-        out.append((words, False))
-    return out
+    return [tuple(segment) for segment in out]
 
 
 def head(words):
@@ -128,31 +174,62 @@ def judge(command):
     parts = segments(command)
     if not parts:
         return None, []
-    findings, slept, looping, reported = [], 0.0, None, False
-    for words, backgrounded in parts:
+    findings, slept, loops, reported = [], [0.0], [], [False]
+    # Each background job's sleep in seconds and its watchers, until a foreground `wait` takes it.
+    background, last = {}, None
+
+    def sleeps(wait, label):
+        # A loop that sleeps is a poll at any length, `sleep $DELAY` included.
+        if loops and not reported[0]:
+            findings.append("a `%s` loop that sleeps" % loops[0])
+            reported[0] = True
+        if wait is None:
+            return
+        slept[0] += wait
+        if not loops and wait > WAIT_NOTE:
+            findings.append(label)
+
+    for words, job in parts:
         name, arguments = head(words)
-        if name is None or backgrounded:
+        if name is None:
             continue
-        if name in LOOPS and looping is None:
-            looping = name
+        if job is not None:
+            last = job
+            held = background.setdefault(job, [0.0, [], []])
+            if name == "sleep":
+                wait = seconds(arguments)
+                held[0] = None if wait is None or held[0] is None else held[0] + wait
+                held[1].append("sleep %s" % " ".join(arguments))
+            elif name not in BOUNDED and watcher(name, arguments) is not None:
+                held[2].append(watcher(name, arguments))
+            continue
+        if name in LOOPS:
+            loops.append(name)
+        elif name == "done":
+            if loops:
+                loops.pop()
+            if not loops:
+                reported[0] = False
         elif name == "sleep":
-            # A loop that sleeps is a poll at any length, `sleep $DELAY` included.
-            if looping is not None and not reported:
-                findings.append("a `%s` loop that sleeps" % looping)
-                reported = True
-            wait = seconds(arguments)
-            if wait is None:
-                continue
-            slept += wait
-            if looping is None and wait > WAIT_NOTE:
-                findings.append("`sleep %s`" % " ".join(arguments))
+            sleeps(seconds(arguments), "`sleep %s`" % " ".join(arguments))
+        elif name == "wait":
+            # A foreground `wait` holds the call open for the background jobs it waits on.
+            taken = [last] if arguments == ["$!"] else list(background)
+            held = [background.pop(j) for j in taken if j in background]
+            waits = [h for h in held if h[1]]
+            if waits:
+                known = [h[0] for h in waits if h[0] is not None]
+                sleeps(max(known) if len(known) == len(waits) else None,
+                       "`wait` on `%s &`" % "; ".join(s for h in waits for s in h[1]))
+            for polled in (p for h in held for p in h[2]):
+                findings.append("`wait` on `%s &` with no timeout" % polled)
         elif name not in BOUNDED:
             polled = watcher(name, arguments)
             if polled is not None:
                 findings.append("`%s` with no timeout" % polled)
     if not findings:
         return None, []
-    return ("deny" if slept > WAIT_DENY else "note"), findings
+    return ("deny" if slept[0] > WAIT_DENY else "note"), findings
 
 
 def answer_for(event):
