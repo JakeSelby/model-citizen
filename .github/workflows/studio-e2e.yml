@@ -1,0 +1,36 @@
+name: studio-e2e
+
+on:
+  push:
+    branches: [main, feature/v0.18.0-studio]
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  # The Studio's six main flows end to end in headless Chrome, and its performance budgets,
+  # against a fixture home with no network and no model calls (AH-S316). Whether it blocks a
+  # merge is the branch ruleset's call, not this file's.
+  e2e:
+    name: studio-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The flows serve a clone of this commit, and its lint reads released commits.
+          fetch-depth: 0
+      # The runner image's preinstalled Google Chrome stable, the same browser the
+      # studio-lifecycle job qualifies; nothing is downloaded. A missing browser fails here.
+      - name: Chrome is present
+        run: google-chrome --version
+      - name: Bundle size budgets
+        run: python3 scripts/studio_budgets.py bundle
+      - name: End-to-end flows and live budgets
+        working-directory: tests
+        env:
+          # A missing Chrome fails every flow instead of skipping it.
+          STUDIO_E2E_REQUIRE_BROWSER: "1"
+        run: python3 -m unittest -v test_e2e_studio_flows test_e2e_studio_budgets
