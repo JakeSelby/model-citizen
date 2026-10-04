@@ -406,6 +406,7 @@ development_status:
   ah-s341-extended-layer-sweep-with-a-justification-rule: backlog
   ah-s342-diff-quality-judge-where-deterministic-graders: backlog
   ah-s343-layer-scorecard-generated-from-registered-rows: backlog
+  ah-s347-protect-the-record-block-agent-writes-to: backlog
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
 
   # Items with no epic
@@ -525,6 +526,7 @@ development_status:
   ah-b159-fix-hooks-the-stop-gate-ignores-a-stated-reason: ready-for-dev
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: ready-for-dev
   ah-b161-fix-benchmarks-the-delegation-verdict-ignores: ready-for-dev
+  ah-b162-fix-cost-the-price-table-has-no-entry-for-claude: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -592,6 +594,7 @@ development_status:
   ah-c102-run-the-registered-796-pilot-and-power-analysis: ready-for-dev
   ah-c103-reserve-the-live-judge-story-s-id-and-write-its: ready-for-dev
   ah-c104-record-the-definitive-evaluation-epic-s-bmad: ready-for-dev
+  ah-c105-reserve-the-record-protection-story-s-id-and: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
