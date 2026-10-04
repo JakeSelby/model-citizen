@@ -49,7 +49,10 @@ import os
 import stat
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+
+# Runs a supervisor read on the thread that owns the run index (`compare.compare_runs`).
+Owner = Callable[[Callable[[], Any]], Any]
 
 from . import compare, drafts, replay, runs, targets
 
@@ -552,9 +555,11 @@ def staleness(draft: Mapping[str, Any], revision: str,
 
 def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
             draft: Mapping[str, Any], root: Path,
-            registrations: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+            registrations: Optional[Dict[str, Dict[str, Any]]] = None,
+            owner: Owner = compare.direct) -> Dict[str, Any]:
     """One test's state, verdict, staleness, spend and the comparison it links to.
-    `registrations` caches the registrations this request has loaded."""
+    `registrations` caches the registrations this request has loaded; supervisor reads go
+    through `owner`."""
     run_id = item["run_id"]
     sides = {"base": {"run_id": run_id, "target": 1}, "candidate": {"run_id": run_id, "target": 2}}
     stale, stale_reason = staleness(draft, item["revision"], item["config_digest"])
@@ -566,18 +571,42 @@ def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
            "status": None, "verdict": "unavailable", "reasons": [], "readings": {},
            "spend_usd": None, "registration": item.get("registration"),
            "evidence": replay.EXPLORATORY, "deviations": list(item.get("deviations") or [])}
-    try:
-        shown = supervisor.show(run_id)
-        out["status"] = shown.get("status")
-    except (runs.RunError, OSError):
+    def snapshot_staleness(_repository: Path, target: replay.ReplayTarget):
+        if target.kind != "draft":
+            return False, None
+        if target.draft != draft["draft"]:
+            return True, "the run measured another draft"
+        return staleness(draft, target.revision, target.config_digest)
+
+    def read() -> Tuple[Optional[Dict[str, Any]], Any]:
+        """One executor trip per test: the run's state and, once finished, both sides."""
+        try:
+            shown = supervisor.show(run_id)
+        except (runs.RunError, OSError) as exc:
+            if compare.unknown_run(exc):
+                return None, None
+            raise compare.CompareError("run %s could not be read now (%s); try again"
+                                       % (run_id, exc), compare.UNREADABLE) from exc
+        if shown.get("status") not in runs.TERMINAL:
+            return shown, None
+        try:
+            return shown, compare.load_sides(supervisor, Path(repository), {
+                "base": (run_id, 1), "candidate": (run_id, 2)}, staleness=snapshot_staleness)
+        except compare.CompareError as exc:
+            if exc.code in compare.RETRYABLE:
+                raise
+            return shown, exc
+
+    shown, loaded = owner(read)
+    if shown is None:
         out["reasons"] = ["the run is no longer known"]
     else:
+        out["status"] = shown.get("status")
         if out["status"] not in runs.TERMINAL:
             out["verdict"] = "running"
         else:
             started = shown.get("created_at") or item["created_at"]
-            out.update(_scored(supervisor, repository, item, draft, root, started,
-                               registrations))
+            out.update(_scored(supervisor, item, root, started, loaded, registrations))
     out["headline"] = HEADLINES[out["verdict"]]
     return out
 
@@ -607,11 +636,12 @@ def registered_claim(comparison: Mapping[str, Any]) -> Dict[str, Any]:
         sides[0], sides[1], comparison["result"])))
 
 
-def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
-            draft: Mapping[str, Any], root: Path, started_at: Optional[str],
-            registrations: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+def _scored(supervisor: Any, item: Mapping[str, Any], root: Path, started_at: Optional[str],
+            loaded: Any, registrations: Optional[Dict[str, Dict[str, Any]]] = None
+            ) -> Dict[str, Any]:
     """The verdict, reasons, readings and spend of a finished run, cached by its recorded results
-    and the state of its registration."""
+    and the state of its registration. `loaded` is both sides as the owner read them, or the
+    comparison's refusal; the engine runs here, on the caller's thread, only on a cache miss."""
     run_id = item["run_id"]
     try:
         digest, spend = _recorded(supervisor, run_id)
@@ -624,18 +654,9 @@ def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
     if found is not None:
         return dict(found)
 
-    def snapshot_staleness(_repository: Path, target: replay.ReplayTarget):
-        if target.kind != "draft":
-            return False, None
-        if target.draft != draft["draft"]:
-            return True, "the run measured another draft"
-        return staleness(draft, target.revision, target.config_digest)
-
-    try:
-        comparison = compare.compare_runs(supervisor, Path(repository), {
-            "base": (run_id, 1), "candidate": (run_id, 2)}, staleness=snapshot_staleness)
-    except compare.CompareError as exc:
-        return {"verdict": "unavailable", "reasons": [str(exc)], "spend_usd": spend}
+    if isinstance(loaded, compare.CompareError):
+        return {"verdict": "unavailable", "reasons": [str(loaded)], "spend_usd": spend}
+    comparison = compare.compare(loaded[compare.BASE], loaded[compare.CANDIDATE])
     from . import draft_registration
     label, deviations = draft_registration.evidence(
         root, item.get("registration"), list(item.get("deviations") or []), item["run_id"],
@@ -653,9 +674,11 @@ def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
     return dict(value)
 
 
-def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[str, Any]:
+def verdicts(supervisor: Any, repository: Path, root: Path, name: str,
+             owner: Owner = compare.direct) -> Dict[str, Any]:
     """Each checkpoint's latest test, scored, and every test of this draft listed newest first.
-    Only the latest test of a checkpoint is compared; older ones are listed by run id."""
+    Only the latest test of a checkpoint is compared; older ones are listed by run id. Supervisor
+    reads go through `owner`, the served Studio's mutation executor."""
     draft = identity(repository, name)
     found, skipped = read_records(root)
     registrations: Dict[str, Dict[str, Any]] = {}  # each registration loaded once per request
@@ -669,7 +692,7 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
             checkpoints.append({"revision": item["revision"],
                                 "current": item["revision"] == draft["revision"],
                                 "latest": verdict(supervisor, repository, item, draft, root,
-                                                  registrations),
+                                                  registrations, owner),
                                 "tests": 1})
         else:
             entry["tests"] += 1
