@@ -12,7 +12,7 @@ import { initialPack, packOptions, tasksFor, type ReplayCatalog } from "../exper
 import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
   currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, planBody, readingLines, registerBody,
-  spendLine, startBlocked, validateDraftTest, verdictBadge, withNeededTrials,
+  spendLine, startBlocked, startedMessage, validateDraftTest, verdictBadge, withNeededTrials,
   type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
@@ -202,7 +202,7 @@ export function DraftTest({ draft, revision }: Props) {
       const under = preRegister && registration ? registration.registration_id : null;
       const value = await startDraftTest(draft, plan.preview.request, plan.preview.confirmation_token, body.effect, body.cv, under);
       setPlan(null);
-      setStatus(`Test started as run ${value.run_id}${under ? " under its registration" : ""}. Refresh to follow its verdict.`);
+      setStatus(startedMessage(value));
       await refresh();
     } catch (error) {
       setStatus(message(error, "The test could not start."));
@@ -281,7 +281,8 @@ export function DraftTest({ draft, revision }: Props) {
             {verdicts && <RegistrationList registrations={verdicts.registrations} />}
           </Stack>
         )}
-        {blocked && <Text aria-live="polite" c="dimmed" size="sm">{blocked}</Text>}
+        {/* Always mounted, so a screen reader announces the text when it changes. */}
+        <Text aria-live="polite" c="dimmed" size="sm">{blocked ?? ""}</Text>
         <Group justify="flex-end">
           <Button variant="light" disabled={busy || errors.length > 0} loading={busy} onClick={check}>Check power and spend</Button>
           <Button disabled={busy || blocked !== null || !plan?.preview.valid || !plan.preview.confirmation_token} loading={busy} onClick={start}>Confirm and test</Button>

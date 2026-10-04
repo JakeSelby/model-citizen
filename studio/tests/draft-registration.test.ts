@@ -5,10 +5,10 @@ import { createElement as h } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 
-import { RegistrationList, VerdictCard } from "../src/configure/DraftTest.tsx";
+import { DraftTest, RegistrationList, VerdictCard } from "../src/configure/DraftTest.tsx";
 import { registerDraftTest, startDraftTest } from "../src/configure/draftTestApi.ts";
 import {
-  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, registerBody, startBlocked,
+  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, registerBody, startBlocked, startedMessage,
   type DraftTestRegistration, type DraftTestVerdicts,
 } from "../src/configure/draftTestModel.ts";
 
@@ -101,4 +101,19 @@ test("register posts to its CSRF route and start names the registration only whe
   assert.deepEqual(posts.map((call) => call.input), ["/api/configure/test/register", "/api/configure/test/start"]);
   for (const call of posts) assert.equal((call.init?.headers as Record<string, string>)["X-Studio-CSRF"], "csrf");
   assert.equal(JSON.parse(String(posts[1].init?.body)).registration, "r");
+});
+
+test("the started message comes from the server's record, never assumed", () => {
+  const run = { run_id: "r1", status: "queued" };
+  assert.match(startedMessage({ ...run, record: { registration: "g", deviations: [] } }), /pre-registered: it matches/);
+  const lost = startedMessage({ ...run, record: { registration: "g", deviations: ["the run's task manifest differs from the registration's"] } });
+  assert.match(lost, /exploratory: the run's task manifest differs/);
+  assert.ok(!/pre-registered/.test(lost));
+  assert.match(startedMessage({ ...run, record: { registration: null, deviations: [] } }), /, exploratory\./);
+});
+
+test("the blocked-start live region is mounted before it has anything to say", () => {
+  const html = page(h(DraftTest, { draft: "tuned", revision: "rev" }));
+  assert.ok((html.match(/aria-live="polite"/g) ?? []).length >= 3, html);
+  assert.ok(draftTestErrorMessage("draft_test_variance_undeclared").includes("benchmarks/ablations.json"));
 });

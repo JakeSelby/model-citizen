@@ -11,6 +11,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,8 +21,8 @@ from test_harness import REPO, harness  # noqa: E402
 from harness_core.studio import draft_registration, draft_tests, packs, replay, runs, server  # noqa: E402
 from test_studio_compare import Runs, request, spec, target  # noqa: E402
 from test_studio_draft_tests import (  # noqa: E402
-    BASE_REV, FIRST_REV, SECOND_REV, RUN_ONE, RUN_TWO, Admission, draft_at, draft_request,
-    route_call)
+    BASE_REV, FIRST_REV, SECOND_REV, RUN_ONE, RUN_TWO, Admission, Handler, draft_at,
+    draft_request, route_call)
 import test_studio_security as studio_security  # noqa: E402
 
 PROTOCOL = replay._engine_module("experiment_protocol")
@@ -59,7 +60,7 @@ def register(root, revision=FIRST_REV, spec_value=None, effect=EFFECT, cv=None, 
 
 
 def registered_run(tmp, candidate, registration=True, selected=None, run_id=RUN_ONE,
-                   supervisor=None, found=None, **changes):
+                   supervisor=None, found=None, stamp=None, **changes):
     """One finished draft test at five trials per task, started and claimed under a fresh
     registration (or `found`) unless `registration` is false; `changes` alter the request."""
     if supervisor is None:
@@ -72,19 +73,22 @@ def registered_run(tmp, candidate, registration=True, selected=None, run_id=RUN_
     if selected is None:
         selected = draft_request(FIRST_REV, repetitions=changes.pop("repetitions", 5), **changes)
     base, revision = selected.targets[0].revision, selected.targets[1].revision
-    if selected.repetitions != 5 or list(selected.tasks) != ["a", "b", "c"]:
-        supervisor.add(run_id, selected, {base: sized(BASE5, selected),
-                                          revision: sized(candidate, selected)})
-    else:
-        supervisor.add(run_id, selected, {base: BASE5, revision: candidate})
     with draft_at(revision):
         draft = draft_tests.identity(REPO, "tuned")
         identity, deviations = draft_tests.start_registration(
             supervisor.state_root, REPO, draft, selected,
             found["registration_id"] if registration else None)
-        if identity is not None and not draft_registration.claim(supervisor.state_root, identity,
-                                                                 run_id):
-            deviations.append("the registration already backs another run")
+    # The server's order: claim, admit the run, then record the run the registration backs.
+    if identity is not None:
+        draft_registration.claim(supervisor.state_root, identity)
+    if selected.repetitions != 5 or list(selected.tasks) != ["a", "b", "c"]:
+        supervisor.add(run_id, selected, {base: sized(BASE5, selected),
+                                          revision: sized(candidate, selected)}, stamp=stamp)
+    else:
+        supervisor.add(run_id, selected, {base: BASE5, revision: candidate}, stamp=stamp)
+    if identity is not None:
+        draft_registration.bind(supervisor.state_root, identity, run_id)
+    with draft_at(revision):
         draft_tests.record(supervisor.state_root, run_id, draft, selected,
                            draft_tests.power(REPO, len(selected.tasks), selected.repetitions,
                                              {"effect": EFFECT, "cv": CV}),
@@ -147,6 +151,13 @@ class RegisterTests(unittest.TestCase):
             "Contamination control"], kept)
         self.assertIn("the installed checkout's `benchmarks/tasks.json` as read at registration",
                       PROTOCOL.fields(PROTOCOL.sections(text)["Run"])["Task manifest"])
+        rule = PROTOCOL.sections(text)["Decision rule"]
+        self.assertIn("The result is published with its intervals, whatever it shows.", rule)
+        self.assertIn("(draft\n  minus base)", rule)
+        self.assertNotIn("bare", rule)
+        log = PROTOCOL.sections(text)["Deviation log"]
+        self.assertIn("Append a dated entry for every change after the first trial", log)
+        self.assertNotIn("<", log)
 
     def test_a_template_field_left_unfilled_or_an_override_it_lacks_fails_registration(self):
         template = draft_registration.TEMPLATE.read_text(encoding="utf-8")
@@ -209,6 +220,24 @@ class RegisterTests(unittest.TestCase):
             register(self.root, effect=0.2)
         self.assertEqual(caught.exception.code, "draft_test_effect_too_large")
 
+    def test_no_declared_variance_is_refused_with_the_way_to_declare_one(self):
+        missing = draft_tests.DraftTestError("no planning assumption is declared",
+                                             "draft_test_planning_unavailable")
+        with draft_at(), catalog(), mock.patch.object(draft_tests, "declared_planning",
+                                                      side_effect=missing):
+            with self.assertRaises(draft_tests.DraftTestError) as caught:
+                draft_registration.register(self.root, REPO, "tuned", dict(SPEC), EFFECT, None)
+        self.assertEqual(caught.exception.code, "draft_test_variance_undeclared")
+        for named in ("scripts/replay_power.py --pilot", "benchmarks/ablations.json",
+                      "cost_bench.py replay --exploratory"):
+            self.assertIn(named, str(caught.exception))
+        self.assertNotIn("state a coefficient", str(caught.exception))
+
+    def test_the_model_is_stripped_so_the_record_matches_its_plan(self):
+        found = register(self.root, spec_value=dict(SPEC, model="  claude-test "))
+        self.assertEqual((found["model"], found["committed"]["model"], found["problems"]),
+                         ("claude-test", "claude-test", []))
+
     def test_bad_specs_unknown_tasks_and_a_draft_at_its_base_are_refused(self):
         for bad in ({"model": "m"}, dict(SPEC, tasks=[]), dict(SPEC, tasks=["a", "a"]),
                     dict(SPEC, model="-x"), dict(SPEC, model="a`b"), dict(SPEC, repetitions=21),
@@ -226,9 +255,8 @@ class RegisterTests(unittest.TestCase):
         found = register(self.root)
         plan = registry(self.root) / found["plan"]
         self.assertEqual(plan.stat().st_mode & 0o777, 0o400)
-        if hasattr(os, "geteuid") and os.geteuid() != 0:
-            with self.assertRaises(PermissionError):
-                plan.write_text("over", encoding="utf-8")
+        with self.assertRaises(PermissionError):  # the gate never runs as root
+            plan.write_text("over", encoding="utf-8")
         records = os.open(str(self.root / draft_tests.RECORDS_DIR / "registrations"),
                           os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -290,8 +318,13 @@ class RegisterTests(unittest.TestCase):
         selected = draft_request(FIRST_REV, repetitions=5)
         self.assertEqual(draft_tests.start_registration(self.root, REPO, draft, selected,
                                                         identity), (identity, []))
-        self.assertTrue(draft_registration.claim(self.root, identity, RUN_ONE))
-        self.assertFalse(draft_registration.claim(self.root, identity, RUN_TWO))
+        draft_registration.claim(self.root, identity)
+        self.assertEqual(draft_registration.used_by(self.root, identity), draft_registration.PENDING)
+        with self.assertRaises(draft_tests.DraftTestError) as caught:
+            draft_registration.claim(self.root, identity)
+        self.assertEqual(caught.exception.code, "draft_test_registration_used")
+        draft_registration.bind(self.root, identity, RUN_ONE)
+        draft_registration.release(self.root, identity)  # a bound claim is never undone
         self.assertEqual(draft_registration.used_by(self.root, identity), RUN_ONE)
         with self.assertRaises(draft_tests.DraftTestError) as caught:
             draft_tests.start_registration(self.root, REPO, draft, selected, identity)
@@ -378,6 +411,47 @@ class VerdictTests(unittest.TestCase):
                 dict(comparison, candidate=dict(candidate, **changed)), None)
             self.assertEqual(label, replay.EXPLORATORY)
             self.assertTrue(any(named in item for item in reasons), reasons)
+
+    def test_another_pack_in_the_run_reads_exploratory_through_the_full_verdict(self):
+        pack = {"name": "suite", "version": "1.0.0", "commit": "e" * 40, "digest": "f" * 64,
+                "source": "/packs/suite"}
+        supervisor, _found, deviations = registered_run(
+            self.tmp.name, CHEAPER5, selected=draft_request(FIRST_REV, repetitions=5, pack=pack),
+            stamp={"pack_digest": pack["digest"], "pack_commit": pack["commit"]})
+        self.assertIn("the run's evaluator pack differs from the registration's", deviations)
+        _payload, test = latest(supervisor)
+        self.assertEqual((test["verdict"], test["evidence"]), ("exploratory", replay.EXPLORATORY))
+        self.assertIn("the run's evaluator pack differs from the registration's", test["reasons"])
+
+    def test_a_run_of_another_draft_commit_reads_exploratory_through_the_full_verdict(self):
+        # Registered at the first checkpoint; a run recorded against it measured the second.
+        supervisor = Runs(Path(self.tmp.name) / "runs")
+        supervisor.root.mkdir()
+        supervisor.state_root = Path(self.tmp.name) / "state"
+        supervisor.state_root.mkdir(mode=0o700)
+        found = register(supervisor.state_root)
+        selected = draft_request(SECOND_REV, repetitions=5)
+        draft_registration.claim(supervisor.state_root, found["registration_id"])
+        supervisor.add(RUN_ONE, selected, {BASE_REV: BASE5, SECOND_REV: CHEAPER5})
+        draft_registration.bind(supervisor.state_root, found["registration_id"], RUN_ONE)
+        with draft_at(SECOND_REV):
+            draft_tests.record(supervisor.state_root, RUN_ONE,
+                               draft_tests.identity(REPO, "tuned"), selected,
+                               draft_tests.power(REPO, 3, 5, {"effect": EFFECT, "cv": CV}),
+                               found["registration_id"], [])
+        _payload, test = latest(supervisor, SECOND_REV)
+        self.assertEqual((test["verdict"], test["evidence"]), ("exploratory", replay.EXPLORATORY))
+        self.assertIn("the run's draft commit differs from the registration's", test["reasons"])
+
+    def test_a_verdicts_request_reads_each_registration_once(self):
+        supervisor, _found, _ = registered_run(self.tmp.name, CHEAPER5)
+        register(supervisor.state_root)
+        with mock.patch.object(draft_registration, "_annotated",
+                               wraps=draft_registration._annotated) as spy:
+            payload, test = latest(supervisor)
+        self.assertEqual(test["verdict"], "helped")
+        self.assertEqual(len(payload["registrations"]), 2)
+        self.assertEqual(spy.call_count, 2)
 
     def test_a_second_run_under_a_used_registration_never_counts(self):
         supervisor, found, _ = registered_run(self.tmp.name, CHEAPER5)
@@ -505,16 +579,65 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(self.call("/api/configure/test/start", unknown, Admission()),
                          (404, {"error": "draft_test_registration_not_found"}))
 
-    def test_a_start_that_loses_the_claim_race_runs_exploratory(self):
-        identity = self.registered()
-        body = {"draft": "tuned", "request": draft_request(FIRST_REV, repetitions=5).as_dict(),
+    def start_body(self, identity):
+        return {"draft": "tuned", "request": draft_request(FIRST_REV, repetitions=5).as_dict(),
                 "confirmation_token": "token", "effect": EFFECT, "cv": CV,
                 "registration": identity}
-        with mock.patch.object(draft_registration, "claim", return_value=False):
-            code, started = self.call("/api/configure/test/start", body, Admission())
-        self.assertEqual(code, 200, started)
-        self.assertEqual(started["record"]["deviations"],
-                         ["the registration already backs another run"])
+
+    def test_two_starts_racing_for_one_registration_start_one_run(self):
+        identity = self.registered()
+        barrier = threading.Barrier(2)
+        admissions = [Admission(run_id=RUN_ONE), Admission(run_id=RUN_TWO)]
+        for admission in admissions:
+            confirm = admission.confirm
+
+            def synchronised(value, confirm=confirm):
+                barrier.wait(timeout=10)  # both starts reach the claim together
+                return confirm(value)
+            admission.confirm = synchronised
+        route = next(item for item in server.ROUTES.entries
+                     if item.path == "/api/configure/test/start")
+        handlers = [Handler(self.supervisor, self.start_body(identity)) for _ in admissions]
+        with draft_at(), catalog(), mock.patch.object(server, "_replay_admission",
+                                                      side_effect=admissions):
+            threads = [threading.Thread(target=route.handler, args=(handler, route))
+                       for handler in handlers]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+        codes = sorted(handler.response[0] for handler in handlers)
+        self.assertEqual(codes, [200, 409], [handler.response for handler in handlers])
+        self.assertEqual(sum(len(admission.started) for admission in admissions), 1)
+        winner = next(handler for handler in handlers if handler.response[0] == 200)
+        self.assertEqual(winner.response[1]["record"]["deviations"], [])
+        self.assertEqual(draft_registration.used_by(self.supervisor.state_root, identity),
+                         winner.response[1]["run_id"])
+        loser = next(handler for handler in handlers if handler.response[0] == 409)
+        self.assertEqual(loser.response[1], {"error": "draft_test_registration_used"})
+
+    def test_a_claim_that_cannot_be_written_refuses_the_start(self):
+        identity = self.registered()
+        admission = Admission()
+        with mock.patch.object(draft_registration, "_write_once", side_effect=OSError("disk")):
+            response = self.call("/api/configure/test/start", self.start_body(identity), admission)
+        self.assertEqual(response, (500, {"error": "draft_test_registration_failed"}))
+        self.assertEqual(admission.started, [])
+        self.assertIsNone(draft_registration.used_by(self.supervisor.state_root, identity))
+
+    def test_a_start_that_is_not_admitted_releases_its_claim(self):
+        identity = self.registered()
+        admission = Admission()
+
+        def refuse(_selected, _token):
+            raise replay.ReplayError("refused")
+        admission.start_confirmed = refuse
+        code, _payload = self.call("/api/configure/test/start", self.start_body(identity), admission)
+        self.assertEqual(code, 400)
+        self.assertIsNone(draft_registration.used_by(self.supervisor.state_root, identity))
+        code, payload = self.call("/api/configure/test/start", self.start_body(identity),
+                                  Admission())
+        self.assertEqual((code, payload["record"]["deviations"]), (200, []))
 
     def test_the_register_route_names_its_citizen_command(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}

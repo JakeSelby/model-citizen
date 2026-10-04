@@ -829,6 +829,7 @@ _DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft
                       "draft_test_registration_used": 409,
                       "draft_test_underpowered": 409, "draft_test_effect_too_large": 400,
                       "draft_test_cv_not_declared": 400, "draft_test_registration_subset": 400,
+                      "draft_test_variance_undeclared": 409,
                       "draft_test_registration_failed": 500}
 
 
@@ -923,19 +924,33 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
             request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
-        started = handler.server.mutations.call(lambda: admission.start_confirmed(
-            confirmed, request["confirmation_token"]))
+    except (draft_tests.DraftTestError, replay.ReplayError) as exc:
+        _draft_test_error(handler, exc)
+        return
+    root = handler.server.run_supervisor.state_root
+    try:
+        # Single use: claimed before the run exists; a claim that exists or fails refuses the start.
+        if registration is not None:
+            draft_registration.claim(root, registration)
+        try:
+            started = handler.server.mutations.call(lambda: admission.start_confirmed(
+                confirmed, request["confirmation_token"]))
+        except BaseException:
+            if registration is not None:
+                try:
+                    draft_registration.release(root, registration)
+                except (OSError, draft_tests.DraftTestError):
+                    pass  # stays claimed: never reusable, which is the safe side
+            raise
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
     if registration is not None:
-        # Single use: the first run started claims it; a run that loses the race runs exploratory.
         try:
-            if not draft_registration.claim(handler.server.run_supervisor.state_root,
-                                            registration, started["run_id"]):
-                deviations = deviations + ["the registration already backs another run"]
+            draft_registration.bind(root, registration, started["run_id"])
         except (OSError, draft_tests.DraftTestError):
-            deviations = deviations + ["the registration's use could not be recorded"]
+            # The registration stays claimed, so it cannot be reused; this run never counts.
+            deviations = deviations + ["the run could not be recorded against its registration"]
     try:
         recorded = draft_tests.record(handler.server.run_supervisor.state_root, started["run_id"],
                                       draft, confirmed, power, registration, deviations)

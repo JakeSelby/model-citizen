@@ -21,13 +21,15 @@ the committed plan (`committed`), never from the record JSON beside it, which on
 **Refused before it is written.** SM-2 states the minimum detectable effect before the run and caps
 it at 15% (docs/evidence-standard.md, item 1), so a larger effect is refused. Power is planned from
 the repository's declared variance (`benchmarks/ablations.json`), never a coefficient of variation
-the caller states. A task subset is refused: as for a release (`replay.label_evidence`), only the
+the caller states; with none declared, registration is refused with the way to declare one. A task
+subset is refused: as for a release (`replay.label_evidence`), only the
 whole set may be registered. A trial count that cannot detect the effect is refused with the
 engine's minimum detectable effect and the fewest trials that would (`draft_tests.power`).
 
-**When it counts.** A registration is single-use: the first run started under it claims it with a
-file created exclusively (`<id>.used`, naming the run), a later start is refused, and at verdict time
-only the claiming run may count. A registration is stale once the draft has another checkpoint or
+**When it counts.** A registration is single-use: a start claims it before the run is admitted
+with a file created exclusively (`<id>.used`); a claim that exists or cannot be written refuses the
+start, a run that is then not admitted releases it, and an admitted run is recorded beside it
+(`<id>.run`). At verdict time only that recorded run may count. A registration is stale once the draft has another checkpoint or
 configuration; a stale one stays listed and a new one is needed. A run counts as pre-registered only
 when its registration is intact, was written before the run started, was claimed by that run, and
 the run measured exactly what the committed plan registers (`deviations`); any difference makes it
@@ -57,6 +59,8 @@ REGISTRATIONS_DIR = "registrations"
 REGISTRY_DIR = "registry"
 LOCK_NAME = "registry.lock"
 USED_SUFFIX = ".used"
+RUN_SUFFIX = ".run"
+PENDING = "pending"
 PLAN_DIRECTORY = Path("benchmarks") / "preregistrations"
 TEMPLATE = Path(__file__).resolve().parents[3] / "docs" / "pre-registration-template.md"
 TASKS_FILE = Path("benchmarks") / "tasks.json"
@@ -89,9 +93,15 @@ def _git_env() -> Dict[str, str]:
     return {key: value for key, value in os.environ.items() if key not in REPOSITORY_VARIABLES}
 
 
+_PROTOCOL: Optional[Any] = None
+
+
 def _protocol() -> Any:
-    """`experiment_protocol`, loaded privately, its Git calls run without a caller's repository
+    """`experiment_protocol`, loaded privately once, its Git calls run without a caller's repository
     variables so a `GIT_DIR` in the environment cannot point the check at another repository."""
+    global _PROTOCOL
+    if _PROTOCOL is not None:
+        return _PROTOCOL
     module = replay._engine_module("experiment_protocol")
 
     def scrubbed(root: Any, *args: str) -> Tuple[int, str]:
@@ -100,6 +110,7 @@ def _protocol() -> Any:
         return done.returncode, done.stdout.strip()
 
     module._git = scrubbed
+    _PROTOCOL = module
     return module
 
 
@@ -171,6 +182,7 @@ def _parse_spec(repository: Path, spec: Any) -> Dict[str, Any]:
                                          "tasks and pack")
     model, repetitions, tasks, chosen = (spec["model"], spec["repetitions"], spec["tasks"],
                                          spec["pack"])
+    model = model.strip() if isinstance(model, str) else model
     if (not isinstance(model, str) or not model or len(model) > MAX_MODEL or "\0" in model
             or model.startswith("-") or "\n" in model or "`" in model):
         raise draft_tests.DraftTestError("a registration names its model")
@@ -221,12 +233,14 @@ def _percent(value: Optional[float]) -> str:
     return "undefined" if value is None else "%.1f%%" % (100 * value)
 
 
-def _fill(template: str, fields: Mapping[str, Mapping[str, str]], bodies: Mapping[str, str],
+def _fill(template: str, fields: Mapping[str, Mapping[str, str]],
+          rewrites: Mapping[str, Mapping[str, str]],
           extra: Mapping[str, List[Tuple[str, str]]]) -> str:
-    """The template's sections, in order, below its `---` rule: each field in `fields` replaces the
-    template's (continuation lines included), each section in `bodies` replaces the whole body, and
-    `extra` fields follow a section's own. A placeholder left anywhere fails, as does an override
-    naming a section or field the template lacks."""
+    """The template's sections, in order, below its `---` rule, its own text kept: each field in
+    `fields` replaces the template's (continuation lines included), each line in `rewrites` (by
+    section, the template's exact line) is replaced by its rewrite, and `extra` fields follow a
+    section's own. A placeholder left anywhere fails, as does an override or rewrite naming a
+    section, field or line the template lacks."""
     protocol = _protocol()
     lines = template.split("\n")
     try:
@@ -243,7 +257,8 @@ def _fill(template: str, fields: Mapping[str, Mapping[str, str]], bodies: Mappin
                 "the pre-registration template has no %s field %s" % (section, missing),
                 "draft_test_registration_failed")
     out: List[str] = []
-    section, skipping, replacing = None, False, False
+    section, replacing = None, False
+    unused = {(name, line) for name, values in rewrites.items() for line in values}
 
     def close() -> None:
         if section in extra:
@@ -257,11 +272,11 @@ def _fill(template: str, fields: Mapping[str, Mapping[str, str]], bodies: Mappin
             close()
             section, replacing = line[3:].strip(), False
             out.append(line)
-            skipping = section in bodies
-            if skipping:
-                out.extend(["", bodies[section], ""])
             continue
-        if skipping:
+        if line in rewrites.get(section, {}):
+            unused.discard((section, line))
+            out.append(rewrites[section][line])
+            replacing = False
             continue
         match = protocol.FIELD.match(line)
         if match:
@@ -280,6 +295,10 @@ def _fill(template: str, fields: Mapping[str, Mapping[str, str]], bodies: Mappin
                 % (section, line.strip()), "draft_test_registration_failed")
         out.append(line)
     close()
+    if unused:
+        raise draft_tests.DraftTestError(
+            "the pre-registration template no longer has the lines %s" % sorted(unused),
+            "draft_test_registration_failed")
     return "\n".join(out).strip("\n") + "\n"
 
 
@@ -348,15 +367,18 @@ def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
         "Multiplicity": {"Further confirmatory tests": "none."},
         "Exclusions": {"Pre-stated exclusions": "none."},
     }
-    bodies = {
-        "Decision rule": "\n".join([
-            "The hypothesis is supported only when both hold:", "",
-            "- the paired, task-clustered 95% interval on the Cost-of-Pass ratio lies wholly "
-            "below 1.0;",
+    # The template's own lines, rewritten only where its arms are harness and bare.
+    rewrites = {
+        "Decision rule": {
             "- the lower bound of the paired, task-clustered 95% interval on the pass-rate "
-            "difference (draft minus base) is above −δ.", "",
-            "Its exact mirror reads worse; anything else is inconclusive."]),
-        "Deviation log": "- %s: none yet" % today,
+            "difference (harness": "- the lower bound of the paired, task-clustered 95% interval "
+                                   "on the pass-rate difference (draft",
+            "  minus bare) is above −δ.": "  minus base) is above −δ.",
+            "The result is published with its intervals, whatever it shows.":
+                "The result is published with its intervals, whatever it shows. Its exact mirror "
+                "reads worse; anything else is inconclusive.",
+        },
+        "Deviation log": {"- <YYYY-MM-DD: none yet>": "- %s: none yet" % today},
     }
     extra = {"Run": [
         ("Registration", record["registration_id"]),
@@ -377,7 +399,7 @@ def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
         "deviation log are frozen; the registration backs one run and is stale once the draft",
         "changes.", "", ""])
     text = template if template is not None else TEMPLATE.read_text(encoding="utf-8")
-    return header + _fill(text, fields, bodies, extra)
+    return header + _fill(text, fields, rewrites, extra)
 
 
 def _write_once(directory: int, name: str, content: bytes) -> None:
@@ -419,7 +441,17 @@ def register(root: Path, repository: Path, name: str, spec: Any, effect: Any,
     draft = draft_tests.identity(repository, name)
     draft_tests._refuse_unchanged(draft["base_revision"], draft["revision"])
     sample = _parse_spec(repository, spec)
-    power = draft_tests.power(repository, len(sample["tasks"]), sample["repetitions"], plan)
+    try:
+        power = draft_tests.power(repository, len(sample["tasks"]), sample["repetitions"], plan)
+    except draft_tests.DraftTestError as exc:
+        if exc.code != "draft_test_planning_unavailable":
+            raise
+        raise draft_tests.DraftTestError(
+            "no planning variance is declared, so a registration cannot be sized. Run an "
+            "exploratory pilot (`python3 scripts/cost_bench.py replay --exploratory ...`), size it "
+            "with `python3 scripts/replay_power.py --pilot <results dir>`, and declare its "
+            "coefficient of variation as `planning` (`cv`, `source`) in %s"
+            % draft_tests.PLANNING_MANIFEST.as_posix(), "draft_test_variance_undeclared") from exc
     if not power["enough"]:
         raise draft_tests.DraftTestError(
             "registration refused: " + draft_tests.power_line(power), "draft_test_underpowered")
@@ -510,13 +542,12 @@ def _read_json(directory: int, name: str) -> Optional[Dict[str, Any]]:
     return value
 
 
-def used_by(root: Path, registration_id: str) -> Optional[str]:
-    """The run that claimed the registration, or None while it is unused."""
+def _read_marker(root: Path, name: str) -> Optional[str]:
     records = _open_records(root)
     if records is None:
         return None
     try:
-        content = _read_small(records, registration_id + USED_SUFFIX)
+        content = _read_small(records, name)
     finally:
         os.close(records)
     try:
@@ -525,19 +556,65 @@ def used_by(root: Path, registration_id: str) -> Optional[str]:
         return "unreadable"
 
 
-def claim(root: Path, registration_id: str, run_id: str) -> bool:
-    """Claim the registration for `run_id`, atomically; False when another run already holds it."""
-    if str(uuid.UUID(run_id)) != run_id or not IDENTITY.fullmatch(registration_id):
-        raise draft_tests.DraftTestError("the run or registration id is invalid")
+def used_by(root: Path, registration_id: str) -> Optional[str]:
+    """The run the registration backs; `PENDING` while it is claimed and that run is not yet
+    recorded (or never was); None while it is unclaimed."""
+    run = _read_marker(root, registration_id + RUN_SUFFIX)
+    if run is not None:
+        return run
+    return PENDING if _read_marker(root, registration_id + USED_SUFFIX) is not None else None
+
+
+def claim(root: Path, registration_id: str) -> None:
+    """Claim the registration before its run starts, atomically: an exclusively created
+    `<id>.used`. A registration already claimed is refused (`draft_test_registration_used`), and
+    a claim that cannot be written refuses the start (`draft_test_registration_failed`)."""
+    if not isinstance(registration_id, str) or not IDENTITY.fullmatch(registration_id):
+        raise draft_tests.DraftTestError("the registration id is invalid")
+    try:
+        with _locked(root) as directory:
+            records = _private_dir(directory, REGISTRATIONS_DIR)
+            try:
+                _write_once(records, registration_id + USED_SUFFIX, (
+                    datetime.datetime.now(datetime.timezone.utc).isoformat() + "\n").encode("utf-8"))
+            finally:
+                os.close(records)
+    except FileExistsError as exc:
+        raise draft_tests.DraftTestError("the registration already backs a run; register the "
+                                         "test again", "draft_test_registration_used") from exc
+    except OSError as exc:
+        raise draft_tests.DraftTestError("the registration's use could not be recorded, so the "
+                                         "test was not started",
+                                         "draft_test_registration_failed") from exc
+
+
+def release(root: Path, registration_id: str) -> None:
+    """Undo a claim whose run was never admitted; a claim with a recorded run is never undone."""
     with _locked(root) as directory:
         records = _private_dir(directory, REGISTRATIONS_DIR)
         try:
-            _write_once(records, registration_id + USED_SUFFIX, (run_id + "\n").encode("utf-8"))
-        except FileExistsError:
-            return False
+            try:
+                os.stat(registration_id + RUN_SUFFIX, dir_fd=records)
+            except FileNotFoundError:
+                try:
+                    os.unlink(registration_id + USED_SUFFIX, dir_fd=records)
+                except FileNotFoundError:
+                    pass
         finally:
             os.close(records)
-    return True
+
+
+def bind(root: Path, registration_id: str, run_id: str) -> None:
+    """Record the admitted run a claimed registration backs, once; OSError when it cannot be
+    written, and the run then never counts as pre-registered."""
+    if str(uuid.UUID(run_id)) != run_id:
+        raise draft_tests.DraftTestError("the run id is invalid")
+    with _locked(root) as directory:
+        records = _private_dir(directory, REGISTRATIONS_DIR)
+        try:
+            _write_once(records, registration_id + RUN_SUFFIX, (run_id + "\n").encode("utf-8"))
+        finally:
+            os.close(records)
 
 
 def _value(text: str) -> str:
@@ -609,11 +686,15 @@ def _annotated(root: Path, value: Mapping[str, Any]) -> Dict[str, Any]:
                 used_by=used_by(root, value["registration_id"]))
 
 
-def load(root: Path, registration_id: Any) -> Dict[str, Any]:
+def load(root: Path, registration_id: Any,
+         cache: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """One registration, the values its committed plan registers, its problems and the run that
-    claimed it; DraftTestError when it does not exist."""
+    claimed it; DraftTestError when it does not exist. `cache` holds what one request has already
+    loaded, so a page reads each registration's plan and Git history once."""
     if not isinstance(registration_id, str) or not IDENTITY.fullmatch(registration_id):
         raise draft_tests.DraftTestError("the registration id is invalid")
+    if cache is not None and registration_id in cache:
+        return cache[registration_id]
     records = _open_records(root)
     value = None
     if records is not None:
@@ -623,10 +704,14 @@ def load(root: Path, registration_id: Any) -> Dict[str, Any]:
             os.close(records)
     if value is None:
         raise draft_tests.DraftTestError("no such registration", "draft_test_registration_not_found")
-    return _annotated(root, value)
+    loaded = _annotated(root, value)
+    if cache is not None:
+        cache[registration_id] = loaded
+    return loaded
 
 
-def listed(root: Path, draft: Mapping[str, Any]) -> List[Dict[str, Any]]:
+def listed(root: Path, draft: Mapping[str, Any],
+           cache: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Every registration of this draft, newest first, each marked stale, used or not; none
     removed."""
     records = _open_records(root)
@@ -642,7 +727,14 @@ def listed(root: Path, draft: Mapping[str, Any]) -> List[Dict[str, Any]]:
         if value is None or value["draft_id"] != draft["draft_id"]:
             continue
         stale, reason = draft_tests.staleness(draft, value["revision"], value["config_digest"])
-        out.append(dict(_annotated(root, value), stale=stale, stale_reason=reason))
+        identity = value["registration_id"]
+        if cache is not None and identity in cache:
+            annotated = cache[identity]
+        else:
+            annotated = _annotated(root, value)
+            if cache is not None:
+                cache[identity] = annotated
+        out.append(dict(annotated, stale=stale, stale_reason=reason))
     return sorted(out, key=lambda item: (item["created_at"], item["registration_id"]), reverse=True)
 
 
@@ -717,21 +809,23 @@ def _instant(value: Any) -> Optional[datetime.datetime]:
 
 
 def evidence(root: Path, registration_id: Optional[str], recorded: List[str], run_id: str,
-             comparison: Mapping[str, Any], started_at: Optional[str]) -> Tuple[str, List[str]]:
+             comparison: Mapping[str, Any], started_at: Optional[str],
+             cache: Optional[Dict[str, Dict[str, Any]]] = None) -> Tuple[str, List[str]]:
     """`(label, reasons)` for a finished run: pre-registered only on an intact registration written
     before the run started, claimed by this run, that the run matches exactly; otherwise
     exploratory, with every reason."""
     if registration_id is None:
         return replay.EXPLORATORY, []
     try:
-        record = load(root, registration_id)
+        record = load(root, registration_id, cache)
     except draft_tests.DraftTestError as exc:
         return replay.EXPLORATORY, ["the registration cannot be read: %s" % exc]
     reasons = list(recorded) + ["the registration is not intact: %s" % item
                                 for item in record["problems"]]
     if record["used_by"] != run_id:
-        reasons.append("the registration backs %s, not this run"
-                       % ("run %s" % record["used_by"] if record["used_by"] else "no run"))
+        reasons.append("the registration backs %s, not this run" % (
+            "run %s" % record["used_by"] if record["used_by"] not in (None, PENDING)
+            else "no recorded run"))
     registered, started = _instant(record["created_at"]), _instant(started_at)
     if started_at is not None and (registered is None or started is None or registered > started):
         reasons.append("the registration was written after the run started")

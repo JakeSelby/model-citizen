@@ -551,8 +551,10 @@ def staleness(draft: Mapping[str, Any], revision: str,
 
 
 def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
-            draft: Mapping[str, Any], root: Path) -> Dict[str, Any]:
-    """One test's state, verdict, staleness, spend and the comparison it links to."""
+            draft: Mapping[str, Any], root: Path,
+            registrations: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
+    """One test's state, verdict, staleness, spend and the comparison it links to.
+    `registrations` caches the registrations this request has loaded."""
     run_id = item["run_id"]
     sides = {"base": {"run_id": run_id, "target": 1}, "candidate": {"run_id": run_id, "target": 2}}
     stale, stale_reason = staleness(draft, item["revision"], item["config_digest"])
@@ -574,18 +576,20 @@ def verdict(supervisor: Any, repository: Path, item: Mapping[str, Any],
             out["verdict"] = "running"
         else:
             started = shown.get("created_at") or item["created_at"]
-            out.update(_scored(supervisor, repository, item, draft, root, started))
+            out.update(_scored(supervisor, repository, item, draft, root, started,
+                               registrations))
     out["headline"] = HEADLINES[out["verdict"]]
     return out
 
 
-def _registration_key(root: Path, item: Mapping[str, Any], started_at: Optional[str]) -> str:
+def _registration_key(root: Path, item: Mapping[str, Any], started_at: Optional[str],
+                      registrations: Optional[Dict[str, Dict[str, Any]]] = None) -> str:
     """What the cached verdict depends on beyond the results: the registration as it reads now."""
     if item.get("registration") is None:
         return "unregistered"
     from . import draft_registration
     try:
-        found = draft_registration.load(root, item["registration"])
+        found = draft_registration.load(root, item["registration"], registrations)
     except DraftTestError as exc:
         return "unreadable:" + str(exc)
     return json.dumps([found["plan_sha256"], found["created_at"], found["problems"],
@@ -604,7 +608,8 @@ def registered_claim(comparison: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
-            draft: Mapping[str, Any], root: Path, started_at: Optional[str]) -> Dict[str, Any]:
+            draft: Mapping[str, Any], root: Path, started_at: Optional[str],
+            registrations: Optional[Dict[str, Dict[str, Any]]] = None) -> Dict[str, Any]:
     """The verdict, reasons, readings and spend of a finished run, cached by its recorded results
     and the state of its registration."""
     run_id = item["run_id"]
@@ -613,7 +618,7 @@ def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
     except (replay.ReplayError, runs.RunError, OSError):
         digest, spend = None, None
     if digest is not None:
-        digest = hashlib.sha256((digest + "\0" + _registration_key(root, item, started_at)).encode(
+        digest = hashlib.sha256((digest + "\0" + _registration_key(root, item, started_at, registrations)).encode(
             "utf-8")).hexdigest()
     found = _cached(root, run_id, digest) if digest is not None else None
     if found is not None:
@@ -634,7 +639,7 @@ def _scored(supervisor: Any, repository: Path, item: Mapping[str, Any],
     from . import draft_registration
     label, deviations = draft_registration.evidence(
         root, item.get("registration"), list(item.get("deviations") or []), item["run_id"],
-        comparison, started_at)
+        comparison, started_at, registrations)
     judged = registered_claim(comparison) if label == replay.PREREGISTERED else claim(comparison)
     if label != replay.PREREGISTERED and judged["verdict"] in (HELPED, WORSE, INCONCLUSIVE,
                                                                EXPLORATORY):
@@ -653,6 +658,7 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
     Only the latest test of a checkpoint is compared; older ones are listed by run id."""
     draft = identity(repository, name)
     found, skipped = read_records(root)
+    registrations: Dict[str, Dict[str, Any]] = {}  # each registration loaded once per request
     items = sorted((value for value in found if value["draft_id"] == draft["draft_id"]),
                    key=lambda value: (value["created_at"], value["run_id"]), reverse=True)
     checkpoints: List[Dict[str, Any]] = []
@@ -662,7 +668,8 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
         if entry is None:
             checkpoints.append({"revision": item["revision"],
                                 "current": item["revision"] == draft["revision"],
-                                "latest": verdict(supervisor, repository, item, draft, root),
+                                "latest": verdict(supervisor, repository, item, draft, root,
+                                                  registrations),
                                 "tests": 1})
         else:
             entry["tests"] += 1
@@ -672,7 +679,7 @@ def verdicts(supervisor: Any, repository: Path, root: Path, name: str) -> Dict[s
     return {"schema_version": SCHEMA_VERSION, "draft": draft["draft"],
             "revision": draft["revision"], "base_revision": draft["base_revision"],
             "evidence_note": EXPLORATORY_NOTE, "tests": tests, "checkpoints": checkpoints,
-            "registrations": draft_registration.listed(root, draft),
+            "registrations": draft_registration.listed(root, draft, registrations),
             "unreadable_records": skipped}
 
 

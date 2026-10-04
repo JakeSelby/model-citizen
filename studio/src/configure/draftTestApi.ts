@@ -1,5 +1,5 @@
 import type { ReplayRequest } from "../experiments/replay/model";
-import type { DraftTestPlan, DraftTestRegistration, DraftTestVerdicts } from "./draftTestModel";
+import type { DraftTestPlan, DraftTestRegistration, DraftTestStarted, DraftTestVerdicts } from "./draftTestModel";
 
 async function json<T>(response: Response): Promise<T> {
   const body = await response.json() as T & { error?: string };
@@ -28,7 +28,7 @@ export function registerDraftTest(body: Record<string, unknown>): Promise<{ regi
 
 /** Start the planned pair with its one-use spend confirmation, under a registration when one is named. */
 export function startDraftTest(draft: string, request: ReplayRequest, confirmationToken: string,
-  effect: unknown, cv: unknown, registration: string | null = null): Promise<{ run_id: string; status: string }> {
+  effect: unknown, cv: unknown, registration: string | null = null): Promise<DraftTestStarted> {
   return post("/api/configure/test/start", {
     draft, request, confirmation_token: confirmationToken, effect, cv,
     ...(registration ? { registration } : {}),

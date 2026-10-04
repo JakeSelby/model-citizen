@@ -131,6 +131,23 @@ export function currentRegistration(verdicts: DraftTestVerdicts | null): DraftTe
   return verdicts?.registrations.find((item) => !item.stale && item.problems.length === 0 && item.used_by === null) ?? null;
 }
 
+/** The start route's answer: the run and its record, whose `deviations` say whether it counts. */
+export type DraftTestStarted = {
+  run_id: string; status: string;
+  record: { registration: string | null; deviations: string[] };
+};
+
+/** What the Studio says after a start, read from the server's record and never assumed: a run
+ * under a registration with no deviation is registered; any deviation makes it exploratory. */
+export function startedMessage(value: DraftTestStarted): string {
+  const { registration, deviations } = value.record;
+  if (!registration) return `Test started as run ${value.run_id}, exploratory. Refresh to follow its verdict.`;
+  if (deviations.length === 0) {
+    return `Test started as run ${value.run_id}, pre-registered: it matches its registration. Refresh to follow its verdict.`;
+  }
+  return `Test started as run ${value.run_id}, exploratory: ${deviations.join("; ")}. Refresh to follow its verdict.`;
+}
+
 /** Why the test cannot start yet as asked; null when it can. Ticking pre-register without a
  * current registration would otherwise start an unregistered run the developer took for registered. */
 export function startBlocked(preRegister: boolean, registration: DraftTestRegistration | null): string | null {
@@ -195,6 +212,7 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_registration_mismatch: "That registration belongs to another draft.",
     draft_test_registration_failed: "The registration could not be written; nothing was registered.",
     draft_test_registration_used: "That registration already backs a run; register the test again.",
+    draft_test_variance_undeclared: "No planning variance is declared: run an exploratory pilot, size it with scripts/replay_power.py --pilot, and declare its coefficient of variation as planning in benchmarks/ablations.json.",
     draft_test_cv_not_declared: "A registration plans from the repository's declared variance; clear the coefficient of variation.",
     draft_test_registration_subset: "Only the whole task set can be registered; choose every task.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
