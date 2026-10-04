@@ -230,8 +230,13 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   in the directory, a one-policy pair's `reference` and `treatment` arms included, and writes `detections.jsonl` there: one row per run per detector, with the
   detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
   call, counted from 1, and a tool result takes the turn of the call that asked for it. A
-  subagent's own messages are not the run's, though its return is. Every detector runs in both
-  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  subagent's own messages are not the run's, though its return is. A detector's stance gate is
+  its applicability: a gated detector scores a run only when the selection its arm ran with
+  enables it, so the concise voice's `voice/scaffold-leak` never scores the default `scannable`
+  arm, and no gated detector scores the bare arm, which has no stances. The selection is the
+  row's `arm_config`, a pair row's `selection`, or the defaults for the harness arm; an arm whose
+  selection no row records leaves its gated detectors unknown. Such a row is `not_applicable`,
+  with `count` null: never a hit, never clean, and skipped by the all-rules-at-once rate. A stream
   with no model call, a stream that cannot be found, one found twice, and a detector that raised
   are rows with `count` null and the reason in `error`: unknown, never zero. An existing
   `detections.jsonl` is replaced only with `--overwrite`. With `--raw`, the replay does the same
@@ -351,7 +356,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   the all-rules-at-once rate: the share of runs in which no rule-violation detector fired, read
   from the `detections.jsonl` beside the rows, with a Wilson interval and each detector's own rate
   beside it. A run no detector could read is `unknown` and left out of the rate, never counted as
-  clean; `joint` is `null` when the set has no detections. The rules are in
+  clean, and a `not_applicable` row is skipped; `joint` is `null` when the set has no detections. The rules are in
   `scripts/replay_reliability.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
