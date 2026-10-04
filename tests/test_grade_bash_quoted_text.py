@@ -97,8 +97,6 @@ class ApprovalsStore(unittest.TestCase):
                 "S=$T/.local/state/agent-harness/approvals; ls $S; cat $S/s.json; ./hook.sh < p.json",
                 "cat %s/s.json; make build" % self.STORE,
                 "ls %s > /tmp/list.txt; make" % self.STORE,
-                "cd %s && for f in *; do python3 -c \"import json; print(json.load(open('$f')))\"; done"
-                % self.STORE,
                 "python3 - > cases.txt <<'PY'\nprint('nice cp x %s/s.json')\nPY\nmake test" % self.STORE):
             with self.subTest(command=command):
                 self.assertNotEqual(grader.grade_text(command, CWD)[1], "write to")
@@ -109,6 +107,9 @@ class ApprovalsStore(unittest.TestCase):
                 "export S=%s; touch $S/x" % self.STORE,
                 "S=%s; X=\"cp a $S/s.json\"; eval \"$X\"" % self.STORE,
                 "cd %s && for f in *; do python3 -c \"open('$f', 'w').write('x')\"; done" % self.STORE,
+                # A double-quoted program with a shell expansion can be rewritten by a crafted file name.
+                "cd %s && for f in *; do python3 -c \"import json; print(json.load(open('$f')))\"; done"
+                % self.STORE,
                 "ls %s | xargs rm" % self.STORE,
                 "for f in %s/*; do rm $f; done" % self.STORE,
                 "ls %s; cat a > %s/s.json" % (self.STORE, self.STORE),

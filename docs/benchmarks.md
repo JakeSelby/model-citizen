@@ -857,6 +857,54 @@ other arm against `bare` on the cost-per-session ratio and the pass-rate differe
 scenario. With three scenarios the intervals are wide by construction: a session gives many
 per-turn observations, but the clusters are the scenarios.
 
+### Diff-quality judge
+
+The oracles say whether a task passed and the detectors which rules fired. Neither can say which of
+two runs kept to its scope, made the better design, or ended on the clearer and more correct
+reply. `scripts/replay_judge.py` asks a pinned model those three questions, blind and pairwise, and
+a dimension's answers count only once they agree with the maintainer's hand labels.
+
+```sh
+python3 scripts/replay_judge.py export --results <set>/results.jsonl --tasks <manifest> --out <dir>
+python3 scripts/replay_judge.py run --pairs <dir>/pairs.json --image <built arm image> --out <dir>/verdicts.jsonl \
+    --pre-registration <plan>
+python3 scripts/replay_judge.py calibrate --verdicts <dir>/verdicts.jsonl --labels <labels.json> --out <dir>/calibration.json
+python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/pairs.key.json --calibration <calibration.json>
+```
+
+- **The judge is pinned.** `benchmarks/judge/judge.json` names the model, its effort, the rubric
+  prompt in `benchmarks/judge/rubric.md` and that file's sha256; a rubric that differs from its
+  digest is refused, so changing the question is a deliberate re-pin. The model is asked through
+  the replay's own path: a fresh container of a built arm image, nothing mounted, no tool allowed,
+  one turn, the credential passed by name and the egress proxy as its one way out. `run` needs
+  `--pre-registration` or `--exploratory`, as a replay does; `--dry-run` prints the command line.
+- **It is blind twice over.** `export` takes pairs of one task's runs, one per arm, matched by rep
+  and with neither errored, and writes each pair's two runs in a seeded random order as `first`
+  and `second`, with nothing naming the arm or the run. Which arm is which goes to
+  `pairs.key.json`, which neither the labeller nor the judge reads. The judge then sees each pair
+  twice, as response 1 and response 2, in a seeded random order and then swapped.
+- **An answer that changes with the order is a tie.** Each dimension whose two answers disagree is
+  counted as a tie and flagged inconsistent, and the share of such pairs is reported. An answer
+  that cannot be read is an error and left out, never a tie.
+- **What a run is judged on.** The final reply comes from the run's saved stream, so the set needs
+  `--raw`. The diff is a `<task>-<arm>-<rep>.diff` beside the stream when one exists; otherwise it
+  is the file edits the stream's Edit, MultiEdit and Write calls record, which miss any change a
+  shell command made. Each side is clipped at the pinned `max_chars`, with the remainder counted.
+- **Calibration.** `export` takes the pinned 40 pairs by default, spread round-robin over tasks
+  (`--all` takes every pair, for a judged evaluation), and writes `label.html`, a local form over
+  the same blind pairs whose **Save labels** button downloads `labels.json`. `calibrate` reports per
+  dimension Cohen's kappa between judge and labeller, their raw agreement and confusion, the
+  judge's position bias (how often a decided answer chose the response shown first, with a Wilson
+  interval, flagged when it excludes one half), its length bias (how often it preferred the longer
+  response, beside how often the labeller did on the same pairs) and the order-swap inconsistency.
+- **A dimension is admitted only when kappa reaches the floor,** 0.6 unless the pre-registration
+  sets another with `--kappa-floor`; an undefined kappa is never admitted.
+- **The summary section.** `judge_section(verdicts, key, calibration)` returns `(section, text)`:
+  per arm pair, the treatment's win rate over the reference on each admitted dimension, a tie
+  counting one half, with a task-clustered percentile bootstrap interval, and the dimensions left
+  out. `summarise` does not call it yet; the one line that adds it is
+  `out["judge"], text = replay_judge.judge_section(verdicts, key, calibration)`.
+
 ## Limits
 
 - Claude Code only. Codex instructions are rendered at sync time and are not counted.
