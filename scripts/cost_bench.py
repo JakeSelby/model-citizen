@@ -50,6 +50,7 @@ import replay_detect  # noqa: E402  which rules fired, read from the saved strea
 import replay_spawns  # noqa: E402  each spawn's brief budget, Workflow launches against the hooks, the first wave
 import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
 import replay_pack  # noqa: E402  the evaluator pack: tasks and checks kept outside this repository
+import oracle_metrics  # noqa: E402  named metrics a check may return beside pass, and their report
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
@@ -324,6 +325,14 @@ def load_tasks(path):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
         if not isinstance(task.get("allow_web_search", False), bool):
             raise SystemExit("task %r is malformed: allow_web_search must be true or false" % task.get("id"))
+        if "metrics" not in task:
+            continue
+        if task["kind"] == "issue":  # its unit tests return no metric, so each would stay null
+            raise SystemExit("task %r is malformed: an issue task's unit tests report no metrics"
+                             % task.get("id"))
+        problems = oracle_metrics.declaration_errors(task["metrics"], "task %r" % task.get("id"))
+        if problems:
+            raise SystemExit("task is malformed: " + "; ".join(problems))
     return tasks
 
 
@@ -1239,8 +1248,9 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None):
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
-        errors = json.loads(marks[-1][len(ORACLE_MARK):])
-        return (not errors, "; ".join(errors[:3]))
+        passed, detail, recorded = oracle_metrics.verdict(json.loads(marks[-1][len(ORACLE_MARK):]),
+                                                          task.get("metrics"))
+        return (passed, detail) if recorded is None else (passed, detail, recorded)
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
     done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
@@ -1304,7 +1314,7 @@ def verify_tasks(tasks, repo, parent, image, gate=None, launch=subprocess.run):
         else:
             after = before
             _oracle(repo, task["tests"]["oracle"]).solve(after)
-        passed, detail = score(task, after, repo, image, launch)
+        passed, detail = score(task, after, repo, image, launch)[:2]
         if not passed:
             errors.append("%s: the check fails on the known-good tree (%s)" % (task["id"], detail))
     return errors
@@ -1462,6 +1472,7 @@ def _attempt(task, rep, arm, opts, launch):
     row["web_search"] = bool(task.get("allow_web_search"))
     # A first-wave task stops once its first spawns are out (`replay_spawns.first_wave_launch`).
     run_launch = replay_spawns.first_wave_launch(launch) if task.get("first_wave") else launch
+    row.update(oracle_metrics.row_fields(task.get("metrics")))  # nothing for a task declaring none
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
     if opts.get("design") is not None:
@@ -1550,7 +1561,10 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
-            row["passed"] = bool(_scorer(opts, launch)(task, workdir, opts["repo"])[0])
+            scored = _scorer(opts, launch)(task, workdir, opts["repo"])
+            row["passed"] = bool(scored[0])
+            if len(scored) > 2 and scored[2] is not None:
+                row.update(scored[2])
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
             return finish(dict(row, error=True, error_kind="check: %s" % type(exc).__name__))
         return finish(row)
@@ -2042,9 +2056,16 @@ def cmd_summarise(args):
         if same_file:
             raise SystemExit("cost-bench: plot output must differ from the saved rows")
         plot.write_text(replay_stats.pareto_svg(result), encoding="utf-8")
+    try:
+        metrics = oracle_metrics.summarise(rows, args.seed, args.resamples)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    write_report(dict(result, delegation=delegation), cache_basis(rows), args.json,
-                 replay_stats.render(result) + delegation_verdict.render(delegation))
+    report = dict(result, delegation=delegation)
+    if metrics is not None:  # a set without metrics reports exactly as before
+        report["metrics"] = metrics
+    write_report(report, cache_basis(rows), args.json,
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
     return 0
 
 

@@ -31,9 +31,13 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import oracle_metrics  # noqa: E402  a task's declared metrics and which way each improves
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 1
@@ -368,6 +372,8 @@ def task_errors(spec, task_dir, document):
     skills = spec.get("requires_skills", [])
     if not isinstance(skills, list) or not all(isinstance(n, str) and NAME.match(n) for n in skills):
         errors.append("%s: requires_skills is not a list of skill names" % where)
+    if "metrics" in spec:
+        errors.extend(oracle_metrics.declaration_errors(spec["metrics"], where))
     for name in (CHECK_FILE, SOLUTION_FILE):
         path = task_dir / name
         if not path.is_file():
@@ -426,6 +432,8 @@ def load_set(pack, set_name, tier):
         vendor = document["workspaces"][task_spec["workspace"]].get("vendor")
         if vendor:
             task["pack"]["vendor"] = vendor
+        if "metrics" in task_spec:
+            task["metrics"] = task_spec["metrics"]
         tasks.append(task)
     if errors:
         raise PackError("pack %s %s, set %s:\n  %s" % (pack["name"], pack["version"], set_name, "\n  ".join(errors)))
