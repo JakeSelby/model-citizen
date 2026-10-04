@@ -1,0 +1,4 @@
+{"type": "user", "isSidechain": true, "agentId": "a1b2c3d4e5f600001", "sessionId": "s-1", "message": {"role": "user", "content": "find the config loader"}}
+{"type": "assistant", "isSidechain": true, "agentId": "a1b2c3d4e5f600001", "sessionId": "s-1", "message": {"id": "m-1", "role": "assistant", "model": "model-a", "content": [{"type": "tool_use", "id": "t-1", "name": "Read", "input": {}}], "usage": {"output_tokens": 300}}}
+{"type": "user", "isSidechain": true, "agentId": "a1b2c3d4e5f600001", "sessionId": "s-1", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t-1", "content": "ok"}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "a1b2c3d4e5f600001", "sessionId": "s-1", "message": {"id": "m-2", "role": "assistant", "model": "model-a", "content": [{"type": "text", "text": "done"}], "stop_reason": "end_turn", "usage": {"output_tokens": 1200}}}

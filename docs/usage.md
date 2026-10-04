@@ -420,6 +420,12 @@ found for agent a1b2c3` — and is fed once a session for that agent. It carries
 nothing will ever reconcile it, so repeating it turn after turn, which a session whose reader
 state was rebuilt used to do, only spends the orchestrator's context on a fact it has read.
 
+Claude Code also fires a `SubagentStop` for its own end-of-turn agent, seconds after most
+main-session `Stop`s, with no `SubagentStart` before it, no agent type and no transcript written
+anywhere. The feed journals that stop as `internal` and neither reports nor counts it; before it
+did, such stops were most of the `spend unknown` lines. A stop with no type and no transcript whose
+start was journalled is still a spawned agent, and still says `spend unknown`.
+
 A synchronous return can also arrive before the agent's last response is on disk: one API
 response is written as several records, the early ones carrying a partial streaming count and
 the last one a `stop_reason`. So the return polls the transcript's tail for up to a second,
@@ -440,10 +446,23 @@ reader start over — reads the thresholds already said back out of the state fi
 falls back under a threshold, which is what an in-place compaction does, arms that threshold
 again, because crossing it a second time is a crossing nobody has been told about. The line names
 the highest threshold newly crossed, never one already fed. A context no response has reported
-yet is no crossing, so nothing is said rather than a size of zero being invented. Like every
-other line here it is soft: nothing is blocked.
+yet is no crossing, so nothing is said rather than a size of zero being invented. Where the
+variant's cost curve has a point at or under the size, the line also names the cost multiple:
+`…, past the fresh-session threshold of 160,000, where a call costs about 1.3× one under 160,000
+— finish the task, …`. Like every other line here it is soft: nothing is blocked.
 
-Five settings in the active `cost` variant's sidecar govern all of it, and the hook holds no
+Past the variant's hard threshold the feed answers `Stop` too. The stop that ends the turn is
+blocked once, with a reason naming the size, the threshold and the multiple and asking for the
+handoff (the state, the next step, the open decisions) and a fresh session started from it. The
+threshold blocked at is kept in the state file, so the next stop is released whatever the turn
+did and a session that stays past it is never blocked again; a context that falls back under it
+re-arms it. The repository's stop gate is asked first, and a stop it blocks does not spend the
+hand-off. A headless run (`CLAUDE_CODE_ENTRYPOINT` `sdk-cli`, `sdk-ts` or `sdk-py`, which is what
+`claude -p` and a replay trial are) is never blocked unless `HARNESS_HANDOFF_BLOCK=on`;
+`HARNESS_HANDOFF_BLOCK=off` turns the block off anywhere. Why the thresholds sit where they do is
+in [preferences.md](preferences.md#when-a-session-should-hand-off).
+
+Seven settings in the active `cost` variant's sidecar govern all of it, and the hook holds no
 number of its own:
 
 - `turn_feed: "off"` — nothing is injected anywhere and no file is written.
@@ -454,9 +473,14 @@ number of its own:
 - `nudge_at` — the multiples that mark a return as over budget. An empty list, which `max` ships,
   means never.
 - `session_nudge_at` — the context sizes, in whole tokens, smallest first and none repeating,
-  that the fresh-session line is said at. `frugal` ships 80,000 and 120,000, `balanced` 120,000 and 160,000, and `max` an empty list, which
-  means never. Those figures are starting points chosen against a 200,000-token window, not
-  measured ones: the follow-up to #321 replaces them with sizes read out of the ledger.
+  that the fresh-session line is said at: the soft threshold. `balanced` and `frugal` ship
+  160,000, and `max` an empty list, which means never.
+- `session_handoff_at` — the hard threshold, one size in whole tokens past which a stop is
+  blocked once. `balanced` ships 400,000, `frugal` 200,000; `null`, which `max` ships, means
+  never, and `off` turns the block off with the rest of the feed.
+- `context_cost_curve` — `[size, multiple]` pairs, sizes ascending: from that size up, a call
+  costs about that multiple of one under the first size. `balanced` ships 1.3 from 160,000, 1.7
+  from 200,000 and 3.3 from 400,000, and the other variants inherit it.
 - `max_parallel` — the width the running-agent note measures against. `null`, which `max` ships,
   means the note never appears.
 
@@ -517,8 +541,12 @@ The fresh-session line is a recommendation, so saying it also appends an `emitte
 row holds a prompt, a tool call or the line's own text, and recording never changes what the feed
 says: a ledger it cannot write is skipped in silence.
 
+The hand-off block is recorded the same way, as `fresh-session-handoff`, so how often a blocked
+session actually ends is a rate of its own.
+
 The response is read from the observation ledger (`observation.jsonl`). A session that ends
-within three prompts of the line followed it; one that carries on past them did not. Until the
+within three prompts of the line followed it, or within two of the block; one that carries on
+past them did not. Until the
 observation entry point is registered in live sessions, that ledger holds no rows, so every
 emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
@@ -714,10 +742,15 @@ bin/citizen usage --by decision        # counts, outcome rates and the unlabelle
 The **unlabelled share** is the column to read first: an outcome rate over the two decisions
 that happened to be labelled is not evidence about the point.
 
+A `steer-polling` row is a foreground wait the Bash hook noted (`note`) or refused (`deny`), or one
+it left alone because it ran in the background (`background`); its `input` is the command.
+
 An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
 `coordination.repeat_overlap` in `config.json` chooses whether a repeated overlap is denied
-(`deny`, the default) or only warned (`warn`); `bin/citizen intent --help` has the commands.
+(`deny`, the default) or only warned (`warn`). A claim the editing session made itself in another
+worktree only ever warns, and its row carries `same_session: true`; `bin/citizen intent --help` has
+the commands.
 
 ```sh
 bin/citizen usage --conflicts          # landing merge conflicts and intent overlaps per week

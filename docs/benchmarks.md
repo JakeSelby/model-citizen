@@ -188,10 +188,11 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   API without the proxy does not resolve.
 - **No check runs on your machine.** The held-back test files are written into the snapshot from
   this repository's history, then the check runs in a fresh container of the bare image with the
-  snapshot as its only mount, the image's own HOME, no network and no credential; an oracle is
-  sent on stdin. `--verify-tasks` runs each task's gate and both of its checks the same way,
-  building the bare arm first unless `--check-image` names one: on your machine an older
-  snapshot's code reads your live configuration through HOME and goes red for that.
+  snapshot mounted, plus the scored run's session stream read-only when the run supplies one, and
+  nothing else; the image's own HOME, no network and no credential; an oracle is sent on stdin.
+  `--verify-tasks` runs each task's gate and both of its checks the same way, building the bare
+  arm first unless `--check-image` names one: on your machine an older snapshot's code reads your
+  live configuration through HOME and goes red for that.
 - **The stop gate can fire.** The stop-gate hook runs a gate only in a trusted root, so the harness
   image trusts `/work`, where every snapshot is mounted, when it is built. No run writes a trust
   file anywhere.
@@ -232,8 +233,13 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   in the directory, a one-policy pair's `reference` and `treatment` arms included, and writes `detections.jsonl` there: one row per run per detector, with the
   detector, its rule, `count` and `turns`, the turn of each firing. A turn is the run's model
   call, counted from 1, and a tool result takes the turn of the call that asked for it. A
-  subagent's own messages are not the run's, though its return is. Every detector runs in both
-  arms whatever its stance gate says, since the bare arm has no stances to gate on. A stream
+  subagent's own messages are not the run's, though its return is. A detector's stance gate is
+  its applicability: a gated detector scores a run only when the selection its arm ran with
+  enables it, so the concise voice's `voice/scaffold-leak` never scores the default `scannable`
+  arm, and no gated detector scores the bare arm, which has no stances. The selection is the
+  row's `arm_config`, a pair row's `selection`, or the defaults for the harness arm; an arm whose
+  selection no row records leaves its gated detectors unknown. Such a row is `not_applicable`,
+  with `count` null: never a hit, never clean, and skipped by the all-rules-at-once rate. A stream
   with no model call, a stream that cannot be found, one found twice, and a detector that raised
   are rows with `count` null and the reason in `error`: unknown, never zero. An existing
   `detections.jsonl` is replaced only with `--overwrite`. With `--raw`, the replay does the same
@@ -346,6 +352,15 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   reading that closes #429 is #1104. The mean cost of spawning and non-spawning runs is shown beside the verdict and is
   descriptive, not causal. The same block is in each history row under `delegation`. The rules
   are in `scripts/delegation_verdict.py`.
+- **Reliability and joint rule compliance follow, under `--json` as a `reliability` key.**
+  `pass_k` gives, per task and arm, whether every trial passed and the unbiased pass^k estimate
+  C(c, k) / C(n, k) from its n trials and c passes, with k the fewest trials any cell ran; per arm
+  it gives the share of tasks whose every trial passed, the mean estimate and pass^1. `joint` is
+  the all-rules-at-once rate: the share of runs in which no rule-violation detector fired, read
+  from the `detections.jsonl` beside the rows, with a Wilson interval and each detector's own rate
+  beside it. A run no detector could read is `unknown` and left out of the rate, never counted as
+  clean, and a `not_applicable` row is skipped; `joint` is `null` when the set has no detections. The rules are in
+  `scripts/replay_reliability.py`.
 - **`benchmarks/history.jsonl` holds one row per harness version per run day**, stored as a ratio to
   bare on the same day and model; `benchmarks/history.md` is rendered from it. Compare ratios across
   days, never dollars. Each row carries the SM-2 result under `sm2`, printed under its ledger line.
@@ -387,6 +402,7 @@ python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack
     --model <id> --tag <full commit> --pre-registration <plan>
 python3 scripts/cost_bench.py replay --tier micro --pack <pack repo> --pack-set delegation-nudge ...
 python3 scripts/replay_power.py --pilot <results dir>                   # k, n and m for SM-2
+python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalence verdicts
 ```
 
 - **It is read from a pinned commit, never a working tree.** `--pack-ref` (default `HEAD`) is
@@ -398,8 +414,9 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
 - **An arm sees only the task's workspace.** It is copied into a fresh git repository with one
   commit; no check, solution or pack file goes with it. The check is sent on stdin to the scorer, a
   fresh container of the bare image with no network and no credential that mounts only the agent's
-  tree, as every synthetic check is. `--verify-tasks` runs each workspace's own gate, then proves
-  the check fails on the workspace and passes after the reference solution.
+  tree and, for a scored run, its session stream read-only, as every synthetic check is.
+  `--verify-tasks` runs each workspace's own gate, then proves the check fails on the workspace
+  and passes after the reference solution.
 - **The contamination control checks every pack task at the exact harness commit,** before any
   model call and in `--dry-run`, which prints one line per task and exits 2 when any is refused.
   A task is refused when any commit in the installed checkout's history holds the exact bytes of
@@ -420,7 +437,16 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   power (the ratio test and the pass-rate test) and claim power (those and the long subset's ratio
   test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
-  in its docstring.
+  in its docstring. A pilot that passes everything or nothing is sized only with the
+  pre-registered `--assumed-pass-rate`, which the output names as an assumption; a pilot with fewer
+  than two tasks passing in both arms, the floor included, also needs the pre-registered `--tau2`.
+  `--mde` sets the minimum detectable effect.
+- **A null has bounds.** `scripts/equivalence.py <results dir> --plan <plan>` reads each metric's
+  task-clustered interval against the plan's Equivalence margins and prints equivalent, not
+  equivalent or inconclusive; the rule is in the
+  [pre-registration template](pre-registration-template.md#decision-rule). A verdict is labelled
+  exploratory unless every row records that plan as its pre-registration, each task and arm has
+  five trials, and a behaviour score has five known values in each.
 
 ### First-wave trials and spawn briefs
 
@@ -472,6 +498,18 @@ conciseness or format adherence lands on the same rows without changing how a ru
   that passes when empty, or `{"pass": <bool>, "metrics": {"<name>": <number or null>},
   "errors": [<str>]}`, with `metrics` and `errors` optional. Either form keeps working; a task that
   declares no metrics writes rows byte-identical to before.
+- **A check may read the session.** A check written `check(root, stream=None)`, or any check
+  taking a second positional argument, is called with the path of the scored run's whole
+  stream-json, subagent messages included; a one-argument `check(root)` is called as before. The
+  runner reads the signature from the check's source without running it, so `check` must be a
+  top-level `def`; nothing the check prints can change that call or `metric_stream`. The stream is
+  written beside the run's tree
+  and mounted there read-only at `/session-stream.jsonl`, whether or not `--raw` keeps a copy.
+  `--verify-tasks` passes no stream. A declaring task's rows carry `metric_stream`, true only when
+  the stream reached the check. Without it, `metric_errors` says so and the check's stream metrics
+  are `null`; with it, the check's own errors beginning `stream metrics unknown` are copied into
+  `metric_errors`, or, when it gave none, `stream metrics unknown: the check gave no reason for null`
+  and the metric names, so a `null` stream metric always carries its reason.
 - **A broken check is a check error, never a fail.** A `pass` that is not a boolean, an unknown
   key, `metrics` that is not an object, or a metric the task does not declare makes the attempt
   `error: true` with `error_kind` `check: ValueError`, as any check that cannot run does.
@@ -604,6 +642,88 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
   only together read as two inconclusive results. A sweep over a profile of your own is a local
   diagnostic, not a publishable figure.
 
+#### The layer sweep and its justification rule
+
+`benchmarks/ablations.json` holds one removal arm for every layer that costs tokens or turns: each
+rule, each stance with an `off` variant, the hooks that act in a headless session (the delegation
+nudge's `tier-agent-spawns`, `filter-output`, `usage-feed`, `stop-gate`, `grade-bash` and five
+more) and the skill, agent and command listings, each as a whole.
+
+```sh
+python3 scripts/ablations.py plan --pack <pack repo> --model claude-haiku-4-5 --model claude-sonnet-5
+python3 scripts/ablations.py justify --manifest benchmarks/ablations.json --results <dir>/results.jsonl [...]
+```
+
+- **Each arm says what it removes, and the plan says how that is proven.** An arm names its
+  `layer` and `what` it removes in words. A listing's `removes` is a list: every unit of its kind,
+  plus any unit of another kind that the module manifest binds to it, such as the two design roles
+  that cannot stay on without the `design-loop` skill. `check_entries` refuses a listing that leaves
+  a unit on or carries an unbound one. A core hook's arm declares `core_switches_acknowledged` in
+  its selection, as a user must. The plan prints each arm's verification: its declared selection,
+  the admission check that its declaration differs from control's only there, the surface fields it
+  may move (none for a hook) and the entries its attribution may not hold.
+- **Each arm runs its own tasks and the outcome subset.** `tasks` are pack v1.3.0 `rules` tasks
+  that target the layer, `long_session` the long-session scenarios where the layer is a cost
+  control, and `outcome.tasks` the ten tasks every arm also runs: the seven production tasks and
+  three rule tasks. In a replay, a task the manifest names runs on bare, control and the arms that
+  map it; a task it does not name runs on every arm. The worst case is that plan's run count at the
+  run cap.
+- **The justification rule is pre-registered in the manifest.** Each arm's `scores` pair a metric,
+  either a pack metric or `Cost-of-Pass ratio`, with its equivalence margin, read on its own tasks
+  or on the outcome subset when it has none. `outcome` holds the pass-rate margin. `justify` reads
+  each interval as `scripts/equivalence.py` does, from the arm's paired rows against control. A layer
+  is **keep** when removing it worsens a score or the outcome beyond the margin. It is **trim** when
+  each is equivalent within its margin or better beyond it. Otherwise it is **no evidence**. Its
+  marginal cost, control's mean cost per attempt minus the arm's, is reported beside the verdict and
+  never decides it. Fewer than five paired trials per task label it exploratory.
+  `verdicts_by_entry` keys the verdicts as a scorecard row is.
+- **The price is a ceiling, not an estimate.** Each task run is its `max_turns` at the manifest's
+  per-turn token envelope, at the model's rates in `policy/prices.json`, never above the run cap.
+  Each long-session run is its scenario's own cost cap. The envelope is an assumption, labelled with
+  its source, until a sweep's rows replace it. The plan refuses a score that none of its tasks
+  declares.
+- **Not every layer is removable yet.** `unbuilt` names `CLAUDE.md`, which no selection switch
+  withholds, and the autonomy and plan-ceremony stances, which ship no `off` variant. `excluded`
+  names the hooks a headless replay never fires. The plan prints both, so a gap is never silent.
+  Long-session rows are planned and priced but `justify` does not read them yet.
+
+### Arm configs
+
+The shipped default is not the only configuration worth measuring. `replay --arm-config
+NAME=PATH`, repeatable, adds one harness arm per config beside bare and harness, each built from
+the tag with a named stance selection declared into its own image.
+
+```sh
+python3 scripts/cost_bench.py replay --tasks <tasks> --tag <full commit> --model <exact id> \
+    --arm-config maintainer=benchmarks/arms/maintainer.json \
+    --arm-config frugal=benchmarks/arms/frugal.json --exploratory --dry-run
+```
+
+- **A config names stance dimension to variant.** `{"schema": 1, "description": "...",
+  "stances": {"voice": "concise"}}`; any other key is refused. `benchmarks/arms/maintainer.json`
+  is the maintainer's configuration, the default stances with the concise voice in place of
+  scannable; `benchmarks/arms/frugal.json` is the frugal cost tiering, which routes gathering to
+  the light class, measured against the balanced default.
+- **Checked against the tag before anything is planned.** Each config is read against a clone of
+  the tag's commit, through its own resolver with an empty home: a dimension the tag does not
+  ship, a variant it does not ship, a selection its resolver refuses, or one that is the tag's
+  default throughout is refused, naming what exists. The arm name must be lower-case letters,
+  digits and hyphens, and none a run already uses (`bare`, `harness`, `control`, `reference`,
+  `treatment`).
+- **Declared, digested and admitted like any harness arm.** The selection is the arm's
+  `selection` component, so its image name moves with it. Before any spend the arm passes the
+  pair check against bare that every harness arm passes, its declaration must equal the harness
+  arm's less its selection, and its selection must resolve to a profile other than the harness
+  arm's.
+- **Rows record the config.** Every row carries `arm_config`: `null` for bare and harness, and for
+  a config arm its name, schema, `stances` and `sha256`, the digest of the config's canonical
+  JSON, so reformatting the file never moves it. The dry run lists each config arm with that
+  digest and its image, and schedules it with the leading arm rotating.
+- **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
+  `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
+  `results.jsonl` and no history row. `summarise` does not report config arms yet: it refuses
+  their rows as an unknown arm.
+
 ### Unit evals: the two-by-two
 
 `replay --design unit-economy --unit <kind>.<id>` measures one rule, skill, role, workflow or hook
@@ -667,6 +787,34 @@ python3 scripts/cost_bench.py summarise --results tests/fixtures/unit-economy [-
   factor levels contradict its arm, or a cell loaded a surface that differs from `base`'s beyond
   its factors' entries. A grid writes no history row.
 
+### Strata: several models in one run
+
+```sh
+python3 scripts/cost_bench.py replay --model <id-a>,<id-b> --tag <full commit> --pre-registration <plan> --dry-run
+python3 scripts/cost_bench.py summarise --results benchmarks/<version>/<tag> [--json] [--pool]
+```
+
+- **Each model is its own stratum.** `--model` takes a comma list or repeats. The run goes through
+  once per model, in the order named, and each stratum gets its own schedule, run and spend caps,
+  preflight, arm builds, series and history row. Its rows carry `stratum` (the model id) and
+  `strata`, and land in `<tag>/<model>/results.jsonl`. One model writes no stratum, as before.
+  The micro tier pins its model and takes no strata.
+- **A failed stratum stops the run.** A refusal, an error or a stop at its spend cap ends the run at
+  that stratum with its exit status: the strata after it never start, the ones before it keep their
+  results, and the run prints what it has spent so far. A dry run spends nothing, so it lists every
+  stratum and exits with the worst status.
+- **The dry run lists and prices each stratum:** its schedule, and its worst case if every run and
+  preflight reaches its cap.
+- **`summarise` reports every section per stratum**, given a results file or the tag folder that
+  holds the strata. With `--json` the reports nest under `strata`. SM-2 refuses rows from two strata,
+  so a verdict is always one model's.
+- **Pooling is pre-registered or refused.** `--pool` adds a pooled report only when the plan every
+  row names fills **Pooled analysis** under Run with something other than "none"
+  ([template](pre-registration-template.md)); exploratory rows are refused. The pooled rows keep each
+  task-and-model pair as its own cluster, so no task is paired across models.
+- **An evidence bundle holds one stratum.** Its `design.strata` names every model of the run, and
+  every row's `stratum` must be the design's model ([evidence bundles](evidence-bundles.md)).
+
 ### Micro tier
 
 `replay --tier micro` asks a cheaper question than the production set: does a mechanism fire at
@@ -707,6 +855,186 @@ python3 scripts/cost_bench.py replay --tier micro --tag <release or full commit>
   tasks. **What it cannot:** that it fires on the production model, how often it would, or
   anything about what the harness costs or saves. A small model's behaviour is not the production
   model's; the production set stays the release calibration.
+
+### Long-session tier
+
+`replay --tier long-session` runs a pack's scripted multi-turn scenarios, where the harness's cost
+case lives: context that grows over twenty to sixty turns, gathering that piles up, repeated test
+runs. A fixed script of user turns stands in for the user, never a model, so runs are comparable.
+The scenario format is in the pack's README; `scripts/replay_session.py` drives a session.
+
+```sh
+python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --tag <full commit> \
+    --exploratory --dry-run                                         # every planned session and the ceiling
+python3 scripts/cost_bench.py replay --tier long-session --pack <pack repo> --pack-digest <digest> \
+    --tag <full commit> --ablations <manifest> --spend-cap <usd> --pre-registration <plan>
+python3 scripts/cost_bench.py summarise --results <results dir>
+```
+
+- **A set lists `scenarios`, not `tasks`, at tier `long-session`.** Loading validates each
+  `scenario.json` (caps, turns, branches only on an earlier checkpoint, each declared checkpoint run
+  by exactly one turn, its metrics) and refuses a check or solution without the canary, as for a
+  task. Only the workspace is copied for an arm; the contamination control checks every
+  checkpoint's check and solution. `--verify-tasks` does not read scenarios: the pack's
+  `tools/verify_scenarios.py` proves them. The set's pinned model is the model, reps default to 3,
+  and `--pair` and `--design` are refused.
+- **One session per scenario, arm and rep, resumed turn by turn.** Each user turn is a fresh
+  container of the arm on the same tree. Turn 1 starts the CLI session with `--session-id`, and
+  every later turn continues it with `--resume`, its transcript kept in a host directory created
+  for that session and mounted as the image user's CLI projects folder (`replay_arms.SESSION_STORE`).
+  One cold-cache nonce (#1174) opens the session and is mounted unchanged on every turn, so later
+  turns read the session's own cache as a real session does.
+- **Branches, caps and the spend stop.** A `branch` turn sends its `pass` or `fail` prompt by that
+  earlier checkpoint's verdict. At most `max_user_turns` turns are sent; each turn is launched with
+  `--max-turns` set to `max_agent_turns_per_user_turn`, and a turn that reaches it ends while the
+  session goes on. The session cap is the scenario's `max_cost_usd_hint`, or `--run-cap` when that
+  is lower; each turn gets the rest of the cap as `--max-budget-usd`, and the session stops before
+  a turn once its reported spend reaches the cap. A checkpoint never reached is not passed and its
+  metrics are null. A turn that times out counts at the rest of the cap and errors the session.
+- **Each checkpoint is scored on the tree and its segment.** The check runs as a pack task's does,
+  in a fresh container with no network, with the stream of every turn since the previous checkpoint
+  mounted read-only at `/session-stream.jsonl`.
+- **The dry run prices the tier:** each scenario's turns, checkpoints and session cap, the ceiling
+  if every session and preflight reaches its cap, then every planned session. Three scenarios,
+  three arms and three reps on `claude-sonnet-5` at the 1.3.0 pack's caps is 378.75 USD.
+
+**Rows.** A long-session set writes two kinds of row to `results.jsonl`, and no history row. Every
+row carries the run's stamp, `tier: long-session`, `scenario` (also as `task`), `arm`, `rep`,
+`session_id` (the CLI session's id) and `row_kind`. A row of the other tiers is identified by
+`(task, arm, rep)`; a long-session row by `(scenario, arm, rep, row_kind, checkpoint_index)`, so a
+reader of these rows, the Studio included, must key on `row_kind` before reading one as a run.
+
+- `row_kind: checkpoint`, one per checkpoint in turn order: `checkpoint`, `checkpoint_index`
+  (from 1), `reached`, `turn`, `passed`, `outcome`, the check's `metrics`, `metric_directions`,
+  `metric_errors` and `metric_stream`, `segment_turns` (first and last turn of the segment), and
+  over the segment `cost_usd`, `input_tokens`, `cache_creation_input_tokens`,
+  `cache_read_input_tokens`, `output_tokens`, `main_peak_context_tokens` (the largest main-thread
+  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from each
+  result's per-model cost), with `cumulative_cost_usd` at the checkpoint.
+- `row_kind: session`, one per session, `checkpoint` and `checkpoint_index` null: the session's
+  totals of the same cost, token, context and tier fields, `main_mean_context_tokens`,
+  `user_turns_planned`, `user_turns_run`, `stopped` (`cap`, `max_user_turns`, `error` or null),
+  `error`, `error_kind`, `session_cap_usd`, `agent_turn_cap_hits`, `checkpoints_passed` of
+  `checkpoints_total`, and the curves as arrays, one entry per turn run: `cost_per_turn`,
+  `cumulative_cost_usd`, `main_peak_context_per_turn`, `agent_turns_per_turn`, with
+  `cost_per_turn_slope` (least squares on turn number) and the `branches` taken.
+
+The per-turn cost is the turn's own `total_cost_usd`; that a resumed `-p` run reports its own spend,
+not the session's to date, is how the pack's segment metrics read it too, and the first paid pilot
+should confirm it.
+
+**`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
+session, the cost-per-turn slope, the main thread's peak context and the share of cost on model
+classes cheaper than the main model's, each with a percentile interval that resamples scenarios as
+clusters; the pass rate per checkpoint and the mean cost-per-turn curve per scenario; and each
+other arm against `bare` on the cost-per-session ratio and the pass-rate difference, paired by
+scenario. With three scenarios the intervals are wide by construction: a session gives many
+per-turn observations, but the clusters are the scenarios.
+
+### Diff-quality judge
+
+The oracles say whether a task passed and the detectors which rules fired. Neither can say which of
+two runs kept to its scope, made the better design, or ended on the clearer and more correct
+reply. `scripts/replay_judge.py` asks a pinned model those three questions, blind and pairwise, and
+a dimension's answers count only once they agree with the maintainer's hand labels.
+
+```sh
+python3 scripts/replay_judge.py export --results <set>/results.jsonl --tasks <manifest> --out <dir>
+python3 scripts/replay_judge.py run --pairs <dir>/pairs.json --image <built arm image> --out <dir>/verdicts.jsonl \
+    --pre-registration <plan>
+python3 scripts/replay_judge.py calibrate --verdicts <dir>/verdicts.jsonl --labels <labels.json> --out <dir>/calibration.json
+python3 scripts/replay_judge.py report --verdicts <verdicts.jsonl> --key <dir>/pairs.key.json --calibration <calibration.json>
+```
+
+- **The judge is pinned.** `benchmarks/judge/judge.json` names the model, its effort, the rubric
+  prompt in `benchmarks/judge/rubric.md` and that file's sha256; a rubric that differs from its
+  digest is refused, so changing the question is a deliberate re-pin. The model is asked through
+  the replay's own path: a fresh container of a built arm image, nothing mounted, no tool allowed,
+  one turn, the credential passed by name and the egress proxy as its one way out. `run` needs
+  `--pre-registration` or `--exploratory`, as a replay does; `--dry-run` prints the command line.
+- **It is blind twice over.** `export` takes pairs of one task's runs, one per arm, matched by rep
+  and with neither errored, and writes each pair's two runs in a seeded random order as `first`
+  and `second`, with nothing naming the arm or the run. Which arm is which goes to
+  `pairs.key.json`, which neither the labeller nor the judge reads. The judge then sees each pair
+  twice, as response 1 and response 2, in a seeded random order and then swapped.
+- **An answer that changes with the order is a tie.** Each dimension whose two answers disagree is
+  counted as a tie and flagged inconsistent, and the share of such pairs is reported. An answer
+  that cannot be read is an error and left out, never a tie.
+- **What a run is judged on.** The final reply comes from the run's saved stream, so the set needs
+  `--raw`. The diff is a `<task>-<arm>-<rep>.diff` beside the stream when one exists; otherwise it
+  is the file edits the stream's Edit, MultiEdit and Write calls record, which miss any change a
+  shell command made. Each side is clipped at the pinned `max_chars`, with the remainder counted.
+- **Calibration.** `export` takes the pinned 40 pairs by default, spread round-robin over tasks
+  (`--all` takes every pair, for a judged evaluation), and writes `label.html`, a local form over
+  the same blind pairs whose **Save labels** button downloads `labels.json`. `calibrate` reports per
+  dimension Cohen's kappa between judge and labeller, their raw agreement and confusion, the
+  judge's position bias (how often a decided answer chose the response shown first, with a Wilson
+  interval, flagged when it excludes one half), its length bias (how often it preferred the longer
+  response, beside how often the labeller did on the same pairs) and the order-swap inconsistency.
+- **A dimension is admitted only when kappa reaches the floor,** 0.6 unless the pre-registration
+  sets another with `--kappa-floor`; an undefined kappa is never admitted.
+- **The summary section.** `judge_section(verdicts, key, calibration)` returns `(section, text)`:
+  per arm pair, the treatment's win rate over the reference on each admitted dimension, a tie
+  counting one half, with a task-clustered percentile bootstrap interval, and the dimensions left
+  out. `summarise` does not call it yet; the one line that adds it is
+  `out["judge"], text = replay_judge.judge_section(verdicts, key, calibration)`.
+
+### Layer scorecard
+
+`scripts/layer_scorecard.py` builds one report from the result directories a definitive evaluation
+leaves, each passed by its role. It reruns nothing and calls no model, and it writes
+`scorecard.json` and `scorecard.md` when given `--out`.
+
+```sh
+python3 scripts/layer_scorecard.py --production <dir> [...] --rules <dir> --long-session <dir> \
+  --sweep <dir> --judge <judge dir> [--plan <pre-registration>] [--allow-exploratory] --out <dir>
+```
+
+Each role is optional. A result directory is searched for every `results.jsonl` under it. A judge
+directory holds the `verdicts.jsonl`, `pairs.key.json` and `calibration.json` that `replay_judge.py`
+writes.
+
+- **Registered rows only, unless you say otherwise.** A row, or a judge verdict, whose `evidence`
+  is not `pre-registered` with a plan named is refused, and the error names each source. With
+  `--allow-exploratory`, the scorecard scores them anyway. It sets `exploratory: true`, lists the
+  reasons, opens the Markdown with **Exploratory: not evidence**, and labels every equivalence
+  verdict exploratory. A set passed twice is refused, because its rows would count twice.
+- **The headline is harness against bare, per stratum.** A row's `stratum` decides its stratum.
+  Rows from before strata existed are grouped by `model`, and the report says so. For each stratum
+  it gives:
+  - the Cost-of-Pass ratio and pass-rate difference, from `replay_stats.analyse`
+  - pass^k and the all-rules-at-once rate from `replay_reliability`, each as the mean per-task
+    difference with a task-clustered interval
+  - the judge's win rate on each admitted dimension, read as its excess over one half
+  - the mean long-session cost, harness over bare, with scenarios as the clusters
+
+  Each reading carries an `equivalence` verdict. The margins are the pre-registration template's
+  defaults: 0.85 to 1.1765 for the ratio, and ±0.125 for each difference and for the win rate's
+  excess over one half. A `--plan`'s Equivalence margins field overrides any metric it names, under
+  the names `pass^k difference`, `All-rules rate difference` and `Judge win rate over one half`.
+- **One card per layer.** The layers are every sweep arm, every `unbuilt` and `excluded` entry, and
+  each output style in `benchmarks/static.json`. Each card holds:
+  - **Prefix tokens and USD per run, by model.** The tokens are the median over harness rows of the
+    layer's entries in `context_attribution`, or the static figure where no row records them. A hook
+    holds none. The USD is the static figure's split, one cache write and a cache read on every
+    later turn, at `policy/prices.json` rates and the rows' mean turns.
+  - **Behaviour against bare and against the layer's own removal.** Both use the score reader
+    `justify` uses, on the layer's own tasks, and both read as the removed arm minus the harness.
+    Bare is the whole harness removed.
+  - **The outcome effect.** The removal's pass-rate difference on the outcome subset.
+  - **The cost effect, for a cost-control layer.** A cost-control layer is one scored on the
+    Cost-of-Pass ratio or run on long-session scenarios. The card gives the sweep's marginal cost
+    and the removal's mean session cost over the harness's on the arm's scenarios.
+  - **The verdict.** `justify`'s keep, trim or no evidence, run per stratum. It names the deciding
+    score, with its margin and interval, every score it rested on, and the sources, arms, tasks and
+    row count it came from. A layer with no arm reads no evidence, with the manifest's reason.
+- **What is absent is said, never zeroed.** A role not supplied, a long-session set whose rows
+  carry no `row_kind`, a production set with no `detections.jsonl` beside it, and a stratum with no
+  judge result are each reported as `not measured`, with the reason. A stratum whose rows SM-2
+  refuses reports that refusal.
+- **Deterministic.** The same rows, manifest, static figure, prices and seed give byte-identical
+  files. Sources are named by role, position and path inside their directory, never by an absolute
+  path. An evidence bundle may carry the scorecard (docs/evidence-bundles.md).
 
 ## Limits
 

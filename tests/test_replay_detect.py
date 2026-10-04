@@ -54,7 +54,9 @@ class StreamDetectionTests(unittest.TestCase):
             _, rows, out = self.detect_raw(tmp)
             bare = by_detector(rows, "gate-run-bare-1.json")
             self.assertEqual(set(bare), set(MODULE.DETECTORS))
-            self.assertTrue(all(r["count"] == 0 and r["turns"] == [] for r in bare.values()))
+            scored = [r for r in bare.values() if MODULE.DETECTORS[r["detector"]].gate is None]
+            self.assertTrue(scored)
+            self.assertTrue(all(r["count"] == 0 and r["turns"] == [] for r in scored))
             self.assertEqual((bare["verification/no-verify"]["task"], bare["verification/no-verify"]["arm"],
                               bare["verification/no-verify"]["rep"]), ("gate-run", "bare", 1))
             self.assertIn("3 run(s), 1 unreadable", out)
@@ -145,8 +147,9 @@ class StreamDetectionTests(unittest.TestCase):
             _, rows, _ = self.detect_raw(tmp)
             self.assertNotIn("preflight-harness.json", set(r["source"] for r in rows))
 
-    def test_stance_gated_detectors_run_in_both_arms(self):
-        """`commits/missing-trailer` is gated on a stance neither arm's stream names."""
+    def test_a_stance_gated_detector_scores_the_harness_arm_by_its_default_selection(self):
+        """`commits/missing-trailer` is gated on a stance the stream never names; the harness arm
+        runs the default selection, which selects it."""
         with tempfile.TemporaryDirectory() as tmp:
             _, rows, _ = self.detect_raw(tmp)
             self.assertEqual(by_detector(rows, "gate-run-harness-1.json")["commits/missing-trailer"]["turns"], [4])

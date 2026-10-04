@@ -52,11 +52,17 @@ Seven facts shape the whole file:
   can only grow. A subagent's transcript is capped by bytes and by the clock.
 
 No budget, threshold, model name or role name lives here: every number comes from the cost
-table, every switch from `switches.turn_feed`, `switches.nudge_at`, `switches.session_nudge_at`
-and `switches.max_parallel`.
+table, every switch from `switches.turn_feed`, `switches.nudge_at`, `switches.session_nudge_at`,
+`switches.session_handoff_at`, `switches.context_cost_curve` and `switches.max_parallel`.
 A variant that sets none of them feeds nothing. Any failure at all emits nothing and exits 0,
 and no line the feed emits is ever a decision. The fresh-session nudge is a recommendation, so
 saying it also records an adherence event, which `adherence.py` later answers.
+
+One answer is not a line: past `session_handoff_at`, the `Stop` that ends a turn is blocked once
+with the hand-off instruction, because on a 1M-token window sessions went on past the soft line
+for a median of six more turns at a rising price per call. It is a single block per crossing — the
+next stop is released whatever the turn did — it is recorded as an adherence event, and it is off
+in a headless run (`claude -p`, an SDK) unless `HARNESS_HANDOFF_BLOCK=on` enables it there.
 """
 import errno
 import hashlib
@@ -118,6 +124,10 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
 AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 UNNAMED = "other"
 MODES = ("off", "thresholds", "every-turn")
+# The `CLAUDE_CODE_ENTRYPOINT` values Claude Code gives a non-interactive run: `claude -p` is
+# `sdk-cli`. A replay trial is one, and blocking its last stop would add a turn to the measure.
+HEADLESS = ("sdk-cli", "sdk-ts", "sdk-py")
+HANDOFF_SWITCH = "HARNESS_HANDOFF_BLOCK"
 
 
 def sibling(name):
@@ -207,10 +217,10 @@ def new_state():
             "turn": {"output": 0, "tool_calls": 0},
             "previous_turn": {"output": 0, "tool_calls": 0},
             "subagents": {"output": 0, "tool_calls": 0, "count": 0, "unknown": 0},
-            "journal_offset": 0, "running": {}, "pending": [], "counted": [],
+            "journal_offset": 0, "running": {}, "started": [], "pending": [], "counted": [],
             "figures": {}, "unsummed": {}, "open": [], "pruned": 0, "said_turn": None,
             "rounds": {}, "said_unknown": [], "said_measure": False,
-            "context": None, "said_nudge": [], "turns": 0}
+            "context": None, "said_nudge": [], "turns": 0, "handed_off": None}
 
 
 def load_state(path):
@@ -254,23 +264,29 @@ def load_state(path):
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             del state["rounds"][agent]
     state["said_measure"] = bool(state.get("said_measure"))
-    for key in ("pending", "counted", "open", "said_unknown", "said_nudge"):
+    for key in ("started", "pending", "counted", "open", "said_unknown", "said_nudge"):
         if not isinstance(state.get(key), list):
             state[key] = []
+    state["started"] = [v for v in state["started"] if isinstance(v, str)]
     state["said_unknown"] = [v for v in state["said_unknown"] if isinstance(v, str)]
     state["said_nudge"] = [v for v in state["said_nudge"]
                            if isinstance(v, int) and not isinstance(v, bool) and v > 0]
     size = state.get("context")
     if not (isinstance(size, int) and not isinstance(size, bool) and size > 0):
         state["context"] = None
+    handed = state.get("handed_off")
+    if not (isinstance(handed, int) and not isinstance(handed, bool) and handed > 0):
+        state["handed_off"] = None
     return state
 
 
 def save_state(path, state):
-    """Atomic and private. Called before the slow read as well as after it."""
+    """Atomic and private, and True once the state is on disk. Called before the slow read as
+    well as after it."""
     state["pending"] = state.get("pending", [])[-MAX_PENDING:]
     state["counted"] = state.get("counted", [])[-MAX_COUNTED:]
     state["said_unknown"] = state.get("said_unknown", [])[-MAX_COUNTED:]
+    state["started"] = state.get("started", [])[-MAX_COUNTED:]
     for stale in list(state.get("rounds", {}))[:max(0, len(state.get("rounds", {}))
                                                     - MAX_COUNTED)]:
         del state["rounds"][stale]
@@ -278,7 +294,7 @@ def save_state(path, state):
                                                       - MAX_PENDING)]:
         del state["unsummed"][stale]
     if not ensure_dir(path.parent):
-        return
+        return False
     tmp = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
     try:
         handle = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -287,11 +303,13 @@ def save_state(path, state):
         finally:
             os.close(handle)
         os.replace(str(tmp), str(path))
+        return True
     except OSError:
         try:
             tmp.unlink()
         except OSError:
             pass
+        return False
 
 
 class Lock(object):
@@ -531,8 +549,9 @@ def advance(state, transcript, save=None, budget=READ_BUDGET):
             # session nudge through the size itself, not by forgetting the line was fed.
             seen = state.get("inode") is not None
             kept = {key: state[key] for key in
-                    ("journal_offset", "running", "pending", "counted", "figures", "unsummed",
-                     "subagents", "pruned", "rounds", "said_unknown", "said_nudge", "turns")}
+                    ("journal_offset", "running", "started", "pending", "counted", "figures", "unsummed",
+                     "subagents", "pruned", "rounds", "said_unknown", "said_nudge", "turns",
+                      "handed_off")}
             state = dict(new_state(), **kept)
             state["inode"], state["head"] = inode, head
             state["offset"] = max(0, size - COLD_TAIL)
@@ -813,6 +832,22 @@ def journal_records(journal_file, offset):
     return out
 
 
+def internal(state, record):
+    """Whether a stop is Claude Code's own end-of-turn agent rather than a subagent anyone spawned.
+
+    Such a stop fires within seconds of the main session's `Stop`, with no `SubagentStart` before
+    it, no agent type and no transcript written anywhere, so no lookup can ever give it a figure.
+    Reported, it read `unknown finished, spend unknown` once a turn and was most of the feed's
+    unknown lines. The stop journals the first two facts as `internal`; the third is that no start
+    was seen for it, which keeps a spawned agent whose transcript went missing reported. The start
+    is looked for in `started` as well as `running`, because `running_now` forgets a start after
+    `RUNNING_TTL` and an agent that outlives it is still one somebody spawned.
+    """
+    agent_id = record.get("id")
+    return (bool(record.get("internal")) and agent_id not in state["running"]
+            and agent_id not in (state.get("started") or []))
+
+
 def needs_sum(record):
     """Whether a journalled stop's figure is one to take as final.
 
@@ -856,8 +891,14 @@ def to_settle(state, journal_file, payload, env, first=None):
         items.append((agent_id, expand(entry[0], env, agent_id) or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)))
     rounds = dict(state.get("rounds") or {})
+    seen_running = {"running": dict(state.get("running") or {}),
+                    "started": list(state.get("started") or [])}
     for record in journal_records(journal_file, state.get("journal_offset", 0)):
         agent_id = record["id"]
+        if record.get("t") == "start":
+            seen_running["started"].append(agent_id)
+        if internal(seen_running, record):
+            continue
         repeat = False
         if record.get("t") == "stop":
             rounds[agent_id] = rounds.get(agent_id, 0) + 1
@@ -928,10 +969,14 @@ def ingest(state, journal_file, resolved=None):
             agent_id = record["id"]
             if record.get("t") == "start":
                 state["running"][agent_id] = int(record.get("at") or 0)
+                if agent_id not in state["started"]:
+                    state["started"].append(agent_id)
                 continue
-            if record.get("t") != "stop":
+            if record.get("t") != "stop" or internal(state, record):
                 continue
             state["running"].pop(agent_id, None)
+            if agent_id in state["started"]:
+                state["started"].remove(agent_id)
             round_number = bump_round(state, agent_id)
             # A later round's stop is never taken at the figure it was journalled with. The
             # transcript it was read from still ends on the previous round's finished response,
@@ -1165,6 +1210,53 @@ def session_nudges(table):
                   if isinstance(v, int) and not isinstance(v, bool) and v > 0)
 
 
+def _switch(table, key):
+    switches = table.get("switches") if isinstance(table, dict) else None
+    return switches.get(key) if isinstance(switches, dict) else None
+
+
+def handoff_at(table):
+    """The hard threshold, the context size past which a turn's end is blocked once, or None."""
+    value = _switch(table, "session_handoff_at")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def cost_multiple(table, size):
+    """`(multiple, floor)` for a call at `size` tokens on the posture's cost curve, or None.
+
+    The multiple is the curve's at the largest size not above `size`, against a call under the
+    curve's first size, `floor`. Under the floor there is no multiple worth naming.
+    """
+    curve = _switch(table, "context_cost_curve")
+    points = []
+    for pair in curve if isinstance(curve, list) else []:
+        if (isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], int)
+                and not isinstance(pair[0], bool) and pair[0] > 0
+                and isinstance(pair[1], (int, float)) and not isinstance(pair[1], bool)
+                and pair[1] > 0):
+            points.append((pair[0], pair[1]))
+    points.sort()
+    reached = [multiple for at, multiple in points if size >= at]
+    return (reached[-1], points[0][0]) if reached else None
+
+
+def costs(table, size):
+    """`, where a call costs about 1.3× one under 160,000`, or nothing without a curve point."""
+    found = cost_multiple(table, size) if isinstance(size, int) else None
+    if found is None:
+        return ""
+    return (", where a call costs about " + "{:.1f}".format(found[0]) + "× one under "
+            + "{:,}".format(found[1]))
+
+
+def handoff_enabled(env):
+    """Whether this run may block a stop at all: never headless, unless the switch says so."""
+    switch = (env.get(HANDOFF_SWITCH) or "").strip().lower()
+    if switch in ("on", "off"):
+        return switch == "on"
+    return env.get("CLAUDE_CODE_ENTRYPOINT") not in HEADLESS
+
+
 def budgets(row):
     """The row's two soft budgets, each only when it is a positive whole number."""
     if not isinstance(row, dict):
@@ -1264,7 +1356,7 @@ def turn_line(state):
     return text
 
 
-def session_line(state, thresholds):
+def session_line(state, thresholds, table=None):
     """One line the first time the session's context passes a threshold, or None.
 
     The turn line reports what a turn produced. What a long session costs is mostly the context
@@ -1280,6 +1372,9 @@ def session_line(state, thresholds):
     A size no transcript line has supplied yet is not a crossing: the line would name a
     threshold nothing was measured against, and reporting the context of an unread transcript
     as zero would be a lie either way.
+
+    Where the posture's cost curve has a point at or under the size, the line also names what a
+    call here costs against one under the curve's floor, which is the reason to act on it.
     """
     size = state.get("context")
     if not thresholds or not isinstance(size, int) or isinstance(size, bool) or size <= 0:
@@ -1293,8 +1388,17 @@ def session_line(state, thresholds):
     # The largest of the ones newly crossed, which is not the largest passed: a threshold
     # already said is not news, and naming it would read as a line repeating itself.
     return (PREFIX + "session context " + plural(size, "token") + ", past the fresh-session "
-            "threshold of " + "{:,}".format(fresh[-1]) + " — finish the task, write the "
-            "handoff, start a fresh session")
+            "threshold of " + "{:,}".format(fresh[-1]) + costs(table, size)
+            + " — finish the task, write the handoff, start a fresh session")
+
+
+def handoff_reason(size, threshold, table):
+    """The one block's text: what was crossed, what it costs, and the two things to do now."""
+    return (PREFIX + "session context " + plural(size, "token") + ", past the hard fresh-session "
+            "threshold of " + "{:,}".format(threshold) + costs(table, size) + ". Before this "
+            "turn ends, write the handoff (the state, the next step, the open decisions), then "
+            "tell the user to start a fresh session from it. This stop is blocked once; the next "
+            "one is released whatever this turn does.")
 
 
 def record_adherence(recommendation, session_id, turn, env):
@@ -1433,6 +1537,8 @@ def on_subagent_event(payload, env, kind):
         path = payload.get("agent_transcript_path") or agent_transcript(
             payload.get("transcript_path"), payload.get("session_id"), agent_id)
         record["path"] = redact(path, env)
+        if not payload.get("agent_type") and not readable(path):
+            record["internal"] = True
         if workflow_agent(path):
             record["workflow"] = True
         totals = agent_totals(path)
@@ -1541,6 +1647,8 @@ def on_agent_return(payload, env):
                     if fresh.get("not_yet"):
                         remember_unsummed(state, agent_id, redact(first[1], env))
                     state["running"].pop(agent_id, None)
+                    if agent_id in state["started"]:
+                        state["started"].remove(agent_id)
                     figured = emit(state, lines, fresh, line)
         note = width_line(running_now(state), width)
         if note:
@@ -1581,7 +1689,7 @@ def on_prompt(payload, env):
         turn = turn_line(state) if mode == "every-turn" else None
         lines = [turn] if turn else []
         # Not a subagent's line and not a figure to compare: it is said under `thresholds` too.
-        nudge = session_line(state, session_nudges(table))
+        nudge = session_line(state, session_nudges(table), table)
         if nudge:
             lines.append(nudge)
             record_adherence("fresh-session", payload.get("session_id"), state["turns"], env)
@@ -1616,6 +1724,50 @@ def on_prompt(payload, env):
     return lines or None
 
 
+def on_stop(payload, env):
+    """The hand-off block's reason when this stop is the one to block, else None.
+
+    Once per crossing: the threshold blocked at is kept in the state, so the next stop is
+    released whether or not the turn wrote the handoff, and a session that stays past the
+    threshold is never blocked again. A context that falls back under it, as a compaction does,
+    re-arms it, and so does a switch to a posture with another threshold. A stop that cannot
+    save the marker is released, since nothing would stop the next one blocking again. The
+    block is answered in the adherence log, where a session end within the window counts as
+    followed.
+    """
+    table, mode, _, _ = settings(env)
+    threshold = handoff_at(table)
+    if mode == "off" or threshold is None or not handoff_enabled(env):
+        return None
+    found = paths(payload.get("session_id"), env)
+    transcript = payload.get("transcript_path")
+    if found is None or not isinstance(transcript, str) \
+            or not os.path.isfile(os.path.expanduser(transcript)):
+        return None
+    state_file, _, lock_file = found
+    with Lock(lock_file) as held:
+        if not held:
+            return None
+        state = advance(load_state(state_file), transcript,
+                        save=lambda current: save_state(state_file, current))
+        if state.get("timed_out"):
+            save_state(state_file, state)
+            return None
+        size = state.get("context")
+        marker = state.get("handed_off")
+        if marker and (size is None or size < marker or marker != threshold):
+            state["handed_off"] = None
+        if size is None or size < threshold or state.get("handed_off"):
+            save_state(state_file, state)
+            return None
+        state["handed_off"] = threshold
+        if not save_state(state_file, state):
+            return None
+        turn = state["turns"]
+    record_adherence("fresh-session-handoff", payload.get("session_id"), turn, env)
+    return handoff_reason(size, threshold, table)
+
+
 def run(payload, env=None):
     """The lines one event produces, or None. The parent thread is the only place a feed runs."""
     env = os.environ if env is None else env
@@ -1636,6 +1788,11 @@ def main():
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
+            return
+        if payload.get("hook_event_name") == "Stop":
+            reason = None if payload.get("agent_id") else on_stop(payload, os.environ)
+            if reason:
+                print(json.dumps({"decision": "block", "reason": reason}))
             return
         lines = run(payload)
     except Exception:

@@ -42,6 +42,19 @@ which either arm passed nothing has no log ratio and is counted, not used. `tau2
 same for the per-task pass-rate difference. The pass outcome's intra-cluster correlation, tasks as
 clusters, is reported per arm for the pre-registration's variance-source field.
 
+**A pilot at the ceiling or the floor.** A pilot whose pass rate is 0 or 1 has no binomial variance
+to size from, so the command refuses it unless the pre-registration states an assumed pass rate,
+passed as `--assumed-pass-rate`. That rate then stands in for `p` in both standard errors, and the
+output and the JSON say it was assumed and what the pilot showed; it is never applied silently.
+The pilot's `tau2_pass`, zero at a ceiling, is kept, so the pass test assumes no between-task
+variance in the pass-rate difference beyond the binomial term. `--mde` is the minimum detectable
+effect, the same input as `--effect`.
+
+A pilot at the floor, or one where fewer than two tasks passed in both arms, also has no per-task
+log Cost-of-Pass ratio, so no `tau2`, and no assumed pass rate can recover it. The pre-registration
+then states that variance too, passed as `--tau2` beside `--pilot`; it is accepted only when the
+pilot measured none, and the output and the JSON (`tau2_assumed`) name it as an assumption.
+
 Standard library only. Reading: docs/benchmarks.md.
 """
 import argparse
@@ -175,10 +188,11 @@ def check_inputs(inputs, effect, alpha, power):
         raise ValueError("alpha and power must each lie between 0 and 1")
     if not 0 < inputs["pass_rate"] < 1:
         raise ValueError("the pass rate must lie strictly between 0 and 1; a pilot that passes "
-                         "everything or nothing has no variance to size from")
+                         "everything or nothing has no variance to size from, so state the "
+                         "pre-registered pass rate with --assumed-pass-rate")
     for key in ("tau2", "cv2", "tau2_pass", "long_tau2"):
-        if inputs.get(key) is not None and inputs[key] < 0:
-            raise ValueError("%s must not be negative" % key)
+        if inputs.get(key) is not None and (not math.isfinite(inputs[key]) or inputs[key] < 0):
+            raise ValueError("%s must be finite and must not be negative" % key)
 
 
 def _sample_var(values):
@@ -199,8 +213,9 @@ def _icc(cells):
     return None if denominator == 0 else (between - within) / denominator
 
 
-def estimate(rows, arms=replay_stats.ARMS):
-    """The variance inputs from pilot rows, by the rules in this module's docstring."""
+def estimate(rows, arms=replay_stats.ARMS, assumed_tau2=None):
+    """The variance inputs from pilot rows, by the rules in this module's docstring.
+    `assumed_tau2` stands in for `tau2` only when the pilot has none to give."""
     attempts = replay_stats.attempts(rows, arms)
     if any(a["cost"] is None for a in attempts):
         raise ValueError("a pilot row has no cost; a cost variance cannot be read from it")
@@ -239,8 +254,16 @@ def estimate(rows, arms=replay_stats.ARMS):
         return max(0.0, _sample_var(ratios) - within), len(subset) - len(ratios)
 
     tau2, unusable = tau2_of(tasks)
-    if tau2 is None:
-        raise ValueError("fewer than two pilot tasks passed in both arms; no between-task variance")
+    tau2_assumed = tau2 is None and assumed_tau2 is not None
+    if tau2 is None and assumed_tau2 is None:
+        raise ValueError("fewer than two pilot tasks passed in both arms; no between-task variance, "
+                         "so state the pre-registered tau2 with --tau2")
+    if tau2 is not None and assumed_tau2 is not None:
+        raise ValueError("the pilot measured tau2; --tau2 with --pilot is only for a pilot that has none")
+    if tau2_assumed:
+        if not math.isfinite(assumed_tau2) or assumed_tau2 < 0:
+            raise ValueError("tau2 must be finite and must not be negative")
+        tau2 = assumed_tau2
     diffs = [statistics.mean(1.0 if a["passed"] else 0.0 for a in cells[t][arms[1]])
              - statistics.mean(1.0 if a["passed"] else 0.0 for a in cells[t][arms[0]]) for t in tasks]
     tau2_pass = max(0.0, _sample_var(diffs) - 2.0 * pass_rate * (1.0 - pass_rate) / reps)
@@ -250,7 +273,16 @@ def estimate(rows, arms=replay_stats.ARMS):
                for arm in arms)
     return {"tau2": tau2, "cv2": cv2, "pass_rate": pass_rate, "tau2_pass": tau2_pass,
             "long_tau2": long_tau2, "tasks": len(tasks), "long_tasks": len(long_tasks),
-            "unusable_tasks": unusable, "reps": reps, "icc_pass": icc}
+            "unusable_tasks": unusable, "reps": reps, "icc_pass": icc, "tau2_assumed": tau2_assumed}
+
+
+def assume_pass_rate(inputs, assumed):
+    """`inputs` with the pre-registered `assumed` pass rate standing in for the measured one; the
+    measured rate is kept as `measured_pass_rate` and `pass_rate_assumed` is set, so every report
+    says the figure was assumed."""
+    if not 0 < assumed < 1:
+        raise ValueError("--assumed-pass-rate must lie strictly between 0 and 1")
+    return dict(inputs, pass_rate=assumed, measured_pass_rate=inputs.get("pass_rate"), pass_rate_assumed=True)
 
 
 def read_rows(paths):
@@ -268,12 +300,23 @@ def _num(value, places=4):
 
 
 def render(result, inputs, effect, alpha, power, have=None):
-    lines = ["Power for SM-2 at alpha %g two-sided, target power %g, effect %g (ratio %g), delta %g"
-             % (alpha, power, effect, 1 - effect, DELTA),
+    lines = ["Power for SM-2 at alpha %g two-sided, target power %g, minimum detectable effect %g "
+             "(ratio %g), delta %g" % (alpha, power, effect, 1 - effect, DELTA),
              "inputs: tau2 %s, cv2 %s, pass rate %s, tau2_pass %s, long tau2 %s"
              % (_num(inputs["tau2"]), _num(inputs["cv2"]), _num(inputs["pass_rate"]),
                 _num(inputs["tau2_pass"]), _num(inputs.get("long_tau2")) if inputs.get("long_tau2") is not None
                 else "unknown (claim power is unavailable)")]
+    if inputs.get("pass_rate_assumed") and "tasks" in inputs:
+        lines.append("assumption: pass rate %s is the pre-registered assumption, not a measurement; the "
+                     "measured pass rate is %s, and tau2_pass %s is the measured figure"
+                     % (_num(inputs["pass_rate"]), _num(inputs.get("measured_pass_rate")),
+                        _num(inputs["tau2_pass"])))
+    elif inputs.get("pass_rate_assumed"):
+        lines.append("assumption: pass rate %s is the pre-registered assumption, not a measurement; "
+                     "tau2_pass %s is stated, not measured" % (_num(inputs["pass_rate"]), _num(inputs["tau2_pass"])))
+    if inputs.get("tau2_assumed"):
+        lines.append("assumption: tau2 %s is the pre-registered assumption, not a measurement; fewer "
+                     "than two pilot tasks passed in both arms" % _num(inputs["tau2"]))
     if "tasks" in inputs:
         lines.append("pilot: %d task(s), %d long, %s trial(s) per cell, %d task(s) with no log ratio; "
                      "pass ICC %s" % (inputs["tasks"], inputs["long_tasks"], _num(inputs["reps"], 1),
@@ -311,14 +354,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--pilot", action="append", help="a pilot's results.jsonl, or the directory "
                         "holding one; repeatable. Or state the inputs below")
-    parser.add_argument("--tau2", type=float, help="between-task variance of the log Cost-of-Pass ratio")
+    parser.add_argument("--tau2", type=float, help="between-task variance of the log Cost-of-Pass ratio; "
+                        "with --pilot, the pre-registered figure for a pilot that measured none")
     parser.add_argument("--cv2", type=float, help="within-cell squared coefficient of variation of cost")
     parser.add_argument("--pass-rate", type=float, help="pooled pass rate of both arms")
     parser.add_argument("--tau2-pass", type=float, help="between-task variance of the pass-rate difference")
     parser.add_argument("--long-tau2", type=float, help="the long tasks' own tau2; without it, or "
                         "a pilot with enough long tasks, claim power is unavailable")
-    parser.add_argument("--effect", type=float, default=EFFECT, help="the saving to detect, 1 - ratio; "
-                        "at most and by default %(default)s")
+    parser.add_argument("--assumed-pass-rate", type=float, help="the pre-registered pass rate to size "
+                        "with in place of the measured one; required when a pilot passes everything "
+                        "or nothing, and printed as an assumption")
+    parser.add_argument("--effect", "--mde", dest="effect", type=float, default=EFFECT,
+                        help="the minimum detectable effect, the saving 1 - ratio; at most and by "
+                        "default %(default)s")
     parser.add_argument("--alpha", type=float, default=ALPHA, help="two-sided; default %(default)s")
     parser.add_argument("--power", type=float, default=POWER, help="target joint power; default %(default)s")
     parser.add_argument("--min-reps", type=int, default=MIN_REPS, help="default and floor %(default)s")
@@ -328,19 +376,26 @@ def main(argv=None):
                         "a set of K tasks, N long, at M trials meets the target; exit 1 when it does not")
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
-    stated = (args.tau2, args.cv2, args.pass_rate, args.tau2_pass)
+    stated = (args.cv2, args.pass_rate, args.tau2_pass)
     try:
         if args.pilot:
             if any(v is not None for v in stated):
-                raise ValueError("give --pilot or the stated inputs, not both")
-            inputs = estimate(read_rows(args.pilot))
+                raise ValueError("give --pilot or the stated inputs, not both; only --tau2, for a pilot "
+                                 "with no between-task variance, goes with it")
+            inputs = estimate(read_rows(args.pilot), assumed_tau2=args.tau2)
             if args.long_tau2 is not None:
                 inputs["long_tau2"] = args.long_tau2
-        elif all(v is not None for v in stated):
+        elif args.pass_rate is not None and args.assumed_pass_rate is not None:
+            raise ValueError("give --pass-rate or --assumed-pass-rate, not both")
+        elif all(v is not None for v in (args.tau2, args.cv2, args.tau2_pass)) and \
+                (args.pass_rate is not None or args.assumed_pass_rate is not None):
             inputs = {"tau2": args.tau2, "cv2": args.cv2, "pass_rate": args.pass_rate,
                       "tau2_pass": args.tau2_pass, "long_tau2": args.long_tau2}
         else:
-            raise ValueError("give --pilot, or all of --tau2, --cv2, --pass-rate and --tau2-pass")
+            raise ValueError("give --pilot, or all of --tau2, --cv2, --pass-rate (or --assumed-pass-rate) "
+                             "and --tau2-pass")
+        if args.assumed_pass_rate is not None:
+            inputs = assume_pass_rate(inputs, args.assumed_pass_rate)
         result = size(inputs, args.effect, args.alpha, args.power, args.min_reps, args.max_reps, args.max_tasks)
         have = None
         if args.have:

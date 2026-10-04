@@ -51,6 +51,7 @@ INVOKED = {
     "harness-session": ({"hook_event_name": "SessionStart", "session_id": "s"}, RUNTIMES),
     "neutralize-tool-output": (post("Read", file_path="/tmp/x"), RUNTIMES),
     "stage-user-files": (pre("SendUserFile", files=["/tmp/x"]), ("claude-code",)),
+    "steer-polling": (pre("Bash", command="sleep 60"), ("claude-code",)),
     "stop-gate": ({"hook_event_name": "Stop", "session_id": "s"}, RUNTIMES),
     "tier-agent-spawns": (pre("Agent", prompt="work"), ("claude-code",)),
     "usage-feed": ({"hook_event_name": "UserPromptSubmit", "session_id": "s", "prompt": "hi"}, ("claude-code",)),

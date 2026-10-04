@@ -397,15 +397,15 @@ development_status:
   ah-e027-definitive-evaluation-a-powered-pre-registered: in-progress
   ah-d014-decide-the-definitive-run-s-design-and-budget: backlog
   ah-s334-pack-v1-1-harder-production-tasks-off-the: backlog
-  ah-s335-behaviour-graders-a-graded-score-contract-for: backlog
+  ah-s335-behaviour-graders-a-graded-score-contract-for: ready-for-dev
   ah-s336-rule-targeted-tasks-one-per-layer-that-claims-a: backlog
-  ah-s337-reliability-and-joint-compliance-metrics-pass-k: backlog
-  ah-s338-informative-nulls-equivalence-bounds-and-sizing: backlog
-  ah-s339-multi-model-arms-as-separate-strata-in-a: backlog
-  ah-s340-a-third-arm-the-maintainer-s-real-configuration: backlog
-  ah-s341-extended-layer-sweep-with-a-justification-rule: backlog
-  ah-s342-diff-quality-judge-where-deterministic-graders: backlog
-  ah-s343-layer-scorecard-generated-from-registered-rows: backlog
+  ah-s337-reliability-and-joint-compliance-metrics-pass-k: ready-for-dev
+  ah-s338-informative-nulls-equivalence-bounds-and-sizing: ready-for-dev
+  ah-s339-multi-model-arms-as-separate-strata-in-a: ready-for-dev
+  ah-s340-a-third-arm-the-maintainer-s-real-configuration: ready-for-dev
+  ah-s341-extended-layer-sweep-with-a-justification-rule: ready-for-dev
+  ah-s342-diff-quality-judge-where-deterministic-graders: ready-for-dev
+  ah-s343-layer-scorecard-generated-from-registered-rows: ready-for-dev
   ah-s347-protect-the-record-block-agent-writes-to: backlog
   ah-s348-bench-measure-the-first-wave-of-spawns-when-a: ready-for-dev
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
@@ -532,6 +532,13 @@ development_status:
   ah-b164-fix-security-grade-bash-flags-quoted-text-misses: ready-for-dev
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: ready-for-dev
   ah-b166-fix-ci-the-bmad-traceability-workflow-is-red-on: ready-for-dev
+  ah-b167-fix-coordination-intent-overlap-refusals-are: ready-for-dev
+  ah-b168-fix-usage-feed-finished-subagent-spend-reads: ready-for-dev
+  ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
+  ah-b170-fix-security-grade-bash-grades-a-read-of-the: ready-for-dev
+  ah-b171-fix-cost-sleep-and-poll-loops-instead-of: ready-for-dev
+  ah-b173-fix-cost-the-fresh-session-thresholds-are: ready-for-dev
+  ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -705,6 +712,7 @@ development_status:
   ah-s331-add-a-codex-plugin-manifest-for-the-skills: ready-for-dev
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: ready-for-dev
   ah-s344-admit-oracle-scorers-that-return-named-metrics: ready-for-dev
+  ah-s349-long-session-tier-simulated-deep-coding-and: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog

@@ -667,6 +667,23 @@ def _sizes(value):
     return None
 
 
+def _curve(value):
+    """None when `value` is a usable context cost curve, else the rule it breaks.
+
+    `[[tokens, multiple], …]`: from `tokens` of context up, one call costs about `multiple` times
+    a call under the first entry's size. The sizes follow `_sizes`; a multiple is positive.
+    """
+    if not isinstance(value, list) or not all(isinstance(p, list) and len(p) == 2 for p in value):
+        return "is a list of [whole token count, multiple] pairs, smallest first"
+    problem = _sizes([pair[0] for pair in value])
+    if problem:
+        return problem
+    for pair in value:
+        if not (_number(pair[1], 0, MAX_MULTIPLIER) and pair[1] > 0):
+            return "multiple " + json.dumps(pair[1], default=str) + " is not a positive number"
+    return None
+
+
 def validate_sidecar(data, roles=None):
     """`(usable copy, findings)` for one sidecar object; every finding drops the value it names.
 
@@ -718,6 +735,15 @@ def validate_sidecar(data, roles=None):
             problem = _sizes(value)
             if problem:
                 findings.append("switch 'session_nudge_at' " + problem)
+                continue
+            ok = True
+        elif key == "session_handoff_at":
+            # The hard threshold: one size, or null for a variant that never blocks.
+            ok = value is None or (_number(value, 0, MAX_BUDGET, integer=True) and value > 0)
+        elif key == "context_cost_curve":
+            problem = _curve(value)
+            if problem:
+                findings.append("switch 'context_cost_curve' " + problem)
                 continue
             ok = True
         else:

@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "description": "The configuration the maintainer runs: the shipped default stances with the concise voice in place of scannable.",
+  "stances": {
+    "voice": "concise"
+  }
+}

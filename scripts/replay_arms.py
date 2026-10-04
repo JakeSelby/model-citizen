@@ -131,6 +131,9 @@ def _selection_problem(selection):
     if not isinstance(selection, dict):
         return "a selection is an object of kind to {unit: value}"
     for kind, units in selection.items():
+        # A core hook switched off needs the acknowledgement a user gives (`posture.CORE_ACK`).
+        if kind == "core_switches_acknowledged" and units is True:
+            continue
         if not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z-]*", kind) or not isinstance(units, dict) \
                 or not units or any(not isinstance(unit, str) or not isinstance(value, str) or not value
                                     for unit, value in units.items()):
@@ -350,6 +353,117 @@ def two_build_check(decl, out_dir, snapshot, launch=subprocess.run, repo=ROOT, d
     for line in diffs:
         say("  " + line)
     return not diffs
+
+
+# --- Arm configs: a further harness arm built from a named stance selection --------------------
+
+# An arm config is a small JSON file naming stance dimension to variant, for example
+# `{"schema": 1, "description": "...", "stances": {"voice": "concise"}}`. Its stances become the
+# arm's declared selection (`declaration(selection=...)`), so the image holds the harness at the
+# tag synced with exactly that selection, and the run admits it with the pair check every harness
+# arm passes. Shipped examples: benchmarks/arms/. Use: docs/benchmarks.md, "Arm configs".
+ARM_CONFIG_SCHEMA = 1
+ARM_CONFIG_KEYS = ("schema", "description", "stances")
+ARM_CONFIG_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+# Names a run already gives an arm, in a replay, a pair or an ablation run.
+RESERVED_ARM_NAMES = ARMS + ("control", "reference", "treatment")
+STANCE_NAME = re.compile(r"[a-z][a-z0-9-]*")
+
+
+def arm_config_problem(data):
+    """Why `data` is not an arm config, or None: the schema, at most a description, and a non-empty
+    `stances` object of dimension to variant, each an identifier."""
+    if not isinstance(data, dict):
+        return "an arm config is a JSON object"
+    unknown = sorted(set(data) - set(ARM_CONFIG_KEYS))
+    if unknown:
+        return "unknown key(s) %s; an arm config holds %s" % (", ".join(unknown), ", ".join(ARM_CONFIG_KEYS))
+    if data.get("schema") != ARM_CONFIG_SCHEMA:
+        return "schema must be %d" % ARM_CONFIG_SCHEMA
+    if "description" in data and not isinstance(data["description"], str):
+        return "description must be a string"
+    stances = data.get("stances")
+    if not isinstance(stances, dict) or not stances:
+        return "stances must be a non-empty object of dimension to variant"
+    for dimension, variant in stances.items():
+        if not STANCE_NAME.fullmatch(dimension) or not isinstance(variant, str) or not STANCE_NAME.fullmatch(variant):
+            return "stance %r: %r is not a variant name" % (dimension, variant)
+    return None
+
+
+def load_arm_config(path):
+    """The arm config at `path`, parsed and checked for shape; SystemExit naming the file otherwise."""
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit("replay-arms: cannot read the arm config %s: %s" % (path, exc))
+    problem = arm_config_problem(data)
+    if problem:
+        raise SystemExit("replay-arms: the arm config %s is refused: %s" % (path, problem))
+    return data
+
+
+def arm_config_name_problem(name):
+    """Why `name` cannot name a config arm, or None."""
+    if not ARM_CONFIG_NAME.fullmatch(name or ""):
+        return "arm name %r is not lower-case letters, digits and hyphens" % (name,)
+    if name in RESERVED_ARM_NAMES:
+        return "arm name %r is taken; the reserved names are %s" % (name, ", ".join(RESERVED_ARM_NAMES))
+    return None
+
+
+def arm_config_sha256(config):
+    """The config's digest: canonical JSON, so formatting and key order never move it."""
+    return digest(config)
+
+
+def arm_config_selection(config):
+    """The selection the arm declares, in the user-config shape the sync reads."""
+    return {"stances": dict(config["stances"])}
+
+
+def arm_config_stamp(name, config):
+    """What every row of a config arm records as `arm_config`."""
+    return {"name": name, "schema": config["schema"], "sha256": arm_config_sha256(config),
+            "stances": dict(config["stances"])}
+
+
+def stance_variants(posture, root):
+    """`{dimension: [variant, ...]}` the checkout at `root` ships, read through its own resolver's
+    primitive roots with no user configuration."""
+    out = {}
+    for source in posture.primitive_roots({}, Path(root), "stances"):
+        if not source.is_dir():
+            continue
+        for path in sorted(source.glob("*/*.md")):
+            out.setdefault(path.parent.name, set()).add(path.stem)
+    return {dimension: sorted(variants) for dimension, variants in sorted(out.items())}
+
+
+def arm_config_errors(name, config, posture, root, env=None):
+    """Every reason the checkout at `root` cannot build this config arm, one line each: an unknown
+    dimension, a variant it does not ship, a selection its resolver refuses, or a selection that
+    is the tag's default throughout and so would be the harness arm again."""
+    env = dict(env or {}, HOME=str(Path(root) / ".arm-config-empty-home"))
+    available = stance_variants(posture, root)
+    errors = []
+    for dimension, variant in sorted(config["stances"].items()):
+        if dimension not in available:
+            errors.append("%s: unknown stance dimension %s; the dimensions are %s"
+                          % (name, dimension, ", ".join(available)))
+        elif variant not in available[dimension]:
+            errors.append("%s: stance %s has no variant %s; its variants are %s"
+                          % (name, dimension, variant, ", ".join(available[dimension])))
+    if errors:
+        return errors
+    try:
+        chosen = posture.selection(env, strict=True, config=arm_config_selection(config), root=Path(root))
+        default = posture.selection(env, strict=False, config={}, root=Path(root))
+    except ValueError as exc:
+        return ["%s: the tag's resolver refuses its selection: %s" % (name, str(exc).splitlines()[0])]
+    if chosen.get("stances") == default.get("stances"):
+        errors.append("%s: every stance it names is already the tag's default, so it is the harness arm" % name)
+    return errors
 
 
 # --- The seam where an arm can be refused before it launches -----------------------------------
@@ -861,6 +975,13 @@ OBSERVATION_MOUNT = "/observations"
 # Claude Code's managed memory file on Linux, the first memory it loads: a file mounted here opens
 # the session segment, the first message after the system prompt (`cost_bench.trial_memory`).
 MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
+# Where a check container sees the scored run's saved stream-json, read-only (`check_command`).
+SESSION_STREAM = "/session-stream.jsonl"
+# Where the image's CLI keeps its session transcripts: the `agent` user's home in both arms. A
+# long-session run mounts one empty host directory here for each session, so a later turn's fresh
+# container can `--resume` the session an earlier one wrote.
+AGENT_HOME = "/home/agent"
+SESSION_STORE = AGENT_HOME + "/.claude/projects"
 OBSERVATION_MARKER = ".model-citizen-benchmark-output"
 
 
@@ -882,7 +1003,8 @@ def observation_mount(path):
 
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
-                observation_dir=None, keep=False, managed_memory=None):
+                observation_dir=None, keep=False, managed_memory=None, session_stream=None,
+                session_store=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -893,8 +1015,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     `cost_bench.py` creates, so no launch can reach the host's home, profile or live checkout. `keep`
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
     it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
-    `MANAGED_MEMORY`, the per-trial cache nonce."""
-    sources = [str(p) for p in (workdir, managed_memory) if p is not None]
+    `MANAGED_MEMORY`, the per-trial cache nonce; `session_stream` a run's saved stream mounted
+    read-only as `SESSION_STREAM`, for the check that scores it; `session_store` one session's
+    transcript directory mounted writable as `SESSION_STORE`, so the next turn can resume it."""
+    sources = [str(p) for p in (workdir, managed_memory, session_stream, session_store) if p is not None]
     reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
@@ -911,6 +1035,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         command += ["-v", "%s:%s" % (observation, OBSERVATION_MOUNT)]
     if managed_memory is not None:
         command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
+    if session_stream is not None:
+        command += ["-v", "%s:%s:ro" % (session_stream, SESSION_STREAM)]
+    if session_store is not None:
+        command += ["-v", "%s:%s" % (session_store, SESSION_STORE)]
     if credential:
         command += ["-e", CREDENTIAL]
     for key in sorted(env or {}):
@@ -918,9 +1046,10 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     return command + [image] + list(argv)
 
 
-def check_command(image, workdir, argv, env=None, name=None, stdin=False):
+def check_command(image, workdir, argv, env=None, name=None, stdin=False, session_stream=None):
     """A held-back check in a fresh container: no network and no credential."""
-    return run_command(image, workdir, argv, "none", env, name, credential=False, stdin=stdin)
+    return run_command(image, workdir, argv, "none", env, name, credential=False, stdin=stdin,
+                       session_stream=session_stream)
 
 
 def kill_command(name):

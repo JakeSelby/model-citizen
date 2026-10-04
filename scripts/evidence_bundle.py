@@ -23,6 +23,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import experiment_protocol  # noqa: E402
 import replay_arms  # noqa: E402
+import replay_reliability  # noqa: E402
 import replay_stats  # noqa: E402
 
 SCHEMA_VERSION = 1
@@ -50,6 +51,10 @@ PARITY_CLAIM = re.compile(
     re.IGNORECASE)
 ARTIFACT_KEYS = ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report",
                  "arms", "trajectories")
+# Optional: the all-rules-at-once summary (`replay_reliability.joint_summary`), never raw detections,
+# and the layer scorecard (`scripts/layer_scorecard.py`) built from these rows among others.
+OPTIONAL_ARTIFACT_KEYS = ("joint_compliance", "scorecard")
+SCORECARD_KIND, SCORECARD_SCHEMA = "layer-scorecard", 1
 INDEX_KEYS = ("schema_version", "bundle_id", "repository", "artifacts", "design", "statistics",
               "published_figures", "evidence_cards", "items")
 
@@ -91,11 +96,11 @@ def _finite_json(value):
     return True
 
 
-def _keys(value, required, label):
+def _keys(value, required, label, optional=()):
     if not isinstance(value, dict):
         raise StrictJSONError("%s is not an object" % label)
     missing = sorted(set(required) - set(value))
-    extra = sorted(set(value) - set(required))
+    extra = sorted(set(value) - set(required) - set(optional))
     if missing or extra:
         raise StrictJSONError("%s keys differ (missing %s; unexpected %s)" %
                               (label, missing, extra))
@@ -297,13 +302,18 @@ def load_bundle(directory):
     repo = _safe_path(root, index["repository"]["path"], "repository", directory=True)
     _repository_objects(repo)
     artifacts = index["artifacts"]
-    _keys(artifacts, ARTIFACT_KEYS, "artifacts")
+    _keys(artifacts, ARTIFACT_KEYS, "artifacts", OPTIONAL_ARTIFACT_KEYS)
     loaded = {"root": root, "index": index, "repository": repo, "raw": {}}
     metadata = {"plan": ("git_path", "commit"), "tasks": ("git_path",)}
     for name in ("rows", "tasks", "plan", "github_receipt", "prices", "audits", "report"):
         path, data = _read_ref(root, artifacts[name], "artifact %s" % name,
                                metadata.get(name, ()))
         loaded["raw"][name] = (path, data)
+    if "joint_compliance" in artifacts:
+        loaded["raw"]["joint_compliance"] = _read_ref(root, artifacts["joint_compliance"],
+                                                      "artifact joint_compliance")
+    if "scorecard" in artifacts:
+        loaded["raw"]["scorecard"] = _read_ref(root, artifacts["scorecard"], "artifact scorecard")
     if not isinstance(artifacts["arms"], list) or len(artifacts["arms"]) != 2:
         raise StrictJSONError("artifacts.arms must contain two records")
     loaded["raw"]["arms"] = [_read_ref(root, ref, "arm record %d" % number)
@@ -483,6 +493,29 @@ def _arm_pair_differences(bare, harness):
     return differences
 
 
+def _scorecard_problems(data, rows_data):
+    """`(problems, reference)` for a carried layer scorecard: it must be one, not exploratory, and
+    built from this bundle's rows file among its production sources. It is checked, not re-derived;
+    `scripts/layer_scorecard.py` rebuilds it from the same rows."""
+    try:
+        card = strict_json(data.decode("utf-8"), "scorecard")
+    except (UnicodeError, StrictJSONError) as exc:
+        return ["scorecard is not strict JSON: %s" % exc], None
+    if not isinstance(card, dict) or card.get("kind") != SCORECARD_KIND or card.get("schema") != SCORECARD_SCHEMA:
+        return ["scorecard is not a schema-%d %s" % (SCORECARD_SCHEMA, SCORECARD_KIND)], None
+    problems = []
+    if card.get("exploratory") is not False:
+        problems.append("scorecard is exploratory, so a bundle cannot carry it")
+    rows_sha = _sha(rows_data)
+    sources = card.get("sources") if isinstance(card.get("sources"), list) else []
+    if not any(isinstance(s, dict) and s.get("role") == "production" and s.get("sha256") == rows_sha
+               for s in sources):
+        problems.append("scorecard was not built from this bundle's rows file")
+    layers = card.get("layers") if isinstance(card.get("layers"), list) else []
+    return problems, {"sha256": _sha(data), "layers": len(layers),
+                      "strata": sorted(card.get("headline") or {}) if isinstance(card.get("headline"), dict) else []}
+
+
 def copy_without_treatment(declaration):
     copied = dict(declaration)
     copied.pop("arm", None)
@@ -594,10 +627,20 @@ def _verify_loaded(bundle, git):
     design_keys = ("model", "cli_version", "effort", "tasks", "trials_per_task", "arms",
                    "task_order_seed", "bootstrap_seed", "resamples", "model_sampling_seedable",
                    "replay_command", "verify_command", "run_cap_usd")
+    # A bundle holds one stratum of a multi-model run; `strata` names them all, so the bundle
+    # records that its model is one of several and its figures speak for that model alone.
+    stratified = "strata" in design
     try:
-        _keys(design, design_keys, "design")
+        _keys(design, design_keys + (("strata",) if stratified else ()), "design")
     except StrictJSONError as exc:
         _error(errors, 3, str(exc))
+    if stratified:
+        listed = design["strata"]
+        if not isinstance(listed, list) or len(listed) < 2 \
+                or any(not isinstance(model, str) or not model for model in listed) \
+                or len(set(listed)) != len(listed) or design.get("model") not in listed:
+            _error(errors, 3, "design.strata must be two or more unique models, the design's model among them")
+        derived["strata"] = {"strata": listed, "stratum": design.get("model")}
     for field in ("model", "cli_version", "effort", "replay_command", "verify_command"):
         if not isinstance(design.get(field), str) or not design.get(field):
             _error(errors, 3 if field not in ("replay_command", "verify_command") else 7,
@@ -652,6 +695,10 @@ def _verify_loaded(bundle, git):
                               ("bootstrap_seed", design.get("bootstrap_seed"))):
             if row.get(field) != wanted:
                 _error(errors, 3, "row %d %s differs from the design" % (number, field))
+        if stratified and row.get("stratum") != design.get("model"):
+            _error(errors, 3, "row %d stratum is not the design's model" % number)
+        elif not stratified and row.get("stratum") is not None:
+            _error(errors, 3, "row %d names a stratum the design does not record" % number)
         # `model` is the request; `observed_model` is what the trial's own transcript reports,
         # and only it can reveal a fallback.
         if not isinstance(row.get("observed_model"), str) or not row["observed_model"]:
@@ -882,6 +929,25 @@ def _verify_loaded(bundle, git):
                              for arm, cost, rate, status in replay_stats.pareto(derived["sm2"])]
     except (KeyError, TypeError, ValueError, StrictJSONError) as exc:
         _error(errors, 5, "SM-2 derivation failed: %s" % exc)
+    try:
+        derived["reliability"] = replay_reliability.reliability_section(priced_rows)[0]
+        if "joint_compliance" in raw:
+            # A carried summary, checked against the rows and its own counts; not re-derived.
+            summary = strict_json(raw["joint_compliance"][1].decode("utf-8"), "joint compliance")
+            problems = replay_reliability.summary_problems(priced_rows, summary)
+            for problem in problems:
+                _error(errors, 5, problem)
+            if not problems:
+                derived["reliability"]["joint"] = summary
+    except (UnicodeError, ValueError) as exc:
+        _error(errors, 5, "reliability derivation failed: %s" % exc)
+    derived["scorecard"] = None
+    if "scorecard" in raw:
+        problems, card = _scorecard_problems(raw["scorecard"][1], raw["rows"][1])
+        for problem in problems:
+            _error(errors, 5, problem)
+        if not problems:
+            derived["scorecard"] = card
     derived["icc"] = {arm: {field: _icc(priced_rows, arm, field) for field in ("pass", "cost")}
                       for arm in ARMS}
     planned = {arm: len(tasks) * trials_per_task for arm in ARMS}
