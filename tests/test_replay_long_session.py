@@ -378,7 +378,8 @@ def session_rows(arm, scenario_id, rep, cost, passes, slope_costs, tier_split=0.
             for i, p in enumerate(passes, 1)]
     rows.append(dict(base, row_kind="session", cost_usd=cost, cost_per_turn=slope_costs,
                      cost_per_turn_slope=SESSION.slope(slope_costs), main_peak_context_tokens=100000 + cost,
-                     cost_by_tier={"standard": cost * (1 - tier_split), "light": cost * tier_split}, error=False))
+                     cost_by_tier={"standard": cost * (1 - tier_split), "light": cost * tier_split}, error=False,
+                     passed=all(passes)))
     return rows
 
 
@@ -424,6 +425,26 @@ class SummaryTests(unittest.TestCase):
         report = json.loads(out.getvalue())
         self.assertEqual((report["tier"], report["cache_basis"]), ("long-session", "cold"))
         self.assertEqual(report["method"], "scenario-clustered percentile bootstrap")
+
+    def test_a_long_session_summary_carries_pass_k_over_its_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / BENCH.RESULTS
+            BENCH.write_jsonl(path, self.rows())
+            reports = []
+            for as_json in (True, False):
+                args = argparse.Namespace(results=str(path), seed=1, resamples=50, plot=None, json=as_json,
+                                          break_even=3, correction=None)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(BENCH.cmd_summarise(args), 0)
+                reports.append(out.getvalue())
+        reliability = json.loads(reports[0])["reliability"]
+        self.assertEqual(reliability["pass_k"]["k"], 2)
+        self.assertEqual(reliability["pass_k"]["arms"]["bare"]["all_passed"], 0)
+        self.assertEqual(reliability["pass_k"]["arms"]["harness"]["all_passed"], 3)
+        self.assertIsNone(reliability["joint"])
+        self.assertIn("Reliability: pass^2", reports[1])
+        self.assertIn("cost on cheaper tiers", reports[1])
 
 
 class DryRunTests(unittest.TestCase):

@@ -56,6 +56,7 @@ import ablations  # noqa: E402  the N-arm ablation manifest: one declared-select
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
 import replay_session  # noqa: E402  the long-session tier: scripted multi-turn sessions and their rows
+import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -2235,11 +2236,17 @@ def cmd_summarise(args):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    report = dict(result, delegation=delegation)
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(
+            rows, replay_reliability.detections_beside(path))
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, delegation=delegation, reliability=reliability)
     if metrics is not None:  # a set without metrics reports exactly as before
         report["metrics"] = metrics
     write_report(report, cache_basis(rows), args.json,
-                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
+                 + reliability_text)
     return 0
 
 
@@ -2252,15 +2259,22 @@ def write_report(result, basis, as_json, text):
 def summarise_long_session(rows, path, args):
     """A long-session set's report (`replay_session.summarise`): per arm, checkpoint pass rates,
     cost per session, the cost-per-turn slope and curve, peak context and the cost share on cheaper
-    tiers, with scenarios as the bootstrap's clusters."""
+    tiers, with scenarios as the bootstrap's clusters; then the reliability section over the
+    session rows, one trial per session."""
     if args.plot or getattr(args, "correction", None):
         raise SystemExit("cost-bench: --plot and --correction do not apply to a long-session set")
     try:
         result = replay_session.summarise(rows, None, TIERS, args.seed, args.resamples)
     except (ValueError, KeyError, TypeError) as exc:
         raise SystemExit("cost-bench: cannot summarise the long-session set in %s: %s" % (path, exc))
-    write_report(result, cache_basis([r for r in rows if r.get("row_kind") == replay_session.SESSION]),
-                 args.json, "" if args.json else replay_session.render(result))
+    sessions = [r for r in rows if r.get("row_kind") == replay_session.SESSION]
+    try:  # one trial per session row: its pass is every checkpoint passing
+        reliability, reliability_text = replay_reliability.reliability_section(
+            sessions, replay_reliability.detections_beside(path))
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    write_report(dict(result, reliability=reliability), cache_basis(sessions),
+                 args.json, "" if args.json else replay_session.render(result) + reliability_text)
     return 0
 
 

@@ -81,6 +81,7 @@ class CacheBasisTests(unittest.TestCase):
                     mock.patch.object(BENCH.replay_stats, "render", return_value="report\n"), \
                     mock.patch.object(BENCH.delegation_verdict, "report", return_value={}), \
                     mock.patch.object(BENCH.delegation_verdict, "render", return_value=""), \
+                    mock.patch.object(BENCH.replay_reliability, "reliability_section", return_value=({}, "")), \
                     contextlib.redirect_stdout(out):
                 BENCH.cmd_summarise(args)
         return out.getvalue()
