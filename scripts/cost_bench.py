@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,7 @@ import oracle_metrics  # noqa: E402  named metrics a check may return beside pas
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
+import replay_session  # noqa: E402  the long-session tier: scripted multi-turn sessions and their rows
 import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
 import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
 
@@ -149,6 +151,8 @@ CONTAMINATION_CONTROL = "installed-checkout-oracle-and-transcript-v1"
 RESULTS = "results.jsonl"
 # The model classes a re-spawn is ranked on, read once from this checkout's bindings.
 TIERS = replay_pair.load_tiers(ROOT)
+LONG_SESSION = replay_pack.LONG_SESSION
+LONG_SESSION_REPS = 3  # a session yields many per-turn observations, so few reps per arm
 DETECTIONS = replay_detect.DETECTIONS
 ENRICHED = "results.enriched.jsonl"
 
@@ -593,7 +597,8 @@ def config_fingerprint(config_dir, home=None):
             "personal_bytes": dict(listed).get("CLAUDE.personal.md", 0)}
 
 
-def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT):
+def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT,
+                session_id=None, resume=False):
     """One command line for every arm, run inside its container: the arms differ by image and by
     nothing else.
 
@@ -603,12 +608,21 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effo
     place a Stop hook's decision appears and the CLI emits them in no other format. `max_turns`
     is the task's own cap; without it a run is bounded only by the soft budget and the timeout.
     `effort` is the arm's pinned reasoning effort, passed as `--effort` on every launch so no run
-    takes the model's default, which differs by model."""
+    takes the model's default, which differs by model.
+
+    `session_id` makes the run one turn of a long session: the CLI keeps the session's transcript
+    (no `--no-session-persistence`), the first turn starts it with `--session-id` and every later
+    one, `resume`, continues it with `--resume`; the transcript lives in the mounted session store
+    (`replay_arms.SESSION_STORE`)."""
     if effort not in arms.EFFORT_LEVELS:
         raise SystemExit("cost-bench: effort %r is not one of %s" % (effort, ", ".join(arms.EFFORT_LEVELS)))
     turns = ["--max-turns", str(int(max_turns))] if max_turns else []
+    if session_id is None:
+        session = ["--no-session-persistence"]
+    else:
+        session = ["--resume" if resume else "--session-id", session_id]
     return [claude, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "stream-json",
-            "--include-hook-events", "--verbose", "--strict-mcp-config", "--no-session-persistence",
+            "--include-hook-events", "--verbose", "--strict-mcp-config"] + session + [
             "--max-budget-usd", "%g" % run_cap, "--permission-mode", PERMISSION_MODE] + turns + [
             "--settings", json.dumps(ARM_SETTINGS)]
 
@@ -683,18 +697,18 @@ def check_observer_settings(record):
 
 
 def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None,
-               memory=None):
+               memory=None, session_store=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written. `arm` names a pair arm, whose selection is
     passed by value; `observation_run` is one native session's observation stage; `memory` is the
-    trial's cache nonce (`trial_memory`)."""
+    trial's cache nonce (`trial_memory`); `session_store` a long session's transcript directory."""
     check_observer_settings(record)
     env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
                                observation_dir=observation_run["mount"] if observation_run else None,
-                               managed_memory=memory)
+                               managed_memory=memory, session_store=session_store)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -1620,6 +1634,104 @@ def _attempt(task, rep, arm, opts, launch):
         discard_observation(observed)
 
 
+def session_base(task, rep, arm, opts):
+    """The fields every row of one long session carries: the run's stamp, the arm's container and
+    profile, and the session's identity, `(scenario, arm, rep)` with its CLI session id."""
+    record = opts["arms"][arm]
+    env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
+    profile = arm_profile(arm, env, opts)
+    base = dict(opts["stamp"], tier=LONG_SESSION, scenario=task["id"], task=task["id"], arm=arm, tag=opts["tag"],
+                rep=rep, session_id=str(uuid.uuid4()), effort=record["declaration"]["effort"],
+                cache_basis=CACHE_COLD, cache_nonce=None, contamination_control=CONTAMINATION_CONTROL,
+                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
+                profile_fingerprint=profile, arm_config=(opts.get("arm_configs") or {}).get(arm),
+                **arm_stamp(record))
+    if opts.get("ablation") is not None:
+        base.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
+    return base, profile
+
+
+def turn_refusal(stdout, effort):
+    """Why a finished turn's stream disqualifies the session, or "": it read the installed
+    checkout, or it ran at another effort than the one pinned."""
+    try:
+        parsed = parse_diagnostics(stdout)
+    except ValueError:
+        return ""
+    if parsed["installed_checkout_reads"]:
+        return "installed-checkout-read"
+    if parsed["observed_effort"] is not None and parsed["observed_effort"] != effort:
+        return "effort: observed %s, pinned %s" % (parsed["observed_effort"], effort)
+    return ""
+
+
+def run_long_session(task, rep, arm, opts, launch=subprocess.run):
+    """The rows of one scripted session of a long-session scenario in one arm
+    (`replay_session.run_session`): each user turn is a fresh container of the arm on the same tree,
+    the same cache nonce and the same mounted session store, so turn 1 starts the CLI session and
+    every later turn resumes it by id. The check of each checkpoint runs on the tree with the
+    segment's stream, as a pack task's does (`score`). `opts["session_driver"]` replaces the
+    container launch in tests."""
+    base, profile = session_base(task, rep, arm, opts)
+    effort = base["effort"]
+    cap = replay_session.session_cap(task, opts.get("run_cap"))
+    parent = Path(tempfile.mkdtemp(prefix="cost-session-", dir=opts.get("tmp")))
+    workdir, store = parent / "repo", parent / "sessions"
+    observed = None
+    started = time.time()
+    try:
+        observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
+        task_workdir(task, opts["repo"], workdir)
+        store.mkdir()
+        os.chmod(str(store), 0o777)  # the image's user writes the transcript, whatever its uid
+        memory, base["cache_nonce"] = trial_memory(parent)
+        saved = []
+
+        def container_turn(number, prompt, budget, resume):
+            argv = arm_command("claude", opts["model"], prompt, budget, task["caps"]["max_agent_turns_per_user_turn"],
+                               effort, session_id=base["session_id"], resume=resume)
+            name = container_name(task["id"], arm, rep, "turn", number)
+            try:
+                done = launch_arm(opts["arms"][arm], workdir, argv, opts, name, launch, arm, observed, memory,
+                                  session_store=store)
+            except subprocess.TimeoutExpired as exc:
+                partial = getattr(exc, "stdout", None)
+                return {"stdout": partial if isinstance(partial, str) else "", "timeout": True}
+            return {"stdout": done.stdout or "", "returncode": done.returncode,
+                    "error_kind": turn_refusal(done.stdout or "", effort)}
+
+        driver = opts.get("session_driver") or container_turn
+
+        def recording(number, prompt, budget, resume):
+            done = driver(number, prompt, budget, resume)
+            saved.append(done.get("stdout") or "")
+            return done
+
+        def checker(name, stream):
+            checkpoint = replay_pack.checkpoint_task(task, name)
+            path = parent / ("segment-%s.jsonl" % name)
+            path.write_text(stream, encoding="utf-8")
+            os.chmod(str(path), 0o644)
+            scorer = opts.get("session_scorer") or (lambda t, w, r, s: score(t, w, r, opts["arms"]["bare"]["image"],
+                                                                              launch, stream=s))
+            return scorer(checkpoint, workdir, opts["repo"], path)
+
+        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS)
+        if opts.get("raw"):
+            save_stream(opts, task["id"], arm, rep, "".join(t if t.endswith("\n") or not t else t + "\n"
+                                                            for t in saved))
+        fields, problem = observation_result(observed)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)  # removed, never reset
+        discard_observation(observed)
+    summary = rows[-1]
+    summary.update(fields, wall_seconds=round(time.time() - started, 1))
+    if problem:
+        summary.update(error=True, passed=None, outcome="fail",
+                       error_kind="; ".join(x for x in (summary["error_kind"], problem) if x))
+    return rows
+
+
 def gate_output(stdout):
     """Every tool result in a `-p` stream, joined: the gate's own output, not the model's relay."""
     try:
@@ -1843,6 +1955,23 @@ def _replay(tasks, opts, launch, sink):
     order = ablations.schedule(tasks, opts["reps"], names, opts["schedule_seed"]) \
         if seeded else schedule(tasks, opts["reps"], names)
     for task, rep, arm in order:
+        if replay_pack.is_scenario(task):
+            cap = replay_session.session_cap(task, opts["run_cap"])
+            if spent + cap > opts["spend_cap"]:
+                return rows, True
+            session = run_long_session(task, rep, arm, opts, launch)
+            spent += session[-1]["cost_usd"]
+            if ledger is not None:
+                ledger.append(session[-1]["cost_usd"])
+            rows += session
+            if sink is not None:
+                for row in session:
+                    sink.write(json.dumps(row, sort_keys=True) + "\n")
+                sink.flush()
+            if session[-1]["error_kind"].startswith("effort:"):
+                raise SystemExit("cost-bench: stopping the set: the %s arm's session of %s rep %d %s"
+                                 % (arm, task["id"], rep, session[-1]["error_kind"]))
+            continue
         if spent + opts["run_cap"] > opts["spend_cap"]:
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
@@ -2100,6 +2229,8 @@ def cmd_summarise(args, rows=None, detections=BESIDE):
         rows = read_jsonl(path) if path.is_file() else stratum_folder_rows(path)
         if strata.is_stratified(rows) or getattr(args, "pool", False):
             return summarise_strata(rows, path, args)
+    if replay_session.is_long_session(rows):
+        return summarise_long_session(rows, path, args, detections)
     if unit_economy.is_design(rows):
         return summarise_design(rows, path, args)
     if ablations.is_ablation(rows):
@@ -2208,6 +2339,28 @@ def write_report(result, basis, as_json, text):
     """Print one summary, in any format, with the cache basis its costs stand on (`cache_basis`)."""
     sys.stdout.write(json.dumps(dict(result, cache_basis=basis), indent=2, sort_keys=True) + "\n" if as_json
                      else CACHE_BASIS_TEXT[basis] + text)
+
+
+def summarise_long_session(rows, path, args, detections=BESIDE):
+    """A long-session set's report (`replay_session.summarise`): per arm, checkpoint pass rates,
+    cost per session, the cost-per-turn slope and curve, peak context and the cost share on cheaper
+    tiers, with scenarios as the bootstrap's clusters; then the reliability section over the
+    session rows, one trial per session."""
+    if args.plot or getattr(args, "correction", None):
+        raise SystemExit("cost-bench: --plot and --correction do not apply to a long-session set")
+    try:
+        result = replay_session.summarise(rows, None, TIERS, args.seed, args.resamples)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SystemExit("cost-bench: cannot summarise the long-session set in %s: %s" % (path, exc))
+    sessions = [r for r in rows if r.get("row_kind") == replay_session.SESSION]
+    try:  # one trial per session row: its pass is every checkpoint passing
+        reliability, reliability_text = replay_reliability.reliability_section(
+            sessions, replay_reliability.detections_beside(path) if detections is BESIDE else detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    write_report(dict(result, reliability=reliability), cache_basis(sessions),
+                 args.json, "" if args.json else replay_session.render(result) + reliability_text)
+    return 0
 
 
 def summarise_ablation(rows, path, args):
@@ -2391,7 +2544,10 @@ def open_pack_for(args):
                                  getattr(args, "tmp", None))
     try:
         tier = getattr(args, "tier", None) or micro.PRODUCTION
-        tasks, manifest = replay_pack.load_set(pack, getattr(args, "pack_set", None) or tier, tier)
+        if tier == LONG_SESSION:
+            tasks, manifest = replay_pack.load_scenarios(pack, getattr(args, "pack_set", None) or tier)
+        else:
+            tasks, manifest = replay_pack.load_set(pack, getattr(args, "pack_set", None) or tier, tier)
     except BaseException:
         replay_pack.close_pack(pack)
         raise
@@ -2414,6 +2570,8 @@ def resolve_tier(args, pack=None):
     real run needs `--raw`, since the offline detectors score the mechanisms from the streams.
     Namespaces built without `tier`, as older callers build them, are the production tier."""
     args.tier = getattr(args, "tier", None) or micro.PRODUCTION
+    if args.tier == LONG_SESSION:
+        return resolve_long_session(args, pack)
     if args.tier != micro.MICRO:
         if pack is None:
             args.tasks = args.tasks or str(ROOT / TASKS)
@@ -2441,6 +2599,53 @@ def resolve_tier(args, pack=None):
     return document
 
 
+def resolve_long_session(args, pack):
+    """The long-session tier's defaults and refusals. Its scenarios live only in an evaluator pack;
+    the set's pinned model is the model, which a flag may name but never change; reps default to
+    `LONG_SESSION_REPS`; and `--run-cap`, when given, caps every session at the lower of it and the
+    scenario's own `max_cost_usd_hint`, which is the cap without it. `args.run_cap` is left at the
+    highest session cap, so a line naming one cap names the largest. A pair or a grid is refused:
+    each launches one prompt per run."""
+    if pack is None:
+        raise SystemExit("cost-bench: --tier long-session needs --pack: its scenarios live in the evaluator pack")
+    for flag in ("pair", "design"):
+        if getattr(args, flag, None):
+            raise SystemExit("cost-bench: --%s is refused with --tier long-session: it launches one prompt "
+                             "per run, not a scripted session" % flag)
+    if getattr(args, "verify_tasks", False):
+        raise SystemExit("cost-bench: --verify-tasks does not read scenarios; the pack's own "
+                         "tools/verify_scenarios.py proves each checkpoint against its solution")
+    document = pack["manifest"]
+    if args.model and document.get("model") and args.model != document["model"]:
+        raise SystemExit("cost-bench: the long-session set pins model %s, not %s" % (document["model"], args.model))
+    args.model = args.model or document.get("model")
+    args.reps = LONG_SESSION_REPS if args.reps is None else args.reps
+    if args.run_cap is not None and args.run_cap <= 0:
+        raise SystemExit("cost-bench: --run-cap must be positive")
+    args.run_cap = max(replay_session.session_cap(s, args.run_cap) for s in pack["tasks"])
+    return document
+
+
+def long_session_lines(scenarios, reps, arm_count, run_cap, preflight_cap, source):
+    """The dry run's price of a long-session plan: each scenario's session cap, then the ceiling."""
+    cap = ("the lower of --run-cap and the scenario's max_cost_usd_hint" if source == "--run-cap"
+           else "the scenario's max_cost_usd_hint")
+    lines = ["long-session tier: %d session(s): %d scenario(s) x %d arm(s) x %d rep(s), each turn after the first "
+             "resuming the session with --resume; per-session cap %s"
+             % (len(scenarios) * arm_count * reps, len(scenarios), arm_count, reps, cap)]
+    for scenario in scenarios:
+        caps = scenario["caps"]
+        lines.append("  scenario %s: %d user turn(s) (cap %d), %d checkpoint(s), %d agent turns per user turn, "
+                     "%g USD per session" % (scenario["id"], len(scenario["turns"]), caps["max_user_turns"],
+                                             len(scenario["checkpoint_order"]),
+                                             caps["max_agent_turns_per_user_turn"],
+                                             replay_session.session_cap(scenario, run_cap)))
+    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap and all %d preflight(s) "
+                 "reach %g USD" % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
+                                   arm_count, preflight_cap))
+    return lines
+
+
 def cmd_replay(args):
     models = strata.parse_models(getattr(args, "model", None))
     if len(models) > 1:
@@ -2462,6 +2667,10 @@ def replay_strata(args, models):
     stratum and exits with the worst status."""
     if (getattr(args, "tier", None) or micro.PRODUCTION) == micro.MICRO:
         raise SystemExit("cost-bench: --tier micro pins its manifest's one model; it takes no strata")
+    if getattr(args, "tier", None) == LONG_SESSION:
+        pinned = long_session_pinned_model(args, models[0])
+        if pinned:  # refused before the first stratum spends, not when the second reaches the pin
+            raise SystemExit("cost-bench: the long-session set pins model %s; it takes no strata" % pinned)
     print("%d strata, each run and reported on its own: %s" % (len(models), ", ".join(models)))
     ledger, worst = [], 0
     for number, model in enumerate(models, 1):
@@ -2484,6 +2693,16 @@ def replay_strata(args, models):
                   file=sys.stderr)
             return status
     return worst
+
+
+def long_session_pinned_model(args, model):
+    """The model the long-session set's manifest pins, or None when it pins none (or no pack is
+    named, which `resolve_long_session` refuses on its own)."""
+    pack = open_pack_for(argparse.Namespace(**dict(vars(args), model=model)))
+    try:
+        return (pack or {}).get("manifest", {}).get("model")
+    finally:
+        replay_pack.close_pack(pack)
 
 
 def stratum_exit(stop):
@@ -2526,6 +2745,10 @@ def _cmd_replay(args, pack):
     if manifest is not None:
         return replay_ablations(args, tasks, protocol, manifest, pack)
     pair = pair_manifest(args)
+    long_session = args.tier == LONG_SESSION
+    if long_session and not configs and args.spend_cap is None:
+        args.spend_cap = replay_session.ceiling_usd(tasks, args.reps, len(ARMS), args.run_cap,
+                                                    0.0 if args.skip_preflight else PREFLIGHT_CAP_USD)
     if not pair and not configs and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
     if configs and not spend_cap_given:
@@ -2551,6 +2774,10 @@ def _cmd_replay(args, pack):
         print("micro tier: %g USD if every run and preflight reaches its cap; its rows go to %s only"
               % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, micro.PREFLIGHT_CAP_USD),
                  micro.HISTORY_NAME))
+    if long_session:
+        for line in long_session_lines(tasks, args.reps, len(names), args.run_cap,
+                                       0.0 if args.skip_preflight else PREFLIGHT_CAP_USD, args.run_cap_source):
+            print(line)
     if getattr(args, "stratum", None):
         preflights = 0 if args.skip_preflight else len(names) * len(tags)
         print("stratum %s: worst case %.2f USD if all %d run(s) reach %g USD and all %d preflight(s) reach "
@@ -2566,7 +2793,7 @@ def _cmd_replay(args, pack):
               "row says surface_drift_allowed")
     if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
-        for task in tasks if pack else ():
+        for task in tasks if pack and not long_session else ():
             print("  task %s: %s, expected absorbed calls %s" % (
                 task["id"], "long" if task.get("long") else "short", task.get("expected_absorbed_calls")))
         refused = 0
@@ -2754,12 +2981,16 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
           % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
              cap_source, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
              else "a real run must name its --spend-cap", seed))
-    # An arm runs only the named tasks it maps (`ablations.arm_task_filter`), so the plan's own
-    # length, not tasks x arms, is what every run reaching its cap would cost.
-    print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
-          "reach %g USD" % (len(plan) * args.run_cap + len(names) * preflight_cap,
-                            len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
-                            preflight_cap))
+    if getattr(args, "tier", None) == LONG_SESSION:
+        for line in long_session_lines(tasks, args.reps, len(names), args.run_cap, preflight_cap, cap_source):
+            print(line)
+    else:
+        # An arm runs only the named tasks it maps (`ablations.arm_task_filter`), so the plan's own
+        # length, not tasks x arms, is what every run reaching its cap would cost.
+        print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
+              "reach %g USD" % (len(plan) * args.run_cap + len(names) * preflight_cap,
+                                len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
+                                preflight_cap))
     print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
     print("ablation %s (manifest %s); each arm's selection is declared into its own image"
           % (manifest["name"], manifest["sha256"][:12]))
@@ -2928,11 +3159,12 @@ def replay_tag(tag, args, common, harness):
     # comparable with one whose harness arm read a host profile.
     tier = getattr(args, "tier", None) or micro.PRODUCTION
     is_micro = tier == micro.MICRO
+    is_long = tier == LONG_SESSION
     # The production series keeps its original seed; the micro tier's adds its name, so the two
     # can never share a series even over identical bytes.
     source = getattr(args, "series_source", None) or Path(args.tasks).read_bytes()
-    series = hashlib.sha256(source + args.model.encode()
-                            + b"|container" + (b"|micro" if is_micro else b"")).hexdigest()[:8]
+    series = hashlib.sha256(source + args.model.encode() + b"|container"
+                            + (b"|micro" if is_micro else b"|long-session" if is_long else b"")).hexdigest()[:8]
     home = micro.HISTORY_DIR if is_micro else Path("benchmarks")
     out = strata.out_dir((common["out"] or ROOT / home / version) / tag, getattr(args, "stratum", None))
     streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
@@ -2956,7 +3188,7 @@ def replay_tag(tag, args, common, harness):
                           "surface_drift_allowed": bool(args.allow_surface_drift),
                           **({strata.KEY: args.stratum, "strata": args.strata}
                              if getattr(args, "stratum", None) else {}),
-                          **({"tier": micro.MICRO} if is_micro else {}),
+                          **({"tier": micro.MICRO} if is_micro else {"tier": LONG_SESSION} if is_long else {}),
                           **common.get("pack_stamp", {}),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
@@ -2996,7 +3228,7 @@ def replay_tag(tag, args, common, harness):
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
     detections = None
-    if args.raw and rows:
+    if args.raw and rows and not is_long:  # a session's rows are not one run each; detect reads the streams later
         # Now, before the next tag's runs overwrite these streams under the same names, and only
         # from the streams this tag's runs saved: a timeout saves none.
         detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors(),
@@ -3023,9 +3255,10 @@ def replay_tag(tag, args, common, harness):
         # `summarise` knows no config arm, so it is not offered here.
         print("cost-bench: a run with config arms writes no history row; its rows are in %s" % (out / RESULTS),
               file=sys.stderr)
-    elif pair or common.get("ablation") or design:
+    elif pair or common.get("ablation") or design or is_long:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
-              % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
+              % ("a pair" if pair else "a grid" if design else "a long-session set" if is_long
+                 else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == full_set_size(args) and not stopped:
@@ -3173,9 +3406,11 @@ def main(argv=None):
                       "unexplained growth of the total")
     run = sub.add_parser("replay", help="run the pinned tasks in a bare and a harness container; "
                          "spends usage")
-    run.add_argument("--tier", choices=micro.REPLAY_TIERS, default=micro.PRODUCTION,
-                     help="production, the cost comparison; or micro, whether each mechanism fires "
-                     "on the small model %s pins, with its own caps, series and history"
+    run.add_argument("--tier", choices=micro.REPLAY_TIERS + (LONG_SESSION,), default=micro.PRODUCTION,
+                     help="production, the cost comparison; micro, whether each mechanism fires "
+                     "on the small model %s pins, with its own caps, series and history; or "
+                     "long-session, a pack's scripted multi-turn scenarios, one resumed session per "
+                     "scenario, arm and rep, with --run-cap applying per session"
                      % micro.TASKS.as_posix())
     run.add_argument("--tasks", help="the task manifest; default the tier's own, %s or %s"
                      % (TASKS.as_posix(), micro.TASKS.as_posix()))
