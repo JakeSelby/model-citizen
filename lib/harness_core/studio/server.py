@@ -30,7 +30,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import eval_tiers, first_run, rule_health
+from . import eval_tiers, first_run, rule_health, run_store, trends
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -1887,6 +1887,22 @@ def _rule_health(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _trends(handler: Handler, route: Route) -> None:
+    # The run store reads run on the thread that owns its SQLite connection; the bundle
+    # verifier reads only local files, so it runs here, off the serial mutation executor.
+    if _required_request(handler, ()) is None:
+        return
+    try:
+        collected = handler.server.mutations.call(
+            lambda: trends.collect(handler.server.run_supervisor.history))
+    except run_store.RunStoreError:
+        handler._error(503, "trends_unavailable")
+        return
+    payload = trends.report(handler.server.repo_root, collected)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
 def _create_rule_draft(repo_root: Path, name: str) -> str:
     """`citizen draft create` for "Try without it"; "" or the failure code."""
     failure = _run_draft_create(repo_root, name)
@@ -2170,6 +2186,12 @@ RULE_HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("commands", "object"),
                                               ("findings", "array"),
                                               ("rows", "array")))
+TRENDS = ResponseSchema("json-object", (("schema_version", "integer"),
+                                         ("generated_at", "string"), ("ratio_note", "string"),
+                                         ("measures", "array"), ("lines", "array"),
+                                         ("static", "object"), ("not_tracked", "array"),
+                                         ("truncated", "boolean"), ("proof", "object"),
+                                         ("commands", "object")))
 RULE_TRY_WITHOUT = ResponseSchema("json-object", (("schema_version", "integer"),
                                                    ("rule", "string"),
                                                    ("draft", "object"),
@@ -2378,6 +2400,8 @@ ROUTES = RouteRegistry((
           "application/json", rule_health.CLI_COMMANDS["status"]),
     Route("POST", "/api/rules/try-without", "application/json", RULE_TRY_WITHOUT,
           _rule_try_without, None, "application/json", rule_health.CLI_COMMANDS["try_without"]),
+    Route("POST", "/api/reports/trends", "application/json", TRENDS, _trends, None,
+          "application/json", trends.CLI_COMMAND),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

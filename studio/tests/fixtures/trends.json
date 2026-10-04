@@ -1,0 +1,497 @@
+{
+  "commands": {
+    "history": "citizen runs history --json (suite cost-benchmark-history), after citizen runs reindex",
+    "proof": "citizen evidence verify --json <bundle>",
+    "static": "citizen runs history --json (suite static-cost), after citizen runs reindex"
+  },
+  "generated_at": "2026-10-04T00:00:00Z",
+  "lines": [
+    {
+      "bucket": "",
+      "evidence": "exploratory",
+      "evidence_note": "Every point on this line is exploratory and cannot be cited as evidence.",
+      "id": "micro-v1",
+      "points": [
+        {
+          "bucket": "",
+          "cache_basis": null,
+          "change_note": "release 0.13.0",
+          "cli_version": "2.1.0",
+          "date": "2026-09-21",
+          "delegation": {
+            "label": "adherence, descriptive, not causal",
+            "verdicts": {
+              "declined-below-break-even": 1,
+              "fired": 2,
+              "missed-above-break-even": 0,
+              "not-offered": 0,
+              "unknown": 1
+            }
+          },
+          "evidence": {
+            "label": "exploratory",
+            "pre_registration": null,
+            "reason": "the row records no pre-registration, so it reads exploratory"
+          },
+          "harness_sha": "0130013001300130013001300130013001300130",
+          "harness_version": "0.13.0",
+          "measures": {
+            "pass_rate_bare": {
+              "interval": null,
+              "interval_kind": null,
+              "value": null
+            },
+            "pass_rate_difference": {
+              "interval": null,
+              "interval_kind": null,
+              "value": null
+            },
+            "pass_rate_harness": {
+              "interval": null,
+              "interval_kind": null,
+              "value": null
+            },
+            "ratio": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.8
+            },
+            "ratio_cache_normalised": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.79
+            },
+            "ratio_sm2": {
+              "interval": null,
+              "interval_kind": null,
+              "value": null
+            }
+          },
+          "model": "claude-haiku-4-5",
+          "reps": 5,
+          "run_id": "a1484b65-4d9d-517c-92ed-c7e137350b52",
+          "series": "micro-v1",
+          "sm2": {
+            "confidence": null,
+            "eligible": null,
+            "limitation": null,
+            "reason": null,
+            "unavailable": "the rows saved no pass or fail",
+            "verdict": null
+          },
+          "source": {
+            "line": 4,
+            "path": "benchmarks/history.jsonl"
+          },
+          "status": "failed",
+          "tag": "v0.13.0"
+        }
+      ],
+      "series": "micro-v1"
+    },
+    {
+      "bucket": "",
+      "evidence": "mixed",
+      "evidence_note": "This line mixes exploratory and pre-registered points; the exploratory points cannot be cited as evidence.",
+      "id": "replay-v2",
+      "points": [
+        {
+          "bucket": "",
+          "cache_basis": null,
+          "change_note": "release 0.13.0",
+          "cli_version": "2.1.0",
+          "date": "2026-09-20",
+          "delegation": {
+            "label": "adherence, descriptive, not causal",
+            "verdicts": {
+              "declined-below-break-even": 1,
+              "fired": 2,
+              "missed-above-break-even": 0,
+              "not-offered": 0,
+              "unknown": 1
+            }
+          },
+          "evidence": {
+            "label": "pre-registered",
+            "pre_registration": null,
+            "reason": "the row's delegation block records every run of its set as pre-registered"
+          },
+          "harness_sha": "0130013001300130013001300130013001300130",
+          "harness_version": "0.13.0",
+          "measures": {
+            "pass_rate_bare": {
+              "interval": [
+                0.6,
+                0.9
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.8
+            },
+            "pass_rate_difference": {
+              "interval": [
+                -0.1,
+                0.2
+              ],
+              "interval_kind": "SM-2",
+              "value": 0.05
+            },
+            "pass_rate_harness": {
+              "interval": [
+                0.65,
+                0.95
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.85
+            },
+            "ratio": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 1.052
+            },
+            "ratio_cache_normalised": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.98
+            },
+            "ratio_sm2": {
+              "interval": [
+                0.942,
+                1.142
+              ],
+              "interval_kind": "SM-2",
+              "value": 1.042
+            }
+          },
+          "model": "claude-haiku-4-5",
+          "reps": 5,
+          "run_id": "35044ca4-ab9d-5de5-91f1-4552ca5414a9",
+          "series": "replay-v2",
+          "sm2": {
+            "confidence": 0.95,
+            "eligible": true,
+            "limitation": null,
+            "reason": "the ratio interval spans 1",
+            "unavailable": null,
+            "verdict": "inconclusive"
+          },
+          "source": {
+            "line": 1,
+            "path": "benchmarks/history.jsonl"
+          },
+          "status": "failed",
+          "tag": "v0.13.0"
+        },
+        {
+          "bucket": "",
+          "cache_basis": "cold",
+          "change_note": "cold cache per trial",
+          "cli_version": "2.1.0",
+          "date": "2026-09-27",
+          "delegation": {
+            "label": "adherence, descriptive, not causal",
+            "verdicts": {
+              "declined-below-break-even": 1,
+              "fired": 2,
+              "missed-above-break-even": 0,
+              "not-offered": 0,
+              "unknown": 1
+            }
+          },
+          "evidence": {
+            "label": "exploratory",
+            "pre_registration": null,
+            "reason": "the row records no pre-registration, so it reads exploratory"
+          },
+          "harness_sha": "0140014001400140014001400140014001400140",
+          "harness_version": "0.14.0",
+          "measures": {
+            "pass_rate_bare": {
+              "interval": [
+                0.6,
+                0.9
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.8
+            },
+            "pass_rate_difference": {
+              "interval": [
+                -0.1,
+                0.2
+              ],
+              "interval_kind": "SM-2",
+              "value": 0.05
+            },
+            "pass_rate_harness": {
+              "interval": [
+                0.65,
+                0.95
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.85
+            },
+            "ratio": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.97
+            },
+            "ratio_cache_normalised": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.93
+            },
+            "ratio_sm2": {
+              "interval": [
+                0.86,
+                1.06
+              ],
+              "interval_kind": "SM-2",
+              "value": 0.96
+            }
+          },
+          "model": "claude-haiku-4-5",
+          "reps": 5,
+          "run_id": "04b48129-66f1-571c-a571-ae7ba468c716",
+          "series": "replay-v2",
+          "sm2": {
+            "confidence": 0.95,
+            "eligible": true,
+            "limitation": null,
+            "reason": "the ratio interval spans 1",
+            "unavailable": null,
+            "verdict": "inconclusive"
+          },
+          "source": {
+            "line": 2,
+            "path": "benchmarks/history.jsonl"
+          },
+          "status": "failed",
+          "tag": "v0.14.0"
+        },
+        {
+          "bucket": "",
+          "cache_basis": null,
+          "change_note": "release 0.15.0",
+          "cli_version": "2.1.0",
+          "date": "2026-10-01",
+          "delegation": {
+            "label": "adherence, descriptive, not causal",
+            "verdicts": {
+              "declined-below-break-even": 1,
+              "fired": 2,
+              "missed-above-break-even": 0,
+              "not-offered": 0,
+              "unknown": 1
+            }
+          },
+          "evidence": {
+            "label": "pre-registered",
+            "pre_registration": "docs/plans/registered.md",
+            "reason": "the row is labelled pre-registered"
+          },
+          "harness_sha": "0150015001500150015001500150015001500150",
+          "harness_version": "0.15.0",
+          "measures": {
+            "pass_rate_bare": {
+              "interval": [
+                0.6,
+                0.9
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.8
+            },
+            "pass_rate_difference": {
+              "interval": [
+                -0.1,
+                0.2
+              ],
+              "interval_kind": "SM-2",
+              "value": 0.05
+            },
+            "pass_rate_harness": {
+              "interval": [
+                0.65,
+                0.95
+              ],
+              "interval_kind": "descriptive",
+              "value": 0.85
+            },
+            "ratio": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.91
+            },
+            "ratio_cache_normalised": {
+              "interval": null,
+              "interval_kind": null,
+              "value": 0.9
+            },
+            "ratio_sm2": {
+              "interval": [
+                0.8,
+                1.0
+              ],
+              "interval_kind": "SM-2",
+              "value": 0.9
+            }
+          },
+          "model": "claude-haiku-4-5",
+          "reps": 5,
+          "run_id": "db2b8635-d2e4-5b4f-b2e4-0a9dde6fc343",
+          "series": "replay-v2",
+          "sm2": {
+            "confidence": 0.95,
+            "eligible": true,
+            "limitation": null,
+            "reason": "the ratio interval spans 1",
+            "unavailable": null,
+            "verdict": "inconclusive"
+          },
+          "source": {
+            "line": 3,
+            "path": "benchmarks/history.jsonl"
+          },
+          "status": "failed",
+          "tag": "v0.15.0"
+        }
+      ],
+      "series": "replay-v2"
+    }
+  ],
+  "measures": [
+    {
+      "id": "ratio_sm2",
+      "label": "Cost ratio, SM-2",
+      "note": "SM-2's cost of a pass, harness over bare, with the interval SM-2 stored.",
+      "unit": "ratio"
+    },
+    {
+      "id": "ratio",
+      "label": "Cost ratio, mean of reps",
+      "note": "The older mean-of-reps ratio, kept so earlier rows stay comparable.",
+      "unit": "ratio"
+    },
+    {
+      "id": "ratio_cache_normalised",
+      "label": "Cache-normalised cost ratio",
+      "note": "The mean-of-reps ratio on cache-normalised cost.",
+      "unit": "ratio"
+    },
+    {
+      "id": "pass_rate_harness",
+      "label": "Pass rate, harness",
+      "note": "SM-2's harness pass rate; its interval is descriptive.",
+      "unit": "share"
+    },
+    {
+      "id": "pass_rate_bare",
+      "label": "Pass rate, bare",
+      "note": "SM-2's bare pass rate; its interval is descriptive.",
+      "unit": "share"
+    },
+    {
+      "id": "pass_rate_difference",
+      "label": "Pass-rate difference",
+      "note": "SM-2's harness minus bare pass rate, with the interval SM-2 stored.",
+      "unit": "points"
+    }
+  ],
+  "not_tracked": [
+    {
+      "measure": "Detector precision",
+      "reason": "No engine keeps detector precision by version or date; Rule health shows the current labelled-corpus reading.",
+      "where": "/reports/rules"
+    },
+    {
+      "measure": "Rule adherence",
+      "reason": "No engine keeps rule adherence by version or date beyond each benchmark row's delegation tally, shown on its point; Rule health shows the current reading.",
+      "where": "/reports/rules"
+    }
+  ],
+  "proof": {
+    "bundles": [
+      {
+        "bundle": "proof/one",
+        "bundle_id": "proof-set-1",
+        "cards": [
+          {
+            "claim": "Observed cost ratio",
+            "estimand": "intention-to-treat",
+            "figure": 0.82,
+            "id": "ratio",
+            "interval": [
+              0.7,
+              0.95
+            ],
+            "published": {
+              "field": "/hero/line",
+              "text": "Observed cost ratio 0.82"
+            },
+            "verify_status": true
+          },
+          {
+            "claim": "Pass rate held",
+            "estimand": "intention-to-treat",
+            "figure": 0.0,
+            "id": "passes",
+            "interval": [
+              -0.1,
+              0.1
+            ],
+            "published": null,
+            "verify_status": false
+          }
+        ],
+        "checks": {
+          "1": true,
+          "10": true,
+          "11": true,
+          "12": true,
+          "2": true,
+          "3": true,
+          "4": true,
+          "5": true,
+          "6": true,
+          "7": true,
+          "8": true,
+          "9": true
+        },
+        "command": "citizen evidence verify --json proof/one",
+        "errors": [],
+        "status": "verified",
+        "unknown": [
+          "reasoning effort for the bare arm"
+        ]
+      }
+    ],
+    "claims": [
+      {
+        "bundle": "proof/one",
+        "card": "ratio",
+        "field": "/hero/line",
+        "text": "Observed cost ratio 0.82",
+        "verify_status": true
+      }
+    ],
+    "statement": null,
+    "unverified_bundles": []
+  },
+  "ratio_note": "Each ratio is harness over bare on the same day and model. Compare ratios across days, never dollars. A new series means the task set or the model changed.",
+  "schema_version": 1,
+  "static": {
+    "measure": {
+      "id": "static_tokens",
+      "label": "Static context, estimated tokens",
+      "note": "benchmarks/static.json's estimated tokens per version.",
+      "unit": "tokens"
+    },
+    "points": [
+      {
+        "files": 12,
+        "harness_version": "0.15.0",
+        "run_id": "c06396a4-0a74-5a6e-ae9b-0b7f2671b36e",
+        "value": 3000
+      }
+    ]
+  },
+  "truncated": false
+}

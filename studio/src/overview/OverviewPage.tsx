@@ -25,6 +25,7 @@ const reportCards = [
   { label: "Hook performance", measure: "No timing window", detail: "Invocation counts and latency stay linked to their source window.", href: "/reports#hook-performance" },
   { label: "Efficacy", measure: "No comparison yet", detail: "Run a paired experiment before judging a draft.", href: "/reports#efficacy" },
   { label: "Usage", measure: "No local total", detail: "Estimated and unpriced usage are reported separately.", href: "/reports/usage" },
+  { label: "Trends", measure: "By version and date", detail: "Each measure beside the project's proof set, labelled exploratory or pre-registered.", href: "/reports/trends" },
 ] as const;
 
 function ReportCard({ label, measure, detail, href }: (typeof reportCards)[number]) {
