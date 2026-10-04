@@ -175,7 +175,7 @@ class MessageTests(unittest.TestCase):
 
     def test_the_gate_message_says_where_the_command_came_from(self):
         text = (REPO / "claude" / "hooks" / "stop-gate.py").read_text()
-        self.assertIn("check block this repository defines under `## Gate`", text)
+        self.assertIn("check block this repository defines under `{heading}`", text)
 
     def test_the_untrusted_message_names_the_command_that_fixes_it(self):
         text = (REPO / "claude" / "hooks" / "stop-gate.py").read_text()
