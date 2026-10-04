@@ -1181,10 +1181,9 @@ def _run_start(handler: Handler, route: Route) -> None:
             or not isinstance(request["target_ref"], str)):
         handler._error(400, "invalid_request")
         return
-    if (request["suite_id"] not in free_suites.FREE_SUITE_IDS
-            or request["target_kind"] != "installed"
-            or request["target_ref"] != str(handler.server.repo_root.resolve())
-            or request["parameters"].get("root") != str(handler.server.repo_root.resolve())):
+    if free_suites.start_refusal(handler.server.repo_root, request["suite_id"],
+                                 request["parameters"], request["target_kind"],
+                                 request["target_ref"]) is not None:
         handler._error(400, "invalid_run")
         return
     try:
@@ -2286,7 +2285,8 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/first-run", "application/json", FIRST_RUN,
           _first_run_status, None, "application/json", first_run.CLI_COMMANDS["status"]),
     Route("POST", "/api/first-run/start", "application/json", FIRST_RUN,
-          _first_run_start, None, "application/json", first_run.CLI_COMMANDS["start"]),
+          _first_run_start, None, "application/json",
+          ("citizen", "draft", "first-run", "{draft}", "--start", "--json")),
     Route("POST", "/api/configure/apply/rollback/preview", "application/json", ROLLBACK_PREVIEW,
           _draft_rollback_preview, None, "application/json", draft_rollback.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/apply/rollback", "application/json", APPLY_RESULT,
@@ -2296,7 +2296,8 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/activity", "application/json", ACTIVITY,
           _activity, None, "application/json", ("citizen", "activity", "--json")),
     Route("POST", "/api/reports/spend", "application/json", SPEND,
-          _spend, None, "application/json", ("citizen", "usage", "--json")),
+          _spend, None, "application/json",
+          ("citizen", "usage", "--by", "{by}", "--days", "{days}", "--json")),
     Route("GET", "/api/runs/catalog", "application/json", RUN_CATALOG,
           _runs_catalog, None, cli_command=("citizen", "runs", "catalog", "--json")),
     Route("POST", "/api/runs/start", "application/json", RUN_RECORD,
@@ -2384,7 +2385,8 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/rules/health", "application/json", RULE_HEALTH, _rule_health, None,
           "application/json", rule_health.CLI_COMMANDS["status"]),
     Route("POST", "/api/rules/try-without", "application/json", RULE_TRY_WITHOUT,
-          _rule_try_without, None, "application/json", rule_health.CLI_COMMANDS["try_without"]),
+          _rule_try_without, None, "application/json",
+          ("citizen", "draft", "try-without", "{rule}", "--json")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

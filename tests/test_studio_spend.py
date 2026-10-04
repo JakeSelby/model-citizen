@@ -288,7 +288,8 @@ class SpendContractTests(unittest.TestCase):
     def test_the_route_names_its_citizen_command(self):
         route = next(item for item in server.ROUTES.entries if item.path == "/api/reports/spend")
         self.assertEqual((route.method, route.cli_command),
-                         ("POST", ("citizen", "usage", "--json")))
+                         ("POST", ("citizen", "usage", "--by", "{by}", "--days", "{days}",
+                                   "--json")))
 
 
 class SpendRouteTests(studio_security.StudioSecurityFixture):

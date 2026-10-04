@@ -186,7 +186,7 @@ class StatusParity(unittest.TestCase):
                          ("citizen", "usage", "--rules", "--health", "--json"))
         self.assertIsNone(routes["/api/rules/health"].parity_exemption)
         self.assertEqual(routes["/api/rules/try-without"].cli_command,
-                         ("citizen", "draft", "create", "{draft}", "--json"))
+                         ("citizen", "draft", "try-without", "{rule}", "--json"))
 
 
 class Figures(unittest.TestCase):

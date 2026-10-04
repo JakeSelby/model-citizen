@@ -86,7 +86,7 @@ def cases(draft, revision, files):
         ("POST", "/api/configure/apply/recover"): (
             ["draft", "recover", "--draft", d], {"action": "restore", "confirm": d}, "same"),
         ("POST", "/api/first-run"): (["draft", "first-run", d], {"draft": d}, "same"),
-        ("POST", "/api/first-run/start"): (["draft", "create", "Not A Name"],
+        ("POST", "/api/first-run/start"): (["draft", "first-run", "Not A Name", "--start"],
                                            {"draft": "Not A Name"}, "refused"),
         ("POST", "/api/configure/apply/rollback/preview"): (
             ["draft", "rollback", APPLY_ID, "--preview"], {"apply_id": APPLY_ID}, "same"),
@@ -131,7 +131,7 @@ def cases(draft, revision, files):
         ("POST", "/api/configure/test/verdicts"): (["draft", "test", d], {"draft": d}, "same"),
         ("POST", "/api/rules/health"): (["usage", "--rules", "--health"], {}, "same"),
         ("POST", "/api/rules/try-without"): (
-            ["draft", "create", "Not A Name"], {"rule": "not a rule"}, "refused"),
+            ["draft", "try-without", "not a rule"], {"rule": "not a rule"}, "refused"),
     }
 
 
@@ -221,12 +221,15 @@ class ShapeParityTests(unittest.TestCase):
                 if expected == "refused":
                     self.assertGreaterEqual(status, 400, sent)
                     self.assertNotEqual(code, 0, printed)
-                    self.assertIn("error", printed)
+                    self.assertEqual(printed, sent)
                     continue
                 self.assertEqual(status, 200, sent)
                 if expected == "ledger":
-                    self.assertEqual(sorted(sent["command"].split()),
-                                     sorted(["citizen"] + argv + ["--json"]))
+                    shown = [word.replace("{by}", request["by"]).replace(
+                        "{days}", str(request["days"]))
+                        for word in server.ROUTES.resolve(method, path).cli_command]
+                    self.assertEqual(shown, ["citizen"] + argv + ["--json"])
+                    self.assertEqual(sorted(sent["command"].split()), sorted(shown))
                     self.assertEqual(sorted(printed), sorted(sent["ledger"]))
                     continue
                 self.assertNotIn("error", set(printed) - set(sent), printed)

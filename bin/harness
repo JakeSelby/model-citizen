@@ -94,6 +94,7 @@ from harness_core import instruction_surface, scorecard
 from harness_core.studio import apply as studio_apply
 from harness_core.studio import first_run as studio_first_run
 from harness_core.studio import headless as studio_headless
+from harness_core.studio import free_suites as studio_free_suites
 from harness_core.studio import rule_health as studio_rule_health
 from harness_core.studio import module_library as studio_module_library
 from harness_core.studio import rollback as studio_rollback
@@ -3270,8 +3271,9 @@ def cmd_selection(args: argparse.Namespace) -> int:
         try:
             payload = studio_selection.report(REPO, args.repository, args.project_file)
         except studio_selection.SelectionError as exc:
-            print(json.dumps({"error": str(exc)}, sort_keys=True) if args.json
-                  else "selection: " + str(exc), file=sys.stdout if args.json else sys.stderr)
+            if args.json:
+                print(json.dumps({"error": "invalid_selection"}, sort_keys=True))
+            print("selection: " + str(exc), file=sys.stderr)
             return 2
         print(json.dumps(payload, sort_keys=True) if args.json else json.dumps(payload, indent=2))
         return 0
@@ -3908,12 +3910,17 @@ def _draft_review_report(result: Dict[str, Any]) -> None:
 
 def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> int:
     """`citizen draft test NAME --register`: the Studio's register route, from the shell."""
+    def refuse(code: str, message: str) -> int:
+        if args.json:
+            say(json.dumps({"error": code}, sort_keys=True))
+        print("draft test: " + message, file=sys.stderr if args.json else sys.stdout)
+        return 2
+
     if not args.model or not args.task or args.effect is None or args.repetitions is None:
-        say("draft test: --register needs --model, --repetitions, at least one --task and --effect")
-        return 2
+        return refuse("invalid_request",
+                      "--register needs --model, --repetitions, at least one --task and --effect")
     if (args.pack is None) != (args.pack_digest is None):
-        say("draft test: --pack and --pack-digest go together")
-        return 2
+        return refuse("invalid_request", "--pack and --pack-digest go together")
     spec = {"model": args.model, "repetitions": args.repetitions, "tasks": list(args.task),
             "pack": ({"name": args.pack, "digest": args.pack_digest}
                      if args.pack is not None else None)}
@@ -3923,11 +3930,12 @@ def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> in
     except (OSError, studio_draft_tests.DraftTestError) as exc:
         code = getattr(exc, "code", "draft_test_registration_failed")
         message = str(exc) if not isinstance(exc, OSError) else "registration I/O failed"
-        say(json.dumps({"error": {"code": code, "message": message}}, sort_keys=True)
-            if args.json else "draft test: " + message)
-        return 2
+        return refuse(code, message)
     if args.json:
-        say(json.dumps(registration, sort_keys=True))
+        # `POST /api/configure/test/register` sends this object.
+        say(json.dumps({"registration": registration,
+                        "power_line": studio_draft_tests.power_line(registration["power"])},
+                       sort_keys=True))
     else:
         for line in studio_draft_registration.render(registration):
             say(line)
@@ -3939,6 +3947,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
     # Draft configuration and managed roots are relative to the installed checkout that owns
     # this CLI, not the shared Git common directory behind a linked worktree.
     repo = REPO.resolve()
+    if args.action == "first-run" and args.start:
+        # `POST /api/first-run/start`: create the first-run draft, or resume the one there.
+        return _studio_route_cli(args, "/api/first-run/start", {"draft": args.name})
     if args.action == "first-run":
         try:
             status = studio_first_run.status(repo, args.name, home())
@@ -3964,8 +3975,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
         except (OSError, studio.runs.RunError, studio_draft_tests.DraftTestError) as exc:
             code = getattr(exc, "code", "draft_test_unavailable")
             message = str(exc) if not isinstance(exc, OSError) else "run state I/O failed"
-            say(json.dumps({"error": {"code": code, "message": message}}, sort_keys=True)
-                if args.json else "draft test: " + message)
+            if args.json:
+                say(json.dumps({"error": code}, sort_keys=True))
+            print("draft test: " + message, file=sys.stderr if args.json else sys.stdout)
             return 2
         if args.json:
             say(json.dumps(result, sort_keys=True))
@@ -6258,7 +6270,10 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if getattr(args, "health", False):
         # The Studio's rule-health document: detector hits, coverage and lint, as one object.
         if not args.rules:
-            raise SystemExit("usage: --health needs --rules")
+            if json_output:
+                print(json.dumps({"error": "invalid_request"}, sort_keys=True))
+            print("usage: --health needs --rules", file=sys.stderr)
+            return 2
         payload = studio_rule_health.report(REPO)
         print(json.dumps(payload, sort_keys=True) if json_output else json.dumps(payload, indent=2))
         return 0
@@ -7026,6 +7041,14 @@ def cmd_tiers(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+# The error each `citizen runs` action's Studio route sends for the same refusal.
+_RUNS_ERROR_CODES = {"start": "invalid_run", "show": "run_not_found", "detail": "run_not_found",
+                     "cancel": "run_not_found", "evidence": "evidence_unavailable",
+                     "rerun": "rerun_unavailable", "history": "invalid_history_query",
+                     "case-history": "invalid_case_history_query",
+                     "catalog": "run_catalog_unavailable"}
+
+
 def cmd_runs(args: argparse.Namespace) -> int:
     """Launch and inspect allowlisted suites through the shared Studio run core."""
     try:
@@ -7035,6 +7058,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
         if args.runs_action == "catalog":
             result = supervisor.catalog(REPO)
         elif args.runs_action == "start":
+            parameters = studio.runs.parse_parameters(args.param)
             if args.suite in studio_headless.ADMITTED_SUITES:
                 admissions = " or ".join(
                     "`citizen runs %s %s`" % (group, studio_headless.START_ACTIONS[group])
@@ -7042,7 +7066,10 @@ def cmd_runs(args: argparse.Namespace) -> int:
                 raise studio.runs.RunError(
                     "%s starts only through %s after its preview, which resolve and check its "
                     "targets as the Studio does" % (args.suite, admissions))
-            parameters = studio.runs.parse_parameters(args.param)
+            refusal = studio_free_suites.start_refusal(
+                REPO, args.suite, parameters, args.target_kind, args.target_ref)
+            if refusal is not None:
+                raise studio.runs.RunError(refusal)
             preview = supervisor.spend_preview(
                 args.suite, parameters, args.target_kind, args.target_ref,
                 args.max_budget_usd, args.spend_cap, args.pricing_source)
@@ -7091,8 +7118,14 @@ def cmd_runs(args: argparse.Namespace) -> int:
     except (OSError, studio.runs.RunError, studio_compare.CompareError) as exc:
         message = (str(exc) if isinstance(exc, (studio.runs.RunError, studio_compare.CompareError))
                    else "run state I/O failed")
+        # A command a Studio route answers prints that route's error code; the reason goes to
+        # stderr. `list` and `reindex` have no route, so they print the reason itself.
+        code = (exc.code if isinstance(exc, studio_compare.CompareError)
+                else _RUNS_ERROR_CODES.get(args.runs_action, message))
         if args.json:
-            print(json.dumps({"error": message}, sort_keys=True))
+            print(json.dumps({"error": code}, sort_keys=True))
+            if code != message:
+                print("runs: " + message, file=sys.stderr)
         else:
             print("runs: " + message, file=sys.stderr)
         return 2
@@ -7151,6 +7184,24 @@ def cmd_runs(args: argparse.Namespace) -> int:
     return 3 if confirmation_pending else 0
 
 
+def _studio_route_cli(args: argparse.Namespace, path: str, request: Dict[str, Any]) -> int:
+    """Answer one Studio POST route through its own handler; see `studio.headless`."""
+    try:
+        status, result = studio_headless.call_route(REPO, state_dir() / "studio", "POST", path,
+                                                    request)
+    except (OSError, studio.runs.RunError):
+        status, result = 503, {"error": "run_state_unavailable"}
+    except (ValueError, RuntimeError):
+        status, result = 500, {"error": "internal_error"}
+    print(json.dumps(result, sort_keys=True) if args.json else json.dumps(result, indent=2))
+    return 0 if status == 200 else (1 if status >= 500 else 2)
+
+
+def cmd_draft_try_without(args: argparse.Namespace) -> int:
+    """`POST /api/rules/try-without`: a draft with one rule switched off."""
+    return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
+
+
 def cmd_runs_studio(args: argparse.Namespace) -> int:
     """Answer one paid-run Studio route through its own handler; see `studio.headless`."""
     group, action = args.studio_group, args.studio_action
@@ -7174,14 +7225,19 @@ def cmd_runs_studio(args: argparse.Namespace) -> int:
         try:
             status, result = studio_headless.call(REPO, state_dir() / "studio", group, action, request)
         except studio.runs.RunError as exc:
-            status, result = 409, {"error": str(exc)}
-        except (OSError, ValueError):
-            status, result = 500, {"error": "run_state_unavailable"}
+            status, result = 503, {"error": "run_state_unavailable"}
+            detail = str(exc)
+        except OSError:
+            status, result = 503, {"error": "run_state_unavailable"}
+        except (ValueError, RuntimeError) as exc:
+            # A handler fault, such as an answer its own schema refuses: the Studio's 500.
+            status, result = 500, {"error": "internal_error"}
+            detail = str(exc)
     if args.json:
         print(json.dumps(result, sort_keys=True))
     elif status == 200:
         print(json.dumps(result, indent=2, sort_keys=True))
-    else:
+    if status != 200 and (detail or not args.json):
         print("runs %s %s: %s%s" % (group, action, result.get("error"),
                                     "; " + detail if detail else ""), file=sys.stderr)
     if status == 200:
@@ -7499,6 +7555,8 @@ def build_parser() -> argparse.ArgumentParser:
     first_run = draft_sub.add_parser(
         "first-run", help="show where the guided first run stands and the commands that reproduce it")
     first_run.add_argument("name", nargs="?", default=studio_first_run.DRAFT)
+    first_run.add_argument("--start", action="store_true",
+                           help="create the first-run draft, or resume it, as the Studio does")
     first_run.add_argument("--json", action="store_true")
     first_run.set_defaults(func=cmd_draft)
     test_parser = draft_sub.add_parser(
@@ -7657,6 +7715,12 @@ def build_parser() -> argparse.ArgumentParser:
     module_library_parser.add_argument("name")
     module_library_parser.add_argument("--json", action="store_true")
     module_library_parser.set_defaults(func=cmd_draft)
+    try_without = draft_sub.add_parser(
+        "try-without", help="create a draft with one rule switched off, as the Studio's rule "
+                            "health page does; nothing live changes")
+    try_without.add_argument("rule", help="the rule, as rules.NAME")
+    try_without.add_argument("--json", action="store_true")
+    try_without.set_defaults(func=cmd_draft_try_without)
 
     p = sub.add_parser("remote-control", help="keep a Claude Code Remote Control server running per configured folder (macOS)")
     rc_sub = p.add_subparsers(dest="action", required=True)

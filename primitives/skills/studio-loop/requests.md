@@ -63,12 +63,17 @@ that answers it. Values in angle brackets come from an earlier answer; copy them
 ## Native acceptance
 
 `citizen runs native catalog --json` takes no request; its `initial` object is a selection to start
-from. Set `source_commit` to the commit the target resolved to.
+from. Choose the client, exactly three cases and the model; leave `source_commit` empty, as the Studio does: the
+target's commit is resolved at launch, and the start's answer carries it for progress and retry.
 
 `citizen runs native preview --request FILE --json`:
 
 ```json
-{"selection": "<the catalog's initial object, edited>",
+{"selection": {"cases": ["installation", "stance-switch", "custom-stance"],
+               "client": "claude-code-cli-macos",
+               "model": "claude-haiku-4-5", "progress_id": "<the catalog's initial progress_id>",
+               "retry_case": "", "retry_source": "", "source_commit": "",
+               "target_kind": "installed", "target_ref": "current"},
  "spend": {"max_budget_usd": "1", "spend_cap_usd": "5", "pricing_source": "api_credit"}}
 ```
 

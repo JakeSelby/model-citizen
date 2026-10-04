@@ -6,20 +6,26 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import http.client
 import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+import urllib.parse
 import uuid
 from pathlib import Path
 from unittest import mock
 
 from test_harness import REPO, harness
 from harness_core.studio import apply as draft_apply
-from harness_core.studio import draft_tests, eval_tiers, headless, native_acceptance, server
+from harness_core.studio import auth, draft_tests, eval_tiers, headless, native_acceptance, server
+from harness_core.studio.state import Store
 
 import draft_support
 from studio_target_support import FixtureTargetService
@@ -30,8 +36,8 @@ SKILL = REPO / "primitives" / "skills" / "studio-loop" / "SKILL.md"
 SWITCHED = "cache-hygiene"
 
 
-# Placeholders that must parse as numbers; every other placeholder takes a word.
-NUMERIC = {"repetitions": "3", "effect": "0.1"}
+# Placeholders that must parse as a number or a choice; every other placeholder takes a word.
+NUMERIC = {"repetitions": "3", "effect": "0.1", "days": "30", "by": "day"}
 
 
 def _filled(command):
@@ -139,7 +145,7 @@ class CommandShapeTests(unittest.TestCase):
         output = io.StringIO()
         with mock.patch.object(harness, "state_dir", return_value=self.state), \
                 mock.patch.object(sys, "stdin", io.StringIO(stdin)), \
-                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+                contextlib.redirect_stdout(output):
             code = harness.main(list(argv))
         return code, json.loads(output.getvalue())
 
@@ -169,7 +175,7 @@ class CommandShapeTests(unittest.TestCase):
         with mock.patch.object(headless.runs, "RunSupervisor",
                                side_effect=headless.runs.RunError("run state is unsafe")):
             code, printed = self.cli("runs", "eval", "catalog", "--json")
-        self.assertEqual((code, printed), (2, {"error": "run state is unsafe"}))
+        self.assertEqual((code, printed), (1, {"error": "run_state_unavailable"}))
 
     def test_headless_commands_print_the_route_answer_and_its_refusals(self):
         code, printed = self.cli("runs", "eval", "catalog", "--json")
@@ -189,39 +195,18 @@ class CommandShapeTests(unittest.TestCase):
         self.assertEqual(self.cli("runs", "replay", "start", "--json"),
                          (2, {"error": "invalid_request"}))
 
-    def test_a_paid_start_needs_the_token_its_own_preview_issued(self):
-        """The spend guard: the skill's preview example previews, and a start is refused with a
-        token that was never issued, or with an issued token for a request changed since."""
-        body = request_examples()[("replay", "preview")]
-        with fixture_tasks("link-alias"), mock.patch.object(
-                headless.targets, "TargetService", lambda _repository: FixtureTargetService()):
-            code, preview = self.cli("runs", "replay", "preview", "--request", "-", "--json",
-                                     stdin=json.dumps(body))
-            self.assertEqual(code, 0, preview)
-            self.assertTrue(preview["confirmation_required"], preview)
-            self.assertEqual(len(preview["request"]["targets"]), 2)
-            forged = {"request": preview["request"], "confirmation_token": "f" * 64}
-            changed = {"request": dict(preview["request"], spend_cap_usd="21"),
-                       "confirmation_token": preview["confirmation_token"]}
-            for refused in (forged, changed):
-                code, printed = self.cli("runs", "replay", "start", "--request", "-", "--json",
-                                         stdin=json.dumps(refused))
-                self.assertEqual(code, 2, printed)
-                self.assertEqual(printed, {"error": "replay_refused"})
-                self.assertEqual(self.route("POST", "/api/runs/replay/start", refused),
-                                 (400, {"error": "replay_refused"}))
-            self.assertFalse(any((self.state / "studio" / "runs").glob("*.json")))
-
     def test_runs_start_refuses_a_suite_that_has_its_own_admission(self):
         """A generic start would skip the target checks the Studio's admission makes."""
         for suite, groups in sorted(headless.ADMITTED_SUITES.items()):
             with self.subTest(suite=suite):
-                code, printed = self.cli("runs", "start", suite, "--target-kind", "installed",
-                                         "--target-ref", str(REPO), "--json")
-                self.assertEqual(code, 2)
+                reason = io.StringIO()
+                with contextlib.redirect_stderr(reason):
+                    code, printed = self.cli("runs", "start", suite, "--target-kind", "installed",
+                                             "--target-ref", str(REPO), "--json")
+                self.assertEqual((code, printed), (2, {"error": "invalid_run"}))
                 for group in groups:
                     self.assertIn("`citizen runs %s %s`" % (group, headless.START_ACTIONS[group]),
-                                  printed["error"])
+                                  reason.getvalue())
         self.assertFalse((self.state / "studio" / "runs").exists()
                          and any((self.state / "studio" / "runs").iterdir()))
 
@@ -267,12 +252,150 @@ class RequestExampleTests(unittest.TestCase):
         examples = request_examples()
         eval_tiers.PaidRequest.parse(examples[("eval", "preview")]["request"])
         native_acceptance.SpendRequest.parse(examples[("native", "preview")]["spend"])
+        selection = dict(examples[("native", "preview")]["selection"], progress_id="a" * 32)
+        with tempfile.TemporaryDirectory() as state:
+            _status, catalog = headless.call_route(
+                REPO, Path(os.path.realpath(state)), "GET",
+                "/api/experiments/native-acceptance/catalog")
+        self.assertEqual(set(selection), set(catalog["initial"]))
+        self.assertEqual(selection["source_commit"], catalog["initial"]["source_commit"])
+        native_acceptance.Selection.parse(REPO, selection)
         plan = examples[("draft-test", "plan")]
         self.assertEqual(set(plan["request"]), set(draft_tests.FORM_KEYS))
         draft_tests.parse_plan(plan["effect"], plan["cv"])
         start = examples[("draft-test", "start")]
         self.assertEqual(set(start) - {"confirmation_token", "request"},
                          set(plan) - {"request"})
+
+
+class SpendGuardHttpTests(unittest.TestCase):
+    """The spend guard over HTTP and from the CLI, on one run store: the skill's preview example
+    previews, a start with that preview's unchanged request and token is admitted from either
+    face, and a forged or mismatched token is refused alike. The launcher is mocked, so nothing
+    runs and nothing spends."""
+
+    def setUp(self):
+        self.base = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(lambda: shutil.rmtree(str(self.base), ignore_errors=True))
+        self.state = self.base / "state"
+        self.state.mkdir()
+        patches = [
+            fixture_tasks("link-alias"),
+            mock.patch.object(headless.targets, "TargetService",
+                              lambda _repository: FixtureTargetService()),
+            mock.patch.object(headless.runs.RunSupervisor, "_admit_locked"),
+            mock.patch.dict(os.environ, {"HOME": str(self.base), "HARNESS_HOME": str(self.base)}),
+        ]
+        for patch in patches:
+            patch.__enter__()
+            self.addCleanup(patch.__exit__, None, None, None)
+        self.store = Store(self.state / "studio")
+        self.store.__enter__()
+        self.addCleanup(self.store.__exit__, None, None, None)
+        self.server, _fallback = server.bind(REPO / "studio" / "dist", "credential", self.store, 0)
+        thread = threading.Thread(target=self.server.serve_forever,
+                                  kwargs={"poll_interval": 0.01})
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+        token, _form = self.server.sessions.issue()
+        session, _form = self.server.sessions.consume(token)
+        self.headers = {"Host": self.server.host, "Origin": "http://" + self.server.host,
+                        "Cookie": "%s=%s" % (auth.SESSION_COOKIE, session.cookie),
+                        "X-Studio-CSRF": session.csrf, "Content-Type": "application/json"}
+
+    def http(self, path, body):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1],
+                                                timeout=60)
+        try:
+            connection.request("POST", path, json.dumps(body), self.headers)
+            response = connection.getresponse()
+            return response.status, json.loads(response.read())
+        finally:
+            connection.close()
+
+    def cli(self, *argv, stdin=""):
+        output = io.StringIO()
+        with mock.patch.object(harness, "state_dir", return_value=self.state), \
+                mock.patch.object(sys, "stdin", io.StringIO(stdin)), \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            code = harness.main(list(argv))
+        return code, json.loads(output.getvalue())
+
+    def test_each_face_admits_the_others_preview_and_refuses_a_forged_token(self):
+        body = request_examples()[("replay", "preview")]
+        status, by_http = self.http("/api/runs/replay/preview", body)
+        self.assertEqual(status, 200, by_http)
+        code, by_cli = self.cli("runs", "replay", "preview", "--request", "-", "--json",
+                                stdin=json.dumps(body))
+        self.assertEqual(code, 0, by_cli)
+        self.assertEqual(sorted(by_cli), sorted(by_http))
+        self.assertTrue(by_http["confirmation_required"])
+
+        for request, refused in (
+                ({"request": by_http["request"], "confirmation_token": "f" * 64}, True),
+                ({"request": dict(by_http["request"], spend_cap_usd="21"),
+                  "confirmation_token": by_http["confirmation_token"]}, True)):
+            status, sent = self.http("/api/runs/replay/start", request)
+            code, printed = self.cli("runs", "replay", "start", "--request", "-", "--json",
+                                     stdin=json.dumps(request))
+            self.assertEqual((status, sent), (400, {"error": "replay_refused"}))
+            self.assertEqual((code, printed), (2, sent))
+
+        # The HTTP preview's token admits the CLI start, and the CLI preview's the HTTP start.
+        code, started = self.cli("runs", "replay", "start", "--request", "-", "--json",
+                                 stdin=json.dumps({"request": by_http["request"],
+                                                   "confirmation_token": by_http["confirmation_token"]}))
+        self.assertEqual(code, 0, started)
+        status, started_http = self.http("/api/runs/replay/start", {
+            "request": by_cli["request"], "confirmation_token": by_cli["confirmation_token"]})
+        self.assertEqual(status, 200, started_http)
+        self.assertEqual(sorted(started), sorted(started_http))
+        self.assertNotEqual(started["run_id"], started_http["run_id"])
+        # A token is spent once.
+        status, again = self.http("/api/runs/replay/start", {
+            "request": by_cli["request"], "confirmation_token": by_cli["confirmation_token"]})
+        self.assertEqual((status, again), (400, {"error": "replay_refused"}))
+
+
+class StudioJsonTests(unittest.TestCase):
+    """AC2: `citizen studio --detach --json` prints a `url` that reaches the running Studio."""
+
+    def test_the_detached_studio_prints_a_url_that_answers(self):
+        base = Path(os.path.realpath(tempfile.mkdtemp()))
+        self.addCleanup(lambda: shutil.rmtree(str(base), ignore_errors=True))
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith("HARNESS_") and key != "CLAUDE_CONFIG_DIR"}
+        env.update(HOME=str(base), HARNESS_HOME=str(base))
+
+        def citizen(*argv):
+            done = subprocess.run([sys.executable, str(REPO / "bin" / "harness"), *argv],
+                                  cwd=REPO, env=env, capture_output=True, text=True, timeout=60)
+            return done.returncode, json.loads(done.stdout.strip().splitlines()[-1])
+
+        code, launched = citizen("studio", "--detach", "--no-open", "--json")
+        self.addCleanup(citizen, "studio", "stop", "--json")
+        self.assertEqual(code, 0, launched)
+        url = urllib.parse.urlsplit(launched["url"])
+        self.assertEqual(url.scheme, "http")
+        self.assertTrue(url.hostname.endswith(".localhost"), url.hostname)
+
+        def get(host):
+            connection = http.client.HTTPConnection("127.0.0.1", url.port, timeout=10)
+            try:
+                connection.request("GET", url.path or "/", headers={"Host": host})
+                response = connection.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                connection.close()
+
+        # The url's exact origin is the one this Studio answers; any other host is refused.
+        # Anonymous, it asks for the session the launcher's browser bootstrap provides.
+        self.assertEqual(get(url.netloc), (401, {"error": "unauthorized"}))
+        self.assertEqual(get("other.localhost:%d" % url.port), (403, {"error": "request_refused"}))
+        code, status = citizen("studio", "status", "--json")
+        self.assertEqual((code, status["running"], status["url"]), (0, True, launched["url"]))
 
 
 class Home:
@@ -422,13 +545,6 @@ class SkillTests(unittest.TestCase):
         self.assertIn("citizen studio --detach --json", self.text)
         self.assertIn("Hand over that `url`", self.text)
         self.assertIn("Do not send a screenshot or a description", self.text)
-
-    def test_the_studio_json_names_the_url_the_skill_hands_over(self):
-        printed = io.StringIO()
-        with contextlib.redirect_stdout(printed):
-            harness._studio_report({"url": "http://nonce.localhost:1/", "port": 1, "pid": 2,
-                                    "reused": True, "port_fallback": False}, True)
-        self.assertEqual(json.loads(printed.getvalue())["url"], "http://nonce.localhost:1/")
 
     def test_the_skill_keeps_the_studio_confirmations(self):
         for phrase in ("Spend is the user's call", "Apply only a reviewed revision",
