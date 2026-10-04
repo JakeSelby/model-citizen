@@ -385,6 +385,7 @@ python3 scripts/cost_bench.py replay --pack <pack repo> --pack-ref v1.0.0 --pack
     --model <id> --tag <full commit> --pre-registration <plan>
 python3 scripts/cost_bench.py replay --tier micro --pack <pack repo> --pack-set delegation-nudge ...
 python3 scripts/replay_power.py --pilot <results dir>                   # k, n and m for SM-2
+python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalence verdicts
 ```
 
 - **It is read from a pinned commit, never a working tree.** `--pack-ref` (default `HEAD`) is
@@ -419,7 +420,16 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   power (the ratio test and the pass-rate test) and claim power (those and the long subset's ratio
   test) both reach 0.8 at α 0.05 and an effect of at most 15%, with at least five trials per task
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
-  in its docstring.
+  in its docstring. A pilot that passes everything or nothing is sized only with the
+  pre-registered `--assumed-pass-rate`, which the output names as an assumption; a pilot with fewer
+  than two tasks passing in both arms, the floor included, also needs the pre-registered `--tau2`.
+  `--mde` sets the minimum detectable effect.
+- **A null has bounds.** `scripts/equivalence.py <results dir> --plan <plan>` reads each metric's
+  task-clustered interval against the plan's Equivalence margins and prints equivalent, not
+  equivalent or inconclusive; the rule is in the
+  [pre-registration template](pre-registration-template.md#decision-rule). A verdict is labelled
+  exploratory unless every row records that plan as its pre-registration, each task and arm has
+  five trials, and a behaviour score has five known values in each.
 
 ### Oracle metrics
 
