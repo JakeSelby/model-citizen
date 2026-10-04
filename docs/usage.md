@@ -33,11 +33,15 @@ The JSON and text renderers share the aggregation that assigns Workflow-tool run
 stderr without printing a success document. `usage export` is a separate OTLP action and rejects
 `--json` rather than silently ignoring it.
 
-Every report that prices tokens (`usage` in each token grouping, `--by role`, `--by provider` and
-`--by rebuild`) also carries `cost_basis: "list_price_equivalent"` and `price_as_of`, the newest
-`as_of` date in the price table that priced it, or `null` when the table carries none. The Studio's
-spend report is these documents as `citizen usage --json` prints them, so a dollar figure there and
-here comes from one computation and one pricing date.
+Every report that prices tokens (`usage` in each token grouping, `--by role`, `--by provider`,
+`--by rebuild` and `--by adherence`) also carries `cost_basis: "list_price_equivalent"` and
+`price_as_of`: the oldest `as_of` among the price entries its figures were priced from, so no figure
+is newer than the date it carries. It is `"unknown"` when one of those entries has no date or comes
+from a `prices` override in `config.json` that names no `as_of` of its own, and `null` when nothing
+in the window was priced from the table. `--by rebuild` also carries `unpriced`, the window's
+unpriced breaks, and `unpriced_calls`; both are the `all` scope's, which holds every `long` session.
+The Studio's spend report is these documents as `citizen usage --json` prints them, so a dollar
+figure there and here comes from one computation and one pricing date.
 
 ## The loaded instruction surface
 

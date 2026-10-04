@@ -7,7 +7,7 @@ import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 
 import { loadSpend } from "../src/spend/api.ts";
-import { formatUsd, moneyLabel, partialNotes, type SpendReport, type UsageLedger } from "../src/spend/model.ts";
+import { formatUsd, moneyLabel, PAGE_SIZE, pageOf, partialNotes, pricingDate, type SpendReport, type UsageLedger } from "../src/spend/model.ts";
 import { SpendReportView } from "../src/spend/SpendPage.tsx";
 
 // Written by `python3 tests/test_studio_spend.py --write` from the CLI's own fixture ledger.
@@ -29,7 +29,23 @@ test("money keeps unpriced distinct from zero and names its price snapshot", () 
   assert.equal(formatUsd(0.1234567), "$0.1235");
   assert.equal(formatUsd(12.5), "$12.50");
   assert.match(label, /^list-price equivalent, prices as of \d{4}-\d{2}-\d{2}$/);
-  assert.equal(moneyLabel({ ...session.basis, price_as_of: null }), "list-price equivalent, pricing date unknown");
+  assert.equal(moneyLabel({ ...session.basis, price_as_of: "unknown" }), "list-price equivalent, pricing date unknown");
+  assert.equal(pricingDate({ ...session.basis, price_as_of: null }), "no figure priced from the price table");
+  assert.equal(moneyLabel({ ...session.basis, label: "unknown basis" }), `unknown basis, prices as of ${session.basis.price_as_of}`);
+});
+
+test("a year of sessions renders one page of groups plus the ledger's total row", () => {
+  const ledger = session.ledger as UsageLedger;
+  const groups = Array.from({ length: 7300 }, (_, index) => ({ ...ledger.groups[0], name: `s-${index}` }));
+  const big: SpendReport = { ...session, ledger: { ...ledger, groups } };
+  const html = render(big);
+  assert.equal(html.match(/<tr>/g)?.length, PAGE_SIZE + 2);
+  assert.match(html, /s-49</);
+  assert.doesNotMatch(html, /s-50</);
+  assert.match(html, /Page 1 of 146 · 7,300 groups/);
+  assert.match(html, /<strong>Total<\/strong>/);
+  assert.deepEqual(pageOf(groups, 999).rows.map((row) => row.name), ["s-7250", ...groups.slice(7251).map((row) => row.name)]);
+  assert.equal(pageOf([], 3).pages, 1);
 });
 
 test("the total row is the ledger's own totals, not a sum the Studio computed", () => {
@@ -78,8 +94,8 @@ test("rebuild attribution lists each cause with its excess and keeps unknown dol
     by: "rebuild",
     command: "citizen usage --json --by rebuild --days 7",
     ledger: {
-      schema_version: 1, report: "rebuild", by: "rebuild", days: 7, price_as_of: session.basis.price_as_of,
-      groups: [{ scope: "all", sessions: 3, calls: 40, priced_spend_usd: 1.5, unpriced_calls: 0, unpriced_breaks: 1, unknown_breaks: 0,
+      schema_version: 1, report: "rebuild", by: "rebuild", days: 7, price_as_of: session.basis.price_as_of, unpriced: 1, unpriced_calls: 4,
+      groups: [{ scope: "all", sessions: 3, calls: 40, priced_spend_usd: 1.5, unpriced_calls: 4, unpriced_breaks: 1, unknown_breaks: 0,
         causes: [
           { cause: "idle over 1h (TTL expiry)", breaks: 2, rewritten_tokens: 90000, unpriced_breaks: 0, excess_usd: 0.3, cost_per_break: 0.15 },
           { cause: "compaction", breaks: 1, rewritten_tokens: 4000, unpriced_breaks: 1, excess_usd: null, cost_per_break: null },
@@ -89,8 +105,14 @@ test("rebuild attribution lists each cause with its excess and keeps unknown dol
   const html = render(rebuild);
   assert.match(html, /idle over 1h \(TTL expiry\)/);
   assert.match(html, /\$0\.3000/);
-  assert.match(html, /1 rebuild\(s\) unpriced/);
+  // The counts are the CLI's own fields, shown unchanged in the header and the footer.
+  assert.equal(html.match(/1 rebuild\(s\) unpriced/g)?.length, 2);
+  assert.equal(html.match(/4 call\(s\) unpriced: priced spend excludes them/g)?.length, 2);
+  assert.match(html, /4 unpriced call\(s\) excluded from priced spend · 1 unpriced break\(s\) · 0 unexplained break\(s\)/);
   assert.equal(html.match(/>unpriced</g)?.length, 2);
+  // Priced spend, two excess cells and two per-break cells: each carries the label and date.
+  assert.equal(html.match(escaped(`title="${label}"`))?.length, 5);
+  assert.equal(html.match(escaped(`(${label})`))?.length, 5);
 });
 
 test("spend loads from the authenticated same-origin route with the CSRF token", async () => {

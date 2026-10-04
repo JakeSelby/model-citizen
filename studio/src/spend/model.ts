@@ -89,6 +89,8 @@ export type RebuildLedger = LedgerCommon & {
   report: "rebuild";
   by: "rebuild";
   groups: RebuildGroup[];
+  unpriced: number;
+  unpriced_calls: number;
 };
 
 export type SpendReport = {
@@ -100,8 +102,21 @@ export type SpendReport = {
   ledger: UsageLedger | RoleLedger | RebuildLedger;
 };
 
+/** Rows per page in a grouping table; the ledger's total row is shown on every page. */
+export const PAGE_SIZE = 50;
+
+/** One page of rows, clamped, so a year of sessions never renders thousands of rows at once. */
+export function pageOf<Row>(rows: Row[], page: number): { rows: Row[]; page: number; pages: number } {
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+  const current = Math.min(Math.max(page, 0), pages - 1);
+  return { rows: rows.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE), page: current, pages };
+}
+
+/** The CLI's `price_as_of` in words: a date, "unknown", or nothing priced from the table. */
 export function pricingDate(basis: SpendReport["basis"]): string {
-  return basis.price_as_of ? `prices as of ${basis.price_as_of}` : "pricing date unknown";
+  if (basis.price_as_of === null) return "no figure priced from the price table";
+  if (basis.price_as_of === "unknown") return "pricing date unknown";
+  return `prices as of ${basis.price_as_of}`;
 }
 
 /** The label every dollar figure carries: what it is, and which price snapshot made it. */
@@ -134,8 +149,8 @@ export function partialNotes(ledger: SpendReport["ledger"]): string[] {
     if (ledger.unpriced) notes.push(`${ledger.unpriced} run(s) unpriced: unknown model or partial tokens.`);
     if (ledger.workflow_runs) notes.push(`${ledger.workflow_runs} Workflow-tool run(s) are grouped under (workflow), not under any role.`);
   } else {
-    const unpriced = ledger.groups.reduce((most, group) => Math.max(most, group.unpriced_breaks), 0);
-    if (unpriced) notes.push(`${unpriced} rebuild(s) unpriced: their excess dollars are unknown.`);
+    if (ledger.unpriced) notes.push(`${ledger.unpriced} rebuild(s) unpriced: their excess dollars are unknown.`);
+    if (ledger.unpriced_calls) notes.push(`${ledger.unpriced_calls} call(s) unpriced: priced spend excludes them.`);
   }
   if (!("price_table" in ledger) || ledger.price_table !== false) return notes;
   return [...notes, "No price table was readable, so no figure is priced."];

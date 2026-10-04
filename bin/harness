@@ -5747,13 +5747,57 @@ USAGE_JSON_VERSION = 1
 COST_BASIS = "list_price_equivalent"
 
 
+class UsedPrices(dict):
+    """A price table that remembers which entries a report looked up, for its `price_as_of`.
+
+    Every rate lookup in `pricing.py` goes through `table.get(key)` once the key is known to be
+    listed, so the keys read here are the entries the report's figures were priced from.
+    `undated` names the ids whose user override carries no `as_of` of its own: the merge keeps
+    the shipped date on such an entry, but the rate it priced with was never read on that date.
+    """
+
+    def __init__(self, table: Dict[str, Dict[str, Any]], undated: Iterable[str] = ()):
+        super().__init__(table)
+        self.used: set = set()
+        self.undated = frozenset(undated)
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        if key in self:
+            self.used.add(key)
+        return super().get(key, default)
+
+
+def report_prices(cfg: Optional[Dict[str, Any]] = None) -> UsedPrices:
+    """`load_prices`, wrapped so the report can say which dated entries priced it."""
+    cfg = load_config() if cfg is None else cfg
+    overrides = cfg.get("prices") if isinstance(cfg, dict) else None
+    undated = [normalise_model(key) for key, value in (overrides or {}).items()
+               if isinstance(value, dict)
+               and not (isinstance(value.get("as_of"), str) and value["as_of"])] \
+        if isinstance(overrides, dict) else []
+    return UsedPrices(load_prices(cfg), undated)
+
+
 def price_basis(table: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     """The label and pricing date a JSON report's dollars carry, so a reader never re-derives them.
 
-    `price_as_of` is the newest `as_of` in the table that priced the report, or None when the
-    table has none; it is the same date `doctor` ages.
+    `price_as_of` is the oldest `as_of` among the entries the report's figures were priced from,
+    so no figure is newer than the date it carries. It is `"unknown"` when one of those entries
+    carries no date, or comes from a user override that names none, and None when nothing in
+    the report was priced from the table.
     """
-    return {"cost_basis": COST_BASIS, "price_as_of": newest_as_of(table) or None}
+    used = sorted(getattr(table, "used", ()))
+    if not used:
+        return {"cost_basis": COST_BASIS, "price_as_of": None}
+    undated = getattr(table, "undated", frozenset())
+    dates = []
+    for key in used:
+        entry = dict.get(table, key)
+        value = entry.get("as_of") if isinstance(entry, dict) else None
+        if key in undated or not (isinstance(value, str) and value):
+            return {"cost_basis": COST_BASIS, "price_as_of": "unknown"}
+        dates.append(value)
+    return {"cost_basis": COST_BASIS, "price_as_of": min(dates)}
 
 
 def json_safe(value: Any) -> Any:
@@ -6082,12 +6126,13 @@ def adherence_report(days: int, json_output: bool = False) -> int:
             sessions[session_id] = rebuilds.session_calls(projects, session_id)
         return sessions[session_id]
 
+    table = report_prices()
     result = soft_estimates.report(rows, adherence, intervals, calls_for,
-                                   load_prices(load_config()), pricing, feed._context, cutoff)
+                                   table, pricing, feed._context, cutoff)
     if json_output:
         data = soft_estimates.summary(result)
         return usage_json("adherence", "adherence", days, data["groups"], labels=data["labels"],
-                          footer=data["footer"])
+                          footer=data["footer"], **price_basis(table))
     return soft_estimates.render(result, say)
 
 
@@ -6202,17 +6247,23 @@ def cmd_usage(args: argparse.Namespace) -> int:
     if by == "rebuild":
         # This view reads the request stream itself, so each invocation is already a rescan.
         # It does not need or mutate the coarser session ledger.
-        rebuild_prices = load_prices(load_config())
+        rebuild_prices = report_prices()
         result = rebuilds.analyse(claude_projects_root(),
                                   time.time() - max(args.days, 0) * 86400,
                                   args.days, rebuild_prices, pricing)
         if json_output:
             groups = [dict({"scope": name}, **result["scopes"][name])
                       for name in ("long", "all")]
+            # Every session in `long` is also in `all`, so the window's unpriced figures are
+            # `all`'s; said here so no reader has to know that to count them.
+            everything = result["scopes"]["all"]
             return usage_json("rebuild", "rebuild", args.days, groups,
                               files=result["files"], shortfall_tokens=result["shortfall_tokens"],
                               long_session_calls=result["long_session_calls"],
-                              rescan="direct transcript scan", **price_basis(rebuild_prices))
+                              rescan="direct transcript scan",
+                              unpriced=everything["unpriced_breaks"],
+                              unpriced_calls=everything["unpriced_calls"],
+                              **price_basis(rebuild_prices))
         for line in rebuilds.render(result):
             say(line)
         return 0
@@ -6261,7 +6312,7 @@ def cmd_usage(args: argparse.Namespace) -> int:
             return usage_json("prefix", "prefix", args.days, data["groups"], data["totals"],
                               rescan=rescan_result)
         return cache_prefix.report(ledger, cutoff, args.days, say)
-    table = load_prices(load_config())
+    table = report_prices()
     if by == "provider":
         return provider_report([row for row in ledger
                                 if row.get("kind") == decision_ledger.KIND

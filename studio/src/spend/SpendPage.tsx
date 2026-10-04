@@ -1,4 +1,4 @@
-import { Group, NativeSelect, Paper, Stack, Text, Title } from "@mantine/core";
+import { Button, Group, NativeSelect, Paper, Stack, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { type ChangeEvent, useState } from "react";
 
@@ -10,6 +10,7 @@ import {
   formatUsd,
   GROUPINGS,
   moneyLabel,
+  pageOf,
   partialNotes,
   pricingDate,
   WINDOWS,
@@ -37,9 +38,19 @@ function usdHeading(basis: Basis, name = "USD"): string {
   return `${name} · ${basis.label} · ${pricingDate(basis)}`;
 }
 
+function Pager({ page, pages, total, onPage }: { page: number; pages: number; total: number; onPage: (page: number) => void }) {
+  if (pages <= 1) return null;
+  return <Group gap="sm" aria-label="Pages">
+    <Button disabled={page === 0} size="compact-sm" variant="default" onClick={() => onPage(page - 1)}>Previous</Button>
+    <Text size="sm">Page {page + 1} of {pages} · {total.toLocaleString("en-US")} groups</Text>
+    <Button disabled={page >= pages - 1} size="compact-sm" variant="default" onClick={() => onPage(page + 1)}>Next</Button>
+  </Group>;
+}
+
 type UsageRow = UsageGroup & { total: boolean };
 
 function UsageTable({ ledger, basis }: { ledger: UsageLedger; basis: Basis }) {
+  const [requested, setPage] = useState(0);
   const columns: DataColumn<UsageRow>[] = [
     { key: "name", heading: GROUPINGS.find((item) => item.value === ledger.by)?.label ?? ledger.by, cell: (row) => row.total ? <strong>Total</strong> : row.name },
     { key: "runs", heading: "Runs", cell: (row) => formatCount(row.runs) },
@@ -52,13 +63,18 @@ function UsageTable({ ledger, basis }: { ledger: UsageLedger; basis: Basis }) {
     { key: "unpriced", heading: "Unpriced runs", cell: (row) => formatCount(row.unpriced_runs) },
   ];
   // The total row is the ledger's own `totals`, never a sum of the rows above it.
-  const rows: UsageRow[] = ledger.groups.length
-    ? [...ledger.groups.map((group) => ({ ...group, total: false })), { ...ledger.totals, total: true }]
+  const shown = pageOf(ledger.groups, requested);
+  const rows: UsageRow[] = shown.rows.length
+    ? [...shown.rows.map((group) => ({ ...group, total: false })), { ...ledger.totals, total: true }]
     : [];
-  return <DataTable caption={`Spend by ${ledger.by} over ${ledger.days} days, from the local usage ledger`} columns={columns} empty="No sessions recorded in this window" rowKey={(row) => `${row.total ? "total" : "group"}:${row.name}`} rows={rows} />;
+  return <Stack gap="xs">
+    <DataTable caption={`Spend by ${ledger.by} over ${ledger.days} days, from the local usage ledger`} columns={columns} empty="No sessions recorded in this window" rowKey={(row) => `${row.total ? "total" : "group"}:${row.name}`} rows={rows} />
+    <Pager onPage={setPage} page={shown.page} pages={shown.pages} total={ledger.groups.length} />
+  </Stack>;
 }
 
 function RoleTable({ ledger, basis }: { ledger: RoleLedger; basis: Basis }) {
+  const [requested, setPage] = useState(0);
   const columns: DataColumn<RoleGroup>[] = [
     { key: "name", heading: "Role", cell: (row) => row.name },
     { key: "runs", heading: "Runs", cell: (row) => formatCount(row.runs) },
@@ -69,7 +85,11 @@ function RoleTable({ ledger, basis }: { ledger: RoleLedger; basis: Basis }) {
     { key: "tools", heading: "Tool calls p50 / p90", cell: (row) => [row.tools.p50, row.tools.p90].map(formatCount).join(" / ") },
     { key: "unpriced", heading: "Unpriced runs", cell: (row) => formatCount(row.unpriced_runs) },
   ];
-  return <DataTable caption={`Subagent and worker spend per role over ${ledger.days} days`} columns={columns} empty="No subagent or worker runs recorded in this window" rowKey={(row) => row.name} rows={ledger.groups} />;
+  const shown = pageOf(ledger.groups, requested);
+  return <Stack gap="xs">
+    <DataTable caption={`Subagent and worker spend per role over ${ledger.days} days`} columns={columns} empty="No subagent or worker runs recorded in this window" rowKey={(row) => row.name} rows={shown.rows} />
+    <Pager onPage={setPage} page={shown.page} pages={shown.pages} total={ledger.groups.length} />
+  </Stack>;
 }
 
 function RebuildTables({ ledger, basis }: { ledger: RebuildLedger; basis: Basis }) {
@@ -84,6 +104,7 @@ function RebuildTables({ ledger, basis }: { ledger: RebuildLedger; basis: Basis 
     ];
     return <div key={scope.scope}>
       <Text fw={650}>{scope.scope === "long" ? "Long sessions" : "All sessions"}: {formatCount(scope.sessions)} sessions, {formatCount(scope.calls)} calls, priced spend <Money basis={basis} value={scope.priced_spend_usd} /></Text>
+      <Text c="dimmed" size="sm">{formatCount(scope.unpriced_calls)} unpriced call(s) excluded from priced spend · {formatCount(scope.unpriced_breaks)} unpriced break(s) · {formatCount(scope.unknown_breaks)} unexplained break(s)</Text>
       <DataTable caption={`Cache rebuilds by cause, ${scope.scope === "long" ? "long sessions" : "all sessions"}, over ${ledger.days} days`} columns={columns} empty="No cache rebuilds observed" rowKey={(row) => row.cause} rows={scope.causes} />
     </div>;
   })}</Stack>;

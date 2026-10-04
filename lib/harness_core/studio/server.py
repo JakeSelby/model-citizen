@@ -8,7 +8,9 @@ import json
 import os
 import re
 import secrets
+import select
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -547,6 +549,17 @@ def _activity(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _client_gone(connection) -> bool:
+    """Whether the peer has closed its end: readable with nothing left to read."""
+    try:
+        readable, _writable, _errors = select.select([connection], [], [], 0)
+        if not readable:
+            return False
+        return connection.recv(1, socket.MSG_PEEK) == b""
+    except (OSError, ValueError):
+        return True
+
+
 def _spend(handler: Handler, route: Route) -> None:
     request = _required_request(handler, ("by", "days"))
     if request is None:
@@ -559,7 +572,14 @@ def _spend(handler: Handler, route: Route) -> None:
     # A read in a child process, off the serial mutation executor: the CLI takes no lock to
     # report and a queued mutation would otherwise hold the page past its budget.
     try:
-        payload = spend_report.report(handler.server.repo_root, by, days)
+        payload = spend_report.report(handler.server.repo_root, by, days,
+                                      cancelled=lambda: _client_gone(handler.connection))
+    except spend_report.SpendCancelled:
+        handler.close_connection = True
+        return
+    except spend_report.SpendBusy:
+        handler._error(429, "spend_busy")
+        return
     except spend_report.SpendUnavailable:
         handler._error(503, "spend_unavailable")
         return
