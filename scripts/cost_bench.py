@@ -16,6 +16,7 @@ usage. `arms` builds and checks the arm images without calling a model, and `det
 rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
+import ast
 import datetime
 import hashlib
 import importlib.util
@@ -639,12 +640,14 @@ def container_name(*parts):
     return "%srun-%d-%s" % (arms.IMAGE_PREFIX, os.getpid(), re.sub(r"[^a-zA-Z0-9_.-]", "-", text))
 
 
-def run_check(launch, image, workdir, argv, env=None, name=None, **kwargs):
-    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`).
-    On a timeout the container is removed by name before the timeout is raised on: killing the
-    Docker client alone would leave it running the code it was checking."""
+def run_check(launch, image, workdir, argv, env=None, name=None, session_stream=None, **kwargs):
+    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`),
+    with `session_stream`, when given, mounted read-only beside the tree. On a timeout the container
+    is removed by name before the timeout is raised on: killing the Docker client alone would leave
+    it running the code it was checking."""
     name = name or container_name("check")
-    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs)
+    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs,
+                                 session_stream=session_stream)
     client = arms.client_env()
     try:
         return launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
@@ -1177,11 +1180,72 @@ def _oracle(repo, name):
 
 # The last line a check container prints for a synthetic task: the oracle's errors as JSON.
 ORACLE_MARK = "cost-bench-oracle-errors: "
+# The driver calls `check(root, stream)` when `takes_stream` says so, else `check(root)`. That
+# decision is made here and sent in, never read back from the container: anything the check, or
+# code it loads from the agent's tree, prints is untrusted.
 ORACLE_DRIVER = """
 import json as _json
 from pathlib import Path as _Path
-print(%r + _json.dumps(check(_Path(%r))))
+print(%r + _json.dumps(check(_Path(%r), %r) if %r else check(_Path(%r))))
 """
+# Why a declared metric may be null when no stream reached the check; the check's own notes
+# beginning with STREAM_NOTE say why when one did (the pack's contract), and STREAM_NULL stands
+# in when a null metric came back from a stream-reading check with no reason at all.
+NO_STREAM = "stream: no session stream was passed to the check"
+STREAM_NOTE = "stream metrics unknown"
+STREAM_NULL = STREAM_NOTE + ": the check gave no reason for null %s"
+
+
+def takes_stream(source):
+    """Whether the check in `source` takes the stream: its last top-level binding of `check` is a
+    `def` with a second positional parameter or `*args`. Read from the syntax tree, so the check
+    never runs on this machine; any later module-scope binding of `check`, or source that does
+    not parse, takes none, while a helper's local `check` leaves the top-level one in place."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    found = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check":
+            args = node.args
+            found = args.vararg is not None or len(getattr(args, "posonlyargs", [])) + len(args.args) >= 2
+        elif "check" in _module_bindings(node):
+            found = False
+    return found
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _module_bindings(node, in_comprehension=False):
+    """The names `node` binds in the module scope. A nested function or class binds its own name
+    there, and anything it declares `global`; its locals stay its own. A comprehension's loop
+    variables are local to it; an assignment expression inside one binds the enclosing scope."""
+    names = set()
+    if isinstance(node, _SCOPES):
+        if not isinstance(node, ast.Lambda):
+            names.add(node.name)
+        declared = {n for sub in ast.walk(node) if isinstance(sub, ast.Global) for n in sub.names}
+        if declared:
+            names |= declared & {sub.id for sub in ast.walk(node)
+                                 if isinstance(sub, ast.Name) and not isinstance(sub.ctx, ast.Load)}
+        return names
+    if isinstance(node, _COMPREHENSIONS):
+        in_comprehension = True
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        names.update((a.asname or a.name).split(".")[0] for a in node.names)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        names.add(node.name)
+    elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and not in_comprehension:
+        names.add(node.id)
+    elif isinstance(node, ast.NamedExpr):
+        names.add(node.target.id)
+        return names | _module_bindings(node.value, in_comprehension)
+    for child in ast.iter_child_nodes(node):
+        names |= _module_bindings(child, in_comprehension)
+    return names
 
 
 def _copy_held_back(task, workdir, repo):
@@ -1208,30 +1272,46 @@ def _ran(done):
     return (done.returncode == 0 and count > 0, "ran %d, exit %d" % (count, done.returncode))
 
 
-def score(task, workdir, repo, image, launch=subprocess.run, name=None):
+def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=None):
     """(passed, detail), with the check run in a fresh container of `image`, never on this machine.
+    A task declaring metrics gets a third item, its recorded metrics with `metric_stream`, whether
+    `stream`, the run's saved stream-json, reached an oracle that accepts it (`ORACLE_DRIVER`).
 
     Both kinds of check execute the tree they score: a unit test imports it, and an oracle may
     compile or load it. An agent's tree is code nobody reviewed, and even this repository's own
     older trees read the configuration under whatever HOME they are given, so a check on this
     machine would score the owner's live profile along with the task. So every check runs in a
-    container of the bare image, with the tree mounted as the only path, the image's own HOME, no
-    network and no credential. The held-back test files are written into the tree from this
-    repository's history first; an oracle is sent on stdin, so nothing else is mounted."""
+    container of the bare image, with the tree mounted, plus the scored run's session stream
+    read-only when one is given, the image's own HOME, no network and no credential. The held-back
+    test files are written into the tree from this repository's history first; an oracle is sent
+    on stdin, so nothing else is mounted."""
     workdir = Path(workdir)
     tests = task["tests"]
     name = name or container_name("check", task["id"])
     if task["kind"] in ("synthetic", "pack"):
         source = (replay_pack.check_source(task) if task["kind"] == "pack" else
                   (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8"))
-        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR)
-        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, input=stdin)
+        mounted = arms.SESSION_STREAM if stream is not None else None
+        takes = takes_stream(source)
+        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR, mounted, takes, arms.WORKDIR)
+        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, session_stream=stream, input=stdin)
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
-        passed, detail, recorded = oracle_metrics.verdict(json.loads(marks[-1][len(ORACLE_MARK):]),
-                                                          task.get("metrics"))
-        return (passed, detail) if recorded is None else (passed, detail, recorded)
+        value = json.loads(marks[-1][len(ORACLE_MARK):])
+        passed, detail, recorded = oracle_metrics.verdict(value, task.get("metrics"))
+        if recorded is None:
+            return passed, detail
+        recorded["metric_stream"] = takes and stream is not None
+        if not recorded["metric_stream"]:
+            recorded["metric_errors"].append(NO_STREAM)
+            return passed, detail, recorded
+        notes = [n for n in (value.get("errors", []) if isinstance(value, dict) else value)
+                 if n.startswith(STREAM_NOTE)]
+        explained = {e.split(":", 1)[0] for e in recorded["metric_errors"]}
+        unexplained = [m for m, v in sorted(recorded["metrics"].items()) if v is None and m not in explained]
+        recorded["metric_errors"] += notes or ([STREAM_NULL % ", ".join(unexplained)] if unexplained else [])
+        return passed, detail, recorded
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
     done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
@@ -1368,11 +1448,22 @@ def arm_stamp(record):
             "harness_ref": record["harness_ref"], "harness_commit": record["harness_commit"]}
 
 
-def _scorer(opts, launch):
+def _scorer(opts, launch, stream=None):
     if opts.get("scorer"):
         return opts["scorer"]
     image = opts["arms"]["bare"]["image"]
-    return lambda task, workdir, repo: score(task, workdir, repo, image, launch)
+    return lambda task, workdir, repo: score(task, workdir, repo, image, launch, stream=stream)
+
+
+def session_stream(stdout, folder):
+    """The run's whole stream-json, subagent messages included, written beside its tree for the
+    check container to mount read-only, whether or not `--raw` keeps a copy."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    path = Path(folder) / "session-stream.jsonl"
+    path.write_text(stdout or "", encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path
 
 
 def run_one(task, rep, arm, opts, launch=subprocess.run):
@@ -1512,7 +1603,7 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
-            scored = _scorer(opts, launch)(task, workdir, opts["repo"])
+            scored = _scorer(opts, launch, session_stream(done.stdout, workdir.parent))(task, workdir, opts["repo"])
             row["passed"] = bool(scored[0])
             if len(scored) > 2 and scored[2] is not None:
                 row.update(scored[2])
