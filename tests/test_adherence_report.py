@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from test_soft_estimates import POSITIVE, TABLE, context, emitted, response
+from test_soft_estimates import POSITIVE, TABLE, context, emitted, fresh, response
 from test_rebuilds import HARNESS, assistant
 
 REPO = Path(__file__).resolve().parent.parent
@@ -186,7 +186,7 @@ class ReportCommandTests(unittest.TestCase):
         self.assertEqual(code, 0)
         document = json.loads(out)
         self.assertEqual((document["report"], document["by"]), ("adherence", "adherence"))
-        rate, estimate = document["groups"]
+        rate, estimate = fresh(document["groups"])
         self.assertAlmostEqual(rate["figures"]["rate"]["value"], 1 / 3.0)
         self.assertEqual(rate["figures"]["rate"]["label"], soft.MEASURED)
         figures = estimate["figures"]

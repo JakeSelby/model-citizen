@@ -71,6 +71,10 @@ KINDS = {
     # a turn or two each, so the session has three more prompts to end. `/clear` and an exit
     # both raise SessionEnd; a compaction does not, and continuing compacted is not following.
     "fresh-session": {"module": "hooks/usage-feed", "window": 3, "follow": ("SessionEnd",)},
+    # The stop blocked past the hard threshold: the handoff is written in the turn the block
+    # extends, so the session has two more prompts to end before it counts as not followed.
+    "fresh-session-handoff": {"module": "hooks/usage-feed", "window": 2,
+                              "follow": ("SessionEnd",)},
 }
 
 _POSTURE = []

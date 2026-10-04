@@ -52,11 +52,17 @@ Seven facts shape the whole file:
   can only grow. A subagent's transcript is capped by bytes and by the clock.
 
 No budget, threshold, model name or role name lives here: every number comes from the cost
-table, every switch from `switches.turn_feed`, `switches.nudge_at`, `switches.session_nudge_at`
-and `switches.max_parallel`.
+table, every switch from `switches.turn_feed`, `switches.nudge_at`, `switches.session_nudge_at`,
+`switches.session_handoff_at`, `switches.context_cost_curve` and `switches.max_parallel`.
 A variant that sets none of them feeds nothing. Any failure at all emits nothing and exits 0,
 and no line the feed emits is ever a decision. The fresh-session nudge is a recommendation, so
 saying it also records an adherence event, which `adherence.py` later answers.
+
+One answer is not a line: past `session_handoff_at`, the `Stop` that ends a turn is blocked once
+with the hand-off instruction, because on a 1M-token window sessions went on past the soft line
+for a median of six more turns at a rising price per call. It is a single block per crossing — the
+next stop is released whatever the turn did — it is recorded as an adherence event, and it is off
+in a headless run (`claude -p`, an SDK) unless `HARNESS_HANDOFF_BLOCK=on` enables it there.
 """
 import errno
 import hashlib
@@ -118,6 +124,10 @@ IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
 AGENT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 UNNAMED = "other"
 MODES = ("off", "thresholds", "every-turn")
+# The `CLAUDE_CODE_ENTRYPOINT` values Claude Code gives a non-interactive run: `claude -p` is
+# `sdk-cli`. A replay trial is one, and blocking its last stop would add a turn to the measure.
+HEADLESS = ("sdk-cli", "sdk-ts", "sdk-py")
+HANDOFF_SWITCH = "HARNESS_HANDOFF_BLOCK"
 
 
 def sibling(name):
@@ -210,7 +220,7 @@ def new_state():
             "journal_offset": 0, "running": {}, "started": [], "pending": [], "counted": [],
             "figures": {}, "unsummed": {}, "open": [], "pruned": 0, "said_turn": None,
             "rounds": {}, "said_unknown": [], "said_measure": False,
-            "context": None, "said_nudge": [], "turns": 0}
+            "context": None, "said_nudge": [], "turns": 0, "handed_off": None}
 
 
 def load_state(path):
@@ -264,6 +274,9 @@ def load_state(path):
     size = state.get("context")
     if not (isinstance(size, int) and not isinstance(size, bool) and size > 0):
         state["context"] = None
+    handed = state.get("handed_off")
+    if not (isinstance(handed, int) and not isinstance(handed, bool) and handed > 0):
+        state["handed_off"] = None
     return state
 
 
@@ -534,7 +547,8 @@ def advance(state, transcript, save=None, budget=READ_BUDGET):
             seen = state.get("inode") is not None
             kept = {key: state[key] for key in
                     ("journal_offset", "running", "started", "pending", "counted", "figures", "unsummed",
-                     "subagents", "pruned", "rounds", "said_unknown", "said_nudge", "turns")}
+                     "subagents", "pruned", "rounds", "said_unknown", "said_nudge", "turns",
+                      "handed_off")}
             state = dict(new_state(), **kept)
             state["inode"], state["head"] = inode, head
             state["offset"] = max(0, size - COLD_TAIL)
@@ -1193,6 +1207,53 @@ def session_nudges(table):
                   if isinstance(v, int) and not isinstance(v, bool) and v > 0)
 
 
+def _switch(table, key):
+    switches = table.get("switches") if isinstance(table, dict) else None
+    return switches.get(key) if isinstance(switches, dict) else None
+
+
+def handoff_at(table):
+    """The hard threshold, the context size past which a turn's end is blocked once, or None."""
+    value = _switch(table, "session_handoff_at")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def cost_multiple(table, size):
+    """`(multiple, floor)` for a call at `size` tokens on the posture's cost curve, or None.
+
+    The multiple is the curve's at the largest size not above `size`, against a call under the
+    curve's first size, `floor`. Under the floor there is no multiple worth naming.
+    """
+    curve = _switch(table, "context_cost_curve")
+    points = []
+    for pair in curve if isinstance(curve, list) else []:
+        if (isinstance(pair, list) and len(pair) == 2 and isinstance(pair[0], int)
+                and not isinstance(pair[0], bool) and pair[0] > 0
+                and isinstance(pair[1], (int, float)) and not isinstance(pair[1], bool)
+                and pair[1] > 0):
+            points.append((pair[0], pair[1]))
+    points.sort()
+    reached = [multiple for at, multiple in points if size >= at]
+    return (reached[-1], points[0][0]) if reached else None
+
+
+def costs(table, size):
+    """`, where a call costs about 1.3× one under 160,000`, or nothing without a curve point."""
+    found = cost_multiple(table, size) if isinstance(size, int) else None
+    if found is None:
+        return ""
+    return (", where a call costs about " + "{:.1f}".format(found[0]) + "× one under "
+            + "{:,}".format(found[1]))
+
+
+def handoff_enabled(env):
+    """Whether this run may block a stop at all: never headless, unless the switch says so."""
+    switch = (env.get(HANDOFF_SWITCH) or "").strip().lower()
+    if switch in ("on", "off"):
+        return switch == "on"
+    return env.get("CLAUDE_CODE_ENTRYPOINT") not in HEADLESS
+
+
 def budgets(row):
     """The row's two soft budgets, each only when it is a positive whole number."""
     if not isinstance(row, dict):
@@ -1292,7 +1353,7 @@ def turn_line(state):
     return text
 
 
-def session_line(state, thresholds):
+def session_line(state, thresholds, table=None):
     """One line the first time the session's context passes a threshold, or None.
 
     The turn line reports what a turn produced. What a long session costs is mostly the context
@@ -1308,6 +1369,9 @@ def session_line(state, thresholds):
     A size no transcript line has supplied yet is not a crossing: the line would name a
     threshold nothing was measured against, and reporting the context of an unread transcript
     as zero would be a lie either way.
+
+    Where the posture's cost curve has a point at or under the size, the line also names what a
+    call here costs against one under the curve's floor, which is the reason to act on it.
     """
     size = state.get("context")
     if not thresholds or not isinstance(size, int) or isinstance(size, bool) or size <= 0:
@@ -1321,8 +1385,17 @@ def session_line(state, thresholds):
     # The largest of the ones newly crossed, which is not the largest passed: a threshold
     # already said is not news, and naming it would read as a line repeating itself.
     return (PREFIX + "session context " + plural(size, "token") + ", past the fresh-session "
-            "threshold of " + "{:,}".format(fresh[-1]) + " — finish the task, write the "
-            "handoff, start a fresh session")
+            "threshold of " + "{:,}".format(fresh[-1]) + costs(table, size)
+            + " — finish the task, write the handoff, start a fresh session")
+
+
+def handoff_reason(size, threshold, table):
+    """The one block's text: what was crossed, what it costs, and the two things to do now."""
+    return (PREFIX + "session context " + plural(size, "token") + ", past the hard fresh-session "
+            "threshold of " + "{:,}".format(threshold) + costs(table, size) + ". Before this "
+            "turn ends, write the handoff (the state, the next step, the open decisions), then "
+            "tell the user to start a fresh session from it. This stop is blocked once; the next "
+            "one is released whatever this turn does.")
 
 
 def record_adherence(recommendation, session_id, turn, env):
@@ -1613,7 +1686,7 @@ def on_prompt(payload, env):
         turn = turn_line(state) if mode == "every-turn" else None
         lines = [turn] if turn else []
         # Not a subagent's line and not a figure to compare: it is said under `thresholds` too.
-        nudge = session_line(state, session_nudges(table))
+        nudge = session_line(state, session_nudges(table), table)
         if nudge:
             lines.append(nudge)
             record_adherence("fresh-session", payload.get("session_id"), state["turns"], env)
@@ -1648,6 +1721,46 @@ def on_prompt(payload, env):
     return lines or None
 
 
+def on_stop(payload, env):
+    """The hand-off block's reason when this stop is the one to block, else None.
+
+    Once per crossing: the threshold blocked at is kept in the state, so the next stop is
+    released whether or not the turn wrote the handoff, and a session that stays past the
+    threshold is never blocked again. A context that falls back under it, as a compaction does,
+    re-arms it. The block is answered in the adherence log, where a session end within the
+    window counts as followed.
+    """
+    table, mode, _, _ = settings(env)
+    threshold = handoff_at(table)
+    if mode == "off" or threshold is None or not handoff_enabled(env):
+        return None
+    found = paths(payload.get("session_id"), env)
+    transcript = payload.get("transcript_path")
+    if found is None or not isinstance(transcript, str) \
+            or not os.path.isfile(os.path.expanduser(transcript)):
+        return None
+    state_file, _, lock_file = found
+    with Lock(lock_file) as held:
+        if not held:
+            return None
+        state = advance(load_state(state_file), transcript,
+                        save=lambda current: save_state(state_file, current))
+        if state.get("timed_out"):
+            save_state(state_file, state)
+            return None
+        size = state.get("context")
+        if state.get("handed_off") and (size is None or size < state["handed_off"]):
+            state["handed_off"] = None
+        if size is None or size < threshold or state.get("handed_off"):
+            save_state(state_file, state)
+            return None
+        state["handed_off"] = threshold
+        save_state(state_file, state)
+        turn = state["turns"]
+    record_adherence("fresh-session-handoff", payload.get("session_id"), turn, env)
+    return handoff_reason(size, threshold, table)
+
+
 def run(payload, env=None):
     """The lines one event produces, or None. The parent thread is the only place a feed runs."""
     env = os.environ if env is None else env
@@ -1668,6 +1781,11 @@ def main():
     try:
         payload = json.load(sys.stdin)
         if not isinstance(payload, dict):
+            return
+        if payload.get("hook_event_name") == "Stop":
+            reason = None if payload.get("agent_id") else on_stop(payload, os.environ)
+            if reason:
+                print(json.dumps({"decision": "block", "reason": reason}))
             return
         lines = run(payload)
     except Exception:

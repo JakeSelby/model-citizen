@@ -1515,7 +1515,13 @@ def _dispatch(runtime, payload):
         settle_adherence()
         return invoke("harness-session", event)
     if kind == "Stop":
-        return invoke("stop-gate", event)
+        # The gate first: a red gate's block is the one that matters, and the hand-off block is
+        # one-shot, so it is not spent on a stop the gate is already holding.
+        gate = invoke("stop-gate", event)
+        if gate.get("decision") == "block" or runtime != "claude-code":
+            return gate
+        handoff = invoke("usage-feed", event)
+        return handoff if handoff.get("decision") == "block" else gate
     if kind == "SessionEnd":
         # Nothing will arrive for this session again, so an ask with no PostToolUse is settled:
         # the command did not run. Done before the usage worker is spawned, and bounded by the
