@@ -394,7 +394,7 @@ development_status:
   ah-s318-qualify-the-studio-in-every-release: backlog
   ah-sp018-spike-reach-the-studio-from-a-phone-without: backlog
 
-  ah-e027-definitive-evaluation-a-powered-pre-registered: backlog
+  ah-e027-definitive-evaluation-a-powered-pre-registered: in-progress
   ah-d014-decide-the-definitive-run-s-design-and-budget: backlog
   ah-s334-pack-v1-1-harder-production-tasks-off-the: backlog
   ah-s335-behaviour-graders-a-graded-score-contract-for: backlog
@@ -407,6 +407,7 @@ development_status:
   ah-s342-diff-quality-judge-where-deterministic-graders: backlog
   ah-s343-layer-scorecard-generated-from-registered-rows: backlog
   ah-s347-protect-the-record-block-agent-writes-to: backlog
+  ah-s348-bench-measure-the-first-wave-of-spawns-when-a: ready-for-dev
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
 
   # Items with no epic

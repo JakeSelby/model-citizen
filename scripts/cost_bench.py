@@ -47,6 +47,7 @@ import replay_stats  # noqa: E402  SM-2's analysis of the saved rows
 import delegation_verdict  # noqa: E402  whether the delegation stance fired, per task (#429)
 import replay_pair  # noqa: E402  the one-policy pair: manifest, parity, re-spawns and decision roll-up
 import replay_detect  # noqa: E402  which rules fired, read from the saved streams
+import replay_spawns  # noqa: E402  each spawn's brief budget, Workflow launches against the hooks, the first wave
 import replay_micro as micro  # noqa: E402  the micro tier: did each mechanism fire, on a small model
 import replay_pack  # noqa: E402  the evaluator pack: tasks and checks kept outside this repository
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
@@ -1386,6 +1387,20 @@ def _partial_diagnostics(row, stdout):
     return row
 
 
+def _spawn_fields(row, task, arm, stdout, stopped=False, timed_out=False):
+    """Add `replay_spawns.row_fields` from one run's output, readable or not. The bare arm installs
+    no spawn hook, so its written briefs are the briefs its subagents received."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    try:
+        messages = cli_messages(stdout)[0]
+    except ValueError:
+        messages = []
+    row.update(replay_spawns.row_fields(messages, task, stopped, timed_out,
+                                        hooks=False if arm == "bare" else None))
+    return row
+
+
 def save_stream(opts, task_id, arm, rep, stdout):
     """Keep one run's stream under `--raw` as `<task>-<arm>-<rep>.json`, and, when the set keeps
     a `streams` record, note it there with its digest as this run's own. The name carries no tag,
@@ -1425,6 +1440,9 @@ def _attempt(task, rep, arm, opts, launch):
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
     row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    row.update(replay_spawns.ROW_DEFAULTS)
+    # A first-wave task stops once its first spawns are out (`replay_spawns.first_wave_launch`).
+    run_launch = replay_spawns.first_wave_launch(launch) if task.get("first_wave") else launch
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
     if opts.get("design") is not None:
@@ -1459,7 +1477,7 @@ def _attempt(task, rep, arm, opts, launch):
         if kept:
             copied = workdir.parent / "usage.jsonl"
             done, timeout, row["decision_ledger"] = launch_kept(record, workdir, argv, opts, name, copied,
-                                                                 launch, arm, observed, memory)
+                                                                 run_launch, arm, observed, memory)
             if row["decision_ledger"] == replay_pair.LEDGER_READ:
                 try:
                     keep_decisions(copied, replay_pair.decisions_file(opts["decisions"], task["id"], arm, rep))
@@ -1467,7 +1485,7 @@ def _attempt(task, rep, arm, opts, launch):
                     row["decision_ledger"] = "%s: %s" % (replay_pair.LEDGER_UNKNOWN, type(exc).__name__)
         else:
             try:
-                done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed, memory)
+                done = launch_arm(record, workdir, argv, opts, name, run_launch, arm, observed, memory)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
         if timeout is not None:
@@ -1475,11 +1493,19 @@ def _attempt(task, rep, arm, opts, launch):
             partial = getattr(exc, "stdout", None)
             partial = partial if partial is not None else getattr(exc, "output", None)
             _partial_diagnostics(row, partial)
+            _spawn_fields(row, task, arm, partial, timed_out=True)
             return finish(dict(row, error=True, error_kind="timeout", cost_usd=opts["run_cap"],
                                wall_seconds=round(time.time() - started, 1)))
         row["wall_seconds"] = round(time.time() - started, 1)
         if opts.get("raw"):
             save_stream(opts, task["id"], arm, rep, done.stdout)
+        stopped = bool(getattr(done, "first_wave_stopped", False))
+        _spawn_fields(row, task, arm, done.stdout, stopped)
+        if stopped:
+            # Stopped by the launcher, so no priced result arrived: unscored, and the spend
+            # ledger counts the run cap for it.
+            _partial_diagnostics(row, done.stdout)
+            return finish(row)
         try:
             parsed = parse_result(done.stdout)
         except ValueError as exc:
@@ -1495,6 +1521,9 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind="effort: observed %s, pinned %s"
                                % (parsed["observed_effort"], effort)))
+        if task.get("first_wave") and row["ended_by"] in (replay_spawns.MAX_TURNS, replay_spawns.RUN_CAP,
+                                                          replay_spawns.FINISHED):
+            return finish(row)  # a first-wave trial measures its spawns and is not scored
         if parsed["is_error"] or done.returncode:
             # The other stream fields diagnose an errored run; a miss ratio only describes one
             # that finished, and an aborted run's turns are not the spend it would have had.

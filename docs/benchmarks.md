@@ -419,6 +419,41 @@ python3 scripts/replay_power.py --pilot <results dir>                   # k, n a
   and arm. `--have K N M` says whether a given set meets it. Its model and its approximations are
   in its docstring.
 
+### First-wave trials and spawn briefs
+
+A fan-out task can be measured on its first wave of spawns without paying for the fan-out, and
+every row says what the spawn hooks did to each spawn. `scripts/replay_spawns.py` holds all of it
+and defines each reading in its docstrings.
+
+- **A pack can carry a third-party skill without redistributing it.** A workspace's `vendor` list
+  names an upstream git `source`, a full `commit`, a permissive `license` (MIT, Apache-2.0, BSD or
+  ISC), `[upstream path, workspace path]` pairs and the `digest` of the placed files. Each trial's
+  workspace fetches those paths at that commit, refuses any other bytes and any file that would
+  replace the workspace's own, and commits them with the workspace. Both arms run one command
+  line in that workspace, so a skill under `.claude/skills/` is offered to both; a task's
+  `requires_skills` makes the row's `required_skills_loaded` say whether the CLI's `init` event
+  listed each one.
+- **`first_wave: true` stops a trial once its first wave is out:** the spawn and `Workflow` calls
+  of the main thread's first spawning turn, each of which has reported the model its thread runs
+  on, shown activity, or been refused. The container is then stopped by name. The task's
+  `max_turns` and `--run-cap` remain the bounds, and `ended_by` names the one that ended the
+  trial: `first-wave`, `max-turns`, `run-cap`, `finished` or `timeout`. A first-wave trial is not
+  scored (`passed: null`), and one the launcher stopped has no priced result, so the spend ledger
+  counts its run cap. `first_wave_spawns` is the size of the wave.
+- **`spawn_briefs`** has one entry per spawn call: its `requested_model`, the `model` its thread
+  ran on, and `brief_bound` and `brief_budget`, whether the brief the subagent received carried
+  the return bound and the soft budget `brief-guard` appends, judged by the hook's own patterns.
+  `brief_source` says where that brief was read: the subagent's first message, the hook's
+  `updatedInput`, or the written brief when no spawn hook rewrote it. A brief that cannot be read
+  is `null`, never `false`. No brief text reaches a row.
+- **`workflow_launch_hooks`** has one entry per `Workflow` launch: the spawn-tool PreToolUse and
+  PostToolUse `hook_response` events in its window beyond those its own spawn calls explain, and
+  `passed`, whether its agents met `tier-agent-spawns` and `brief-guard`. It is `null` when the
+  stream has no hook events, the launch never finished or showed no activity, or the window's own
+  spawn calls leave the events unattributable.
+- **Saved streams read offline:** `python3 scripts/replay_spawns.py [--no-spawn-hooks] <raw stream>...`
+  prints the same entries as JSON lines; `--no-spawn-hooks` reads a bare-arm stream.
+
 ### Pairs
 
 `replay --pair <manifest>` judges one policy change on what the whole task costs. It runs one
