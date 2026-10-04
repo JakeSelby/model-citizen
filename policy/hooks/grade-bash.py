@@ -25,10 +25,11 @@ Behaviour:
     A program another interpreter reads that calls nothing able to run a command is text, so a
     quoted verb in an edit script grades nothing (`_inert_program`).
   - Every route that discards uncommitted work grades 3 alike: `git checkout` of paths, `git
-    restore` (`--staged` too), `git reset` but `--soft` and `--keep`, `git read-tree`, `git
+    restore` of the working tree, `git reset --hard` and `--merge`, `git read-tree`, `git
     checkout-index -f`, `git rm -f`, `git worktree remove --force`, a blob from `git show` or
-    `git cat-file` written over its own path, and `rm`, `truncate`, `cp /dev/null` or an empty
-    `>` on a tracked file whose working-tree changes `git status` reports (`_discards`).
+    `git cat-file` written over its own path, and `rm`, `truncate`, `cp /dev/null` or any `>`,
+    a git command's included, on a tracked file whose working-tree changes `git status` reports
+    (`_discards`). An index-only `git reset` or `git restore --staged` keeps that work.
   - Grading runs under a deadline inside the hook's timeout (`grade_within`); past it the raw
     text is scanned, a destructive verb is refused and anything else stays open.
   - `bash -c`, `sh -c`, `eval`, `xargs`, `find -exec` and command-substitution bodies grade 3 when

@@ -22,6 +22,9 @@ from test_grade_bash_decision_log import Base
 
 library = grader.library
 GIT = shutil.which("git")
+# A `GIT_DIR` or `GIT_INDEX_FILE` a hook sets would point the fixture's git at the outer
+# repository, so the fixtures strip them as the grader does.
+GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 FORCE = "git push --force origin main"
 STORE = "~/.local/state/agent-harness/approvals"
 
@@ -195,7 +198,7 @@ class Repository(unittest.TestCase):
 
     def git(self, *args):
         subprocess.run([GIT, "-C", self.repo] + list(args), check=True, capture_output=True,
-                       stdin=subprocess.DEVNULL)
+                       env=GIT_ENV, stdin=subprocess.DEVNULL)
 
     def write(self, name, text):
         with open(os.path.join(self.repo, name), "w") as stream:
@@ -573,7 +576,7 @@ class RoundTwoRepository(unittest.TestCase):
         stamp = time.time() + 5
         os.utime(os.path.join(self.repo, "clean.py"), (stamp, stamp))
         subprocess.run([GIT, "-C", self.repo, "status", "--porcelain"], capture_output=True,
-                       stdin=subprocess.DEVNULL)
+                       env=GIT_ENV, stdin=subprocess.DEVNULL)
         self.assertTrue(os.path.exists(marker), "the planted configuration must be live")
         os.unlink(marker)
         os.utime(os.path.join(self.repo, "clean.py"), (stamp + 5, stamp + 5))
@@ -581,6 +584,80 @@ class RoundTwoRepository(unittest.TestCase):
             with self.subTest(command=command):
                 self.grade(command)
                 self.assertFalse(os.path.exists(marker))
+
+
+class RoundThreeFilterFailure(Base):
+    """Round three: when the output filter fails, the row records the refusal the runtime got."""
+
+    def test_a_command_with_no_note_writes_the_refusal(self):
+        decision, reason = self.run_hook("make build", fault="filter")
+        self.assertEqual(decision, "deny")
+        self.assertIn("unverified", reason)
+        self.assertEqual([(r["deterministic_answer"], r.get("error")) for r in self.rows()],
+                         [("deny", "RuntimeError")])
+
+    def test_an_ask_is_logged_as_the_refusal_it_became(self):
+        self.assertEqual(self.run_hook(FORCE, fault="filter")[0], "deny")
+        self.assertEqual([(r["deterministic_answer"], r.get("grade")) for r in self.rows()],
+                         [("deny", 3)])
+
+    def test_an_approval_code_never_shown_is_not_logged_as_offered(self):
+        decision, reason = self.run_hook(FORCE, mode="auto", fault="filter")
+        self.assertEqual(decision, "deny")
+        self.assertNotIn("approve ", reason)
+        self.assertEqual([(r["deterministic_answer"], r.get("approval")) for r in self.rows()],
+                         [("deny", None)])
+
+
+class RoundThreeOptions(unittest.TestCase):
+    """Round three: an option read in the wrong sense, and a wildcard outside the tree."""
+
+    def test_fetch_no_tags_is_no_dry_run(self):
+        for command in ("git fetch -n . +HEAD~9:main", "git fetch -n origin +main:main"):
+            with self.subTest(command=command):
+                self.assertEqual(grader.grade_text(command, CWD)[:2], (3, "git fetch --force"))
+        self.assertLess(grade("git fetch --dry-run . +HEAD~9:main"), 3)
+        self.assertLess(grade("git fetch -n origin"), 3)
+
+    def test_a_wildcard_outside_the_working_directory_grades_three(self):
+        for command in ("rm -f ../*", "rm -f /*", "rm -f .././*", "rm -f ./../*.py",
+                        "rm -f $HOME*", "rm -f ~/*"):
+            for cwd in (CWD, "/"):
+                with self.subTest(command=command, cwd=cwd):
+                    self.assertEqual(grader.grade_text(command, cwd)[:2], (3, "rm -f"))
+
+    def test_a_wildcard_in_the_working_directory_stays_below_three(self):
+        for command in ("rm -f ./*.o", "rm -f *.o", "rm -f sub/../*.o"):
+            with self.subTest(command=command):
+                self.assertLess(grade(command), 3)
+
+
+@unittest.skipUnless(GIT, "git is not installed")
+class RoundThreeRepository(unittest.TestCase):
+    """Round three against `Repository`: git output written over uncommitted work, and fixtures
+    whose git ignores the `GIT_*` variables a hook sets."""
+    setUp = Repository.setUp
+    git = Repository.git
+    write = Repository.write
+    grade = Repository.grade
+
+    def test_git_output_written_over_uncommitted_work_grades_three(self):
+        for command in ("git diff > dirty.py", "git log -1 > src/app.py",
+                        "git status --short > dirty.py"):
+            with self.subTest(command=command):
+                self.assertEqual(self.grade(command)[0], 3)
+
+    def test_git_output_written_elsewhere_stays_below_three(self):
+        for command in ("git diff > clean.py", "git diff > out.diff", "git diff >> dirty.py",
+                        "git log -1 > /dev/null"):
+            with self.subTest(command=command):
+                self.assertLess(self.grade(command)[0], 3)
+
+    def test_the_fixtures_run_git_without_inherited_git_variables(self):
+        self.assertFalse([k for k in GIT_ENV if k.startswith("GIT_")])
+        with mock.patch.object(subprocess, "run") as run:
+            self.git("status")
+        self.assertIs(run.call_args.kwargs["env"], GIT_ENV)
 
 
 if __name__ == "__main__":

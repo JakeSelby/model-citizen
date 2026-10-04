@@ -1405,12 +1405,22 @@ def _dispatch(runtime, payload):
                     "planning. Plan mode widens investigation, not the build. "
                     + classifier.reason(grade, verb, target, family, variant)}})
             # The answer is logged even when the output filter fails after it: a refusal the log
-            # does not hold is one no later label can grade.
+            # does not hold is one no later label can grade. `main` answers that failure with
+            # its own refusal, so the row records the refusal, not the answer composed above,
+            # and no approval code it never showed.
             try:
                 results.append(invoke("filter-output", event))
-            finally:
+            except Exception as exc:
                 if grading:
-                    log_bash_decision(runtime, event, results, command, confirmed, note)
+                    failed = dict(note, error=type(exc).__name__)
+                    if failed.get("approval") == "offered":
+                        del failed["approval"]
+                    log_bash_decision(runtime, event,
+                                      [{"hookSpecificOutput": {"permissionDecision": "deny"}}],
+                                      command, confirmed, failed)
+                raise
+            if grading:
+                log_bash_decision(runtime, event, results, command, confirmed, note)
         elif tool == "Agent":
             delegation = selected("delegation", "tiered")
             inputs = event["tool_input"]

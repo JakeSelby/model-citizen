@@ -19,6 +19,9 @@ from test_grade_bash import grader
 
 library = grader.library
 GIT = shutil.which("git")
+# A `GIT_DIR` or `GIT_INDEX_FILE` a hook sets would point the fixture's git at the outer
+# repository, so the fixture strips them as the grader does.
+GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
 
 # (command, the verb the reason names). Each discards work in the fixture repository.
 DISCARDS = [
@@ -105,7 +108,7 @@ class DiscardRoutes(unittest.TestCase):
         self.repo = os.path.realpath(tmp.name)
 
         def git(*args):
-            subprocess.run([GIT, "-C", self.repo] + list(args), check=True,
+            subprocess.run([GIT, "-C", self.repo] + list(args), check=True, env=GIT_ENV,
                            capture_output=True, stdin=subprocess.DEVNULL)
 
         git("init", "-q", "-b", "main")

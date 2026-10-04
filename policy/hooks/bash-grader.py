@@ -1551,8 +1551,9 @@ def _git(args, cwd, aliases=0):
             return hit
         return 1, "git " + sub, _joined(sargs, 1), None
     flags, ops = _git_options(sub, sargs)
-    # Only a dry-run option in position counts: a value an option took is no option.
-    dry_run = "--dry-run" in flags or "-n" in flags
+    # Only a dry-run option in position counts: a value an option took is no option. For
+    # `git fetch`, `-n` is `--no-tags` and the fetch still runs.
+    dry_run = "--dry-run" in flags or ("-n" in flags and sub != "fetch")
     target = " ".join(ops[:1])
     if sub == "push":
         if dry_run:
@@ -1791,10 +1792,10 @@ def _rm_risky(op, cwd, recursive=True):
     the repository metadata or, `recursive`, a wildcard with it. A wildcard `rm -f` takes only the
     files it matches, which `_discards` asks git about as a pathspec, so `rm -f *.o` of ignored
     build output is not risky while one that matches a file holding work is."""
-    if "*" in op and (recursive or "/" in op.rstrip("/").lstrip("./")):
-        return True
     if "*" in op:
-        return False
+        # Judged after `~`, `$HOME` and `.`/`..` are resolved, so `./*.o` stays in the working
+        # directory while `../*`, `/*` and `$HOME*` name a directory outside it.
+        return recursive or "/" in _expand(op).rstrip("/")
     path = _expand(op)
     if not path or path == "/":
         return True
@@ -2152,7 +2153,9 @@ def _emptying(tokens, clean, cwd):
                 path = os.path.relpath(path, root) if path.startswith("/") else path
                 if any(path == b or path.endswith("/" + b) or b.endswith("/" + path) for b in blobs):
                     return 3, "git " + sub + " >", target, "git-discard"
-            return _discards("git " + sub + " >", targets, cwd)
+        # The shell empties the target before git runs, so any other git output written over a
+        # file holding uncommitted work discards it as any other `>` does.
+        return _discards("git " + (sub or "") + " >", targets, cwd)
     return None
 
 
