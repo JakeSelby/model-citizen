@@ -43,6 +43,24 @@ def rows(harness_cost, harness_passes, tasks=6, reps=5):
     return out
 
 
+REGISTERED = "benchmarks/preregistrations/2026-10-01-equivalence.md"
+
+
+def stamped(row, plan=REGISTERED):
+    """`row` as a run registered against `plan` records it."""
+    return dict(row, evidence="pre-registered", pre_registration=plan, pre_registration_commit="abc")
+
+
+def write_registered(tmp, text, run_rows):
+    """The plan at its registered path under `tmp` and the stamped rows; returns the plan's path."""
+    plan = Path(tmp, REGISTERED)
+    plan.parent.mkdir(parents=True)
+    plan.write_text(text, encoding="utf-8")
+    Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(stamped(r)) for r in run_rows) + "\n",
+                                          encoding="utf-8")
+    return str(plan)
+
+
 class VerdictTests(unittest.TestCase):
     def test_inside_outside_and_crossing(self):
         margin = (0.85, 1.1765)
@@ -154,13 +172,12 @@ class CommandTests(unittest.TestCase):
                 "- **rule_adherence:** -0.05 to 0.05\n- **tool_errors:** -0.05 to 0.05\n"
                 "- **unreported_score:** -0.05 to 0.05\n")
         with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(scored(r)) for r in rows(1.0, 5)) + "\n",
-                                                  encoding="utf-8")
-            Path(tmp, "plan.md").write_text(plan, encoding="utf-8")
-            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
+            path = write_registered(tmp, plan, [scored(r) for r in rows(1.0, 5)])
+            code, out, _ = self.main(tmp, "--plan", path, "--resamples", "200", "--json")
         self.assertEqual(code, 0)
         assessed = json.loads(out)
         self.assertEqual(assessed["rule_adherence"]["verdict"], EQ.EQUIVALENT)
+        self.assertFalse(assessed["rule_adherence"]["exploratory"])
         self.assertEqual(assessed["tool_errors"]["verdict"], EQ.NOT_EQUIVALENT)
         self.assertAlmostEqual(assessed["tool_errors"]["interval"][0], 0.5)
         self.assertEqual(assessed["unreported_score"]["verdict"], EQ.INCONCLUSIVE)
@@ -180,15 +197,64 @@ class CommandTests(unittest.TestCase):
         self.assertTrue(ratio["exploratory"])
         self.assertIn("fewer than five paired trials", ratio["limitation"])
 
-    def test_five_trials_are_not_labelled_exploratory(self):
+    def test_five_trials_of_a_registered_run_are_not_labelled_exploratory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            plan = write_registered(tmp, PLAN, rows(1.5, 5))
+            code, out, _ = self.main(tmp, "--plan", plan, "--resamples", "200", "--json")
+        ratio = json.loads(out)[EQ.RATIO]
+        self.assertEqual(code, 0)
+        self.assertFalse(ratio["exploratory"])
+        self.assertIsNone(ratio["limitation"])
+
+    def test_an_unregistered_run_is_labelled_exploratory_whatever_plan_is_supplied(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "results.jsonl").write_text("\n".join(json.dumps(r) for r in rows(1.5, 5)) + "\n",
                                                   encoding="utf-8")
-            Path(tmp, "plan.md").write_text(PLAN, encoding="utf-8")
-            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "plan.md")), "--resamples", "200", "--json")
+            plan = Path(tmp, REGISTERED)
+            plan.parent.mkdir(parents=True)
+            plan.write_text(PLAN, encoding="utf-8")
+            code, out, _ = self.main(tmp, "--plan", str(plan), "--resamples", "200", "--json")
         ratio = json.loads(out)[EQ.RATIO]
-        self.assertFalse(ratio["exploratory"])
-        self.assertIsNone(ratio["limitation"])
+        self.assertEqual(ratio["verdict"], EQ.NOT_EQUIVALENT)
+        self.assertTrue(ratio["exploratory"])
+        self.assertIn("do not all record a pre-registration", ratio["limitation"])
+
+    def test_a_plan_the_rows_did_not_register_is_labelled_exploratory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            write_registered(tmp, PLAN, rows(1.5, 5))
+            Path(tmp, "other.md").write_text(PLAN, encoding="utf-8")
+            code, out, _ = self.main(tmp, "--plan", str(Path(tmp, "other.md")), "--resamples", "200")
+        self.assertEqual(code, 0)
+        self.assertIn("Cost-of-Pass ratio: not equivalent (exploratory)", out)
+        self.assertIn("not %s" % Path(tmp, "other.md"), out)
+
+    def test_registration_limitation_names_each_way_a_run_fails_to_match(self):
+        plan = "/x/" + REGISTERED
+        one = rows(1.0, 5, tasks=1, reps=1)
+        self.assertIsNone(EQ.registration_limitation([stamped(r) for r in one], plan))
+        self.assertIn("do not all record", EQ.registration_limitation([], plan))
+        self.assertIn("do not all record", EQ.registration_limitation(
+            [stamped(one[0]), dict(stamped(one[1]), evidence="exploratory")], plan))
+        self.assertIn("more than one", EQ.registration_limitation(
+            [stamped(one[0]), stamped(one[1], "benchmarks/preregistrations/2026-10-02-other.md")], plan))
+        self.assertIn("not /x/y.md", EQ.registration_limitation([stamped(r) for r in one], "/x/y.md"))
+
+    def test_a_score_known_in_too_few_attempts_is_labelled_exploratory(self):
+        def scored(row):
+            known = row["rep"] == 1 or row["task"] != "t0"
+            return dict(row, metric_directions={"rule_adherence": "higher"},
+                        metrics={"rule_adherence": 0.8 + 0.01 * (row["rep"] % 3) if known else None})
+        plan = "## Equivalence margins\n\n- **Pass-rate difference:** -0.125 to 0.125\n" \
+               "- **rule_adherence:** -0.05 to 0.05\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_registered(tmp, plan, [scored(r) for r in rows(1.0, 5)])
+            code, out, _ = self.main(tmp, "--plan", path, "--resamples", "200", "--json")
+        assessed = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(assessed["rule_adherence"]["verdict"], EQ.EQUIVALENT)
+        self.assertTrue(assessed["rule_adherence"]["exploratory"])
+        self.assertIn("t0/bare 1, t0/harness 1", assessed["rule_adherence"]["limitation"])
+        self.assertFalse(assessed[EQ.DIFFERENCE]["exploratory"])
 
     def test_a_plan_without_margins_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,8 +12,11 @@ uses at 0.05; the analysis keeps one interval per metric rather than computing a
 A margin is `(lower, upper)` on the metric's own scale: a ratio's margin brackets 1.0 and is
 positive, a difference's brackets 0. Margins come from the pre-registration's "Equivalence
 margins" section (`margins_from_plan`), one `- **<metric>:** <lower> to <upper>` field each; a
-field reading "none" registers no margin. When the analysis carries a limitation (fewer than five
-paired trials per task and arm), the verdicts stand but each is labelled exploratory with it. `Cost-of-Pass ratio` and `Pass-rate difference` read
+field reading "none" registers no margin. The verdicts stand but each is labelled exploratory, with
+its reason, when the analysis carries a limitation (fewer than five paired trials per task and arm),
+when the rows do not all record the `--plan` file as their pre-registration (`registration_limitation`),
+or, for a behaviour score, when a task and arm has fewer than five known values
+(`coverage_limitations`). `Cost-of-Pass ratio` and `Pass-rate difference` read
 `replay_stats.analyse`'s intervals; any other field is a behaviour score, an oracle metric named
 as `oracle_metrics.summarise` reports it, judged from that metric's paired treatment-minus-reference
 difference interval, so its margin brackets 0 too. How a plan states them:
@@ -90,12 +93,45 @@ def assess(intervals, margins):
     return out
 
 
-def label(assessed, limitation):
-    """`assessed` with each verdict marked `exploratory` and carrying `limitation`, the analysis's
-    reason it cannot be cited (None when it can). The verdicts themselves are kept."""
-    for item in assessed.values():
-        item["exploratory"] = bool(limitation)
-        item["limitation"] = limitation
+def coverage_limitations(metrics):
+    """`{score: reason}` for each behaviour score in an `oracle_metrics.summarise` result whose
+    known values fall short of `replay_stats.MIN_TRIALS` in some task and arm. An interval can come
+    from a single known value, so attempts counted per cell say nothing about a score's coverage."""
+    out = {}
+    for name, metric in ((metrics or {}).get("metrics") or {}).items():
+        short = sorted("%s/%s %d" % (task, arm, cell["n"])
+                       for task, cells in (metric.get("tasks") or {}).items()
+                       for arm, cell in cells.items() if cell["n"] < replay_stats.MIN_TRIALS)
+        if short:
+            out[name] = ("fewer than %d known values per task and arm for this score (%s)"
+                         % (replay_stats.MIN_TRIALS, ", ".join(short)))
+    return out
+
+
+def registration_limitation(rows, plan):
+    """None when every row records the `plan` file as its pre-registration, else the reason the
+    verdicts cannot be cited. A row records the plan's repository-relative path; `plan` matches it
+    when its resolved path ends with that path, so a plan from another checkout still matches."""
+    recorded = set(r.get("pre_registration") for r in rows)
+    if not rows or any(r.get("evidence") != experiment_protocol.PREREGISTERED for r in rows) \
+            or None in recorded or "" in recorded:
+        return "the rows do not all record a pre-registration; exploratory diagnostic only"
+    if len(recorded) > 1:
+        return "the rows record more than one pre-registration (%s)" % ", ".join(sorted(recorded))
+    want = Path(next(iter(recorded))).parts
+    if Path(plan).expanduser().resolve().parts[-len(want):] != want:
+        return "the rows record %s as their pre-registration, not %s" % ("/".join(want), plan)
+    return None
+
+
+def label(assessed, limitation, per_metric=None):
+    """`assessed` with each verdict marked `exploratory` and carrying its limitations: `limitation`,
+    the run's reason it cannot be cited, and its own entry in `per_metric`, joined; None when it
+    can be cited. The verdicts themselves are kept."""
+    for metric, item in assessed.items():
+        reasons = [r for r in (limitation, (per_metric or {}).get(metric)) if r]
+        item["exploratory"] = bool(reasons)
+        item["limitation"] = "; ".join(reasons) or None
     return assessed
 
 
@@ -155,8 +191,10 @@ def main(argv=None):
             path = path / "results.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         result = replay_stats.analyse(rows, args.seed, args.resamples)
-        assessed = label(assess(intervals_of(result, oracle_metrics.summarise(rows, args.seed, args.resamples)),
-                                margins), result.get("limitation"))
+        scores = oracle_metrics.summarise(rows, args.seed, args.resamples)
+        run_limits = [r for r in (result.get("limitation"), registration_limitation(rows, args.plan)) if r]
+        assessed = label(assess(intervals_of(result, scores), margins), "; ".join(run_limits) or None,
+                         coverage_limitations(scores))
     except (ValueError, OSError) as exc:
         print("equivalence: %s" % exc, file=sys.stderr)
         return 2

@@ -427,7 +427,9 @@ python3 scripts/equivalence.py <results dir> --plan <plan>          # equivalenc
 - **A null has bounds.** `scripts/equivalence.py <results dir> --plan <plan>` reads each metric's
   task-clustered interval against the plan's Equivalence margins and prints equivalent, not
   equivalent or inconclusive; the rule is in the
-  [pre-registration template](pre-registration-template.md#decision-rule).
+  [pre-registration template](pre-registration-template.md#decision-rule). A verdict is labelled
+  exploratory unless every row records that plan as its pre-registration, each task and arm has
+  five trials, and a behaviour score has five known values in each.
 
 ### Oracle metrics
 
