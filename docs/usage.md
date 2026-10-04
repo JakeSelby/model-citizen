@@ -717,7 +717,9 @@ that happened to be labelled is not evidence about the point.
 An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
 `coordination.repeat_overlap` in `config.json` chooses whether a repeated overlap is denied
-(`deny`, the default) or only warned (`warn`); `bin/citizen intent --help` has the commands.
+(`deny`, the default) or only warned (`warn`). A claim the editing session made itself in another
+worktree only ever warns, and its row carries `same_session: true`; `bin/citizen intent --help` has
+the commands.
 
 ```sh
 bin/citizen usage --conflicts          # landing merge conflicts and intent overlaps per week
