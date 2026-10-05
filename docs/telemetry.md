@@ -69,7 +69,8 @@ by default) or past it, the file becomes `decisions.jsonl.1`, each older one mov
 and the one past `decision_log_keep` (3 by default) is deleted. A rotated file is never
 rewritten, and the reports that read the log (`usage --by decision`, `usage --conflicts` and the
 decision evaluation) read the kept files too. `decision_log_max_bytes: 0` turns rotation off;
-`decision_log_keep: 0` keeps no rotated file.
+`decision_log_keep: 0` keeps no rotated file. Lowering `decision_log_keep` deletes the files
+numbered past it at the next rotation.
 What each hook writes to the log is listed in
 [runtime-controls.md](runtime-controls.md#what-each-hook-logs).
 

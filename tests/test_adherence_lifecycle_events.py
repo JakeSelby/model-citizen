@@ -105,14 +105,15 @@ class SettleTests(Base):
         start = time.time() - 600
         observed = adherence.observation_path(self.env)
         observed.parent.mkdir(parents=True, exist_ok=True)
-        observed.write_text(json.dumps({"event": "UserPromptSubmit", "session_id": "s-3",
-                                        "ts": adherence.now_ts(start)}) + "\n")
+        observed.write_text("".join(
+            json.dumps({"event": event, "session_id": "s-3", "ts": adherence.now_ts(start)}) + "\n"
+            for event in ("SessionStart", "UserPromptSubmit")))
         # The same prompt, written by the dispatcher too, must not count a second time.
         adherence.note_event("UserPromptSubmit", "s-3", env=self.env, now=start)
         adherence.note_event("SessionEnd", "s-3", env=self.env, now=start + 5)
         rows = [r for r in adherence.observed_rows(self.env) if r.get("session_id") == "s-3"]
-        self.assertEqual(len(rows), 1)
-        self.assertNotIn("source", rows[0])
+        self.assertEqual([r["event"] for r in rows], ["SessionStart", "UserPromptSubmit"])
+        self.assertFalse(any("source" in r for r in rows))
 
 
 class DispatchTests(Base):

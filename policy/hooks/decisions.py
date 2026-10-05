@@ -318,6 +318,13 @@ def rotate(target, cap=None, count=None):
         if os.path.getsize(str(target)) < cap:
             return False
         older = rotated(target, count)
+        # A lowered `decision_log_keep` leaves files numbered past it, which no reader reaches.
+        prefix = target.name + "."
+        for sibling in target.parent.iterdir():
+            suffix = sibling.name[len(prefix):]
+            if (sibling.name.startswith(prefix) and suffix.isascii() and suffix.isdigit()
+                    and int(suffix) > count):
+                sibling.unlink()
         if not older:
             target.unlink()
             return True

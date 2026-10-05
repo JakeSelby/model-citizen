@@ -10,8 +10,8 @@ original case-insensitively; only the uppercase directives need the original.
 The harness's own files are full of these shapes, since they are where its rules, hooks and
 settings are written, and they were most of what this flagged. Output read from them is not
 flagged: a file tool or `Grep` whose path is under a managed location, or a Bash command made
-only of plain readers (`READERS`) whose every existing path operand, or the working directory
-when it names none, is under one. A managed location is any harness checkout or worktree (a
+only of plain readers (`READERS`), with no unquoted glob or brace, whose every existing path
+operand, or the working directory when it names none, is under one. A managed location is any harness checkout or worktree (a
 folder holding this hook's own `policy/hooks` file and `bin/harness`), the harness
 configuration folder, and the runtime files `sync` writes (`MANAGED`). Anything else, a
 substitution, a redirect, a network tool or a path outside them, is scanned as before.
@@ -116,6 +116,10 @@ READERS = {"cat", "head", "tail", "sed", "grep", "rg", "wc", "ls", "diff", "nl",
            "sort", "uniq", "cut", "stat", "file"}
 GIT_READS = {"diff", "show", "log", "grep", "status", "blame", "ls-files"}
 SEPARATORS = {"|", "||", "&&", ";"}
+# Quoted text, which the shell neither globs nor brace-expands; what is left of a command after
+# it is removed must hold no `GLOB` character.
+QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
+GLOB = "*?[{"
 DEPTH = 12
 
 
@@ -148,6 +152,9 @@ def managed(path):
 def bash_reads_managed(command, cwd):
     """Whether a Bash command only reads, and only from managed paths. See the module doc."""
     if not isinstance(command, str) or "$" in command or "`" in command:
+        return False
+    # The shell expands a glob or a brace to paths this never sees, any of which may be outside.
+    if any(char in GLOB for char in QUOTED.sub("", command)):
         return False
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)

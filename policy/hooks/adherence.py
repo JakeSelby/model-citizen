@@ -34,8 +34,8 @@ The observation entry point is an opt-in (`observation.enabled`), and with it of
 writes `observation.jsonl`, which left every emission `unobserved`. So the dispatcher also
 records the two events a response reads, each prompt and each session end, in
 `session-events.jsonl` beside it (`note_event`), in the observation row's shape. A session the
-observation ledger holds is read from that ledger alone and any other session from this file,
-so a session is never counted twice when both are written.
+observation ledger holds from its start is read from that ledger alone and any other session
+from this file (`observed_rows`), so a session is never counted twice when both are written.
 
 This module sits beside the hooks rather than in `lib/harness_core` for the reason `decisions.py`
 gives: a hook is reached through `~/.claude/hooks/harness` and nothing above that resolves.
@@ -152,19 +152,26 @@ def note_event(event, session_id, runtime="", env=None, now=None):
 def observed_rows(env=None):
     """The rows a response is read from: the observation ledger, then the events file.
 
-    A session with any row in the observation ledger is read from it alone, because there the
-    observation entry point saw every event; the events file answers for the rest. The two
-    events files are read under `events_lock`, so no rotation lands between the reads; None when
-    it cannot be taken, because a reading with a rotated file missing would answer wrongly.
+    A session whose `SessionStart` is in the observation ledger is read from it alone, because
+    there the observation entry point saw every event. One the ledger holds only part of, as when
+    `observation.enabled` is turned on mid-session, is read from the events file, whose prompt
+    count the emitting turn matches; from the ledger only when the events file has none of it,
+    as in the bare arm. The two events files are read under `events_lock`, so no rotation lands
+    between the reads; None when it cannot be taken, because a reading with a rotated file
+    missing would answer wrongly.
     """
     observed = read_rows(observation_path(env))
-    covered = set(row.get("session_id") for row in observed)
     target = events_path(env)
     with events_lock(env) as held:
         if not held:
             return None
         events = read_rows(str(target) + ".1") + read_rows(target)
-    return observed + [row for row in events if row.get("session_id") not in covered]
+    started = set(row.get("session_id") for row in observed if row.get("event") == "SessionStart")
+    noted = set(row.get("session_id") for row in events)
+    covered = set(row.get("session_id") for row in observed
+                  if row.get("session_id") in started or row.get("session_id") not in noted)
+    return ([row for row in observed if row.get("session_id") in covered]
+            + [row for row in events if row.get("session_id") not in covered])
 
 
 def now_ts(now=None):
