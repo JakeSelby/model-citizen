@@ -215,7 +215,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       {analysisError && <Alert color="yellow" title="Engine analysis unknown">{analysisError}</Alert>}
       {analysis && analysis.map((entry) => <Paper key={entry.target} p="md" withBorder>
         <Text fw={600}>Engine analysis, target {entry.target} (cost_bench.py summarise)</Text>
-        <Table><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
+        <Table className="leaf-table"><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
           <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>)}
       {comparisons.length > 0 && <Paper p="md" withBorder>

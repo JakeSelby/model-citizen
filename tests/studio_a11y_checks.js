@@ -3,9 +3,10 @@
 // axe-core is MPL-2.0 and the repository takes no copyleft dependency, so these rules stand in
 // for its AA rule set where a check can be decided from the DOM and computed styles. The
 // expression returns a JSON string: {"violations": [{rule, node, detail}], "checked": {...}}.
+// A check that cannot decide reports a `-undecided` rule rather than passing by being skipped.
 (() => {
   const violations = [];
-  const checked = { text: 0, controls: 0, targets: 0 };
+  const checked = { text: 0, fields: 0, controls: 0, targets: 0 };
   const LARGE_TEXT_PX = 24;
   const LARGE_BOLD_TEXT_PX = 18.66;
   const TARGET_PX = 24;
@@ -123,6 +124,26 @@
     return Boolean(element.closest("[disabled], [aria-disabled=true], [data-disabled]"));
   }
 
+  // WCAG's minimums are hard: 4.499:1 fails 4.5:1, so the ratio is never rounded up.
+  function measureText(element, paint, style, what) {
+    const foreground = parseColor(paint);
+    const behind = backdrop(element);
+    if (!foreground || !behind) {
+      add("color-contrast-undecided", element, what + " " + paint + " over an undecidable backdrop");
+      return false;
+    }
+    const shown = over([foreground[0], foreground[1], foreground[2], foreground[3] * opacity(element)], behind);
+    const size = parseFloat(style.fontSize);
+    const bold = Number(style.fontWeight) >= 700;
+    const large = size >= LARGE_TEXT_PX || (bold && size >= LARGE_BOLD_TEXT_PX);
+    const needed = large ? 3 : 4.5;
+    const measured = ratio(shown, behind);
+    if (measured < needed) {
+      add("color-contrast", element, what + " " + measured.toFixed(2) + ":1 < " + needed + ":1 (" + paint + " on rgb(" + behind.slice(0, 3).map(Math.round).join(", ") + "))");
+    }
+    return true;
+  }
+
   function checkTextContrast() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const seen = new Set();
@@ -130,24 +151,29 @@
       const element = node.parentElement;
       if (!element || seen.has(element) || !node.textContent.trim()) continue;
       seen.add(element);
-      if (["SCRIPT", "STYLE", "NOSCRIPT"].includes(element.tagName)) continue;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEXTAREA", "OPTION"].includes(element.tagName)) continue;
       if (hiddenFromEveryone(element) || visuallyHidden(element) || disabled(element)) continue;
       const style = getComputedStyle(element);
-      const foreground = parseColor(style.color);
-      const behind = backdrop(element);
-      if (!foreground || !behind) {
-        add("color-contrast-undecided", element, "color " + style.color + " over an undecidable backdrop");
-        continue;
-      }
-      const shown = over([foreground[0], foreground[1], foreground[2], foreground[3] * opacity(element)], behind);
-      const size = parseFloat(style.fontSize);
-      const bold = Number(style.fontWeight) >= 700;
-      const large = size >= LARGE_TEXT_PX || (bold && size >= LARGE_BOLD_TEXT_PX);
-      const needed = large ? 3 : 4.5;
-      const measured = ratio(shown, behind);
-      checked.text += 1;
-      if (measured + 0.005 < needed) {
-        add("color-contrast", element, measured.toFixed(2) + ":1 < " + needed + ":1 (" + style.color + " on rgb(" + behind.slice(0, 3).map(Math.round).join(", ") + "))");
+      // SVG text paints with `fill`, not `color`; an unset fill is SVG's default black.
+      const svg = element instanceof SVGElement;
+      if (svg && style.fill === "none") continue;
+      if (measureText(element, svg ? style.fill : style.color, style, svg ? "fill" : "text")) checked.text += 1;
+    }
+  }
+
+  // A field's typed value, and its placeholder while empty, are text too.
+  function checkFieldText() {
+    const fields = "input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]):not([type=file]):not([type=submit]):not([type=button]):not([type=reset]), textarea, select";
+    for (const field of document.querySelectorAll(fields)) {
+      if (hiddenFromEveryone(field) || visuallyHidden(field) || disabled(field)) continue;
+      const style = getComputedStyle(field);
+      if (field.tagName === "SELECT" || field.value) {
+        if (field.tagName === "SELECT" ? field.selectedOptions.length && field.selectedOptions[0].text.trim() : true) {
+          if (measureText(field, style.color, style, "value")) checked.fields += 1;
+        }
+      } else if (field.placeholder) {
+        const placeholder = getComputedStyle(field, "::placeholder");
+        if (measureText(field, placeholder.color, placeholder, "placeholder")) checked.fields += 1;
       }
     }
   }
@@ -163,7 +189,10 @@
       const outside = backdrop(control.parentElement);
       const border = parseColor(style.borderTopColor);
       const fill = backdrop(control);
-      if (!outside || !border || !fill) continue;
+      if (!outside || !border || !fill) {
+        add("non-text-contrast-undecided", input, "boundary " + style.borderTopColor + " over an undecidable backdrop");
+        continue;
+      }
       const borderWidth = parseFloat(style.borderTopWidth);
       const boundary = borderWidth > 0 ? ratio(over(border, outside), outside) : 0;
       if (boundary < 3 && ratio(fill, outside) < 3) {
@@ -235,6 +264,14 @@
       const named = element.getAttribute("aria-label") || element.getAttribute("aria-labelledby");
       if (named && shown && /\p{L}/u.test(shown) && !(" " + normalise(name) + " ").includes(" " + shown + " ")) {
         add("label-in-name", element, 'name "' + name + '" does not contain visible text "' + shown + '"');
+      }
+      // 2.5.3 binds a field's visible <label> as well: an aria-label must keep the label's words.
+      if (named && element.labels && element.labels.length) {
+        const label = normalise([...element.labels].filter((node) => !hiddenFromEveryone(node) && !visuallyHidden(node))
+          .map(visibleText).join(" "));
+        if (label && /\p{L}/u.test(label) && !(" " + normalise(name) + " ").includes(" " + label + " ")) {
+          add("label-in-name", element, 'name "' + name + '" does not contain visible label "' + label + '"');
+        }
       }
       if (element.tabIndex > 0) add("tabindex", element, "positive tabindex " + element.tabIndex);
       if (element.matches("a[href], button") && element.querySelector(INTERACTIVE)) {
@@ -403,6 +440,7 @@
   checkNames();
   checkTargets();
   checkTextContrast();
+  checkFieldText();
   checkControlBoundaries();
   return JSON.stringify({ violations, checked, width: document.documentElement.clientWidth });
 })()

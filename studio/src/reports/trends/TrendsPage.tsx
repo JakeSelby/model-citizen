@@ -25,8 +25,8 @@ export function TrendChart({ line, measure }: { line: Line; measure: Measure }) 
   const placed = line.points.map((point, index) => ({ point, index, figure: point.measures[measure.id] }))
     .filter((item) => item.figure && item.figure.value !== null);
   return <svg className="trend-chart" role="img" aria-label={label} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
-    <text x={4} y={PAD - 8} fontSize="11">{numberText(high)}</text>
-    <text x={4} y={HEIGHT - PAD + 14} fontSize="11">{numberText(low)}</text>
+    <text x={4} y={PAD - 8} fontSize="11" fill="currentColor">{numberText(high)}</text>
+    <text x={4} y={HEIGHT - PAD + 14} fontSize="11" fill="currentColor">{numberText(low)}</text>
     <polyline fill="none" stroke="currentColor" strokeWidth={1.5}
       points={placed.map((item) => `${x(item.index)},${y(item.figure!.value!)}`).join(" ")} />
     {placed.map(({ point, index, figure }) => <g data-evidence={point.evidence.label} key={`${point.run_id}-${index}`}>
@@ -37,7 +37,7 @@ export function TrendChart({ line, measure }: { line: Line; measure: Measure }) 
       </g>}
       <circle cx={x(index)} cy={y(figure!.value!)} r={4} stroke="currentColor"
         fill={point.evidence.label === "exploratory" ? "none" : "currentColor"} />
-      <text x={x(index)} y={HEIGHT - 8} fontSize="10" textAnchor="middle">{point.harness_version ?? "?"}</text>
+      <text x={x(index)} y={HEIGHT - 8} fontSize="10" textAnchor="middle" fill="currentColor">{point.harness_version ?? "?"}</text>
     </g>)}
   </svg>;
 }

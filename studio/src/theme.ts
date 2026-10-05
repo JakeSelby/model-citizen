@@ -60,7 +60,10 @@ const clearVariantColors: VariantColorsResolver = (input) => {
 };
 
 function paletteVariables(): Record<string, string> {
-  const variables: Record<string, string> = { "--mantine-color-error": "var(--studio-danger)" };
+  const variables: Record<string, string> = {
+    "--mantine-color-error": "var(--studio-danger)",
+    "--mantine-color-placeholder": "var(--studio-ink-secondary)",
+  };
   for (const [name, mapped] of Object.entries(TONES)) {
     variables[`--mantine-color-${name}-text`] = mapped.color;
     variables[`--mantine-color-${name}-light`] = mapped.wash;
@@ -68,6 +71,8 @@ function paletteVariables(): Record<string, string> {
     variables[`--mantine-color-${name}-light-color`] = mapped.color;
     variables[`--mantine-color-${name}-outline`] = mapped.color;
     variables[`--mantine-color-${name}-outline-hover`] = mapped.wash;
+    variables[`--mantine-color-${name}-filled`] = mapped.color;
+    variables[`--mantine-color-${name}-filled-hover`] = mapped.color;
   }
   return variables;
 }

@@ -399,6 +399,9 @@ textarea:focus-visible {
 .command-chip .code-view { white-space: pre-wrap; overflow-wrap: anywhere; }
 .interval-display { color: var(--studio-ink-secondary); font-variant-numeric: tabular-nums; }
 .data-table-scroll { position: relative; max-width: 100%; overflow: auto; }
+/* An engine's field-by-field output: long dotted paths and values wrap instead of widening a phone. */
+.leaf-table { table-layout: fixed; width: 100%; }
+.leaf-table :where(th, td, code) { overflow-wrap: anywhere; white-space: normal; }
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--studio-text-sm); }
 .data-table caption { padding-block: var(--studio-space-4); color: var(--studio-ink-primary); font-weight: 650; text-align: left; }
 .data-table th, .data-table td { padding: var(--studio-space-3) var(--studio-space-4); border-bottom: var(--studio-border-width) solid var(--studio-border-default); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
@@ -414,6 +417,14 @@ textarea:focus-visible {
 /* Mantine fields drop the outline for a 1px border change, and summaries keep the browser ring;
    every focus stop gets the Studio ring instead. */
 .studio-frame :focus-visible { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+/* A scroll viewport fills a root that clips its overflow, so an outside ring would be cut away:
+   its ring is drawn inside its own edge. */
+.studio-frame .mantine-ScrollArea-viewport:focus-visible { outline-offset: calc(-1 * var(--studio-focus-width)); }
+/* A multi-select's typing field can be a sliver inside a clipping box: the box carries the ring. */
+.studio-frame .mantine-Input-input:has(.mantine-PillsInputField-field:focus-visible) { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+.studio-frame .mantine-PillsInputField-field:focus-visible { outline: none; }
+/* Chart labels paint with `fill`, which defaults to black; they take the page ink instead. */
+.trend-chart { color: var(--studio-ink-primary); }
 
 .save-bar {
   position: sticky;
