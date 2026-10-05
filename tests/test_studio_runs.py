@@ -563,7 +563,8 @@ class StudioRunTests(unittest.TestCase):
         self.assertEqual(self.cli_json(["runs", "list"]), [])
         error = self.cli_json(["runs", "start", "unknown", "--target-kind", "installed",
                                "--target-ref", "current"], expected=2)
-        self.assertIn("unknown suite", error["error"])
+        # The `/api/runs/start` refusal, with the same code.
+        self.assertEqual(error, {"error": "invalid_run"})
 
     def test_history_cli_commands_parse_and_dispatch_in_json_and_text_modes(self):
         fake = mock.Mock()
@@ -622,8 +623,10 @@ class StudioRunTests(unittest.TestCase):
 
     def test_cli_successes_round_trip_the_same_persisted_run_record(self):
         self.write_catalog([self.suite()])
-        started = self.cli_json(["runs", "start", "fixture", "--target-kind", "installed",
-                                 "--target-ref", "/private/worktree"])
+        # A fixture suite is not one the Studio launches, so its refusal is set aside here.
+        with mock.patch.object(harness.studio_free_suites, "start_refusal", return_value=None):
+            started = self.cli_json(["runs", "start", "fixture", "--target-kind", "installed",
+                                     "--target-ref", "/private/worktree"])
         supervisor = runs.RunSupervisor(self.state / "studio", self.catalog_path,
                                         target_service=FixtureTargetService())
         self.started.append((supervisor, started["run_id"]))

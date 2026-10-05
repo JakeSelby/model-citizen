@@ -292,6 +292,19 @@
       "dependencies": [],
       "conflicts": []
     },
+    "studio-loop": {
+      "claims": [
+        "Runs the Studio's draft, test and apply loop from the citizen CLI, and hands the user the Studio link."
+      ],
+      "surface": [
+        "resident-context",
+        "on-demand-context"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
     "transcript-hygiene": {
       "claims": [
         "Bounds what subagents return and what tool output enters the transcript."

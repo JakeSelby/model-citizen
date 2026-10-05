@@ -45,6 +45,10 @@ def _contrast_ratio(foreground: str, background: str) -> float:
 
 
 def _chrome() -> Optional[str]:
+    # Release qualification names the Chrome whose version it records; honour it exactly.
+    chosen = os.environ.get("HARNESS_STUDIO_CHROME")
+    if chosen:
+        return chosen if Path(chosen).is_file() else None
     for candidate in (
         shutil.which("google-chrome"),
         shutil.which("chromium"),

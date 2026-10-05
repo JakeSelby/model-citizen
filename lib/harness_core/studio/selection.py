@@ -17,7 +17,8 @@ from harness_core import catalog
 
 SCHEMA_VERSION = 1
 CLI_COMMANDS = {
-    "selection": ("citizen", "selection", "--json"),
+    "selection": ("citizen", "selection", "--report", "--repository", "{repository}",
+                  "--project-file", "{project_file}", "--json"),
     "budget": ("citizen", "lint"),
 }
 RUNTIMES = (("claude-code", "Claude Code"), ("codex", "Codex"))

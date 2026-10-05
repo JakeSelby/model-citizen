@@ -30,6 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from native_acceptance import CLIENTS, redact
+import studio_lifecycle_acceptance
 
 NOT_QUALIFICATION = ("smoke tier: deterministic pre-qualification checks, no model turn; "
                      "a green run is not native client qualification")
@@ -38,6 +39,8 @@ NOT_QUALIFICATION = ("smoke tier: deterministic pre-qualification checks, no mod
 GUARDED = (Path("compatibility") / "evidence", Path("compatibility") / "catalog.json")
 TAIL = 600
 GIT_TIMEOUT = 30
+# Headroom over the Studio qualification's own worst case, so its bounds fire before this one.
+STUDIO_MARGIN = 120
 
 
 def unittest_argv(pattern):
@@ -72,13 +75,20 @@ def steps(work, targets=None):
          "how": "start, authenticate, load and stop Studio in Chrome on this host",
          "argv": [sys.executable, str(ROOT / "scripts" / "studio_lifecycle_acceptance.py"),
                   "--output", str(work / "studio-lifecycle.json")],
-         "timeout": 600, "clean_tree": True},
+         "timeout": studio_lifecycle_acceptance.worst_case_seconds() + STUDIO_MARGIN,
+         "clean_tree": True, "track": True},
         {"name": "disposable-home-lifecycle",
          "how": "install, sync, upgrade, roll back and uninstall in disposable homes",
          "argv": [sys.executable, str(ROOT / "scripts" / "lifecycle_acceptance.py"),
                   "--output", str(work / "lifecycle.json")],
          "timeout": 1800, "clean_tree": True},
     ]
+
+
+def total_seconds(targets=None):
+    """The longest the whole tier can take: every step running to its own limit."""
+    with tempfile.TemporaryDirectory() as work:
+        return sum(step["timeout"] for step in steps(Path(work), targets))
 
 
 def dirty(root=ROOT):
@@ -144,29 +154,50 @@ def run_step(step, root=ROOT):
                            "the checkout is dirty and this check requires a clean one")
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     env.update(step.get("env") or {})
+    # A tracked step names the detached servers and process groups it starts, which leave this
+    # step's group; they are killed with it however the step ends.
+    tracker = None
+    process = None
+    if step.get("track") and not env.get(studio_lifecycle_acceptance.TRACK_ENV):
+        tracker = tempfile.TemporaryDirectory(prefix="studio-processes-")
+        env[studio_lifecycle_acceptance.TRACK_ENV] = tracker.name
     try:
-        process = subprocess.Popen([str(item) for item in step["argv"]], cwd=str(root), env=env,
-                                   stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE, text=True, start_new_session=True)
-    except OSError as error:
-        return outcome(step, "unverified", 0.0, "the check could not be started: " + redact(error))
-    try:
-        out, err = process.communicate(timeout=step["timeout"])
-    except subprocess.TimeoutExpired:
-        # A check that never answered observed nothing, so it is unverified rather than failed —
-        # and it is killed with its children, which is the hang this tier exists to replace.
-        kill_group(process)
-        process.communicate()
-        return outcome(step, "unverified", float(step["timeout"]),
-                       "no answer within %ss" % step["timeout"])
-    except OSError as error:
-        kill_group(process)
-        return outcome(step, "unverified", round(time.time() - started, 1),
-                       "the check could not be read: " + redact(error))
-    seconds = round(time.time() - started, 1)
-    if process.returncode == 0:
-        return outcome(step, "passed", seconds, "")
-    return outcome(step, "failed", seconds, tail((err or "") + (out or ""), process.returncode))
+        try:
+            process = subprocess.Popen([str(item) for item in step["argv"]], cwd=str(root), env=env,
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                       stderr=subprocess.PIPE, text=True, start_new_session=True)
+        except OSError as error:
+            return outcome(step, "unverified", 0.0,
+                           "the check could not be started: " + redact(error))
+        # Each step leads its own group; a supervisor that tracks this tier can kill it whole.
+        studio_lifecycle_acceptance.track(
+            process.pid, env.get(studio_lifecycle_acceptance.TRACK_ENV))
+        try:
+            out, err = process.communicate(timeout=step["timeout"])
+        except subprocess.TimeoutExpired:
+            # A check that never answered observed nothing, so it is unverified rather than
+            # failed — and it is killed with its children, which is the hang this tier exists
+            # to replace.
+            kill_group(process)
+            process.communicate()
+            return outcome(step, "unverified", float(step["timeout"]),
+                           "no answer within %ss" % step["timeout"])
+        except OSError as error:
+            kill_group(process)
+            return outcome(step, "unverified", round(time.time() - started, 1),
+                           "the check could not be read: " + redact(error))
+        seconds = round(time.time() - started, 1)
+        if process.returncode == 0:
+            return outcome(step, "passed", seconds, "")
+        return outcome(step, "failed", seconds, tail((err or "") + (out or ""), process.returncode))
+    finally:
+        directory = env.get(studio_lifecycle_acceptance.TRACK_ENV)
+        if step.get("track"):
+            studio_lifecycle_acceptance.kill_tracked(directory)
+        elif directory and process is not None:
+            studio_lifecycle_acceptance.untrack(process.pid, directory)
+        if tracker is not None:
+            tracker.cleanup()
 
 
 def names_in(names, plan):
@@ -216,6 +247,8 @@ def main(argv=None):
     parser.add_argument("--list", action="store_true", dest="listing",
                         help="print what would run, running nothing")
     args = parser.parse_args(argv)
+    # Under a round, the tier leads its own group: name it so the round can kill it whole.
+    studio_lifecycle_acceptance.track(os.getpid())
     with tempfile.TemporaryDirectory(prefix="harness-smoke-") as work:
         targets = [name.strip() for name in (args.targets or "").split(",") if name.strip()]
         unknown = [name for name in targets if name not in CLIENTS]

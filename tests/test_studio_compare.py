@@ -91,7 +91,8 @@ class Runs:
 
     def show(self, run_id):
         if run_id not in self.records:
-            raise runs.RunError("unknown run")
+            # As the real supervisor reports a run with no state directory.
+            raise runs.RunError("run state directory is missing or unsafe") from FileNotFoundError(run_id)
         return {"run_id": run_id, "suite_id": "live-replay", "status": self.records[run_id][1]}
 
     @staticmethod
@@ -124,7 +125,10 @@ def sides(base, candidate):
 
 class Handler:
     def __init__(self, supervisor, body):
-        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO)
+        # Inline owner: the fixture supervisor has no thread-bound index (see
+        # test_studio_route_thread_ownership for the real one).
+        self.server = SimpleNamespace(run_supervisor=supervisor, repo_root=REPO,
+                                      mutations=SimpleNamespace(call=lambda action: action()))
         self.request_json = body
         self.response = None
 
@@ -406,11 +410,13 @@ class CompareTests(unittest.TestCase):
                 contextlib.redirect_stdout(output):
             code = harness.main(["runs", "compare", FIRST_RUN, FIRST_RUN + ":2", "--json"])
         self.assertEqual(code, 2)
-        self.assertIn("base must be RUN_ID:TARGET", json.loads(output.getvalue())["error"])
+        # The route's code on stdout; the reason, naming the side, goes to stderr.
+        self.assertEqual(json.loads(output.getvalue()), {"error": "compare_invalid"})
 
     def test_the_route_names_its_citizen_command(self):
         route = next(item for item in server.ROUTES.entries if item.path == "/api/runs/compare")
-        self.assertEqual((route.method, route.cli_command), ("POST", ("citizen", "runs", "compare")))
+        self.assertEqual((route.method, route.cli_command),
+                         ("POST", ("citizen", "runs", "compare", "{base}", "{candidate}", "--json")))
 
 
 class CompareRouteSecurityTests(studio_security.StudioSecurityFixture):

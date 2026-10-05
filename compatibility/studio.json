@@ -5,7 +5,7 @@
       "platform": "macos",
       "browser": "chrome",
       "version_policy": "stable-channel",
-      "stable_major": 152,
+      "stable_major": 154,
       "lifecycle_generator": "scripts/studio_lifecycle_acceptance.py",
       "flow_evidence": "tests/test_studio_browser.py",
       "security_evidence": "tests/test_studio_security.py",

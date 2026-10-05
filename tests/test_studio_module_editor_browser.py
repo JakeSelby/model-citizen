@@ -9,6 +9,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 TESTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TESTS))
@@ -28,6 +29,12 @@ class ModuleEditorBrowserTests(unittest.TestCase):
     def setUp(self):
         browser_support.StudioBrowserTests.setUp(self)
         self.env.pop("HARNESS_QUIET", None)
+        # In-process draft commits read this process's environment, and a hosted runner has no
+        # Git identity of its own; lend them the fixture's.
+        identity = mock.patch.dict(
+            "os.environ", {key: value for key, value in self.env.items() if key.startswith("GIT_")})
+        identity.start()
+        self.addCleanup(identity.stop)
         self.env["HARNESS_WORKTREE_ROOT"] = str(Path(self.temporary.name) / "worktrees")
         config_path = self.home / ".config" / "agent-harness" / "config.json"
         config_path.parent.mkdir(parents=True)
