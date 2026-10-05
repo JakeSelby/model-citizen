@@ -13,8 +13,11 @@ the replay containers (`cost_bench.long_session_driver`) and against a fake CLI 
   driver at `max_agent_turns_per_user_turn`; and the session stops before a turn once its reported
   spend reaches the per-session cap. Each turn is given what is left of the cap as its budget.
 - **Checkpoints.** After a checkpoint's turn, `checker` scores the tree with the segment's stream:
-  every turn since the previous checkpoint, appended in order. A checkpoint never reached is not
-  passed and its metrics are null.
+  every turn since the previous checkpoint, appended in order, and the session's totals as they
+  stood before the segment's first turn. A checkpoint never reached is not passed and its metrics
+  are null.
+- **Cost.** A result reports the session's running totals (`session_totals`), so a turn's figures
+  are the change since the previous result and the session's spend is the latest total.
 
 The rows are one per checkpoint and one per session; their fields and identity are in
 docs/benchmarks.md. `summarise` reads them back with scenario-clustered intervals. Standard
@@ -34,9 +37,16 @@ TIER = "long-session"
 CHECKPOINT, SESSION = "checkpoint", "session"
 TOKEN_KINDS = ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")
 MODEL_USAGE_KEYS = ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens", "outputTokens")
+# The `modelUsage` keys that are session running totals. The rest describe the model
+# (`contextWindow`, `maxOutputTokens`, `canonicalModel`, `costBasis`, `provider`) and may change or
+# vanish between turns.
+RUNNING_TOTAL_KEYS = MODEL_USAGE_KEYS + ("thinkingTokens", "webSearchRequests", "costUSD")
 UNRANKED = "unranked"
 BUDGET_STOP = "error_max_budget_usd"
 TURN_CAP_STOP = "error_max_turns"
+# A resumed turn whose result is another session's, or whose running totals fell: the resume lost
+# the session, so the turn's own figures are unknown.
+RESUME_LOST = "resume-lost"
 # Why a session stopped before its script ended.
 STOP_CAP, STOP_USER_TURNS, STOP_ERROR = "cap", "max_user_turns", "error"
 CONTROL = "bare"
@@ -96,11 +106,47 @@ def tier_of(model, tiers):
     return replay_pair.model_class(model, tiers) or UNRANKED
 
 
-def turn_usage(stdout, tiers):
-    """One turn's figures from its stream: the reported cost, the four token kinds and the cost
-    per model class from the last `result` event's `modelUsage` (subagents included), each
-    main-thread call's context (`input + cache write + cache read`), and the result's verdict.
-    `cost_usd` is None when no priced result arrived."""
+# The session's totals before its first turn: what turn 1, and the first segment, count against.
+ZERO_TOTALS = {"total_cost_usd": 0, "modelUsage": {}}
+
+
+def session_totals(result):
+    """A `result` event's session totals, `{"total_cost_usd", "modelUsage"}`, or None unpriced.
+
+    A resumed `claude -p --resume` turn reports `total_cost_usd` and `modelUsage` as the session's
+    running totals, not the turn's own; only its top-level `usage` is the turn's alone. So a turn's
+    cost, tokens and cost by tier are the change in these totals since the previous turn's result,
+    and the session's spend is the latest total."""
+    if not isinstance(result, dict) or not isinstance(result.get("total_cost_usd"), (int, float)):
+        return None
+    models = {m: dict(u) for m, u in (result.get("modelUsage") or {}).items() if isinstance(u, dict)}
+    return {"total_cost_usd": result["total_cost_usd"], "modelUsage": models}
+
+
+def _number(value):
+    return value if isinstance(value, (int, float)) else 0
+
+
+def totals_fell(previous, current):
+    """Whether any running total in `current` is below `previous`: `total_cost_usd`, or any
+    `RUNNING_TOTAL_KEYS` entry of any model's `modelUsage`, a model missing from `current` counting
+    as zero."""
+    if _number(current.get("total_cost_usd")) < _number(previous.get("total_cost_usd")):
+        return True
+    now = current.get("modelUsage") or {}
+    return any(_number((now.get(model) or {}).get(key)) < _number(usage.get(key))
+               for model, usage in (previous.get("modelUsage") or {}).items() for key in RUNNING_TOTAL_KEYS)
+
+
+def turn_usage(stdout, tiers, previous=None):
+    """One turn's figures from its stream, as the change in the session's totals (`session_totals`)
+    from `previous`, the last result before it (`ZERO_TOTALS` when None): the cost, the four token
+    kinds and the cost per model class from `modelUsage` model by model, subagents included; each
+    main-thread call's context (`input + cache write + cache read`); and the result's verdict.
+    `totals` is this result's own session totals, the next turn's `previous`. `cost_usd` is None
+    when no priced result arrived. A result without `modelUsage` takes its tokens from its own
+    top-level `usage`, which is the turn's alone."""
+    previous = previous or ZERO_TOTALS
     stream = events(stdout)
     results = [e for e in stream if e.get("type") == "result"]
     contexts = [c for c in (_context((e.get("message") or {}).get("usage")) for e in stream
@@ -109,19 +155,23 @@ def turn_usage(stdout, tiers):
     session_ids = [e.get("session_id") for e in stream if isinstance(e.get("session_id"), str)]
     out = {"cost_usd": None, "tokens": {k: None for k in TOKEN_KINDS}, "cost_by_tier": {},
            "main_contexts": contexts, "is_error": None, "subtype": "", "agent_turns": None,
-           "session_id": session_ids[-1] if session_ids else None}
-    if not results or not isinstance(results[-1].get("total_cost_usd"), (int, float)):
+           "session_id": session_ids[-1] if session_ids else None, "totals": None}
+    totals = session_totals(results[-1]) if results else None
+    if totals is None:
         return out
     result = results[-1]
-    out.update(cost_usd=float(result["total_cost_usd"]), is_error=bool(result.get("is_error")),
-               subtype=str(result.get("subtype") or ""), agent_turns=result.get("num_turns"))
-    per_model = {m: u for m, u in (result.get("modelUsage") or {}).items() if isinstance(u, dict)}
+    out.update(cost_usd=round(float(totals["total_cost_usd"]) - float(previous["total_cost_usd"]), 6),
+               is_error=bool(result.get("is_error")), subtype=str(result.get("subtype") or ""),
+               agent_turns=result.get("num_turns"), totals=totals)
+    per_model, before = totals["modelUsage"], previous.get("modelUsage") or {}
     if per_model:
-        out["tokens"] = {kind: sum(int(u.get(key) or 0) for u in per_model.values())
+        deltas = {m: {key: _number(u.get(key)) - _number((before.get(m) or {}).get(key))
+                      for key in MODEL_USAGE_KEYS + ("costUSD",)} for m, u in per_model.items()}
+        out["tokens"] = {kind: int(sum(d[key] for d in deltas.values()))
                          for kind, key in zip(TOKEN_KINDS, MODEL_USAGE_KEYS)}
-        for model, usage in sorted(per_model.items()):
+        for model, delta in sorted(deltas.items()):
             cls = tier_of(model, tiers)
-            out["cost_by_tier"][cls] = round(out["cost_by_tier"].get(cls, 0.0) + float(usage.get("costUSD") or 0.0), 6)
+            out["cost_by_tier"][cls] = round(out["cost_by_tier"].get(cls, 0.0) + float(delta["costUSD"]), 6)
     else:
         usage = result.get("usage") or {}
         out["tokens"] = {kind: int(usage.get(kind) or 0) for kind in TOKEN_KINDS}
@@ -169,13 +219,18 @@ def run_session(scenario, base, cap, driver, checker, tiers):
     optional `returncode`, `timeout` (the turn ran out of time; its cost is unknown) and
     `error_kind` (the caller refused the turn, e.g. it read the installed checkout). `checker(name,
     stream)` scores checkpoint `name` on the tree, `stream` being the segment's stream-json text, and
-    returns `(passed, detail)` or `(passed, detail, recorded metrics)`. `base` is copied into every
-    row. Spend that no result reported, a timed-out turn's, counts at what was left of the cap."""
+    returns `(passed, detail)` or `(passed, detail, recorded metrics)`; it is called with a third
+    argument, `baseline`, the session totals of the last result before the segment (`ZERO_TOTALS`
+    for the first). `base` is copied into every row. Spend that no result reported, a timed-out
+    turn's, counts at what was left of the cap, as does a turn whose resume lost the session
+    (`RESUME_LOST`): its result names another session, or a running total fell (`totals_fell`)."""
     caps = scenario["caps"]
     order = scenario["checkpoint_order"]
     verdicts, records = {}, {}
     usages, branches, segment, segment_text = [], [], [], []
     spent, stopped, error_kind = 0.0, None, ""
+    latest = segment_baseline = ZERO_TOTALS
+    session_id = None
     agent_cap_hits = 0
     for number, turn in enumerate(scenario["turns"], 1):
         if number > caps["max_user_turns"]:
@@ -189,7 +244,7 @@ def run_session(scenario, base, cap, driver, checker, tiers):
             branches.append(dict(branch, turn=number))
         done = driver(number, prompt, round(cap - spent, 6), number > 1)
         stdout = done.get("stdout") or ""
-        usage = turn_usage(stdout, tiers)
+        usage = turn_usage(stdout, tiers, latest)
         usages.append(usage)
         segment.append(usage)
         segment_text.append(stdout if stdout.endswith("\n") or not stdout else stdout + "\n")
@@ -199,7 +254,16 @@ def run_session(scenario, base, cap, driver, checker, tiers):
             stopped, error_kind = STOP_ERROR, ("timeout" if done.get("timeout") else
                                                "exit %s: no priced result" % done.get("returncode"))
             break
-        spent += usage["cost_usd"]
+        lost = (session_id is not None and usage["session_id"] not in (None, session_id)) or \
+            totals_fell(latest, usage["totals"])
+        if lost:  # never a negative cost: like a timeout, the turn counts at what was left of the cap
+            usage.update(cost_usd=round(cap - spent, 6), tokens={k: None for k in TOKEN_KINDS}, cost_by_tier={})
+            spent = cap
+            stopped, error_kind = STOP_ERROR, RESUME_LOST
+            break
+        session_id = session_id or usage["session_id"]
+        latest = usage["totals"]
+        spent = float(latest["total_cost_usd"])
         if done.get("error_kind"):
             stopped, error_kind = STOP_ERROR, done["error_kind"]
             break
@@ -215,7 +279,7 @@ def run_session(scenario, base, cap, driver, checker, tiers):
         if name is None:
             continue
         try:
-            scored = checker(name, "".join(segment_text))
+            scored = checker(name, "".join(segment_text), segment_baseline)
         except Exception as exc:  # a check that cannot run says nothing about the agent's work
             stopped, error_kind = STOP_ERROR, "check %s: %s" % (name, type(exc).__name__)
             break
@@ -224,7 +288,7 @@ def run_session(scenario, base, cap, driver, checker, tiers):
                          "recorded": scored[2] if len(scored) > 2 else None,
                          "segment": _segment_fields(segment, spent),
                          "segment_turns": [number - len(segment) + 1, number]}
-        segment, segment_text = [], []
+        segment, segment_text, segment_baseline = [], [], latest
     rows = []
     for index, name in enumerate(order, 1):
         record = records.get(name)
