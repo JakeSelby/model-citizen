@@ -257,7 +257,8 @@ class PluginEvalReportTests(PluginEvalFixture):
         path = "/api/runs/plugin-eval-report/" + run_id
         route = studio_server.ROUTES.resolve("GET", path)
         self.assertIsNotNone(route)
-        self.assertEqual(route.cli_command, ("citizen", "runs", "evidence"))
+        self.assertEqual(route.cli_command,
+                         ("citizen", "runs", "evidence", "{run_id}", "{artifact}", "--json"))
         handler = mock.Mock()
         handler.path = path
         handler.server.run_supervisor = self.supervisor

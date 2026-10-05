@@ -20,6 +20,23 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 FREE_SUITE_IDS = frozenset((
     "unit-tests", "lint", "static-context", "detector-corpus", "lifecycle-acceptance",
 ))
+
+
+def start_refusal(repository: Path, suite_id: Any, parameters: Any, target_kind: Any,
+                  target_ref: Any) -> Optional[str]:
+    """Why the Studio refuses to start this free run, or None: a free suite, on the installed
+    checkout it runs from. Paid suites start only through their own admissions."""
+    root = str(Path(repository).resolve())
+    if suite_id not in FREE_SUITE_IDS:
+        return ("%s is not a free suite citizen runs start launches; eval tiers and paid runs "
+                "have their own commands" % (suite_id,))
+    if target_kind != "installed" or target_ref != root:
+        return "a free run targets the installed checkout, --target-ref %s" % root
+    if not isinstance(parameters, dict) or parameters.get("root") != root:
+        return "a free run names its checkout as --param root=%s" % root
+    return None
+
+
 SUITE_LABELS = {
     "unit-tests": "Unit tests",
     "lint": "Harness lint",

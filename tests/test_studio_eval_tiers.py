@@ -24,6 +24,7 @@ from test_harness import REPO  # noqa: E402
 from harness_core.studio import eval_tiers, replay, runs, server, spend_guard  # noqa: E402
 from studio_target_support import FixtureTargetService  # noqa: E402
 import test_studio_security as studio_security  # noqa: E402
+from test_replay_pack import make_pack  # noqa: E402
 
 UNIT_FIXTURE = REPO / "tests" / "fixtures" / "unit-economy" / "results.jsonl"
 UNIT_ANALYSIS = REPO / "studio" / "tests" / "fixtures" / "eval-unit-analysis.json"
@@ -187,7 +188,13 @@ class CatalogTests(unittest.TestCase):
         pinned = json.loads((REPO / "benchmarks" / "micro" / "tasks.json").read_text())["model"]
         self.assertRegex(pinned, r"-[0-9]{8}$")
         self.assertEqual((replay.DEFAULT_MODEL, eval_tiers.DEFAULT_MODEL), (pinned, pinned))
-        self.assertEqual(replay.task_catalog(REPO)["default_model"], pinned)
+        # Real discovery, pointed at a fixture packs folder rather than beside this checkout.
+        with tempfile.TemporaryDirectory() as folder:
+            make_pack(Path(folder) / "fixture-pack")
+            with mock.patch.dict(os.environ, {replay.packs.PACKS_ENV: folder}):
+                catalog = replay.task_catalog(REPO)
+        self.assertEqual(catalog["default_model"], pinned)
+        self.assertEqual([item["name"] for item in catalog["packs"]], ["test-pack"])
         self.assertEqual(eval_tiers.catalog(REPO)["unit_model"], pinned)
         with mock.patch.object(replay.Path, "read_text", side_effect=OSError):
             self.assertEqual(replay._pinned_model(), "claude-haiku-4-5-20251001")

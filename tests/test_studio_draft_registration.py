@@ -24,6 +24,8 @@ from test_studio_draft_tests import (  # noqa: E402
     BASE_REV, FIRST_REV, SECOND_REV, RUN_ONE, RUN_TWO, Admission, Handler, draft_at,
     draft_request, route_call)
 import test_studio_security as studio_security  # noqa: E402
+from test_replay_pack import make_pack  # noqa: E402
+from test_studio_replay_packs import harness as harness_checkout  # noqa: E402
 
 PROTOCOL = replay._engine_module("experiment_protocol")
 TASKS = [{"id": task, "label": task.upper(), "long": task == "c"} for task in ("a", "b", "c")]
@@ -102,6 +104,14 @@ def latest(supervisor, revision=FIRST_REV):
     return payload, payload["checkpoints"][0]["latest"]
 
 
+def fixture_harness(root):
+    """A committed stand-in harness checkout that declares a planning variance of `CV`."""
+    checkout = harness_checkout(Path(root) / "harness")
+    (checkout / "benchmarks" / "ablations.json").write_text(json.dumps(
+        {"planning": {"cv": CV, "source": "declared by the fixture"}}), encoding="utf-8")
+    return checkout
+
+
 def registry(root):
     return Path(root) / draft_tests.RECORDS_DIR / draft_registration.REGISTRY_DIR
 
@@ -177,23 +187,24 @@ class RegisterTests(unittest.TestCase):
         self.assertIn("Fallback rate", str(caught.exception))
 
     def test_a_real_evaluator_pack_is_registered_by_its_digest_against_the_declared_variance(self):
-        chosen = packs.discover(REPO)["packs"][0]
+        # A fixture harness checkout with a committed pack beside it, built here: the test never
+        # discovers packs beside this checkout, which would read the user's own repositories.
+        checkout = fixture_harness(Path(self.tmp.name) / "fixture")
+        make_pack(checkout.parent / "fixture-pack")
+        chosen = packs.discover(checkout)["packs"][0]
         tasks = [item["id"] for item in chosen["tasks"]]
+        spec_value = {"model": "claude-test", "repetitions": 5, "tasks": tasks,
+                      "pack": {"name": chosen["name"], "digest": chosen["digest"]}}
         with draft_at():
-            found = draft_registration.register(
-                self.root, REPO, "tuned", {"model": "claude-test", "repetitions": 8,
-                                           "tasks": tasks, "pack": {"name": chosen["name"],
-                                                                    "digest": chosen["digest"]}},
-                EFFECT, None)
-        self.assertEqual((found["pack"]["digest"], found["committed"]["pack_digest"],
-                          found["manifest_digest"]), (chosen["digest"],) * 3)
-        self.assertEqual(found["power"]["cv"], draft_tests.declared_planning(REPO)["cv"])
+            found = draft_registration.register(self.root, checkout, "tuned", spec_value,
+                                                EFFECT, None)
+        self.assertEqual((found["pack"]["name"], found["pack"]["digest"],
+                          found["committed"]["pack_digest"], found["manifest_digest"]),
+                         ("test-pack",) + (chosen["digest"],) * 3)
+        self.assertEqual(found["power"]["cv"], draft_tests.declared_planning(checkout)["cv"])
         with draft_at(), self.assertRaises(draft_tests.DraftTestError):
-            draft_registration.register(
-                self.root, REPO, "tuned", {"model": "claude-test", "repetitions": 8,
-                                           "tasks": tasks, "pack": {"name": chosen["name"],
-                                                                    "digest": "0" * 64}},
-                EFFECT, None)
+            draft_registration.register(self.root, checkout, "tuned", dict(
+                spec_value, pack={"name": chosen["name"], "digest": "0" * 64}), EFFECT, None)
 
     def test_an_underpowered_registration_is_refused_with_the_detectable_effect_and_trials(self):
         with self.assertRaises(draft_tests.DraftTestError) as caught:
@@ -642,7 +653,9 @@ class RouteTests(unittest.TestCase):
     def test_the_register_route_names_its_citizen_command(self):
         commands = {item.path: item.cli_command for item in server.ROUTES.entries}
         self.assertEqual(commands["/api/configure/test/register"],
-                         ("citizen", "draft", "test", "--register"))
+                         ("citizen", "draft", "test", "{draft}", "--register", "--model", "{model}",
+                          "--repetitions", "{repetitions}", "--task", "{task}", "--pack", "{pack}",
+                          "--pack-digest", "{pack_digest}", "--effect", "{effect}", "--json"))
 
 
 class CliTests(unittest.TestCase):
@@ -668,7 +681,11 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 0, text)
             self.assertEqual(spy.call_args.args[2:], ("tuned", SPEC, 0.15, None))
             payload = json.loads(out)
-            self.assertEqual((payload["revision"], payload["tasks"]), (FIRST_REV, ["a", "b", "c"]))
+            # The register route's own object: the registration and its power line.
+            self.assertEqual(sorted(payload), ["power_line", "registration"])
+            registered = payload["registration"]
+            self.assertEqual((registered["revision"], registered["tasks"]),
+                             (FIRST_REV, ["a", "b", "c"]))
             self.assertIn("registered ", text)
             self.assertIn("plan: benchmarks/preregistrations/", text)
             with draft_at():
@@ -685,7 +702,7 @@ class CliTests(unittest.TestCase):
                                           "--task", "a", "--task", "b", "--task", "c",
                                           "--effect", "0.15", "--json"], Path(tmp))
             self.assertEqual(code, 2)
-            self.assertEqual(json.loads(out)["error"]["code"], "draft_test_underpowered")
+            self.assertEqual(json.loads(out), {"error": "draft_test_underpowered"})
 
 
 class RegisterRouteSecurityTests(studio_security.StudioSecurityFixture):
