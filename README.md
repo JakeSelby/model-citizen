@@ -352,6 +352,8 @@ and the [sync model](docs/sync-model.md).
 ## Go deeper
 
 - [Compatibility catalog and qualification contract](docs/compatibility.md)
+- [The Studio](docs/studio.md): drafts, apply and rollback, runs, comparisons and reports in a
+  local browser view
 - [How shared primitives and adapters work](docs/how-it-works.md)
 - [All preferences and stance rationale](docs/preferences.md)
 - [Author a custom stance, skill, role or workflow](docs/primitive-authoring.md)

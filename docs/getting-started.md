@@ -94,6 +94,10 @@ preference variant in force. On a fresh home it says `no measured sessions in th
 until a session or two has been recorded; `--rescan` backfills from transcripts you already have.
 [Usage](usage.md) explains the annotations and what the figures do not yet support.
 
+To see the same harness in a browser, run `citizen studio`. It shows health, configuration and
+the module library, and lets you change the harness in a draft before anything goes live; the
+[Studio guide](studio.md) covers it.
+
 ## What it costs
 
 Model access is billed by your provider or covered by your subscription; rate-limit windows and
