@@ -87,9 +87,10 @@ def resolve(parser, path):
     """The option strings the parser a command path reaches defines, or None for no such command.
 
     Each word selects a subcommand while the parser has subcommands, and otherwise fills the next
-    positional, which must be one of its choices when it has any. Options come from the parser's
-    own actions, never from help text, so another option's description naming a flag proves
-    nothing.
+    positional, which must be one of its choices when it has any; a word left over once every
+    positional is filled, or on a parser that takes none, is no command. Options come from the
+    parser's own actions, never from help text, so another option's description naming a flag
+    proves nothing.
     """
     positionals = None
     for word in path:
@@ -103,8 +104,10 @@ def resolve(parser, path):
         if positionals is None:
             positionals = [action for action in parser._actions if not action.option_strings]
         if not positionals:
-            break
-        action = positionals.pop(0)
+            return None
+        action = positionals[0]
+        if action.nargs not in ("*", "+", argparse.REMAINDER):
+            positionals.pop(0)
         if action.choices is not None and word not in action.choices:
             return None
     return set(flag for action in parser._actions for flag in action.option_strings)
@@ -182,6 +185,8 @@ class StudioGuideCommandTests(unittest.TestCase):
             "  --pack PACK --pack-digset DIGEST",
             "citizen draft no-such-action NAME",
             "citizen runs replay no-such-action --json",
+            "citizen runs catalog free",
+            "citizen evidence verfy",
             "```",
             "",
             "`citizen runs replay result` and `citizen draft list`, each with `--request FILE`.",
@@ -194,6 +199,8 @@ class StudioGuideCommandTests(unittest.TestCase):
             "citizen draft no-such-action NAME: citizen draft no-such-action is not a command",
             "citizen runs replay no-such-action --json: "
             "citizen runs replay no-such-action is not a command",
+            "citizen runs catalog free: citizen runs catalog free is not a command",
+            "citizen evidence verfy: citizen evidence verfy is not a command",
             "citizen draft list: --request not on citizen draft list",
         ])
 
