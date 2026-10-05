@@ -25,6 +25,10 @@ URL and opens a new signed-in tab. `--port PORT` asks for a port; when it is tak
 a free one and says so. `--json` prints one result object with the URL, port and process id, and
 never a credential. State lives under `~/.local/state/agent-harness/studio/`.
 
+The Studio routes pages after a `#`: the server serves the page only at `/`, so a page's address
+is the Studio's URL followed by `/#/` and the page path, such as `/#/reports/rules`. An address
+without the `#`, such as `/reports/rules`, answers 404 `not_found` even when signed in.
+
 Which browsers and platforms are supported, and the release evidence behind that, is in
 [the compatibility catalog](compatibility.md#studio-browser-and-platform-support).
 
@@ -48,22 +52,23 @@ random `*.localhost` host name, unique to the running instance.
 
 ## The pages
 
-- **Hub** (`/`): the installed version, a newer release on `stable` with its changelog link, each
+- **Hub** (`/#/`): the installed version, a newer release on `stable` with its changelog link, each
   failing `citizen doctor` check with the doctor's own repair command, projection drift from
   `citizen diff`, and recent runs. It updates and syncs nothing by itself: a drift fix goes through
   a reviewed `citizen sync --dry-run` first. Its cards link to the usage and trends reports.
-- **Configure** (`/configure`): the effective selection, each value with the layer that set it and
+- **Configure** (`/#/configure`): the effective selection, each value with the layer that set it and
   the values it overrode, as `citizen selection` reports it. Changes are made in a draft, below.
-- **Library** (`/library`): every module with its root, manifest, state, the layer that switched it
+- **Library** (`/#/library`): every module with its root, manifest, state, the layer that switched it
   on or off, the files it projects to for Claude Code and Codex, and its token cost from the static
   context figure. A module whose name collides with a core module is flagged, and a fork shows the
   core module it came from. It reads the same catalog as `citizen catalog`.
-- **Experiments** (`/experiments`): suites to run, run history and the comparison of two runs.
-- **Activity** (`/activity`): hook decisions and governed changes, newest first, paged, with their
+- **Experiments** (`/#/experiments`): suites to run, run history and the comparison of two runs;
+  a run's detail is at `/#/experiments/runs/RUN_ID`.
+- **Activity** (`/#/activity`): hook decisions and governed changes, newest first, paged, with their
   session, repository, hook and source. It is the same query as `citizen activity`. An apply's entry
   is where it is rolled back.
-- **Reports**: rule health (`/reports/rules`), spend and usage (`/reports/usage`) and trends
-  (`/reports/trends`). The Reports tab itself is still a placeholder; reach the reports from the
+- **Reports**: rule health (`/#/reports/rules`), spend and usage (`/#/reports/usage`) and trends
+  (`/#/reports/trends`). The Reports tab itself is still a placeholder; reach the reports from the
   Hub's cards, the Library, or their addresses.
 
 Pages refresh within two seconds of a change made from the CLI, an agent or an editor. The header
@@ -96,8 +101,17 @@ In Configure, pick a draft with **Drafts** in the header, then change it:
 - **Hand-edit a rule, skill or stance** with live lint, the context budget and the runtime
   projection, then save an explicit checkpoint. CLI: `citizen draft module read|preview|save`.
 
-The `save` commands take `--base-revision` (the revision you previewed) and `--idempotency-key`,
-so a retried save is applied once.
+Every `save` needs `--base-revision` (the revision you read or previewed) and `--idempotency-key`,
+so a retried save is applied once. `citizen draft selection save` and `citizen draft settings save`
+also need `--changes FILE`, a JSON file of the changes, and `citizen draft module save NAME MODULE`
+needs `--content FILE`, the new source, and `--source-digest`, the digest of the source you read:
+
+```sh
+citizen draft selection save NAME --base-revision REV --idempotency-key KEY --changes FILE
+citizen draft settings save NAME --base-revision REV --idempotency-key KEY --changes FILE
+citizen draft module save NAME MODULE --base-revision REV --source-digest DIGEST \
+  --idempotency-key KEY --content FILE
+```
 
 ### Templates and forks
 
@@ -156,7 +170,7 @@ an alert in the apply panel offering the same two recover choices.
 
 ## First run
 
-On a fresh install the Hub offers **Set up Model Citizen** (`/setup`), which walks one draft named
+On a fresh install the Hub offers **Set up Model Citizen** (`/#/setup`), which walks one draft named
 `first-run` to an applied, doctor-checked harness: check the install, start a draft, say who you
 are, pick a stance for each dimension, run a free check (`citizen lint`), review and apply, and
 confirm the doctor checks. Leaving halfway changes nothing live, and the draft is kept, so setup
@@ -199,8 +213,34 @@ per-run ceiling and a whole-set cap, in dollars, and a pricing basis (API credit
 limits) that says how to read them. A confirmation is single-use and bound to the request it was
 shown for. A run that reaches its cap stops, keeps its finished cases and marks the rest not run; a
 client usage-limit error stops it as a limit, not a failure. Its spend is recorded in the usage
-ledger under the run's id. Paid suites are launched from the Studio; the CLI has no paid launch
-command yet.
+ledger under the run's id.
+
+The CLI applies the same guard. The paid suites in the catalog (`native-acceptance`,
+`live-replay`, `micro-tier` and `unit-eval`) start only through their own commands, which run the
+Studio's route handlers and so resolve targets and refuse exactly as the Studio does;
+`citizen runs start` refuses them and names the command to use. Each is a preview, then a start:
+
+```sh
+citizen runs replay preview --request FILE --json      # live replay
+citizen runs eval preview --request FILE --json        # micro tier and unit eval
+citizen runs native preview --request FILE --json      # native acceptance
+citizen runs draft-test plan --request FILE --json     # a draft's paired test
+```
+
+`FILE` (or `-` for standard input) is the JSON body the Studio would send. The preview answers
+with the estimate, the per-run ceiling (`max_budget_usd`), the whole-set cap (`spend_cap_usd`),
+the pricing basis, the resolved request and a one-use `confirmation_token`; a draft test's plan
+carries them under `preview`. Nothing has started.
+To start, send the same group's `start` a body carrying the preview's resolved request, unchanged,
+and its token, for example `citizen runs replay start --request FILE --json`. A changed request
+needs a new preview, and a token is never reused. The bodies, with an example of each, are in the
+studio-loop skill's [request reference](../primitives/skills/studio-loop/requests.md).
+
+`citizen runs start` keeps its own spend flags for any other catalog suite that spends usage:
+`--max-budget-usd` and `--spend-cap` set the two caps in dollars and `--pricing-source` the basis.
+Without `--confirm-spend`, such a suite prints its estimate, caps and a token and exits 3 having
+started nothing; repeating the command with `--confirm-spend TOKEN` starts it. A free suite ignores
+the guard and starts at once.
 
 ### Native acceptance
 
@@ -235,6 +275,11 @@ A tier whose engine is not in the target checkout is absent from the list rather
 directory or a plugin's own eval directory, as runs with their cases, both arms and scores. A
 run's detail page links the original HTML report. A result in a schema version other than 1 is
 skipped and reported, never guessed at.
+
+Each paid group also reads its results: `citizen runs replay result`, `citizen runs eval result`
+and `citizen runs native progress`, each with `--request FILE`. `citizen runs eval run` starts a
+free tier (offline rule detection or the hook replay matrix), and `citizen runs native retry`
+retries one failed case into a fresh log.
 
 ### History and detail
 
@@ -297,7 +342,7 @@ point estimate.
 Each benchmark series plotted by version, with its change notes and the intervals its engine
 stored, beside the project's proof set and its `citizen evidence verify` status. Ratios are
 compared across days, never dollars. History appears after `citizen runs reindex`; with none
-indexed, the page says so.
+indexed, the page says so. `citizen reports trends --json` prints the same report.
 
 ## Rule health
 
@@ -305,7 +350,7 @@ Every loaded rule with the status and reason `citizen usage --rules` gives it (m
 unmeasured), its detector hits over 7, 30 and 90 days, and its context cost. Hits come from your
 own sessions, so they are labelled exploratory, and an adherence figure from a detector under its
 precision floor is marked unreliable. **Try without it** opens a draft with the rule switched off
-and its test ready to run. What each detector looks for is in
+and its test ready to run; from the CLI it is `citizen draft try-without rules.NAME`. What each detector looks for is in
 [rule telemetry](usage.md#rule-telemetry).
 
 ## Spend and usage
@@ -318,6 +363,15 @@ having no session, is grouped under its run id. The ledger itself is described i
 ## From the CLI
 
 Every page shows its CLI equivalents, and every command on this page runs headless, so an agent
-can create a draft, edit it, review and apply it, roll it back, run free suites, read history,
-compare replays and register a draft test without the browser. Launching a paid run (native
-acceptance, live replay, the paid evaluation tiers, a draft test) is Studio-only for now.
+can create a draft, edit it, review and apply it, roll it back, run free suites, preview and start
+paid runs, read history and trends, compare replays and register and run a draft test without the
+browser. The commands that answer for a Studio route (`citizen runs replay|eval|native|draft-test`,
+`citizen reports trends` and `citizen draft try-without`) call that route's own handler, so they
+print the JSON the Studio would receive.
+
+The [studio-loop skill](../primitives/skills/studio-loop/SKILL.md) is the agent's guide to that
+loop: draft, test and apply with `--json` throughout, then open the Studio with
+`citizen studio --detach --json` and hand over its `url` when the user has to see or decide
+something. It holds the agent to the same limits as the Studio: a paid run starts only on the
+user's go for the exact preview shown, an apply only on their go for the reviewed revision, and a
+refusal is reported, never worked around.
