@@ -658,14 +658,15 @@ def container_name(*parts):
     return "%srun-%d-%s" % (arms.IMAGE_PREFIX, os.getpid(), re.sub(r"[^a-zA-Z0-9_.-]", "-", text))
 
 
-def run_check(launch, image, workdir, argv, env=None, name=None, session_stream=None, **kwargs):
+def run_check(launch, image, workdir, argv, env=None, name=None, session_stream=None, session_baseline=None,
+              **kwargs):
     """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`),
-    with `session_stream`, when given, mounted read-only beside the tree. On a timeout the container
-    is removed by name before the timeout is raised on: killing the Docker client alone would leave
-    it running the code it was checking."""
+    with `session_stream` and `session_baseline`, when given, mounted read-only beside the tree. On a
+    timeout the container is removed by name before the timeout is raised on: killing the Docker
+    client alone would leave it running the code it was checking."""
     name = name or container_name("check")
     command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs,
-                                 session_stream=session_stream)
+                                 session_stream=session_stream, session_baseline=session_baseline)
     client = arms.client_env()
     try:
         return launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
@@ -1290,7 +1291,7 @@ def _ran(done):
     return (done.returncode == 0 and count > 0, "ran %d, exit %d" % (count, done.returncode))
 
 
-def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=None):
+def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=None, baseline=None):
     """(passed, detail), with the check run in a fresh container of `image`, never on this machine.
     A task declaring metrics gets a third item, its recorded metrics with `metric_stream`, whether
     `stream`, the run's saved stream-json, reached an oracle that accepts it (`ORACLE_DRIVER`).
@@ -1302,7 +1303,8 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=N
     container of the bare image, with the tree mounted, plus the scored run's session stream
     read-only when one is given, the image's own HOME, no network and no credential. The held-back
     test files are written into the tree from this repository's history first; an oracle is sent
-    on stdin, so nothing else is mounted."""
+    on stdin, so nothing else is mounted but a long-session checkpoint's `baseline`, the session's
+    totals before its segment, read-only at `replay_arms.SESSION_BASELINE`."""
     workdir = Path(workdir)
     tests = task["tests"]
     name = name or container_name("check", task["id"])
@@ -1312,7 +1314,8 @@ def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=N
         mounted = arms.SESSION_STREAM if stream is not None else None
         takes = takes_stream(source)
         stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR, mounted, takes, arms.WORKDIR)
-        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, session_stream=stream, input=stdin)
+        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, session_stream=stream,
+                         session_baseline=baseline, input=stdin)
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
@@ -1480,6 +1483,17 @@ def session_stream(stdout, folder):
         stdout = stdout.decode("utf-8", errors="replace")
     path = Path(folder) / "session-stream.jsonl"
     path.write_text(stdout or "", encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path
+
+
+def session_baseline(totals, path):
+    """A checkpoint's baseline, the session's totals before its segment
+    (`replay_session.session_totals`), written to `path` for its check container to mount
+    read-only at `replay_arms.SESSION_BASELINE`."""
+    path = Path(path)
+    path.write_text(json.dumps({"total_cost_usd": totals["total_cost_usd"],
+                                "modelUsage": totals.get("modelUsage") or {}}, sort_keys=True), encoding="utf-8")
     os.chmod(str(path), 0o644)
     return path
 
@@ -1707,14 +1721,15 @@ def run_long_session(task, rep, arm, opts, launch=subprocess.run):
             saved.append(done.get("stdout") or "")
             return done
 
-        def checker(name, stream):
+        def checker(name, stream, baseline):
             checkpoint = replay_pack.checkpoint_task(task, name)
             path = parent / ("segment-%s.jsonl" % name)
             path.write_text(stream, encoding="utf-8")
             os.chmod(str(path), 0o644)
-            scorer = opts.get("session_scorer") or (lambda t, w, r, s: score(t, w, r, opts["arms"]["bare"]["image"],
-                                                                              launch, stream=s))
-            return scorer(checkpoint, workdir, opts["repo"], path)
+            totals = session_baseline(baseline, parent / ("segment-%s-baseline.json" % name))
+            scorer = opts.get("session_scorer") or (lambda t, w, r, s, b: score(
+                t, w, r, opts["arms"]["bare"]["image"], launch, stream=s, baseline=b))
+            return scorer(checkpoint, workdir, opts["repo"], path, totals)
 
         rows = replay_session.run_session(task, base, cap, recording, checker, TIERS)
         if opts.get("raw"):
