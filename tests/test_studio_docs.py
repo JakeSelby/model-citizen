@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: MIT
 """Every `citizen` command the Studio guide names exists, with every flag it shows."""
-import contextlib
+import argparse
 import importlib.machinery
 import importlib.util
-import io
 import itertools
 import re
 import unittest
@@ -26,24 +25,23 @@ FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z-]*)")
 SPAN = re.compile(r"`([^`]+)`")
 
 
-def has_flag(flag, text):
-    """Whether help text lists `flag` as a whole flag, so `--target` never matches `--target-kind`."""
-    return re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(flag), text) is not None
-
-
 def references(text):
-    """Each command reference in document order, as `(command, flags, attributed)`.
+    """Each command reference in document order, as `(command, flags, governors)`.
 
-    A code-block line starting `citizen` is joined with its `\\` continuation lines. An inline span
-    starting `citizen` is a command too. An inline span starting `--` names flags of the command
-    referenced most recently before it, and is returned with `attributed` set.
+    A code-block line starting `citizen` is joined with its `\\` continuation lines; an inline span
+    starting `citizen` is a command too, and both come back with `governors` None. An inline span
+    starting `--` comes back with `command` None and `governors` the commands it belongs to: every
+    command named earlier in its paragraph since the last flag span, so "`a` and `b`, each with
+    `--x`" checks both. With none, it belongs to the command named most recently, as `[]`.
     """
     found = []
     in_block = False
     pending = None
+    paragraph = []
     for line in text.splitlines():
         if line.startswith("```"):
             in_block = not in_block
+            paragraph = []
             continue
         if in_block:
             body = line.split("  #", 1)[0].rstrip()
@@ -54,20 +52,24 @@ def references(text):
             else:
                 continue
             if not body.endswith("\\"):
-                found.append((pending, FLAG.findall(pending), False))
+                found.append((pending, FLAG.findall(pending), None))
                 pending = None
             continue
+        if not line.strip():
+            paragraph = []
         for span in SPAN.findall(line):
             if span.startswith("citizen "):
-                found.append((span, FLAG.findall(span), False))
+                found.append((span, FLAG.findall(span), None))
+                paragraph.append(span)
             elif span.startswith("--"):
-                found.append((None, FLAG.findall(span), True))
+                found.append((None, FLAG.findall(span), paragraph))
+                paragraph = []
     return found
 
 
 def documented_commands(text):
     """Each `citizen` command the text names, inline or in a code block with its continuations."""
-    return [command for command, _flags, attributed in references(text) if not attributed]
+    return [command for command, _flags, governors in references(text) if governors is None]
 
 
 def expand(command):
@@ -81,51 +83,70 @@ def expand(command):
     return [list(choice) for choice in itertools.product(*path)], FLAG.findall(command)
 
 
-def help_text(path):
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-        try:
-            harness.main(path + ["--help"])
-        except SystemExit as exc:
-            return exc.code, out.getvalue()
-    return 0, out.getvalue()
+def resolve(parser, path):
+    """The option strings the parser a command path reaches defines, or None for no such command.
 
-
-def problems(text):
-    """Every command, or flag, the text names that the CLI's own `--help` does not list.
-
-    A flag shown with a command must be in the help of every path it expands to. A flag in a prose
-    span must be in the help of at least one path of the command referenced before it, since prose
-    such as "every `save` needs `--base-revision`" follows a command naming several actions.
+    Each word selects a subcommand while the parser has subcommands, and otherwise fills the next
+    positional, which must be one of its choices when it has any. Options come from the parser's
+    own actions, never from help text, so another option's description naming a flag proves
+    nothing.
     """
-    found = []
-    helps = {}
+    positionals = None
+    for word in path:
+        subcommands = [action for action in parser._actions
+                       if isinstance(action, argparse._SubParsersAction)]
+        if subcommands and positionals is None:
+            if word not in subcommands[0].choices:
+                return None
+            parser = subcommands[0].choices[word]
+            continue
+        if positionals is None:
+            positionals = [action for action in parser._actions if not action.option_strings]
+        if not positionals:
+            break
+        action = positionals.pop(0)
+        if action.choices is not None and word not in action.choices:
+            return None
+    return set(flag for action in parser._actions for flag in action.option_strings)
 
-    def help_for(path):
-        key = tuple(path)
-        if key not in helps:
-            helps[key] = help_text(path)
-        return helps[key]
+
+def problems(text, parser=None):
+    """Every command, or flag, the text names that the CLI's parser does not define.
+
+    A flag shown with a command, or in a prose span that names its commands, must be defined on
+    every path each command expands to. A prose flag after no command in its paragraph must be on
+    at least one path of the command named before it, since prose such as "every `save` needs
+    `--base-revision`" follows a command naming several actions.
+    """
+    parser = parser if parser is not None else harness.build_parser()
+    found = []
+
+    def check(command, flags, every):
+        options = [(path, resolve(parser, path)) for path in expand(command)[0]]
+        for path, defined in options:
+            if defined is None:
+                found.append("%s: citizen %s is not a command" % (command, " ".join(path)))
+        defined = [(path, opts) for path, opts in options if opts is not None]
+        for flag in flags:
+            if every:
+                found.extend("%s: %s not on citizen %s" % (command, flag, " ".join(path))
+                             for path, opts in defined if flag not in opts)
+            elif defined and not any(flag in opts for _path, opts in defined):
+                found.append("%s: %s not on any of its commands" % (command, flag))
 
     last = None
-    for command, flags, attributed in references(text):
-        if attributed:
-            if last is None:
-                found.extend("%s: no command before it" % flag for flag in flags)
-                continue
-            texts = [help_for(path)[1] for path in expand(last)[0]]
-            found.extend("%s: %s not in its help" % (last, flag) for flag in flags
-                         if not any(has_flag(flag, text) for text in texts))
-            continue
-        last = command
-        for path in expand(command)[0]:
-            code, text = help_for(path)
-            if code != 0:
-                found.append("%s: citizen %s fails --help" % (command, " ".join(path)))
-                continue
-            found.extend("%s: %s not in citizen %s --help" % (command, flag, " ".join(path))
-                         for flag in flags if not has_flag(flag, text))
-    return found
+    for command, flags, governors in references(text):
+        if governors is None:
+            last = command
+            check(command, flags, True)
+        elif governors:
+            for governor in governors:
+                check(governor, flags, True)
+        elif last is None:
+            found.extend("%s: no command before it" % flag for flag in flags)
+        else:
+            check(last, flags, False)
+    return list(dict.fromkeys(found))
 
 
 class StudioGuideCommandTests(unittest.TestCase):
@@ -143,12 +164,13 @@ class StudioGuideCommandTests(unittest.TestCase):
 
     def test_continuation_lines_and_prose_flags_are_read(self):
         refs = references(GUIDE.read_text())
-        commands = [command for command, _flags, attributed in refs if not attributed]
+        commands = documented_commands(GUIDE.read_text())
         self.assertTrue(any("--pack-digest" in command and command.startswith("citizen draft test")
                             for command in commands))
-        prose = set(flag for _command, flags, attributed in refs if attributed for flag in flags)
+        prose = set(flag for command, flags, _governors in refs if command is None
+                    for flag in flags)
         self.assertTrue({"--port", "--json", "--base-revision", "--changes",
-                         "--confirm-spend"} <= prose, prose)
+                         "--request"} <= prose, prose)
 
     def test_the_check_catches_a_bogus_command_or_flag(self):
         fixture = "\n".join((
@@ -159,23 +181,37 @@ class StudioGuideCommandTests(unittest.TestCase):
             "citizen draft test NAME --register --model M \\",
             "  --pack PACK --pack-digset DIGEST",
             "citizen draft no-such-action NAME",
+            "citizen runs replay no-such-action --json",
             "```",
             "",
-            "Then `citizen draft apply NAME --revision REV` applies it.",
+            "`citizen runs replay result` and `citizen draft list`, each with `--request FILE`.",
         ))
         self.assertEqual(problems(fixture), [
-            "citizen studio: --prot not in its help",
-            "citizen runs start lint --target installed: --target not in citizen runs start lint "
-            "--help",
+            "citizen studio: --prot not on any of its commands",
+            "citizen runs start lint --target installed: --target not on citizen runs start lint",
             "citizen draft test NAME --register --model M --pack PACK --pack-digset DIGEST: "
-            "--pack-digset not in citizen draft test --help",
-            "citizen draft no-such-action NAME: citizen draft no-such-action fails --help",
+            "--pack-digset not on citizen draft test",
+            "citizen draft no-such-action NAME: citizen draft no-such-action is not a command",
+            "citizen runs replay no-such-action --json: "
+            "citizen runs replay no-such-action is not a command",
+            "citizen draft list: --request not on citizen draft list",
         ])
 
+    def test_a_flag_named_only_in_another_options_help_fails(self):
+        parser = argparse.ArgumentParser(prog="citizen")
+        sub = parser.add_subparsers(dest="cmd", required=True)
+        test = sub.add_parser("test")
+        test.add_argument("--model", help="with --register: the model the plan names")
+        self.assertIn("--register", test.format_help())
+        self.assertEqual(problems("`citizen test --register --model M`", parser),
+                         ["citizen test --register --model M: --register not on citizen test"])
+
     def test_a_whole_flag_never_matches_a_longer_one(self):
-        self.assertFalse(has_flag("--target", "  --target-kind KIND\n"))
-        self.assertFalse(has_flag("--base", "  --base-revision REV\n"))
-        self.assertTrue(has_flag("--target-kind", "  --target-kind KIND\n"))
+        parser = argparse.ArgumentParser(prog="citizen")
+        parser.add_subparsers(dest="cmd").add_parser("start").add_argument("--target-kind")
+        self.assertEqual(problems("`citizen start --target K`", parser),
+                         ["citizen start --target K: --target not on citizen start"])
+        self.assertEqual(problems("`citizen start --target-kind K`", parser), [])
         self.assertEqual(expand("citizen draft module read|save NAME --json"),
                          ([["draft", "module", "read"], ["draft", "module", "save"]], ["--json"]))
 

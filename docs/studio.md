@@ -26,8 +26,9 @@ a free one and says so. `--json` prints one result object with the URL, port and
 never a credential. State lives under `~/.local/state/agent-harness/studio/`.
 
 The Studio routes pages after a `#`: the server serves the page only at `/`, so a page's address
-is the Studio's URL followed by `/#/` and the page path, such as `/#/reports/rules`. An address
-without the `#`, such as `/reports/rules`, answers 404 `not_found` even when signed in.
+is the Studio's URL, which ends in `/`, followed by `#/` and the page path, such as
+`/#/reports/rules`. An address without the `#`, such as `/reports/rules`, answers 404 `not_found`
+even when signed in.
 
 Which browsers and platforms are supported, and the release evidence behind that, is in
 [the compatibility catalog](compatibility.md#studio-browser-and-platform-support).
@@ -236,11 +237,9 @@ and its token, for example `citizen runs replay start --request FILE --json`. A 
 needs a new preview, and a token is never reused. The bodies, with an example of each, are in the
 studio-loop skill's [request reference](../primitives/skills/studio-loop/requests.md).
 
-`citizen runs start` keeps its own spend flags for any other catalog suite that spends usage:
-`--max-budget-usd` and `--spend-cap` set the two caps in dollars and `--pricing-source` the basis.
-Without `--confirm-spend`, such a suite prints its estimate, caps and a token and exits 3 having
-started nothing; repeating the command with `--confirm-spend TOKEN` starts it. A free suite ignores
-the guard and starts at once.
+`citizen runs start` also defines `--max-budget-usd`, `--spend-cap`, `--pricing-source` and
+`--confirm-spend`, but every suite in today's catalog that spends usage is refused there before
+its spend guard runs, so those flags apply to none of them; a free suite starts at once.
 
 ### Native acceptance
 
