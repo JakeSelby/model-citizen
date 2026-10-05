@@ -395,6 +395,7 @@ development_status:
   ah-sp018-spike-reach-the-studio-from-a-phone-without: backlog
 
   ah-e027-definitive-evaluation-a-powered-pre-registered: in-progress
+  ah-b177-fix-benchmarks-read-a-resumed-turn-s-cost-as-the: ready-for-dev
   ah-d014-decide-the-definitive-run-s-design-and-budget: backlog
   ah-s334-pack-v1-1-harder-production-tasks-off-the: backlog
   ah-s335-behaviour-graders-a-graded-score-contract-for: ready-for-dev
@@ -538,6 +539,7 @@ development_status:
   ah-b171-fix-cost-sleep-and-poll-loops-instead-of: ready-for-dev
   ah-b173-fix-cost-the-fresh-session-thresholds-are: ready-for-dev
   ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
+  ah-b175-fix-benchmarks-summarise-refuses-a-partial-set: ready-for-dev
   ah-b176-fix-observability-hook-decisions-that-cannot-be: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done

@@ -304,8 +304,7 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
 - **SM-2 decides the result, from the saved rows alone.** Every row names its `task`, `arm`, trial
   (`rep`), `outcome` (`pass` or `fail`), `cost_usd` and `task_long`, so `summarise` re-derives
   every figure from `results.jsonl` without calling a model; rows that saved no pass or fail, as
-  the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, arm trial-set
-  mismatches across arms or tasks, contradictory outcomes, inconsistent long-task markers, boolean
+  the 2026-09-23 runs did, are refused rather than scored. Duplicate trials, contradictory outcomes, inconsistent long-task markers, boolean
   costs and non-finite pooled costs or ratios are refused too. A replay exclusively creates its
   results file before probes or model calls; even an existing empty file is refused, so concurrent
   runs cannot mix cohorts. After an interrupted run, choose a fresh output path. It reports, per arm, Cost-of-Pass (the
@@ -328,6 +327,26 @@ python3 scripts/cost_bench.py arms probe-egress --image <arm image>  # prove the
   With no marked long-task subset, no saving is claimed. Fewer than five paired trials per task and
   arm remain available as an exploratory diagnostic, but are explicitly ineligible for an SM-2
   proof or saving claim. No task is marked yet.
+- **A partial set is balanced, not refused.** A run stopped at its spend cap can leave a task with
+  unequal trials in its two arms, or tasks holding different trial counts. `summarise` balances
+  each task down to the smaller arm's count by dropping the latest trials, ordered by `rep`, and
+  leaves a task out only when one arm has no trial; each balancing and each left-out task is
+  printed with its reason, and SM-2, the oracle metrics, the delegation verdict and the
+  reliability section all read the balanced rows, the detections of a dropped trial included.
+  Balancing was chosen over leaving every uneven task out because it keeps the trials both arms
+  share. The verdict then reads `partial`, with the count of cells (tasks) used of those the rows
+  name; a task neither arm reached is not in the rows and so not counted. When balancing leaves no
+  task with a trial in both arms, the report still prints, with `0 of N cell(s) used`, every
+  estimate undefined and no claim. A runner that stops a set early writes `stop.json` beside its
+  results, naming its stop reason: `spend-cap`, `effort` (a run at another effort than the pinned
+  one) or `surface-drift`. A partial set supports no claim unless the run is pre-registered and its
+  plan's `Stopping rule` section grants it, read from the plan at its recorded commit:
+  `- **Partial set:** allowed` covers any stop, recorded or not, and
+  `- **Partial set:** allowed when <stop reason>[, <stop reason>]` only a recorded reason it names;
+  `not allowed` or an absent field grants none. Any other value is refused, by `replay` before the
+  run and by `summarise`, naming the value. When the permission covers the stop the verdict reads
+  `partial: <SM-2's verdict>`; otherwise a registered run's verdict reads `partial: no claim`. A
+  complete set reports exactly as before, and under `--json` a partial one adds a `partial` key.
 - **A Pareto view sits beside it:** `summarise --plot <file.svg>` writes a standalone cost-versus-pass-rate plot; unpriced arms have no plotted coordinate. The text report also gives a table of each arm's mean cost per attempt against its pass
   rate, naming the arm on the frontier and any arm another dominates.
 - **Whether delegation fired is reported under SM-2, as adherence, not as the result.** Each row
@@ -852,7 +871,9 @@ python3 scripts/cost_bench.py summarise --results <results dir>
   metrics are null. A turn that times out counts at the rest of the cap and errors the session.
 - **Each checkpoint is scored on the tree and its segment.** The check runs as a pack task's does,
   in a fresh container with no network, with the stream of every turn since the previous checkpoint
-  mounted read-only at `/session-stream.jsonl`.
+  mounted read-only at `/session-stream.jsonl`, and the session's totals as they stood before the
+  segment's first turn at `/session-baseline.json`: `{"total_cost_usd": n, "modelUsage": {model:
+  usage}}` from the last result before the segment, zero and empty for the first.
 - **The dry run prices the tier:** each scenario's turns, checkpoints and session cap, the ceiling
   if every session and preflight reaches its cap, then every planned session. Three scenarios,
   three arms and three reps on `claude-sonnet-5` at the 1.3.0 pack's caps is 378.75 USD.
@@ -868,8 +889,8 @@ reader of these rows, the Studio included, must key on `row_kind` before reading
   `metric_errors` and `metric_stream`, `segment_turns` (first and last turn of the segment), and
   over the segment `cost_usd`, `input_tokens`, `cache_creation_input_tokens`,
   `cache_read_input_tokens`, `output_tokens`, `main_peak_context_tokens` (the largest main-thread
-  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from each
-  result's per-model cost), with `cumulative_cost_usd` at the checkpoint.
+  call's input, cache write plus cache read) and `cost_by_tier` (model class to USD, from the
+  change in each model's cost), with `cumulative_cost_usd` at the checkpoint.
 - `row_kind: session`, one per session, `checkpoint` and `checkpoint_index` null: the session's
   totals of the same cost, token, context and tier fields, `main_mean_context_tokens`,
   `user_turns_planned`, `user_turns_run`, `stopped` (`cap`, `max_user_turns`, `error` or null),
@@ -878,9 +899,19 @@ reader of these rows, the Studio included, must key on `row_kind` before reading
   `cumulative_cost_usd`, `main_peak_context_per_turn`, `agent_turns_per_turn`, with
   `cost_per_turn_slope` (least squares on turn number) and the `branches` taken.
 
-The per-turn cost is the turn's own `total_cost_usd`; that a resumed `-p` run reports its own spend,
-not the session's to date, is how the pack's segment metrics read it too, and the first paid pilot
-should confirm it.
+A resumed `-p` turn's result reports `total_cost_usd` and `modelUsage` as the session's running
+totals, not the turn's own; only its top-level `usage` is the turn's alone. The first paid pilot
+showed it on all 17 turns: each turn's change in `total_cost_usd` equalled its own `usage` priced
+at the model's rates (#1243). So a turn's cost, tokens and cost by tier are the change in those
+totals since the previous turn's result, model by model, turn 1 counting against zero; a segment's
+figures are the change across the segment; and the session's spend, the figure its cap is held to,
+is the latest total. A segment metric of the pack's reads the same change, against the baseline file.
+A turn whose result names another session, or whose running totals fall below the previous turn's
+(`total_cost_usd` or any model's `modelUsage` key), lost the session on resume: it counts at the
+rest of the cap, as a timeout does, and errors the session with `error_kind: resume-lost`.
+The CLI's `--max-budget-usd` counts the invocation's own spend, not the restored session total: in
+the pilot a resumed turn given a 0.33 USD budget started at a 0.44 USD session total and ran to
+success, so each turn is given the cap less the latest total.
 
 **`summarise`** reads a long-session set and reports, per arm, the checkpoint pass rate, cost per
 session, the cost-per-turn slope, the main thread's peak context and the share of cost on model
