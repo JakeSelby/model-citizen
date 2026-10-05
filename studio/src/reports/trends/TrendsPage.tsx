@@ -24,7 +24,10 @@ export function TrendChart({ line, measure }: { line: Line; measure: Measure }) 
   const y = (value: number) => HEIGHT - PAD - (value - low) * (HEIGHT - 2 * PAD) / (high - low);
   const placed = line.points.map((point, index) => ({ point, index, figure: point.measures[measure.id] }))
     .filter((item) => item.figure && item.figure.value !== null);
-  return <svg className="trend-chart" role="img" aria-label={label} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
+  // Drawn no narrower than its own coordinate width, so an 11-unit label is never under 11 px; a
+  // phone scrolls the chart sideways inside its region instead.
+  return <div className="trend-chart-scroll" role="region" aria-label={`${measure.label} chart, series ${line.id}`} tabIndex={0}>
+  <svg className="trend-chart" role="img" aria-label={label} viewBox={`0 0 ${WIDTH} ${HEIGHT}`} width="100%">
     <text x={4} y={PAD - 8} fontSize="11" fill="currentColor">{numberText(high)}</text>
     <text x={4} y={HEIGHT - PAD + 14} fontSize="11" fill="currentColor">{numberText(low)}</text>
     <polyline fill="none" stroke="currentColor" strokeWidth={1.5}
@@ -37,9 +40,10 @@ export function TrendChart({ line, measure }: { line: Line; measure: Measure }) 
       </g>}
       <circle cx={x(index)} cy={y(figure!.value!)} r={4} stroke="currentColor"
         fill={point.evidence.label === "exploratory" ? "none" : "currentColor"} />
-      <text x={x(index)} y={HEIGHT - 8} fontSize="10" textAnchor="middle" fill="currentColor">{point.harness_version ?? "?"}</text>
+      <text x={x(index)} y={HEIGHT - 8} fontSize="11" textAnchor="middle" fill="currentColor">{point.harness_version ?? "?"}</text>
     </g>)}
-  </svg>;
+  </svg>
+  </div>;
 }
 
 function LinePanel({ line, measure }: { line: Line; measure: Measure }) {

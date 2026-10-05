@@ -50,37 +50,75 @@ POPULATE = """
   };
 })();
 """
-# Experiment panels in their populated state: the compare, hook-matrix and replay payloads are
-# the committed fixtures their frontend unit tests read; the start and preview answers around them
-# only move each panel to the point where it fetches its result.
-EXPERIMENTS_POPULATE = r"""
+# Populated states the test home cannot produce, served through one fetch stub. Each answer is a
+# committed fixture: the engine payloads the frontend unit tests read, and `a11y-states.json`, whose
+# entries name the unit test or response type they come from. Every other POST passes only when it
+# is a read on the allow-list; anything else is refused and recorded, so no click starts real work.
+STUBS = r"""
 (() => {
   const fixtures = Object.fromEntries(Object.entries(globalThis.__a11yFixtures)
     .map(([name, text]) => [name, JSON.parse(text)]));
+  const states = Object.fromEntries(Object.entries(fixtures.states).filter(([key]) => !key.startsWith('_'))
+    .map(([key, value]) => [key, Object.fromEntries(Object.entries(value).filter(([field]) => !field.startsWith('_')))]));
+  const READS = new Set(['/api/activity', '/api/configure/authoring/library', '/api/configure/authoring/preview',
+    '/api/configure/authoring/read', '/api/configure/module/preview', '/api/configure/module/read',
+    '/api/configure/preview', '/api/configure/read', '/api/configure/schema', '/api/configure/selection/preview',
+    '/api/configure/selection/read', '/api/configure/test/plan', '/api/evals/catalog', '/api/library',
+    '/api/overview', '/api/reports/spend', '/api/reports/trends', '/api/rules/health', '/api/runs/case-history',
+    '/api/runs/catalog', '/api/runs/detail', '/api/runs/history', '/api/runs/show', '/api/selection',
+    '/api/first-run']);
   const original = globalThis.fetch.bind(globalThis);
   const reply = (body) => Promise.resolve(new Response(JSON.stringify(body), {
     status: 200, headers: { 'Content-Type': 'application/json' } }));
+  const targets = [states.replayTable.rows[0].target, states.replayTable.rows[2].target];
+  globalThis.__a11yRefused = [];
   globalThis.fetch = (input, init = {}) => {
     const url = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
+    const method = (init.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
     const body = JSON.parse(init.body || '{}');
-    if (url === '/api/runs/compare') return reply(fixtures.compare);
-    // The test home's replay catalog lists no task; one is enough to fill the launch form.
-    if (url === '/api/runs/replay/catalog') return original(input, init).then((answer) => answer.json())
-      .then((catalog) => reply({ ...catalog, packs: [], default_pack: null,
-        tasks: [{ id: 'fixture-task', label: 'fixture-task' }] }));
-    if (url === '/api/evals/run') return reply({ run_id: 'fixture-hook-matrix', command: 'citizen evals run hook-matrix' });
-    if (url === '/api/evals/result') return reply({ schema_version: 1, analysis_error: null, result: fixtures.hook,
-      run: { run_id: 'fixture-hook-matrix', status: 'succeeded', suite: 'hook-matrix' } });
-    if (url === '/api/runs/replay/preview') return reply({ valid: true, errors: [], request: body.request,
-      estimate: { amount_usd: 1.25, basis: 'fixture', sample_count: 6 }, confirmation_token: 'fixture',
-      caps: { max_budget_usd: '2', spend_cap_usd: '20' }, command: 'citizen runs replay --fixture' });
-    if (url === '/api/runs/replay/start') return reply({ run_id: 'fixture-replay' });
-    if (url === '/api/runs/replay/result') return reply({ schema_version: 1, progress: [],
-      run: { run_id: 'fixture-replay', status: 'succeeded' },
-      result: { targets: [], table: [], spend_usd: 7.4, reported_spend_usd: 7.4, spend_cap_usd: '20',
-        stopped_at_cap: false, analysis: fixtures.replay, analysis_error: null, comparisons: [] } });
-    // Nothing else may start work: the audit reads fixtures, never a real run.
-    if (/\/(start|run|rerun)$/.test(url)) return Promise.resolve(new Response('{"error":"fixture_only"}', { status: 409 }));
+    switch (url) {
+      case '/api/runs/compare': return reply(fixtures.compare);
+      // The test home's replay catalog lists no task; one is enough to fill the launch form.
+      case '/api/runs/replay/catalog': return original(input, init).then((answer) => answer.json())
+        .then((catalog) => reply({ ...catalog, packs: [], default_pack: null,
+          tasks: [{ id: 'fixture-task', label: 'fixture-task' }] }));
+      case '/api/runs/replay/preview': return reply({ valid: true, errors: [], request: body.request,
+        estimate: { amount_usd: 1.25, basis: 'fixture', sample_count: 6 }, confirmation_token: 'fixture',
+        caps: { max_budget_usd: '2', spend_cap_usd: '20' }, command: 'citizen runs replay --fixture' });
+      case '/api/runs/replay/start': return reply({ run_id: 'fixture-replay' });
+      case '/api/runs/replay/result': return reply({ schema_version: 1, progress: states.replayProgress.rows,
+        run: { run_id: 'fixture-replay', status: 'succeeded' },
+        result: { targets, table: states.replayTable.rows, spend_usd: 7.4, reported_spend_usd: 7.4, spend_cap_usd: '20',
+          stopped_at_cap: false, analysis: fixtures.replay, analysis_error: null, comparisons: [] } });
+      case '/api/evals/run': return reply({ run_id: 'fixture-hook-matrix', command: 'citizen evals run hook-matrix' });
+      case '/api/evals/preview': return reply({ ...states.evalPreview, request: { ...body.request, revision: 'c'.repeat(40) } });
+      case '/api/evals/start': return reply({ run_id: 'fixture-micro-tier' });
+      case '/api/evals/result': return reply(body.run_id === 'fixture-micro-tier'
+        ? { schema_version: 1, analysis_error: null, result: { ...states.paidAnalysis, result: fixtures.unit },
+            run: { run_id: 'fixture-micro-tier', status: 'succeeded', suite: 'micro-tier' } }
+        : { schema_version: 1, analysis_error: null, result: fixtures.hook,
+            run: { run_id: 'fixture-hook-matrix', status: 'succeeded', suite: 'hook-matrix' } });
+      case '/api/experiments/native-acceptance/catalog': return reply(states.nativeCatalog);
+      case '/api/experiments/native-acceptance/preview': return reply(states.nativePreview);
+      case '/api/experiments/native-acceptance/start': return reply(states.nativeRun);
+      case '/api/experiments/native-acceptance/progress': return reply(states.nativeSnapshot);
+      case '/api/runs/detail': if (body.run_id === states.runDetail.run_id) return reply(states.runDetail); break;
+      case '/api/runs/evidence': return reply(states.runEvidence);
+      case '/api/configure/test/verdicts': return reply(fixtures.draftTest);
+      case '/api/configure/apply/review': return reply({ ...states.applyReview,
+        draft: { ...states.applyReview.draft, name: body.draft, revision: globalThis.__a11yRevision },
+        apply_command: 'citizen draft apply ' + body.draft + ' --revision ' + globalThis.__a11yRevision + ' --json' });
+      case '/api/configure/apply': return reply({ ...states.applyResult, message: 'Applied draft ' + body.draft + '.' });
+      case '/api/configure/apply/rollback/preview': return reply(states.rollbackPreview);
+      // A completed rollback reloads the timeline at once, so its result view never stays on screen;
+      // the refused one stays, and is the result view the audit can read.
+      case '/api/configure/apply/rollback': return reply({ ...states.rollbackRefused, review: states.rollbackPreview });
+    }
+    if (url === '/api/activity') return reply(states.activity);
+    if (method !== 'GET' && !READS.has(url)) {
+      globalThis.__a11yRefused.push(method + ' ' + url);
+      return Promise.resolve(new Response('{"error":"fixture_only"}', { status: 409 }));
+    }
     return original(input, init);
   };
 })();
@@ -137,7 +175,12 @@ UNREACHED = r"""
 SETTLED = ("(() => { const busy = document.querySelector('[aria-busy=true], .mantine-Loader-root');"
            " const text = document.body.innerText; const stable = text === globalThis.__a11yText;"
            " globalThis.__a11yText = text;"
-           " return !busy && document.querySelector('main h1') !== null && stable; })()")
+           " const heading = document.querySelector('main h1');"
+           " return !busy && heading !== null && !heading.dataset.a11yStale && stable; })()")
+# Before a route change: the old page's heading is marked and the remembered text dropped, so a
+# poll that still sees the previous page cannot read as settled.
+LEAVE = ("(() => { globalThis.__a11yText = null;"
+         " document.querySelectorAll('main h1').forEach(node => { node.dataset.a11yStale = '1'; }); })()")
 
 # Where focus is after a Tab press, and whether a keyboard user can see it.
 FOCUS_STATE = r"""
@@ -171,7 +214,13 @@ FOCUS_STATE = r"""
   const style = getComputedStyle(box);
   const rect = box.getBoundingClientRect();
   const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 2;
-  const outlineContrast = outline ? ratio(parse(style.outlineColor), backdrop(box.parentElement)) : 0;
+  // The ring is measured against what it paints over: a point in the middle of its band, which
+  // for an inset ring is the control's own content.
+  const ringOffset = parseFloat(style.outlineOffset) || 0;
+  const ringWidth = parseFloat(style.outlineWidth) || 0;
+  const under = document.elementFromPoint(rect.left - ringOffset - ringWidth / 2, rect.top + rect.height / 2);
+  const ringBackdrop = backdrop(under && under !== element ? under : box.parentElement);
+  const outlineContrast = outline ? ratio(parse(style.outlineColor), ringBackdrop) : 0;
   // The ring is the band between the box grown by the offset and grown again by the width. Every
   // ancestor that clips its overflow cuts it to its padding box; under half left is not visible.
   const grow = (by) => ({ l: rect.left - by, t: rect.top - by, r: rect.right + by, b: rect.bottom + by });
@@ -201,13 +250,20 @@ FOCUS_STATE = r"""
   const base = globalThis.__a11yBase && globalThis.__a11yBase.get(box);
   const now = globalThis.__a11ySnap ? globalThis.__a11ySnap(box) : { outline: '', shadow: style.boxShadow };
   const outlineShown = outline && outlineContrast >= 3 && !clipped && (!base || base.outline !== now.outline);
-  const ringShown = Boolean(base) && now.shadow !== 'none' && base.shadow !== now.shadow;
+  // A shadow that appears on focus counts only when its colour reaches 3:1 against the surface.
+  const shadowColor = parse((now.shadow.match(/rgba?\([^)]*\)/) || [''])[0]);
+  const shadowContrast = shadowColor.length >= 3 && (shadowColor.length === 3 || shadowColor[3] === 1)
+    ? ratio(shadowColor, backdrop(box.parentElement)) : 0;
+  const ringShown = Boolean(base) && now.shadow !== 'none' && base.shadow !== now.shadow && shadowContrast >= 3;
   const points = [[rect.left + rect.width / 2, rect.top + rect.height / 2],
     [rect.left + 2, rect.top + 2], [rect.right - 2, rect.top + 2],
     [rect.left + 2, rect.bottom - 2], [rect.right - 2, rect.bottom - 2]];
+  let cover = '';
   const covered = points.every(([x, y]) => {
     const hit = document.elementFromPoint(x, y);
-    return hit && !element.contains(hit) && !hit.contains(element);
+    const hides = hit && !element.contains(hit) && !hit.contains(element);
+    if (hides && !cover) cover = hit.tagName.toLowerCase() + '.' + String(hit.className).trim().split(/\s+/).slice(0, 2).join('.');
+    return hides;
   });
   const offscreen = rect.bottom < 0 || rect.top > innerHeight || rect.width === 0;
   globalThis.__a11yVisits = globalThis.__a11yVisits || 0;
@@ -222,6 +278,7 @@ FOCUS_STATE = r"""
       + (clipped ? ' clipped to ' + Math.round(100 * painted / band) + '% by ' + clipper : '')
       + (base && !outlineShown && !ringShown ? ' unchanged from the unfocused state' : ''),
     obscured: covered && !offscreen,
+    cover,
   });
 })()
 """
@@ -286,19 +343,49 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         self.devtools.call("Page.addScriptToEvaluateOnNewDocument", {"source": POPULATE % (
             fixture("trends.json"), fixture("rule-health.json"), fixture("spend.json"))})
 
-    def _populate_experiments(self) -> None:
+    def _install_stubs(self, revision: str = "") -> None:
         # Installed into the open page, which hash routing keeps: the hook-matrix fixture is larger
         # than one DevTools frame carries, so the fixtures go over in pieces.
         self.devtools.evaluate(e2e_support.PAGE_HELPERS)
-        self.devtools.evaluate("globalThis.__a11yFixtures = { compare: '', hook: '', replay: '' }")
-        for name, file in (("compare", "compare.json"), ("hook", "eval-hook-matrix.json"),
-                           ("replay", "replay-analysis.json")):
+        files = (("compare", "compare.json"), ("hook", "eval-hook-matrix.json"), ("replay", "replay-analysis.json"),
+                 ("unit", "eval-unit-analysis.json"), ("draftTest", "draft-test.json"), ("states", "a11y-states.json"))
+        self.devtools.evaluate("globalThis.__a11yFixtures = %s; globalThis.__a11yRevision = %s" % (
+            json.dumps({name: "" for name, _ in files}), json.dumps(revision)))
+        for name, file in files:
             text = (FIXTURES / file).read_text(encoding="utf-8")
             for start in range(0, len(text), 20000):
                 self.devtools.evaluate("__a11yFixtures.%s += %s" % (name, json.dumps(text[start:start + 20000])))
-        self.devtools.evaluate(EXPERIMENTS_POPULATE)
+        self.devtools.evaluate(STUBS)
+
+    def _assert_nothing_refused(self) -> None:
+        self.assertEqual(json.loads(self.devtools.evaluate("JSON.stringify(globalThis.__a11yRefused)")), [])
+
+    def _set_label(self, label: str, value: str, within: str = "document") -> None:
+        find = ("(() => { const root = %s; const label = [...root.querySelectorAll('label')]"
+                ".find(item => item.textContent.trim().startsWith(%s));"
+                " return label && (document.getElementById(label.htmlFor) || label.closest('div').querySelector('input, textarea')); })()"
+                % (within, json.dumps(label)))
+        self._wait("%s !== null && %s !== undefined" % (find, find), "%s did not render" % label)
+        self.devtools.evaluate(
+            "(input => { Object.getOwnPropertyDescriptor(input instanceof HTMLTextAreaElement"
+            " ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value').set.call(input, %s);"
+            " input.dispatchEvent(new Event('input', { bubbles: true })); })(%s)" % (json.dumps(value), find))
+        self._wait("%s.value === %s" % (find, json.dumps(value)), "%s did not take its value" % label)
+
+    def _click(self, text: str, seconds: float = 20.0) -> None:
+        self._wait("__buttonReady(%s)" % json.dumps(text), "%s never became ready" % text, seconds)
+        self.devtools.evaluate("__click(%s)" % json.dumps(text))
+
+    def _audit_into(self, failures: List[str], label: str) -> None:
+        self._wait(SETTLED, "%s did not settle" % label, seconds=30.0)
+        result = self._audit()
+        self.assertGreater(result["checked"]["text"], 0, label)
+        for violation in result["violations"]:
+            failures.append("%s [%s] %s: %s" % (label, violation["rule"], violation["node"], violation["detail"]))
 
     def _visit(self, route: str, scheme: str) -> None:
+        if self.devtools.evaluate("location.hash") != "#" + route:
+            self.devtools.evaluate(LEAVE)
         self.devtools.evaluate("location.hash = %s" % json.dumps("#" + route))
         self._wait("document.documentElement.dataset.mantineColorScheme === %s" % json.dumps(scheme),
                    "the %s theme did not apply" % scheme)
@@ -356,7 +443,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             if not state["visible"]:
                 failures.append("%s [focus-visible] %s: %s" % (route, state["node"], state["outline"]))
             if state["obscured"]:
-                failures.append("%s [focus-not-obscured] %s" % (route, state["node"]))
+                failures.append("%s [focus-not-obscured] %s under %s" % (route, state["node"], state["cover"]))
         if not left_page:
             failures.append("%s [keyboard-trap] Tab never left the page after %d presses" % (route, len(seen)))
         # Reach compares sets: an extra stop must not stand in for a control never reached.
@@ -398,6 +485,14 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                     self._visit(route, scheme)
                     self.assertFalse(self.devtools.evaluate("document.querySelector('[role=alert]') !== null"),
                                      "%s did not render its fixture" % route)
+                    # Chart labels stay readable: at least 11 px as drawn, at every width.
+                    small = self.devtools.evaluate(
+                        "[...document.querySelectorAll('.trend-chart text')].map(text =>"
+                        " text.getScreenCTM().a * parseFloat(getComputedStyle(text).fontSize))"
+                        ".filter(size => size < 11).length")
+                    if small:
+                        failures.append("%s populated @%dpx %s [chart-label-size] %d labels under 11 px" % (
+                            route, width, scheme, small))
                     result = self._audit()
                     self.assertGreater(result["checked"]["text"], 0, route)
                     for violation in result["violations"]:
@@ -442,6 +537,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             <nav></nav><nav></nav>
             <div style="overflow:auto;width:100px;height:40px"><div style="width:400px;height:80px">Unreachable scroller</div></div>
             <div tabindex="0" style="overflow:auto;width:100px;height:40px"><div style="width:400px;height:80px">Nameless scroller</div></div>
+            <div tabindex="0" aria-label="Roleless" style="overflow:auto;width:100px;height:40px"><div style="width:400px;height:80px">Roleless scroller</div></div>
+            <svg width="160" height="20"><text x="0" y="15" style="fill:#182b2d;fill-opacity:0.3">Translucent chart label</text></svg>
             <div style="width:900px">Too wide</div>`;
           main.appendChild(planted);
           const sheet = new CSSStyleSheet();
@@ -485,7 +582,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             ("image-alt", "img"), ("aria-hidden-focus", "Hidden button"), ("tabindex", "Positive tabindex"),
             ("nested-interactive", "Outer control"), ("progressbar-name", "div"), ("list", "Not an item"),
             ("scrollable-region-focusable", "Unreachable scroller"),
-            ("scrollable-region-name", "Nameless scroller"), ("reflow", None),
+            ("scrollable-region-name", "Nameless scroller"), ("scrollable-region-name", "Roleless scroller"),
+            ("color-contrast", "Translucent chart label"), ("reflow", None),
             ("region", "Outside every landmark"),
         ]
         missing = [(rule, marker) for rule, marker in expected
@@ -543,95 +641,179 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         self.assertEqual(self._tab_walk("/"), [])
 
     def test_populated_experiment_panels_meet_the_aa_rules_at_phone_and_desktop_width_in_both_themes(self):
-        # Compare, the hook matrix and a live replay, each showing its committed fixture.
+        # Compare, the hook matrix, a paid tier's analysis, native acceptance progress and a live
+        # replay with its progress and result tables, each showing its committed fixture.
         failures: List[str] = []
         for width in WIDTHS:
             for scheme in ("light", "dark"):
                 self._open(width, scheme)
-                self._populate_experiments()
+                self._install_stubs()
                 self._visit("/experiments", scheme)
                 self._fill_experiments()
-                result = self._audit()
-                self.assertGreater(result["checked"]["text"], 0)
-                for violation in result["violations"]:
-                    failures.append("/experiments populated @%dpx %s [%s] %s: %s" % (
-                        width, scheme, violation["rule"], violation["node"], violation["detail"]))
+                self._audit_into(failures, "/experiments populated @%dpx %s" % (width, scheme))
                 if width == PHONE and scheme == "light":
                     failures.extend(self._tab_walk("/experiments populated"))
+                self._assert_nothing_refused()
         self._report(failures)
 
     def _fill_experiments(self) -> None:
-        def set_label(label: str, value: str) -> None:
-            self._wait("(() => { try { return Boolean(__labelled(%s)); } catch (error) { return false; } })()"
-                       % json.dumps(label), "%s did not render" % label)
-            self.devtools.evaluate("__setLabelValue(%s, %s)" % (json.dumps(label), json.dumps(value)))
-            self._wait("__labelled(%s).value === %s" % (json.dumps(label), json.dumps(value)),
-                       "%s did not take its value" % label)
-
-        def click(text: str) -> None:
-            self._wait("__buttonReady(%s)" % json.dumps(text), "%s never became ready" % text)
-            self.devtools.evaluate("__click(%s)" % json.dumps(text))
-
         self._wait("__has('Compare two runs, paired by task.')", "the compare panel did not render")
         for label in ("Base run id", "Candidate run id"):
-            set_label(label, "00000000-0000-4000-8000-000000000011")
-        click("Compare")
+            self._set_label(label, "00000000-0000-4000-8000-000000000011")
+        self._click("Compare")
         self._wait("__has('Compared by the engine.')", "the compare fixture did not render")
 
-        click("Run the hook matrix")
+        self._click("Run the hook matrix")
         self._wait("document.querySelector('[aria-label^=\"Hook matrix for \"]') !== null",
                    "the hook matrix fixture did not render")
 
-        set_label("Target 1 reference", "v0.17.0")
-        set_label("Target 2 reference", "fixture-draft")
-        set_label("Pre-registration", "fixture pre-registration")
+        tiers = "[...document.querySelectorAll('h2')].find(h => h.textContent === 'Run an engine, read its own result.').closest('.mantine-Paper-root')"
+        self._set_label("Target reference", "fixture-branch", within=tiers)
+        self._set_label("Per-run cap (USD)", "0.50", within=tiers)
+        self._set_label("Spend cap (USD)", "2", within=tiers)
+        self.devtools.evaluate("[...(%s).querySelectorAll('button')].find(b => b.textContent === 'Preview spend').click()" % tiers)
+        self._click("Confirm and spend up to 2 USD")
+        self._wait("__has('cost_bench.py summarise')", "the paid tier analysis fixture did not render")
+
+        self._click("Review spend and run")
+        self._click("Confirm and launch")
+        self._wait("document.querySelector('[aria-label=\"Settled native acceptance cases\"]') !== null"
+                   " && __has('wrong stance')", "the native acceptance progress fixture did not render")
+
+        self._set_label("Target 1 reference", "v0.17.0")
+        self._set_label("Target 2 reference", "fixture-draft")
+        self._set_label("Pre-registration", "fixture pre-registration")
         if not self.devtools.evaluate("__labelled('Model').value"):
-            set_label("Model", "claude-test")
+            self._set_label("Model", "claude-test")
         tasks = ("document.getElementById(__labelled('Tasks').getAttribute('aria-controls'))")
         self.devtools.evaluate("__labelled('Tasks').click()")
         self._wait("(%s)?.querySelector('[role=option]') != null" % tasks, "Tasks listed no options")
         self.devtools.evaluate("(%s).querySelector('[role=option]').click()" % tasks)
         self.devtools.evaluate("document.activeElement && document.activeElement.blur()")
-        click("Preview spend")
-        click("Confirm and run")
-        self._wait("__has('Engine analysis, target ')", "the replay analysis fixture did not render")
+        replay = "[...document.querySelectorAll('h2')].find(h => h.textContent === 'Measure two explicit targets.').parentElement.parentElement"
+        self._wait("[...(%s).querySelectorAll('button')].some(b => b.textContent === 'Preview spend' && !b.disabled)" % replay,
+                   "the replay preview never became ready")
+        self.devtools.evaluate("[...(%s).querySelectorAll('button')].find(b => b.textContent === 'Preview spend').click()" % replay)
+        self._click("Confirm and run")
+        self._wait("__has('Engine analysis, target ') && document.querySelector('[aria-label=\"Live replay progress\"]') !== null"
+                   " && document.querySelector('[aria-label=\"Cost and pass rate\"]') !== null",
+                   "the replay fixtures did not render")
         self._wait(SETTLED, "the populated experiments did not settle", seconds=30.0)
 
-    def test_a_loaded_draft_meets_the_aa_rules_at_phone_and_desktop_width(self):
-        draft = draft_support.draft_name("a11y-browser-")
-        created = subprocess.run(
-            [sys.executable, str(CLI), "draft", "create", draft, "--json"],
-            env=self.env, capture_output=True, text=True, timeout=30)
-        self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
-        draft_support.register_draft_cleanup(self, draft, self.env, stop=self._stop_studio)
+    def test_a_populated_run_page_meets_the_aa_rules_at_phone_and_desktop_width_in_both_themes(self):
+        # The run page with its exact command, cases and case evidence, all three scroll regions.
+        states = json.loads((FIXTURES / "a11y-states.json").read_text(encoding="utf-8"))
+        route = "/experiments/runs/" + states["runDetail"]["run_id"]
         failures: List[str] = []
         for width in WIDTHS:
-            self._open(width, "light")
-            self._visit("/configure", "light")
-            self.devtools.evaluate(
-                "(() => { const label = [...document.querySelectorAll('label')]"
-                ".find(item => item.textContent.trim().startsWith('Draft name'));"
-                " const input = document.getElementById(label.htmlFor);"
-                " Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, %s);"
-                " input.dispatchEvent(new Event('input', { bubbles: true })); })()" % json.dumps(draft))
-            self._wait("[...document.querySelectorAll('button')].some(b => b.textContent === 'Load draft' && !b.disabled)",
-                       "draft load did not enable")
-            self.devtools.evaluate(
-                "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()")
-            self._wait("document.body.textContent.includes('Draft configuration is ready.')",
-                       "draft configuration did not load", seconds=60.0)
-            self._wait(SETTLED, "the loaded draft did not settle", seconds=30.0)
-            for violation in self._audit()["violations"]:
-                failures.append("draft @%dpx [%s] %s: %s" % (
-                    width, violation["rule"], violation["node"], violation["detail"]))
+            for scheme in ("light", "dark"):
+                self._open(width, scheme)
+                self._install_stubs()
+                self._visit(route, scheme)
+                self._click("Standard output")
+                self._wait("['Exact command', 'Cases', 'Case evidence'].every(name =>"
+                           " document.querySelector('[role=region][aria-label=\"' + name + '\"]') !== null)",
+                           "the run page's scroll regions did not render")
+                self._audit_into(failures, "%s @%dpx %s" % (route, width, scheme))
+                if width == PHONE and scheme == "light":
+                    failures.extend(self._tab_walk(route))
+                self._assert_nothing_refused()
         self._report(failures)
 
-    def test_tab_reaches_every_route_control_with_visible_focus_and_no_trap(self):
+    def test_a_loaded_draft_reviewed_and_applied_meets_the_aa_rules_at_phone_and_desktop_width(self):
+        # Configure with a real draft loaded, its draft-test verdicts, then the apply review and
+        # the apply result from the stub; the review and apply never reach the engine.
+        draft = draft_support.draft_name("a11y-browser-")
+        # The suite's isolation sets HARNESS_QUIET, which silences --json; this call reads it.
+        loud = {key: value for key, value in self.env.items() if key != "HARNESS_QUIET"}
+        created = subprocess.run(
+            [sys.executable, str(CLI), "draft", "create", draft, "--json"],
+            env=loud, capture_output=True, text=True, timeout=30)
+        self.assertEqual(created.returncode, 0, created.stderr or created.stdout)
+        draft_support.register_draft_cleanup(self, draft, self.env, stop=self._stop_studio)
+        described = json.loads(created.stdout)
+        revision = described.get("revision") or described.get("draft", {}).get("revision")
+        self.assertTrue(revision, created.stdout)
         failures: List[str] = []
-        self._open(PHONE, "light")
-        for route in ROUTES:
-            self._visit(route, "light")
-            failures.extend(self._tab_walk(route))
+        for width in WIDTHS:
+            for scheme in ("light", "dark"):
+                self._open(width, scheme)
+                self._install_stubs(revision)
+                self._visit("/configure", scheme)
+                self._set_label("Draft name", draft)
+                self._click("Load draft")
+                self._wait("__has('Draft configuration is ready.')", "draft configuration did not load", seconds=60.0)
+                self._wait(SETTLED, "the loaded draft did not settle", seconds=30.0)
+                label = "draft @%dpx %s" % (width, scheme)
+                self._audit_into(failures, label + " loaded")
+                self._click("Review draft")
+                self._wait("__has('Review complete. Nothing has been applied.')", "the apply review fixture did not render")
+                self._audit_into(failures, label + " reviewed")
+                if width == PHONE and scheme == "light":
+                    failures.extend(self._tab_walk("/configure reviewed"))
+                self._set_label("Confirm the draft to apply", draft)
+                self._click("Apply " + draft)
+                self._wait("__has(%s)" % json.dumps("Applied draft %s." % draft), "the apply result fixture did not render")
+                self._audit_into(failures, label + " applied")
+                self._assert_nothing_refused()
+        self._report(failures)
+
+    def test_a_rollback_previewed_and_done_meets_the_aa_rules_at_phone_and_desktop_width(self):
+        failures: List[str] = []
+        for width in WIDTHS:
+            for scheme in ("light", "dark"):
+                self._open(width, scheme)
+                self._install_stubs()
+                self._visit("/activity", scheme)
+                label = "/activity @%dpx %s" % (width, scheme)
+                self._click("Preview rollback")
+                self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
+                self._audit_into(failures, label + " rollback preview")
+                if width == PHONE and scheme == "light":
+                    failures.extend(self._tab_walk("/activity rollback preview"))
+                self._set_label("Confirm the applied draft to roll back", "tuning")
+                self._click("Roll back tuning")
+                self._wait("__has('citizen sync (pid 1) holds the sync lock')", "the rollback result fixture did not render")
+                self._audit_into(failures, label + " rollback refused")
+                self._assert_nothing_refused()
+        self._report(failures)
+
+    def test_clicks_pass_through_the_toast_region_but_not_a_toast(self):
+        # The region spans the bottom of the page; only a toast in it takes the pointer.
+        self._open(DESKTOP, "light")
+        self._visit("/", "light")
+        probe = json.loads(self.devtools.evaluate(r"""(() => {
+          const region = document.querySelector('.toast-region');
+          const toasts = [0, 1].map(() => {
+            const toast = document.createElement('div');
+            toast.className = 'studio-toast planted-toast';
+            toast.textContent = 'Planted toast';
+            region.appendChild(toast);
+            return toast;
+          });
+          const first = toasts[0].getBoundingClientRect();
+          const second = toasts[1].getBoundingClientRect();
+          const x = first.left + first.width / 2;
+          const gap = document.elementFromPoint(x, (first.bottom + second.top) / 2);
+          const onToast = document.elementFromPoint(x, first.top + first.height / 2);
+          const result = { gapHeight: second.top - first.bottom, gapIsRegion: gap === region,
+            gapReachesPage: Boolean(gap) && !region.contains(gap), toastTakesPointer: toasts[0].contains(onToast) };
+          toasts.forEach(toast => toast.remove());
+          return JSON.stringify(result);
+        })()"""))
+        self.assertGreater(probe["gapHeight"], 0, probe)
+        self.assertFalse(probe["gapIsRegion"], probe)
+        self.assertTrue(probe["gapReachesPage"], probe)
+        self.assertTrue(probe["toastTakesPointer"], probe)
+
+    def test_tab_reaches_every_route_control_with_visible_focus_and_no_trap(self):
+        # At the narrowest width in the light theme, and at desktop width in the dark theme.
+        failures: List[str] = []
+        for width, scheme in ((PHONE, "light"), (DESKTOP, "dark")):
+            self._open(width, scheme)
+            for route in ROUTES:
+                self._visit(route, scheme)
+                failures.extend(self._tab_walk("%s @%dpx %s" % (route, width, scheme)))
         self._report(failures)
 
 if __name__ == "__main__":

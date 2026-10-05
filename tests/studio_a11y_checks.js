@@ -125,14 +125,17 @@
   }
 
   // WCAG's minimums are hard: 4.499:1 fails 4.5:1, so the ratio is never rounded up.
-  function measureText(element, paint, style, what) {
+  function measureText(element, paint, style, what, paintOpacity = 1) {
     const foreground = parseColor(paint);
     const behind = backdrop(element);
     if (!foreground || !behind) {
       add("color-contrast-undecided", element, what + " " + paint + " over an undecidable backdrop");
       return false;
     }
-    const shown = over([foreground[0], foreground[1], foreground[2], foreground[3] * opacity(element)], behind);
+    const alpha = foreground[3] * paintOpacity * opacity(element);
+    // Fully transparent text is not shown (a loading button hides its label this way).
+    if (alpha === 0) return false;
+    const shown = over([foreground[0], foreground[1], foreground[2], alpha], behind);
     const size = parseFloat(style.fontSize);
     const bold = Number(style.fontWeight) >= 700;
     const large = size >= LARGE_TEXT_PX || (bold && size >= LARGE_BOLD_TEXT_PX);
@@ -157,7 +160,8 @@
       // SVG text paints with `fill`, not `color`; an unset fill is SVG's default black.
       const svg = element instanceof SVGElement;
       if (svg && style.fill === "none") continue;
-      if (measureText(element, svg ? style.fill : style.color, style, svg ? "fill" : "text")) checked.text += 1;
+      const paintOpacity = svg ? Number(style.fillOpacity) : 1;
+      if (measureText(element, svg ? style.fill : style.color, style, svg ? "fill" : "text", paintOpacity)) checked.text += 1;
     }
   }
 
@@ -395,7 +399,11 @@
       if (!scrolls || element === document.documentElement || hiddenFromEveryone(element)) continue;
       const reachable = element.tabIndex >= 0 && element.hasAttribute("tabindex");
       if (!reachable && !element.querySelector(INTERACTIVE)) add("scrollable-region-focusable", element, "scrolls but no Tab stop reaches it");
-      else if (reachable && !element.getAttribute("aria-label") && !element.getAttribute("aria-labelledby")) add("scrollable-region-name", element, "focusable scroll region without a name");
+      // ARIA names a region or landmark, not a generic element: the name needs the role.
+      else if (reachable && (!element.getAttribute("aria-label") && !element.getAttribute("aria-labelledby")
+          || !element.matches("[role=region], [role=main], [role=navigation], [role=complementary], [role=log], section, main, nav, aside"))) {
+        add("scrollable-region-name", element, "focusable scroll region without a named region role");
+      }
     }
     for (const progress of document.querySelectorAll("progress, [role=progressbar]")) {
       if (!hiddenFromEveryone(progress) && !accessibleName(progress)) add("progressbar-name", progress, "progress without a name");

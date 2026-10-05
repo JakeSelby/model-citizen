@@ -1,0 +1,691 @@
+{
+  "_source": "Each state is copied from the unit test that renders it (named per key) or, where no unit test holds one, built field by field from the response type in studio/src. The accessibility browser test serves them through its fetch stub.",
+  "applyReview": {
+    "_from": "studio/tests/draft-apply.test.ts CLEAN; the draft name and revision are the loaded draft's at run time",
+    "schema_version": 1,
+    "draft": {
+      "name": "tuning",
+      "revision": "rev-2",
+      "base_revision": "rev-1",
+      "branch": "draft/tuning",
+      "path": "/w"
+    },
+    "destination": "/h/personal-primitives",
+    "files": [
+      {
+        "path": "personal-primitives/rules/greeting.md",
+        "status": "added",
+        "scope": "personal"
+      }
+    ],
+    "root": [
+      {
+        "path": "rules/greeting.md",
+        "action": "write"
+      }
+    ],
+    "config": [
+      {
+        "key": "primitive_roots",
+        "action": "set",
+        "before": [],
+        "after": [
+          "/h/personal-primitives"
+        ],
+        "live": []
+      }
+    ],
+    "checks": {
+      "status": "passed",
+      "findings": [],
+      "truncated": false,
+      "command": "citizen lint"
+    },
+    "budget": {
+      "before_lines": 191,
+      "after_lines": 194,
+      "delta_lines": 3,
+      "line_cap": 225
+    },
+    "commands": [
+      {
+        "step": "root",
+        "command": "git -C /w archive --format=tar rev-2 -- personal-primitives/rules/greeting.md | tar -x -C /h"
+      },
+      {
+        "step": "config",
+        "command": "citizen config set primitive_roots '[\"/h/personal-primitives\"]'"
+      },
+      {
+        "step": "sync",
+        "command": "citizen sync"
+      },
+      {
+        "step": "check",
+        "command": "citizen doctor"
+      }
+    ],
+    "core": null,
+    "interrupted": null,
+    "refusals": [],
+    "can_apply": true,
+    "apply_command": "citizen draft apply tuning --revision rev-2 --json",
+    "nothing_applied": true
+  },
+  "applyResult": {
+    "_from": "studio/tests/draft-apply.test.ts result({})",
+    "schema_version": 1,
+    "status": "applied",
+    "applied": true,
+    "error_code": "",
+    "message": "Applied draft tuning.",
+    "holder": "",
+    "apply_id": "a1",
+    "review": {},
+    "doctor": {
+      "status": "passed",
+      "checks": []
+    },
+    "restored": false,
+    "log": []
+  },
+  "activity": {
+    "_from": "studio/tests/activity.test.ts payload, holding studio/tests/rollback.test.ts APPLY",
+    "schema_version": 1,
+    "entries": [
+      {
+        "id": "studio:0123456789abcdef0123456789abcdef@120",
+        "timestamp": "2026-10-02T12:00:00Z",
+        "source": "studio-action",
+        "kind": "apply",
+        "title": "Draft applied",
+        "outcome": "completed",
+        "reason": "Applied draft tuning through the governed path.",
+        "actor": "Studio",
+        "session": "",
+        "repository": "",
+        "hook": "",
+        "grade": "unknown",
+        "command": "citizen draft apply tuning --revision r --json",
+        "draft": "tuning",
+        "files": [
+          "personal-primitives/rules/greeting.md"
+        ],
+        "evidence_href": "",
+        "evidence_label": "",
+        "apply_id": "0123456789abcdef0123456789abcdef",
+        "rollback_target": "0123456789abcdef0123456789abcdef"
+      }
+    ],
+    "next_cursor": "",
+    "next_command": "",
+    "sources": [
+      {
+        "id": "decision-log",
+        "status": "current",
+        "message": "Decision ledger available."
+      },
+      {
+        "id": "ownership-journal",
+        "status": "current",
+        "message": "Current ownership snapshot records 2 owned files."
+      }
+    ],
+    "filters": {
+      "session": "",
+      "repository": "",
+      "hook": "",
+      "outcome": ""
+    },
+    "command": "citizen activity --json --limit 25"
+  },
+  "rollbackPreview": {
+    "_from": "studio/tests/rollback.test.ts PREVIEW",
+    "schema_version": 1,
+    "apply": {
+      "apply_id": "0123456789abcdef0123456789abcdef",
+      "kind": "apply",
+      "status": "completed",
+      "draft": "tuning",
+      "revision": "r",
+      "ts": "t",
+      "actor": "Studio",
+      "reverses": ""
+    },
+    "destination": "/h/personal-primitives",
+    "config": [
+      {
+        "key": "primitive_roots",
+        "action": "set",
+        "current": [
+          "/h/p"
+        ],
+        "current_present": true,
+        "restored": [],
+        "restored_present": true
+      },
+      {
+        "key": "rules.cache-hygiene",
+        "action": "unset",
+        "current": "off",
+        "current_present": true,
+        "restored": null,
+        "restored_present": false
+      },
+      {
+        "key": "mode",
+        "action": "none",
+        "current": "a",
+        "current_present": true,
+        "restored": "a",
+        "restored_present": true
+      }
+    ],
+    "files": [
+      {
+        "path": "rules/greeting.md",
+        "action": "delete"
+      }
+    ],
+    "commands": [
+      {
+        "step": "rollback",
+        "command": "citizen draft rollback 0123456789abcdef0123456789abcdef --draft tuning --json"
+      },
+      {
+        "step": "sync",
+        "command": "citizen sync"
+      },
+      {
+        "step": "check",
+        "command": "citizen doctor"
+      }
+    ],
+    "refusals": [],
+    "can_rollback": true,
+    "rollback_command": "citizen draft rollback 0123456789abcdef0123456789abcdef --draft tuning --json",
+    "nothing_changed": true
+  },
+  "rollbackResult": {
+    "_from": "studio/tests/rollback.test.ts result({}); its review is rollbackPreview at run time",
+    "schema_version": 1,
+    "status": "rolled-back",
+    "applied": false,
+    "error_code": "",
+    "message": "Rolled back.",
+    "holder": "",
+    "apply_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "review": {},
+    "doctor": {
+      "status": "passed",
+      "checks": []
+    },
+    "restored": true,
+    "log": []
+  },
+  "rollbackRefused": {
+    "_from": "studio/tests/rollback.test.ts result({ status: \"refused\", error_code: \"busy\", holder: \"citizen sync (pid 1)\" }); its review is rollbackPreview at run time",
+    "schema_version": 1,
+    "status": "refused",
+    "applied": false,
+    "error_code": "busy",
+    "message": "Rolled back.",
+    "holder": "citizen sync (pid 1)",
+    "apply_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "review": {},
+    "doctor": {
+      "status": "passed",
+      "checks": []
+    },
+    "restored": true,
+    "log": []
+  },
+  "nativeCatalog": {
+    "_from": "studio/tests/native-acceptance.test.ts catalog",
+    "schema_version": 1,
+    "default_model": "claude-haiku-4-5",
+    "commands": {
+      "run": "run",
+      "resume": "resume",
+      "retry_failed": "retry"
+    },
+    "clients": [
+      {
+        "id": "claude",
+        "runtime": "claude-code",
+        "platform": "macos",
+        "observed": true,
+        "spend_cap_supported": true,
+        "unavailable_reason": null
+      },
+      {
+        "id": "codex",
+        "runtime": "codex",
+        "platform": "macos",
+        "observed": false,
+        "spend_cap_supported": false,
+        "unavailable_reason": "Codex has no in-flight dollar cap; paid Studio launch is refused."
+      }
+    ],
+    "cases": [
+      {
+        "id": "installation",
+        "description": "Install and inspect the native client."
+      },
+      {
+        "id": "stance-switch",
+        "description": "Switch stances in the native client."
+      },
+      {
+        "id": "cost-posture",
+        "description": "Observe routed spend."
+      }
+    ],
+    "target": {
+      "kind": "installed",
+      "ref": "current",
+      "source_commit": null
+    },
+    "initial": {
+      "client": "claude",
+      "cases": [
+        "installation",
+        "stance-switch",
+        "cost-posture"
+      ],
+      "model": "claude-haiku-4-5",
+      "source_commit": "",
+      "progress_id": "run-123",
+      "target_kind": "installed",
+      "target_ref": "current"
+    }
+  },
+  "nativePreview": {
+    "_from": "studio/tests/native-acceptance.test.ts preview",
+    "estimate": {
+      "amount_usd": null,
+      "basis": "no_history",
+      "sample_count": 0,
+      "suite_id": "native-acceptance",
+      "case_count": 3
+    },
+    "caps": {
+      "max_budget_usd": "0.20",
+      "spend_cap_usd": "1.00"
+    },
+    "pricing": {
+      "source": "api_credit",
+      "basis": "money charged to API credit"
+    },
+    "confirmation_required": true,
+    "confirmation_token": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "case_identities": [
+      "installation",
+      "stance-switch",
+      "cost-posture"
+    ]
+  },
+  "nativeRun": {
+    "_from": "the NativeRun type in studio/src/experiments/native-acceptance/model.ts, with native-acceptance.test.ts selection",
+    "run_id": "fixture-native",
+    "status": "running",
+    "selection": {
+      "client": "claude",
+      "cases": [
+        "installation",
+        "stance-switch",
+        "cost-posture"
+      ],
+      "model": "claude-haiku-4-5",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "progress_id": "run-123",
+      "target_kind": "installed",
+      "target_ref": "current"
+    },
+    "target": {
+      "kind": "installed",
+      "ref": "current",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "version": "0.17.0"
+    }
+  },
+  "nativeSnapshot": {
+    "_from": "studio/tests/native-acceptance.test.ts snapshot, with the optional run_status",
+    "schema_version": 1,
+    "selection": {
+      "client": "claude",
+      "cases": [
+        "installation",
+        "stance-switch",
+        "cost-posture"
+      ],
+      "model": "claude-haiku-4-5",
+      "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "progress_id": "run-123",
+      "target_kind": "installed",
+      "target_ref": "current"
+    },
+    "settled_count": 2,
+    "eligible_count": 3,
+    "interrupted": true,
+    "warnings": [],
+    "resume_cases": [
+      "cost-posture"
+    ],
+    "command": "python3 scripts/native_acceptance.py --cases installation,stance-switch,cost-posture",
+    "cases": [
+      {
+        "id": "installation",
+        "status": "passed",
+        "observation": "installed",
+        "seconds": 1,
+        "sessions": 1,
+        "spend_usd": 0.02,
+        "price_as_of": null
+      },
+      {
+        "id": "stance-switch",
+        "status": "failed",
+        "observation": "wrong stance",
+        "seconds": 2,
+        "sessions": 1,
+        "spend_usd": 0.03,
+        "price_as_of": null
+      },
+      {
+        "id": "cost-posture",
+        "status": "unverified",
+        "observation": "no transcript",
+        "seconds": 3,
+        "sessions": 1,
+        "spend_usd": null,
+        "price_as_of": null
+      }
+    ],
+    "run_status": "failed"
+  },
+  "evalPreview": {
+    "_from": "the EvalPreview type in studio/src/experiments/evals/model.ts; its request echoes the form at run time",
+    "estimate": {
+      "amount_usd": null,
+      "basis": "no_history",
+      "sample_count": 0
+    },
+    "caps": {
+      "max_budget_usd": "0.50",
+      "spend_cap_usd": "2"
+    },
+    "pricing": {
+      "source": "api_credit",
+      "basis": "money charged to API credit"
+    },
+    "confirmation_required": true,
+    "confirmation_token": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "cost_class": "spends_usage",
+    "case_identities": [],
+    "request": null,
+    "evidence": "exploratory",
+    "command": "python3 scripts/cost_bench.py micro --json"
+  },
+  "paidAnalysis": {
+    "_from": "studio/tests/eval-tiers.test.ts analysis(); its result is fixtures/eval-unit-analysis.json at run time",
+    "command": [
+      "python3",
+      "scripts/cost_bench.py",
+      "summarise",
+      "--results",
+      "x",
+      "--json"
+    ],
+    "replay_command": [],
+    "replay_exit": 0,
+    "spend_usd": 1.25,
+    "stopped_at_cap": false,
+    "evidence": "exploratory",
+    "result": null,
+    "error": null
+  },
+  "runDetail": {
+    "_from": "the RunDetail type in studio/src/experiments/history/model.ts",
+    "run_id": "00000000-0000-4000-8000-000000000021",
+    "suite_id": "lint",
+    "status": "succeeded",
+    "created_at": "2026-10-02T12:00:00Z",
+    "completed_at": "2026-10-02T12:00:09Z",
+    "target": {
+      "kind": "installed",
+      "ref": "current",
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "cost_usd": null,
+    "duration_ms": 9000,
+    "rerun_of": null,
+    "case_count": 2,
+    "flaky_count": 1,
+    "cases": [
+      {
+        "id": "lint:primitives",
+        "outcome": "passed",
+        "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flaky": false
+      },
+      {
+        "id": "lint:policy-and-adapters-and-every-generated-surface",
+        "outcome": "failed",
+        "commit": null,
+        "flaky": true
+      }
+    ],
+    "reruns": {
+      "items": [],
+      "next_cursor": null
+    },
+    "exact_command": "python3 bin/harness lint --json --root /srv/fixture/checkouts/agent-harness --include-generated-surfaces",
+    "rerun": {
+      "available": false,
+      "reason": "The fixture run's checkout is not on this machine."
+    },
+    "artifacts": [
+      {
+        "id": "stdout",
+        "label": "Standard output",
+        "available": true
+      }
+    ],
+    "evaluation": null
+  },
+  "runEvidence": {
+    "_from": "the loadEvidence response in studio/src/experiments/history/api.ts",
+    "content": "lint: 1 finding(s) in /srv/fixture/checkouts/agent-harness\npolicy/hooks/fixture-01.py:7: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-02.py:14: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-03.py:21: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-04.py:28: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-05.py:35: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-06.py:42: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-07.py:49: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-08.py:56: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-09.py:63: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-10.py:70: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-11.py:77: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-12.py:84: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-13.py:91: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-14.py:98: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-15.py:105: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-16.py:112: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-17.py:119: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-18.py:126: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-19.py:133: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-20.py:140: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-21.py:147: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-22.py:154: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-23.py:161: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-24.py:168: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-25.py:175: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-26.py:182: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-27.py:189: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-28.py:196: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-29.py:203: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-30.py:210: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-31.py:217: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-32.py:224: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-33.py:231: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-34.py:238: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-35.py:245: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-36.py:252: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-37.py:259: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-38.py:266: a long line of fixture lint output that scrolls inside the evidence region\npolicy/hooks/fixture-39.py:273: a long line of fixture lint output that scrolls inside the evidence region"
+  },
+  "replayProgress": {
+    "_from": "studio/tests/replay.test.ts progress rows, over the two fixture targets",
+    "rows": [
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "repetition": 1,
+        "status": "completed",
+        "passed": true,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "repetition": 2,
+        "status": "completed",
+        "passed": false,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "repetition": 1,
+        "status": "completed",
+        "passed": true,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "repetition": 2,
+        "status": "completed",
+        "passed": false,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "repetition": 1,
+        "status": "completed",
+        "passed": true,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "repetition": 2,
+        "status": "completed",
+        "passed": false,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "repetition": 1,
+        "status": "completed",
+        "passed": true,
+        "cost_usd": 0.25
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "repetition": 2,
+        "status": "completed",
+        "passed": false,
+        "cost_usd": 0.25
+      }
+    ]
+  },
+  "replayTable": {
+    "_from": "studio/tests/replay.test.ts rows, over the two fixture targets",
+    "rows": [
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "runs": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
+        "cost_per_passed": 0.5
+      },
+      {
+        "target": {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "runs": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
+        "cost_per_passed": 0.5
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "bare",
+        "runs": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
+        "cost_per_passed": 0.5
+      },
+      {
+        "target": {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft"
+        },
+        "task": "fixture-task",
+        "arm": "harness",
+        "runs": 2,
+        "passed": 1,
+        "pass_rate": 0.5,
+        "cost_per_passed": 0.5
+      }
+    ]
+  }
+}
