@@ -620,6 +620,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
 | `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
 | `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
+| `session-caps` | `allow`, `warn` past 80% of a cap, `deny` at it, or `would-deny` in a headless run, on a spawn, `Workflow` launch or web search; `cap`, `limit` and `count` say which cap and how close | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a
