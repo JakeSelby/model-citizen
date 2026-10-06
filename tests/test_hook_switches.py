@@ -50,6 +50,7 @@ INVOKED = {
     "filter-output": (pre("Bash", command="ls"), RUNTIMES),
     "harness-session": ({"hook_event_name": "SessionStart", "session_id": "s"}, RUNTIMES),
     "neutralize-tool-output": (post("Read", file_path="/tmp/x"), RUNTIMES),
+    "session-caps": (pre("WebSearch", query="x"), ("claude-code",)),
     "stage-user-files": (pre("SendUserFile", files=["/tmp/x"]), ("claude-code",)),
     "steer-polling": (pre("Bash", command="sleep 60"), ("claude-code",)),
     "stop-gate": ({"hook_event_name": "Stop", "session_id": "s"}, RUNTIMES),

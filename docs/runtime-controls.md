@@ -112,6 +112,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `harness-session` | SessionStart |
 | `intent-overlap` | PreToolUse on Edit, Write, MultiEdit and NotebookEdit: a live sibling's claim on the path |
 | `neutralize-tool-output` (core) | PostToolUse |
+| `session-caps` | PreToolUse on a spawn, a Workflow launch and WebSearch, plus SubagentStart and SubagentStop for the count, Claude Code only: warns past 80% of the cost variant's fan-out cap and the research rule's web-search cap and denies at either ([decision log](usage.md)); a Workflow script's own `agent()` calls cannot be refused |
 | `stage-user-files` | PreToolUse on SendUserFile, Claude Code only |
 | `steer-polling` | PreToolUse on Bash, Claude Code only: a foreground sleep or polling loop gets a note naming background notifications and Monitor; a foreground sleep past five minutes is denied |
 | `stop-gate` (core) | Stop |
@@ -141,6 +142,55 @@ unacknowledged `off` keeps running, and so does every hook when the selection wi
 Codex's adapter dispatches through the same `lifecycle.py` and reads the same id map. There is no
 Codex-only id; an id whose event Codex does not raise, such as `usage-feed`, simply never runs
 there. `bin/citizen catalog` lists each id with kind `hooks`, its source and whether it is core.
+
+## What each hook logs
+
+Every decision a hook makes is one row in the local decision log,
+`~/.local/state/agent-harness/decisions.jsonl` ([usage.md](usage.md#the-decision-log) describes the
+log, [telemetry.md](telemetry.md#retention) its retention and switch). Every row carries `point`,
+`module` (`hooks/<id>`), `session_id`, `ts`, `deterministic_answer`, `input` (capped at 2 KiB) and
+its `input_sha256`, `runtime`, `harness_version`, `profile_fingerprint` and `schema_version`. The
+answer and the fields below are what each point adds, and what its evaluation reads.
+
+- **`grade-bash`**: `ask`, `deny` or `allow` on the command, with `grade`, `confirmed`,
+  `approval`, `timed_out` or `error` where they apply, and a later `ran` or `not_run` outcome row.
+  A sample of allowed commands is written as `allow` rows with `sampled` and `sample_rate`. Each
+  question to a decision provider is a `governance` row.
+- **`allow-readonly-bash`**: one `summary` row per session, written at SessionEnd, rather than a row
+  per allow: `counts` of the answers returned, by kind (`read-only`, `plan-read-only`,
+  `plan-investigation`, `plan-ask`, `plan-tool`), and their `total`. A session that never ended is
+  summarised a day later with `stale: true`.
+- **`filter-output`**: one row per filtered run, written by the filter when the run ends:
+  `filtered`, or `unchanged` when the whole run was kept, with `runner`, `bytes_in`, `bytes_out`,
+  `lines_in` and `lines_out`. The input is the runner's name, never the output.
+- **`tier-agent-spawns`**: every spawn it changes: the band's worker for a routed spawn,
+  `one-rung`, `demoted` or `deny`, with `reroute` (`band`, `bare`, `top-class`, `delegation-off`),
+  `model_requested`, `model`, `subagent_type_requested` and `subagent_type`. Its
+  `delegation-nudge` and `integration-descriptor` rows are written from the dispatcher.
+- **`brief-guard`**: `cap`, `budget` or `cap+budget` for each brief it extends.
+- **`stop-gate`**: `blocked`, `released` or `skipped`, with the gate's result as an outcome row
+  and, when `telemetry.completion_claim` is on, the claim.
+- **`intent-overlap`**: `warn` or `deny` on an edit to a path a live sibling claims.
+- **`neutralize-tool-output`**: every match: `warn`, or `excluded` for output read from the
+  harness's own files, with `tool` and `patterns`. The input is the tool's name.
+- **`validate-plan-card`**: `pass` or `fail` per plan file, with `problems`, `card_lines` and
+  `separator`. The input is the file's name.
+- **`allow-plan-webfetch`**: `allow`, with `host`. The input is the URL without its query.
+- **`stage-user-files`**: `staged`, `kept` or `staged+kept`, with `staged`, `kept`, `files` and
+  `bytes_staged`, the bytes copied, so a reused copy adds none. The input is the file names,
+  never their paths.
+- **`harness-session`**: `context` or `silent` per start, with `sections` (lines from `drift`,
+  `overrides`, `task`, `handoff` and `integrations`) and `context_chars`.
+- **`workspace-session`**: `silent`, `ambiguous`, `inline`, `bundle` or `list` per start, with
+  `rule`, `workspace`, `native`, `supplied`, `missing`, `instruction_chars` and `context_chars`
+  where they were decided.
+- The three remaining ids make no permission or routing decision and write no decision row: the
+  user-approval recorder keeps what the user typed, `usage-feed` records each recommendation it
+  emits in `adherence.jsonl`, and `usage-log` writes the usage ledger.
+
+The dispatcher also records each prompt and session end, identifiers only, in
+`session-events.jsonl`, which answers whether a fresh-session recommendation was followed when
+the observation entry point is not registered ([usage.md](usage.md#adherence-events)).
 
 ## Decision providers
 

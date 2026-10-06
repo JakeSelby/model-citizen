@@ -50,7 +50,8 @@ SEVERITY_NUMBER = 9  # INFO, per the OTLP logs data model.
 # `native` is validated here and used by `harness sync`, never by this exporter: runtime
 # pass-through writes a runtime's own telemetry settings and sends nothing itself.
 KNOWN_KEYS = ("export", "endpoint", "headers_env", "headers_file", "labels", "native",
-              "decisions", "completion_claim", "allow_sample_rate")
+              "decisions", "completion_claim", "allow_sample_rate", "decision_log_max_bytes",
+              "decision_log_keep")
 
 # The runtimes native pass-through can configure. `native` is `true` for all of them, `false`
 # for none, or the list of the ones it names: Codex takes header values only as literals in
@@ -61,6 +62,17 @@ DEFAULT_ENDPOINT = "http://localhost:4318"
 # The allowed-command sample, kept in step with `decisions.DEFAULT_SAMPLE_RATE`, which this
 # module does not import: validation here must not depend on a sibling hook being loadable.
 DEFAULT_SAMPLE_RATE = 20
+# The decision log's retention, kept in step with `decisions.DEFAULT_MAX_BYTES` and `DEFAULT_KEEP`.
+DEFAULT_DECISION_LOG_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_DECISION_LOG_KEEP = 3
+
+# Backing off a collector that is not there. A refused or unreachable endpoint is written to the
+# backoff file beside the errors file, and no export is tried again until its `until`: a minute
+# after the first failure, doubling with each one after it, never more than six hours. A
+# collector that answers, even with an error status, clears it, because a listener is there.
+# The rows are in the ledger either way; `harness usage export --since` sends what was skipped.
+BACKOFF_BASE = 60
+BACKOFF_MAX = 6 * 3600
 
 
 def home():
@@ -137,9 +149,19 @@ def settings(cfg=None, path=None):
     if isinstance(rate, bool) or not isinstance(rate, int) or rate < 0:
         raise ValueError("telemetry.allow_sample_rate must be a whole number of commands, one "
                          "of which is logged, or 0 for none; got " + repr(rate))
-    return {"export": mode, "endpoint": endpoint.rstrip("/"), "headers_env": headers_env,
-            "headers_file": headers_file, "labels": dict(labels), "native": native,
-            "decisions": decisions, "completion_claim": claim, "allow_sample_rate": rate}
+    # The decision log's retention: `decisions.max_bytes` and `decisions.keep`.
+    retention = {}
+    for name, default in (("decision_log_max_bytes", DEFAULT_DECISION_LOG_MAX_BYTES),
+                          ("decision_log_keep", DEFAULT_DECISION_LOG_KEEP)):
+        value = block.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError("telemetry." + name + " must be a whole number, 0 or more; got "
+                             + repr(value))
+        retention[name] = value
+    return dict({"export": mode, "endpoint": endpoint.rstrip("/"), "headers_env": headers_env,
+                 "headers_file": headers_file, "labels": dict(labels), "native": native,
+                 "decisions": decisions, "completion_claim": claim, "allow_sample_rate": rate},
+                **retention)
 
 
 def native_runtimes(value):
@@ -492,8 +514,61 @@ def record_failure(path, endpoint, error, rows):
         pass
 
 
+def unreachable(error):
+    """Whether `error` says nothing was listening, as opposed to a collector that answered."""
+    if isinstance(error, urllib.error.HTTPError):
+        return False
+    return isinstance(error, (urllib.error.URLError, OSError))
+
+
+def backoff_until(path, now=None):
+    """The time before which no export is tried, or 0 when there is no backoff in force."""
+    if not path:
+        return 0
+    try:
+        with open(str(path), encoding="utf-8") as stream:
+            state = json.load(stream)
+        until = state.get("until", 0) if isinstance(state, dict) else 0
+    except (OSError, ValueError):
+        return 0
+    moment = time.time() if now is None else now
+    if isinstance(until, bool) or not isinstance(until, (int, float)) or until <= moment:
+        return 0
+    # A clock that went backwards, or a file nobody wrote, must not silence export for longer
+    # than the cap.
+    return min(until, moment + BACKOFF_MAX)
+
+
+def note_backoff(path, failed, now=None):
+    """Record one more unreachable attempt, or clear the record after one that got through."""
+    if not path:
+        return
+    path = Path(path)
+    try:
+        if not failed:
+            if path.exists():
+                path.unlink()
+            return
+        try:
+            with open(str(path), encoding="utf-8") as stream:
+                state = json.load(stream)
+        except (OSError, ValueError):
+            state = {}
+        count = state.get("failures", 0) if isinstance(state, dict) else 0
+        count = (count if isinstance(count, int) and not isinstance(count, bool) else 0) + 1
+        moment = time.time() if now is None else now
+        delay = min(BACKOFF_MAX, BACKOFF_BASE * 2 ** min(count - 1, 20))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_name(path.name + ".tmp")
+        temp.write_text(json.dumps({"failures": count, "until": moment + delay}) + "\n")
+        os.replace(str(temp), str(path))
+    except OSError:
+        pass
+
+
 def export_rows(rows, config=None, env=None, version="", errors_path=None,
-                timeout=TIMEOUT, opener=None, dry_run=False, prices=None):
+                timeout=TIMEOUT, opener=None, dry_run=False, prices=None, backoff_path=None,
+                now=None):
     """Send rows to the configured endpoint. Returns `(sent, failed)` and never raises.
 
     With export off this opens no socket and reads no credential: the first check is the mode,
@@ -502,6 +577,11 @@ def export_rows(rows, config=None, env=None, version="", errors_path=None,
     `prices` is the price table to stamp rows with; with none given it is read from the price
     file and the caller's own `prices` overrides, which is what the hook does. Pricing runs
     after the mode check and cannot fail the export: an unpriced row still travels.
+
+    `backoff_path`, which the session-end hook passes and a replay from the CLI does not, makes
+    an unreachable collector cost one attempt per backoff window rather than one per session:
+    while the window is open the rows are counted failed and nothing is tried or written. See
+    BACKOFF_BASE.
     """
     rows = [r for r in rows if isinstance(r, dict)]
     cfg = None
@@ -526,7 +606,10 @@ def export_rows(rows, config=None, env=None, version="", errors_path=None,
     if not dry_run:
         table = price_table(cfg) if prices is None else prices
         priced = dict((id(row), price) for row, price in zip(rows, row_prices(rows, table)))
+    if not dry_run and backoff_until(backoff_path, now):
+        return 0, len(rows)
     sent = failed = 0
+    reached = False
     for batch in batches(rows):
         if dry_run:
             sent += len(batch)
@@ -534,7 +617,18 @@ def export_rows(rows, config=None, env=None, version="", errors_path=None,
         try:
             sent += post(batch, config, request_headers, version, timeout, opener,
                          [priced.get(id(row)) for row in batch])
+            reached = True
         except Exception as exc:
+            if backoff_path and unreachable(exc):
+                # Nothing is listening, so the batches after this one would fail the same way.
+                left = len(rows) - sent - failed
+                failed += left
+                record_failure(errors_path, config.get("endpoint", ""), exc, left)
+                note_backoff(backoff_path, True, now)
+                return sent, failed
+            reached = reached or not unreachable(exc)
             failed += len(batch)
             record_failure(errors_path, config.get("endpoint", ""), exc, len(batch))
+    if reached and not dry_run:
+        note_backoff(backoff_path, False, now)
     return sent, failed

@@ -83,6 +83,40 @@ def settle_adherence():
         pass
 
 
+def note_adherence(runtime, event):
+    """Record a prompt or a session end for the adherence reading (`adherence.note_event`).
+
+    Observation, like `settle_adherence`: nothing it does or fails to do changes the answer.
+    """
+    try:
+        load("adherence").note_event(event.get("hook_event_name"), event.get("session_id"), runtime)
+    except Exception:
+        pass
+
+
+# The read-only allow answers on most Bash calls, so it is counted rather than logged a row at a
+# time: `decisions.tally`, one summary row per session at SessionEnd. READONLY_POINT names it.
+READONLY_POINT = "allow-readonly-bash"
+
+
+def tally_readonly(event, kind):
+    """Count one `allow-readonly-bash` answer of `kind` for the session. Never raises."""
+    try:
+        log = decisions()
+        if log is not None:
+            log.tally(READONLY_POINT, event.get("session_id"), kind)
+    except Exception:
+        pass
+
+
+def tally_returned(event, results, tallied):
+    """Count `tallied`, a `(kind, answer)` pair or None, only when `answer` is the decision
+    `results` compose to: a later deny, such as a file-tool refusal or a steer, overrides an
+    allow composed earlier, and a count of answers never given measures nothing."""
+    if tallied is not None and strongest_decision(results) == tallied[1]:
+        tally_readonly(event, tallied[0])
+
+
 def normalize(payload):
     event = dict(payload)
     name = str(event.get("tool_name", "")).rsplit(".", 1)[-1]
@@ -940,6 +974,21 @@ def workflow_results(runtime, event):
     return results
 
 
+def caps_results(runtime, event, results):
+    """`session-caps` on a spawn, a `Workflow` launch or a web search, last in the chain.
+
+    Asked only when nothing earlier denied the call, so a refused spawn takes no slot and a
+    refused call is not counted. Claude Code only: the live count falls on `SubagentStop`, which
+    Codex does not raise.
+    """
+    if runtime != "claude-code":
+        return []
+    if any((r.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny" for r in results):
+        return []
+    answer = invoke("session-caps", event)
+    return [answer] if answer else []
+
+
 def framework_deny(runtime, session_id, prompt, subagent_type):
     """The refusal a declared integration's spawn gets, or None when this call is not one.
 
@@ -1189,9 +1238,14 @@ def encode_pre(runtime, original, normalized, results):
     return encoded
 
 
-def _encode_pre(runtime, original, normalized, results):
+def strongest_decision(results):
+    """The permission decision `results` compose to: deny over ask over allow, else None."""
     decisions = [r.get("hookSpecificOutput", {}).get("permissionDecision") for r in results]
-    strongest = next((choice for choice in ("deny", "ask", "allow") if choice in decisions), None)
+    return next((choice for choice in ("deny", "ask", "allow") if choice in decisions), None)
+
+
+def _encode_pre(runtime, original, normalized, results):
+    strongest = strongest_decision(results)
     reasons = [r.get("hookSpecificOutput", {}).get("permissionDecisionReason", "") for r in results]
     reason = "\n".join(x for x in reasons if x)
     fields = {"hookEventName": "PreToolUse"}
@@ -1311,6 +1365,7 @@ def _dispatch(runtime, payload):
     kind, tool = event.get("hook_event_name"), event.get("tool_name")
     if kind == "PreToolUse":
         results = []
+        tallied = None
         # The store of approvals the user typed is the user's alone; `grade-bash` consumes it, so
         # it guards it too. A Bash write to it is graded, a file-tool write is refused here.
         if tool in FILE_TOOLS and enabled("grade-bash"):
@@ -1408,10 +1463,13 @@ def _dispatch(runtime, payload):
             plan = readonly and investigating(runtime, event)
             if readonly and grade == 0:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow"}})
+                tallied = ("plan-read-only" if plan else "read-only", "allow")
             elif plan and not asked and grade == 1:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                     "permissionDecisionReason": "Plan-mode investigation, run at the permission posture you selected."}})
+                tallied = ("plan-investigation", "allow")
             elif plan and not asked and not confirmed and grade == 2:
+                tallied = ("plan-ask", "ask")
                 results.append({"hookSpecificOutput": {"permissionDecision": "ask",
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "
@@ -1484,14 +1542,20 @@ def _dispatch(runtime, payload):
                 if runtime == "claude-code":
                     results.append(invoke("tier-agent-spawns", event))
                 results.append(invoke("brief-guard", event))
+            results.extend(caps_results(runtime, event, results))
         elif tool == "Workflow":
             results.extend(workflow_results(runtime, event))
+            results.extend(caps_results(runtime, event, results))
+        elif tool == "WebSearch":
+            results.extend(caps_results(runtime, event, results))
         elif tool == "WebFetch":
             results.append(invoke("allow-plan-webfetch", event))
         elif enabled("allow-readonly-bash") and investigating(runtime, event) and plan_allowed_tool(tool):
             results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                 "permissionDecisionReason": "Plan-mode research tool named by plan_allow_tools, "
                 "run at the permission posture you selected."}})
+            tallied = ("plan-tool", "allow")
+        tally_returned(event, results, tallied)
         return encode_pre(runtime, payload, event, results)
     if kind == "PostToolUse":
         contexts = []
@@ -1525,7 +1589,12 @@ def _dispatch(runtime, payload):
         if runtime != "claude-code":
             return {}
         if kind == "UserPromptSubmit":
+            # Before the feed runs, so a prompt that carries a nudge is stamped no later than it.
+            note_adherence(runtime, event)
             invoke("approvals", event)
+        else:
+            # Journals the start or stop the fan-out count reads; it never answers these events.
+            invoke("session-caps", event)
         return invoke("usage-feed", event)
     if kind == "SessionStart":
         settle_adherence()
@@ -1543,9 +1612,11 @@ def _dispatch(runtime, payload):
         # the command did not run. Done before the usage worker is spawned, and bounded by the
         # session's own rows, so the 1.5-second SessionEnd budget pays for one read of a file
         # that only a permission prompt writes to.
+        note_adherence(runtime, event)
         log = decisions()
         if log is not None:
             log.close_session(event.get("session_id") or "")
+            log.flush_tally(READONLY_POINT, event.get("session_id") or "", runtime)
         if not enabled("usage-log"):
             return {}
         module = load("usage-log")
