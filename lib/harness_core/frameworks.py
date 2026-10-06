@@ -286,7 +286,9 @@ DIRECTIVE_BACK = re.compile(
     r"\b(?:(?:follow(?:ing)?|apply(?:ing)?|obey(?:ing)?) (?:it|them|that file|this file"
     r"|(?:those|these|its|the) (?:[\w-]+ ){0,3}instructions)"
     r"|use (?:those|these|its|the) (?:[\w-]+ ){0,3}instructions"
-    r"|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
+    r"|as (?:your |the )?(?:\w+ ){0,2}instructions"
+    r"|do (?:exactly |just )?(?:what|whatever|as) (?:it|they|that file|this file)"
+    r" (?:says|say|asks|instructs|tells you))\b")
 # Work on the file rather than work under it, when the verb governs the file the way a directive
 # does: "update <path>", or "update it" after it. "Update your findings" edits something else.
 # Negated ("do not edit it") is still a directive.
@@ -333,6 +335,15 @@ GUIDANCE_NEGATION = re.compile(r"\b(?:no|not|never|without)\b")
 OWN_TARGET = re.compile(r"\s+(?:in|at|from|of|under|inside)\b")
 # The declared path ends where a longer file name would go on: `<path>.bak` is another file.
 PATH_END = r"(?![\w/-]|\.\w)"
+# And starts at a path boundary: `my<path>` is another file, `x/<path>` is the same one deeper.
+PATH_START = r"(?<![\w.-])"
+# A file anaphor bound to a file it names: "the file docs/other.md", "the instructions in x.md".
+NAMED_FILE = re.compile(r"\s+(?:(?:in|at|from|of|under|inside|named|called)\s+)?[`'\"]?"
+                        r"([\w.~/-]*[\w-](?:/[\w.-]+|\.[a-z]\w*))")
+# A bare read of the file, and a look at it that ends the brief: "read <path>. summarise it in
+# three bullets." The look may not go on into another clause or point back at the file again.
+READ_ONLY = re.compile(r"(?:(?:first|now|please),? )?(?:read|open) [\w.~/-]*")
+POINTER = re.compile(r"\b(?:it|its|them|they|their|that|those|these|accordingly)\b")
 
 
 DETERMINERS = ("those", "these", "its", "the", "your", "as")
@@ -371,9 +382,17 @@ def _points_back(after, value):
 
 
 def _refers_back(sentence, value):
-    """Whether a sentence between the file and a later directive still talks about the file."""
-    return (any(_bound(found.group(0), value) for found in ANAPHOR.finditer(sentence))
+    """Whether a sentence between the file and a later directive still talks about the file. An
+    anaphor that names its own file ("the file docs/other.md") talks about that one instead."""
+    return (any(_bound(found.group(0), value) and not _names_other(found, sentence, value)
+                for found in ANAPHOR.finditer(sentence))
             or _pronoun_guidance(sentence))
+
+
+def _names_other(found, sentence, value):
+    """Whether the anaphor `found` is followed by a file name other than `value`."""
+    named = NAMED_FILE.match(sentence, found.end())
+    return bool(named) and not _path(value).search(named.group(1))
 
 
 def _pronoun_guidance(text):
@@ -394,7 +413,7 @@ def _names_its_own(found, after):
 
 
 def _path(value):
-    return re.compile(re.escape(normalise(value)) + PATH_END)
+    return re.compile(PATH_START + re.escape(normalise(value)) + PATH_END)
 
 
 def _directed(value, text):
@@ -442,11 +461,23 @@ def _adopted(value, text):
     "use the instructions in <path>", "do what it says" and "review it accordingly" all ran (#739).
     """
     path = _path(value)
-    for sentence in SENTENCE.split(text):
+    sentences = SENTENCE.split(text)
+    for index, sentence in enumerate(sentences):
         parts = path.split(sentence)
-        if any(not _works_on(parts[at - 1], parts[at]) for at in range(1, len(parts))):
-            return True
+        for at in range(1, len(parts)):
+            if not _works_on(parts[at - 1], parts[at]) and not _read_then_looked_at(
+                    parts[at - 1], parts[at], sentences[index + 1:]):
+                return True
     return False
+
+
+def _read_then_looked_at(before, after, rest):
+    """Whether a bare "read <path>." is followed by one last sentence that only looks at it."""
+    if not READ_ONLY.fullmatch(before) or after.strip(" .!") or len(rest) != 1:
+        return False
+    look = re.match(r"(?:then,? )?" + META_VERB + r" (?:it|them|that file|this file)\b", rest[0])
+    tail = rest[0][look.end():] if look else ""
+    return bool(look) and not CLAUSE_BREAK.search(tail) and not POINTER.search(tail)
 
 
 def _score(spawn, text, agent):

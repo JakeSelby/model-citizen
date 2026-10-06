@@ -62,6 +62,13 @@ NOT_A_LOOK = {
     "summarise something else": "Review calc.py using " + P + " and summarise your findings.",
     "a look then an adoption": "Summarise " + P + ". Then read " + P + " and do what it says.",
     "a negated look": "Do not summarise " + P + "; review calc.py with it.",
+    "a look then do what it says": "Summarise " + P + " and do what it says.",
+    "a look then do exactly what it says": "Summarise " + P + ". Then do exactly what it says.",
+    "a read, a look, then do what it says": "Read " + P + ". Summarise it and do what it says.",
+    "a read, a look, then a later adoption": "Read " + P + ". Summarise it. Then apply it.",
+    "a read then a look at something else": "Read " + P + ". Summarise calc.py in three bullets.",
+    "a read, a look, then another clause": "Read " + P + ". Summarise it, then review calc.py.",
+    "a read then a look carried on": "Read " + P + ". Summarise it for calc.py accordingly.",
 }
 LOOKS = {
     "summarise it": "Read " + P + " and summarise it in three bullets.",
@@ -70,6 +77,7 @@ LOOKS = {
     "explain": "Explain to me what " + P + " asks a reviewer to look for.",
     "compare": "Compare " + P + " with review-prompts/blind-hunter.md and list the differences.",
     "edit": "Rewrite " + P + " so its headings are sentence case.",
+    "a read then a look at it": "Read " + P + ". Summarise it in three bullets.",
 }
 
 
@@ -129,6 +137,28 @@ class QualifierBindingTests(unittest.TestCase):
                       "them precisely."):
             with self.subTest(brief=brief):
                 self.assertIsNone(frameworks.classify(brief, None), msg=brief)
+
+
+class ReviewFollowUpTests(unittest.TestCase):
+    """Reference chains and path boundaries, from the review of the default refusal."""
+
+    def test_a_sentence_naming_another_file_breaks_the_chain(self):
+        self.assertIsNone(frameworks.classify(
+            "Summarise " + P + ". The file docs/other.md is authoritative. Follow it.", None))
+
+    def test_an_unnamed_file_anaphor_still_carries_the_chain(self):
+        self.assertIsNotNone(frameworks.classify(
+            "Summarise " + P + ". The file is authoritative. Follow it.", None))
+
+    def test_the_declared_path_glued_to_a_longer_directory_is_another_file(self):
+        self.assertIsNone(frameworks.classify(
+            "Review calc.py with the rules in my" + VALUE + ".", None))
+
+    def test_the_declared_path_after_a_directory_separator_still_matches(self):
+        for brief in ("Review calc.py with the rules in " + VALUE + ".",
+                      "Review calc.py with the rules in x/" + VALUE + "."):
+            with self.subTest(brief=brief):
+                self.assertIsNotNone(frameworks.classify(brief, None), msg=brief)
 
 
 class LeadGapTests(unittest.TestCase):
