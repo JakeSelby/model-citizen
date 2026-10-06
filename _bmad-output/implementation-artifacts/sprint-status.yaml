@@ -541,6 +541,7 @@ development_status:
   ah-b173-fix-cost-the-fresh-session-thresholds-are: ready-for-dev
   ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
   ah-b175-fix-benchmarks-summarise-refuses-a-partial-set: ready-for-dev
+  ah-b176-fix-observability-hook-decisions-that-cannot-be: ready-for-dev
   ah-b179-clear-the-plugin-scanner-s-false-positive: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
