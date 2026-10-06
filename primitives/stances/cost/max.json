@@ -7,7 +7,8 @@
     "fast_mode": "allowed",
     "compaction": "compact-allowed",
     "nudge_at": [],
-    "session_nudge_at": []
+    "session_nudge_at": [],
+    "session_handoff_at": null
   },
   "rows": {
     "gatherer": {"class": "strong", "effort": "medium"},

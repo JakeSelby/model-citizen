@@ -940,6 +940,21 @@ def workflow_results(runtime, event):
     return results
 
 
+def caps_results(runtime, event, results):
+    """`session-caps` on a spawn, a `Workflow` launch or a web search, last in the chain.
+
+    Asked only when nothing earlier denied the call, so a refused spawn takes no slot and a
+    refused call is not counted. Claude Code only: the live count falls on `SubagentStop`, which
+    Codex does not raise.
+    """
+    if runtime != "claude-code":
+        return []
+    if any((r.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny" for r in results):
+        return []
+    answer = invoke("session-caps", event)
+    return [answer] if answer else []
+
+
 def framework_deny(runtime, session_id, prompt, subagent_type):
     """The refusal a declared integration's spawn gets, or None when this call is not one.
 
@@ -1408,6 +1423,10 @@ def _dispatch(runtime, payload):
             # does not hold is one no later label can grade. `main` answers that failure with
             # its own refusal, so the row records the refusal, not the answer composed above,
             # and no approval code it never showed.
+            # A foreground sleep or poll: a note, or a denial past the cache's five minutes. Only
+            # Claude Code has the background notification and Monitor the note names.
+            if runtime == "claude-code":
+                results.append(invoke("steer-polling", event))
             try:
                 results.append(invoke("filter-output", event))
             except Exception as exc:
@@ -1468,8 +1487,12 @@ def _dispatch(runtime, payload):
                 if runtime == "claude-code":
                     results.append(invoke("tier-agent-spawns", event))
                 results.append(invoke("brief-guard", event))
+            results.extend(caps_results(runtime, event, results))
         elif tool == "Workflow":
             results.extend(workflow_results(runtime, event))
+            results.extend(caps_results(runtime, event, results))
+        elif tool == "WebSearch":
+            results.extend(caps_results(runtime, event, results))
         elif tool == "WebFetch":
             results.append(invoke("allow-plan-webfetch", event))
         elif enabled("allow-readonly-bash") and investigating(runtime, event) and plan_allowed_tool(tool):
@@ -1510,12 +1533,21 @@ def _dispatch(runtime, payload):
             return {}
         if kind == "UserPromptSubmit":
             invoke("approvals", event)
+        else:
+            # Journals the start or stop the fan-out count reads; it never answers these events.
+            invoke("session-caps", event)
         return invoke("usage-feed", event)
     if kind == "SessionStart":
         settle_adherence()
         return invoke("harness-session", event)
     if kind == "Stop":
-        return invoke("stop-gate", event)
+        # The gate first: a red gate's block is the one that matters, and the hand-off block is
+        # one-shot, so it is not spent on a stop the gate is already holding.
+        gate = invoke("stop-gate", event)
+        if gate.get("decision") == "block" or runtime != "claude-code":
+            return gate
+        handoff = invoke("usage-feed", event)
+        return handoff if handoff.get("decision") == "block" else gate
     if kind == "SessionEnd":
         # Nothing will arrive for this session again, so an ask with no PostToolUse is settled:
         # the command did not run. Done before the usage worker is spawned, and bounded by the

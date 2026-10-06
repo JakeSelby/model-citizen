@@ -8,7 +8,8 @@ attempt whose cost is in the figure. The harness-over-bare ratio and the pass-ra
 resamples tasks with replacement and keeps both arms' trials of a task together; it is
 deterministic for a seed, and the seed and resample count are recorded with the result. Each
 arm's own pass rate carries a Wilson interval, which is descriptive only. The verdict applies
-SM-2's decision rule; reading and limits: docs/benchmarks.md and docs/evidence-standard.md.
+SM-2's decision rule; reading and limits: docs/benchmarks.md and docs/evidence-standard.md. A run
+with config arms adds every arm's figures and its paired comparisons (`analyse_arms`).
 
 Standard library only, and no model call: every figure here re-derives from `results.jsonl`.
 """
@@ -38,6 +39,13 @@ def attempts(rows, arms=ARMS):
     intention to treat. The trial is the row's `rep`. `arms` is the `(reference, treatment)`
     pair the rows may name, bare and harness unless a caller compares another pair.
     """
+    rows = list(rows)  # read twice below, and a caller may pass a one-shot iterable
+    strata = sorted({str(row.get("stratum")) for row in rows if isinstance(row, dict)})
+    if len(strata) > 1:
+        # Each model of a multi-model run is its own stratum (`replay_strata`); pooling them is a
+        # pre-registered analysis that relabels the rows first, never a silent default.
+        raise ValueError("the rows hold %d strata (%s); SM-2 is computed per stratum"
+                         % (len(strata), ", ".join(strata)))
     out, seen, long_by_task = [], set(), {}
     for index, row in enumerate(rows, 1):
         missing = [k for k in ("task", "arm", "cost_usd") if k not in row]
@@ -103,10 +111,12 @@ def cost_of_pass(cost, passes):
     return cost / passes
 
 
-def _cells(atts, arms=ARMS):
+def _cells(atts, arms=ARMS, fixed_sample=True):
     """Per task, per arm: `[cost or None, passes, attempts]`, and the sorted task ids. ValueError
     when a task lacks attempts in any of `arms`, or its arms hold different trial ids, since a
-    paired interval cannot use it. Two arms or more; the unit-by-economy grid passes five."""
+    paired interval cannot use it. Two arms or more; the unit-by-economy grid passes five.
+    Without `fixed_sample`, a balanced partial set (`balance`), a task's arms need equal trial
+    counts only, and tasks may hold different counts."""
     cells, trial_ids = {}, {}
     for a in atts:
         cell = cells.setdefault(a["task"], {arm: [0.0, 0, 0] for arm in arms})[a["arm"]]
@@ -121,6 +131,11 @@ def _cells(atts, arms=ARMS):
         empty = [arm for arm in arms if not cells[unpaired[0]][arm][2]]
         raise ValueError("task %s has no attempts in the %s arm; a paired interval needs every arm"
                          % (unpaired[0], empty[0]))
+    if not fixed_sample:
+        uneven = sorted(t for t in cells if len({cells[t][arm][2] for arm in arms}) > 1)
+        if uneven:
+            raise ValueError("task %s has unequal trial counts in its arms; balance the set first" % uneven[0])
+        return cells, sorted(cells)
     mismatched = sorted(t for t in cells if any(trial_ids[t][arms[0]] != trial_ids[t][arm] for arm in arms[1:]))
     if mismatched:
         raise ValueError("task %s has different trial ids in its %s arms"
@@ -239,15 +254,16 @@ def decide(ratio, ratio_ci, diff_ci, long_ci=None, has_long=False):
     return SUPPORTED, "both conditions of the decision rule hold", claim
 
 
-def analyse(rows, seed=SEED, resamples=RESAMPLES, arms=ARMS):
+def analyse(rows, seed=SEED, resamples=RESAMPLES, arms=ARMS, fixed_sample=True):
     """The whole SM-2 result for a finished two-arm row set; ValueError when it cannot be derived.
 
     `arms` is `(reference, treatment)`: the ratio is treatment over reference and the difference
     treatment minus reference. The verdict is SM-2's rule, which is defined for harness against
-    bare only, so a caller comparing another pair reads the intervals and not the verdict."""
+    bare only, so a caller comparing another pair reads the intervals and not the verdict.
+    `fixed_sample=False` is for a balanced partial set only; `analyse_set` is its caller."""
     pair = arms
     atts = attempts(rows, pair)
-    cells, tasks = _cells(atts, pair)
+    cells, tasks = _cells(atts, pair, fixed_sample)
     if not tasks:
         raise ValueError("no rows")
     totals = _totals(cells, tasks, pair)
@@ -287,6 +303,202 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES, arms=ARMS):
             "difference_interval": diff_ci, "long": long, "sm2_eligible": eligible,
             "limitation": limitation,
             "verdict": verdict, "reason": reason, "claim": claim}
+
+
+# --- Every declared arm (#1228) --------------------------------------------------------------------
+#
+# A run with config arms (`--arm-config`) holds bare, harness and one arm per config. Each arm is
+# reported on its own, and each is compared against bare and against the harness default with the
+# same task-clustered bootstrap as SM-2. Harness against bare stays the SM-2 comparison; a config
+# arm's comparison is secondary unless the pre-registration names it primary.
+
+PRIMARY, SECONDARY = "primary", "secondary"
+
+
+def arm_names(rows):
+    """Every arm the rows name: SM-2's pair first in its order, then the rest sorted."""
+    named = set(row.get("arm") for row in rows if isinstance(row, dict))
+    return tuple(a for a in ARMS if a in named) + tuple(sorted((a for a in named if a not in ARMS), key=str))
+
+
+def comparison_label(reference, treatment):
+    return "%s vs %s" % (treatment, reference)
+
+
+def comparison_pairs(names):
+    """`(reference, treatment)` pairs: every arm against bare, then every config arm against harness."""
+    return [("bare", arm) for arm in names if arm != "bare"] + \
+           [("harness", arm) for arm in names if arm not in ARMS]
+
+
+def analyse_arms(rows, seed=SEED, resamples=RESAMPLES, primary=()):
+    """Every arm's own figures and its paired comparisons; ValueError when they cannot be derived.
+
+    Every task must hold the same trial ids in every arm, as SM-2 requires of its two. Each
+    comparison carries the Cost-of-Pass ratio (treatment over reference) and the pass-rate
+    difference (treatment minus reference) with task-clustered 95% intervals, and its `role`:
+    harness against bare is `primary`, being SM-2's own; any other is `secondary` unless its label
+    (`comparison_label`) is in `primary`, the comparisons a pre-registration names. No comparison
+    but SM-2's has a verdict."""
+    rows = list(rows)
+    names = arm_names(rows)
+    for arm in ARMS:
+        if arm not in names:
+            raise ValueError("the rows hold no %s arm; every arm is compared against bare and the harness "
+                             "default" % arm)
+    _cells(attempts(rows, names), names)  # every task in every arm, on one trial set
+    pairs = comparison_pairs(names)
+    labels = [comparison_label(*pair) for pair in pairs]
+    unknown = sorted(set(primary) - set(labels))
+    if unknown:
+        raise ValueError("the pre-registration names %s primary, which this run does not compare; it "
+                         "compares %s" % (", ".join(unknown), ", ".join(labels)))
+    arms, comparisons = {}, []
+    for (reference, treatment), label in zip(pairs, labels):
+        mine = analyse([r for r in rows if r.get("arm") in (reference, treatment)], seed, resamples,
+                       (reference, treatment))
+        arms.update(mine["arms"])
+        sm2 = (reference, treatment) == ARMS
+        comparisons.append({"reference": reference, "treatment": treatment, "label": label,
+                            "role": PRIMARY if sm2 or label in primary else SECONDARY, "sm2": sm2,
+                            "tasks": mine["tasks"], "ratio": mine["ratio"],
+                            "ratio_undefined": mine["ratio_undefined"], "ratio_interval": mine["ratio_interval"],
+                            "undefined_resamples": mine["undefined_resamples"],
+                            "difference": mine["difference"], "difference_interval": mine["difference_interval"],
+                            "sm2_eligible": mine["sm2_eligible"]})
+    return {"method": METHOD, "seed": seed, "resamples": resamples, "confidence": CONFIDENCE,
+            "arm_names": list(names), "arms": {arm: arms[arm] for arm in names},
+            "primary_named": sorted(primary), "comparisons": comparisons}
+
+
+def render_arms(result):
+    """Every arm's figures, then each paired comparison with its role, as text."""
+    lines = ["", "Every arm: %d arm(s), %s, seed %d, %d resamples, %d%% intervals"
+             % (len(result["arm_names"]), result["method"], result["seed"], result["resamples"],
+                round(result["confidence"] * 100))]
+    for arm in result["arm_names"]:
+        a = result["arms"][arm]
+        lines.append("  %s: %d/%d passed (%d errored), pass rate %s, Wilson %s (descriptive), "
+                     "Cost-of-Pass %s USD, total %s USD"
+                     % (arm, a["passes"], a["attempts"], a["errors"], _num(a["pass_rate"]),
+                        _interval(a["pass_rate_interval_descriptive"]), _num(a["cost_of_pass"], 4),
+                        _num(a["cost_usd"], 4)))
+    lines.append("Paired comparisons, task-clustered; only SM-2's has a verdict:")
+    for c in result["comparisons"]:
+        ratio = _num(c["ratio"])
+        if c["ratio_undefined"]:
+            ratio += " (%s)" % c["ratio_undefined"]
+        lines.append("  %s (%s%s): Cost-of-Pass ratio %s, interval %s; pass-rate difference %s, interval %s"
+                     "%s" % (c["label"], c["role"], ", SM-2" if c["sm2"] else "", ratio,
+                             _interval(c["ratio_interval"]), _num(c["difference"]),
+                             _interval(c["difference_interval"]),
+                             "" if c["sm2_eligible"] else "; fewer than five paired trials, exploratory"))
+    return "\n".join(lines) + "\n"
+
+
+PARTIAL, PARTIAL_NO_CLAIM = "partial", "partial: no claim"
+
+
+def _trial(row):
+    return row.get("rep", row.get("trial"))
+
+
+def balance(rows, arms=ARMS):
+    """(kept rows, notes): a stopped run's rows with every task's arms cut to equal trials.
+
+    A task holding unequal trials keeps the smaller arm's count in each arm, dropping the latest
+    trials by rep; a task with no trial in some arm is left out, since nothing pairs with it. Each
+    note is `{task, action, trials, reason}`, a balanced one also `kept` and `dropped`. ValueError
+    on a malformed row (`attempts`)."""
+    attempts(rows, arms)
+    by_cell = {}
+    for row in rows:
+        by_cell.setdefault(row["task"], {arm: [] for arm in arms})[row["arm"]].append(row)
+    kept, notes = [], []
+    for task in sorted(by_cell, key=str):
+        cell = {arm: sorted(by_cell[task][arm], key=_trial) for arm in arms}
+        trials = {arm: len(cell[arm]) for arm in arms}
+        counts = " and ".join("%d %s" % (trials[arm], arm) for arm in arms)
+        empty = [arm for arm in arms if not trials[arm]]
+        if empty:
+            notes.append({"task": task, "action": "left out", "trials": trials,
+                          "reason": "the run recorded no %s trial (%s)" % (" or ".join(empty), counts)})
+            continue
+        least = min(trials.values())
+        dropped = [[arm, _trial(row)] for arm in arms for row in cell[arm][least:]]
+        if dropped:
+            notes.append({"task": task, "action": "balanced", "trials": trials, "kept": least,
+                          "dropped": dropped,
+                          "reason": "the run stopped with %s trials; the latest are dropped" % counts})
+        kept.extend(row for arm in arms for row in cell[arm][:least])
+    return kept, notes
+
+
+def analyse_set(rows, seed=SEED, resamples=RESAMPLES, registered=False, claim_allowed=False):
+    """`analyse` for any saved set, a stopped run's partial one included.
+
+    A complete set, every task holding one trial set in both arms, returns exactly `analyse`. Any
+    other set is balanced (`balance`) and analysed, and its result carries `partial`: the cells
+    used and seen, each note and whether the set may support a claim. A partial set supports one
+    only when the run is pre-registered and its stopping rule allows it (`claim_allowed`); then the
+    verdict reads `partial: <SM-2's verdict>`. Otherwise it reads `partial`, or `partial: no claim`
+    for a registered run, and carries no claim. A set balancing leaves with no paired cell is
+    reported the same way over `_unpaired`'s empty estimates. ValueError as `analyse`."""
+    kept, notes = balance(rows)
+    trial_sets = {}
+    for row in kept:
+        trial_sets.setdefault((row["task"], row["arm"]), set()).add(_trial(row))
+    if not notes and len({frozenset(s) for s in trial_sets.values()}) <= 1:
+        return analyse(rows, seed, resamples)
+    result = analyse(kept, seed, resamples, fixed_sample=False) if kept else _unpaired(seed, resamples)
+    used, seen = result["tasks"], result["tasks"] + sum(1 for n in notes if n["action"] == "left out")
+    claims = registered and claim_allowed and bool(kept)
+    result["partial"] = {"cells_used": used, "cells_seen": seen, "notes": notes,
+                         "uneven": len({len(s) for s in trial_sets.values()}) > 1,
+                         "registered": registered, "claim_allowed": claims}
+    used_text = "%d of %d cell(s) used" % (used, seen)
+    if claims:
+        result["verdict"] = "%s: %s" % (PARTIAL, result["verdict"])
+        result["reason"] = "%s; a partial set, %s, which the stopping rule allows to support a claim" % (
+            result["reason"], used_text)
+    else:
+        result["verdict"] = PARTIAL_NO_CLAIM if registered else PARTIAL
+        result["reason"] = ("a partial set, %s, so no paired cell is left to analyse" % used_text
+                            if not kept else
+                            "a partial set, %s, and the pre-registered stopping rule does not let a "
+                            "partial set support a claim" % used_text if registered else
+                            "a partial set, %s, from an exploratory run" % used_text)
+        result["claim"] = None
+    return result
+
+
+def _unpaired(seed, resamples):
+    """`analyse`'s shape for a partial set that balancing left with no paired cell: every count
+    zero and every estimate undefined, so it renders and supports no claim."""
+    arm = {"attempts": 0, "passes": 0, "errors": 0, "cost_usd": None, "cost_of_pass": None,
+           "mean_cost_per_attempt": None, "pass_rate": None, "pass_rate_interval_descriptive": None}
+    limitation = "no task holds a trial in both arms"
+    return {"method": METHOD, "seed": seed, "resamples": resamples, "confidence": CONFIDENCE,
+            "delta": DELTA, "tasks": 0, "arms": {name: dict(arm) for name in ARMS},
+            "ratio": None, "ratio_undefined": limitation, "ratio_interval": None,
+            "undefined_resamples": 0, "difference": None, "difference_interval": None, "long": None,
+            "sm2_eligible": False, "limitation": limitation,
+            "verdict": INCONCLUSIVE, "reason": limitation, "claim": None}
+
+
+def render_partial(partial):
+    """A partial set's lines: the cells used, then each balancing or left-out task with its reason."""
+    lines = ["  partial set: %d of %d cell(s) used%s" % (
+        partial["cells_used"], partial["cells_seen"],
+        ", tasks hold different trial counts" if partial["uneven"] else "")]
+    for note in partial["notes"]:
+        if note["action"] == "balanced":
+            lines.append("    %s: balanced to %d trial(s) per arm, dropped %s, because %s" % (
+                note["task"], note["kept"],
+                ", ".join("%s trial %d" % (arm, rep) for arm, rep in note["dropped"]), note["reason"]))
+        else:
+            lines.append("    %s: left out, because %s" % (note["task"], note["reason"]))
+    return lines
 
 
 def pareto(result, names=ARMS):
@@ -632,6 +844,8 @@ def render(result):
     lines = ["SM-2 result over %d task(s): %s, seed %d, %d resamples, %d%% intervals"
              % (result["tasks"], result["method"], result["seed"], result["resamples"],
                 round(result["confidence"] * 100))]
+    if result.get("partial"):
+        lines += render_partial(result["partial"])
     for arm in ARMS:
         a = result["arms"][arm]
         lines.append("  %s: %d/%d passed (%d errored), pass rate %s, Wilson %s (descriptive), "

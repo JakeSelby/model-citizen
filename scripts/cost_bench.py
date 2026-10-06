@@ -16,10 +16,12 @@ usage. `arms` builds and checks the arm images without calling a model, and `det
 rules fired out of the saved streams. Reading and limits: docs/benchmarks.md.
 """
 import argparse
+import ast
 import contextlib
 import datetime
 import hashlib
 import importlib.util
+import io
 import itertools
 import json
 import os
@@ -33,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +58,9 @@ import oracle_metrics  # noqa: E402  named metrics a check may return beside pas
 import ablations  # noqa: E402  the N-arm ablation manifest: one declared-selection arm per entry
 import rule_adherence  # noqa: E402  a unit's own detectors over each run's saved stream
 import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity and its analysis
+import replay_session  # noqa: E402  the long-session tier: scripted multi-turn sessions and their rows
+import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
+import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -147,6 +153,8 @@ RESULTS = "results.jsonl"
 SPEND = "spend.json"
 # The model classes a re-spawn is ranked on, read once from this checkout's bindings.
 TIERS = replay_pair.load_tiers(ROOT)
+LONG_SESSION = replay_pack.LONG_SESSION
+LONG_SESSION_REPS = 3  # a session yields many per-turn observations, so few reps per arm
 DETECTIONS = replay_detect.DETECTIONS
 ENRICHED = "results.enriched.jsonl"
 
@@ -312,6 +320,10 @@ def check(root=ROOT, now=None):
 # --------------------------------------------------------------------------- replay
 
 
+# A task id names files under `--raw` and containers, so it is a plain name: no separator, no `..`.
+TASK_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
 def load_tasks(path):
     """The manifest's tasks, or SystemExit naming the first malformed one."""
     tasks = json.loads(Path(path).read_text(encoding="utf-8"))["tasks"]
@@ -320,6 +332,9 @@ def load_tasks(path):
                    if k not in task]
         if missing or task["kind"] not in ("issue", "synthetic", "pack"):
             raise SystemExit("task %r is malformed: missing %s" % (task.get("id"), missing or "a known kind"))
+        if not isinstance(task["id"], str) or not TASK_ID.match(task["id"]):
+            raise SystemExit("task %r is malformed: an id is letters, digits, '.', '_' and '-', "
+                             "starting with a letter or digit" % task["id"])
         if not isinstance(task.get("long", False), bool):
             raise SystemExit("task %r is malformed: long must be true or false" % task.get("id"))
         if "metrics" not in task:
@@ -591,7 +606,8 @@ def config_fingerprint(config_dir, home=None):
             "personal_bytes": dict(listed).get("CLAUDE.personal.md", 0)}
 
 
-def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT):
+def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effort=arms.DEFAULT_EFFORT,
+                session_id=None, resume=False):
     """One command line for every arm, run inside its container: the arms differ by image and by
     nothing else.
 
@@ -601,12 +617,21 @@ def arm_command(claude, model, prompt, run_cap=RUN_CAP_USD, max_turns=None, effo
     place a Stop hook's decision appears and the CLI emits them in no other format. `max_turns`
     is the task's own cap; without it a run is bounded only by the soft budget and the timeout.
     `effort` is the arm's pinned reasoning effort, passed as `--effort` on every launch so no run
-    takes the model's default, which differs by model."""
+    takes the model's default, which differs by model.
+
+    `session_id` makes the run one turn of a long session: the CLI keeps the session's transcript
+    (no `--no-session-persistence`), the first turn starts it with `--session-id` and every later
+    one, `resume`, continues it with `--resume`; the transcript lives in the mounted session store
+    (`replay_arms.SESSION_STORE`)."""
     if effort not in arms.EFFORT_LEVELS:
         raise SystemExit("cost-bench: effort %r is not one of %s" % (effort, ", ".join(arms.EFFORT_LEVELS)))
     turns = ["--max-turns", str(int(max_turns))] if max_turns else []
+    if session_id is None:
+        session = ["--no-session-persistence"]
+    else:
+        session = ["--resume" if resume else "--session-id", session_id]
     return [claude, "-p", prompt, "--model", model, "--effort", effort, "--output-format", "stream-json",
-            "--include-hook-events", "--verbose", "--strict-mcp-config", "--no-session-persistence",
+            "--include-hook-events", "--verbose", "--strict-mcp-config"] + session + [
             "--max-budget-usd", "%g" % run_cap, "--permission-mode", PERMISSION_MODE] + turns + [
             "--settings", json.dumps(ARM_SETTINGS)]
 
@@ -642,12 +667,15 @@ def container_name(*parts):
     return "%srun-%d-%s" % (arms.IMAGE_PREFIX, os.getpid(), re.sub(r"[^a-zA-Z0-9_.-]", "-", text))
 
 
-def run_check(launch, image, workdir, argv, env=None, name=None, **kwargs):
-    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`).
-    On a timeout the container is removed by name before the timeout is raised on: killing the
-    Docker client alone would leave it running the code it was checking."""
+def run_check(launch, image, workdir, argv, env=None, name=None, session_stream=None, session_baseline=None,
+              **kwargs):
+    """A check or gate command in a fresh, named container of `image` (`replay_arms.check_command`),
+    with `session_stream` and `session_baseline`, when given, mounted read-only beside the tree. On a
+    timeout the container is removed by name before the timeout is raised on: killing the Docker
+    client alone would leave it running the code it was checking."""
     name = name or container_name("check")
-    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs)
+    command = arms.check_command(image, workdir, argv, env, name, stdin="input" in kwargs,
+                                 session_stream=session_stream, session_baseline=session_baseline)
     client = arms.client_env()
     try:
         return launch(command, env=client, timeout=CHECK_TIMEOUT, stdout=subprocess.PIPE,
@@ -679,18 +707,18 @@ def check_observer_settings(record):
 
 
 def launch_arm(record, workdir, argv, opts, name, launch=subprocess.run, arm=None, observation_run=None,
-               memory=None):
+               memory=None, session_store=None):
     """Run `argv` in a fresh container of the arm in `record`, the snapshot at `workdir` mounted.
     On a timeout the container is removed before the timeout is raised on, so nothing keeps
     running or spending after the row is written. `arm` names a pair arm, whose selection is
     passed by value; `observation_run` is one native session's observation stage; `memory` is the
-    trial's cache nonce (`trial_memory`)."""
+    trial's cache nonce (`trial_memory`); `session_store` a long session's transcript directory."""
     check_observer_settings(record)
     env = arm_env(record["arm"], opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm),
                   observation_run)
     command = arms.run_command(record["image"], workdir, argv, opts.get("network") or "none", env, name,
                                observation_dir=observation_run["mount"] if observation_run else None,
-                               managed_memory=memory)
+                               managed_memory=memory, session_store=session_store)
     client = opts.get("client_env") or arms.client_env()
     try:
         return launch(command, env=client, timeout=RUN_TIMEOUT, stdout=subprocess.PIPE,
@@ -1180,11 +1208,72 @@ def _oracle(repo, name):
 
 # The last line a check container prints for a synthetic task: the oracle's errors as JSON.
 ORACLE_MARK = "cost-bench-oracle-errors: "
+# The driver calls `check(root, stream)` when `takes_stream` says so, else `check(root)`. That
+# decision is made here and sent in, never read back from the container: anything the check, or
+# code it loads from the agent's tree, prints is untrusted.
 ORACLE_DRIVER = """
 import json as _json
 from pathlib import Path as _Path
-print(%r + _json.dumps(check(_Path(%r))))
+print(%r + _json.dumps(check(_Path(%r), %r) if %r else check(_Path(%r))))
 """
+# Why a declared metric may be null when no stream reached the check; the check's own notes
+# beginning with STREAM_NOTE say why when one did (the pack's contract), and STREAM_NULL stands
+# in when a null metric came back from a stream-reading check with no reason at all.
+NO_STREAM = "stream: no session stream was passed to the check"
+STREAM_NOTE = "stream metrics unknown"
+STREAM_NULL = STREAM_NOTE + ": the check gave no reason for null %s"
+
+
+def takes_stream(source):
+    """Whether the check in `source` takes the stream: its last top-level binding of `check` is a
+    `def` with a second positional parameter or `*args`. Read from the syntax tree, so the check
+    never runs on this machine; any later module-scope binding of `check`, or source that does
+    not parse, takes none, while a helper's local `check` leaves the top-level one in place."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return False
+    found = False
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "check":
+            args = node.args
+            found = args.vararg is not None or len(getattr(args, "posonlyargs", [])) + len(args.args) >= 2
+        elif "check" in _module_bindings(node):
+            found = False
+    return found
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_COMPREHENSIONS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def _module_bindings(node, in_comprehension=False):
+    """The names `node` binds in the module scope. A nested function or class binds its own name
+    there, and anything it declares `global`; its locals stay its own. A comprehension's loop
+    variables are local to it; an assignment expression inside one binds the enclosing scope."""
+    names = set()
+    if isinstance(node, _SCOPES):
+        if not isinstance(node, ast.Lambda):
+            names.add(node.name)
+        declared = {n for sub in ast.walk(node) if isinstance(sub, ast.Global) for n in sub.names}
+        if declared:
+            names |= declared & {sub.id for sub in ast.walk(node)
+                                 if isinstance(sub, ast.Name) and not isinstance(sub.ctx, ast.Load)}
+        return names
+    if isinstance(node, _COMPREHENSIONS):
+        in_comprehension = True
+    elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        names.update((a.asname or a.name).split(".")[0] for a in node.names)
+    elif isinstance(node, ast.ExceptHandler) and node.name:
+        names.add(node.name)
+    elif isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load) and not in_comprehension:
+        names.add(node.id)
+    elif isinstance(node, ast.NamedExpr):
+        names.add(node.target.id)
+        return names | _module_bindings(node.value, in_comprehension)
+    for child in ast.iter_child_nodes(node):
+        names |= _module_bindings(child, in_comprehension)
+    return names
 
 
 def _copy_held_back(task, workdir, repo):
@@ -1211,30 +1300,48 @@ def _ran(done):
     return (done.returncode == 0 and count > 0, "ran %d, exit %d" % (count, done.returncode))
 
 
-def score(task, workdir, repo, image, launch=subprocess.run, name=None):
+def score(task, workdir, repo, image, launch=subprocess.run, name=None, stream=None, baseline=None):
     """(passed, detail), with the check run in a fresh container of `image`, never on this machine.
+    A task declaring metrics gets a third item, its recorded metrics with `metric_stream`, whether
+    `stream`, the run's saved stream-json, reached an oracle that accepts it (`ORACLE_DRIVER`).
 
     Both kinds of check execute the tree they score: a unit test imports it, and an oracle may
     compile or load it. An agent's tree is code nobody reviewed, and even this repository's own
     older trees read the configuration under whatever HOME they are given, so a check on this
     machine would score the owner's live profile along with the task. So every check runs in a
-    container of the bare image, with the tree mounted as the only path, the image's own HOME, no
-    network and no credential. The held-back test files are written into the tree from this
-    repository's history first; an oracle is sent on stdin, so nothing else is mounted."""
+    container of the bare image, with the tree mounted, plus the scored run's session stream
+    read-only when one is given, the image's own HOME, no network and no credential. The held-back
+    test files are written into the tree from this repository's history first; an oracle is sent
+    on stdin, so nothing else is mounted but a long-session checkpoint's `baseline`, the session's
+    totals before its segment, read-only at `replay_arms.SESSION_BASELINE`."""
     workdir = Path(workdir)
     tests = task["tests"]
     name = name or container_name("check", task["id"])
     if task["kind"] in ("synthetic", "pack"):
         source = (replay_pack.check_source(task) if task["kind"] == "pack" else
                   (Path(repo) / ORACLES / (tests["oracle"] + ".py")).read_text(encoding="utf-8"))
-        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR)
-        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, input=stdin)
+        mounted = arms.SESSION_STREAM if stream is not None else None
+        takes = takes_stream(source)
+        stdin = source + ORACLE_DRIVER % (ORACLE_MARK, arms.WORKDIR, mounted, takes, arms.WORKDIR)
+        done = run_check(launch, image, workdir, ["python3", "-"], {}, name, session_stream=stream,
+                         session_baseline=baseline, input=stdin)
         marks = [line for line in (done.stdout or "").splitlines() if line.startswith(ORACLE_MARK)]
         if done.returncode or not marks:
             raise RuntimeError("the oracle did not report (exit %s)" % done.returncode)
-        passed, detail, recorded = oracle_metrics.verdict(json.loads(marks[-1][len(ORACLE_MARK):]),
-                                                          task.get("metrics"))
-        return (passed, detail) if recorded is None else (passed, detail, recorded)
+        value = json.loads(marks[-1][len(ORACLE_MARK):])
+        passed, detail, recorded = oracle_metrics.verdict(value, task.get("metrics"))
+        if recorded is None:
+            return passed, detail
+        recorded["metric_stream"] = takes and stream is not None
+        if not recorded["metric_stream"]:
+            recorded["metric_errors"].append(NO_STREAM)
+            return passed, detail, recorded
+        notes = [n for n in (value.get("errors", []) if isinstance(value, dict) else value)
+                 if n.startswith(STREAM_NOTE)]
+        explained = {e.split(":", 1)[0] for e in recorded["metric_errors"]}
+        unexplained = [m for m, v in sorted(recorded["metrics"].items()) if v is None and m not in explained]
+        recorded["metric_errors"] += notes or ([STREAM_NULL % ", ".join(unexplained)] if unexplained else [])
+        return passed, detail, recorded
     _copy_held_back(task, workdir, repo)
     env = {"PYTHONPATH": ":".join("%s/%s" % (arms.WORKDIR, p) for p in tests.get("pythonpath", []))}
     done = run_check(launch, image, workdir, _unittest_command(task, "python3"), env, name)
@@ -1371,11 +1478,33 @@ def arm_stamp(record):
             "harness_ref": record["harness_ref"], "harness_commit": record["harness_commit"]}
 
 
-def _scorer(opts, launch):
+def _scorer(opts, launch, stream=None):
     if opts.get("scorer"):
         return opts["scorer"]
     image = opts["arms"]["bare"]["image"]
-    return lambda task, workdir, repo: score(task, workdir, repo, image, launch)
+    return lambda task, workdir, repo: score(task, workdir, repo, image, launch, stream=stream)
+
+
+def session_stream(stdout, folder):
+    """The run's whole stream-json, subagent messages included, written beside its tree for the
+    check container to mount read-only, whether or not `--raw` keeps a copy."""
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode("utf-8", errors="replace")
+    path = Path(folder) / "session-stream.jsonl"
+    path.write_text(stdout or "", encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path
+
+
+def session_baseline(totals, path):
+    """A checkpoint's baseline, the session's totals before its segment
+    (`replay_session.session_totals`), written to `path` for its check container to mount
+    read-only at `replay_arms.SESSION_BASELINE`."""
+    path = Path(path)
+    path.write_text(json.dumps({"total_cost_usd": totals["total_cost_usd"],
+                                "modelUsage": totals.get("modelUsage") or {}}, sort_keys=True), encoding="utf-8")
+    os.chmod(str(path), 0o644)
+    return path
 
 
 def run_one(task, rep, arm, opts, launch=subprocess.run):
@@ -1417,6 +1546,50 @@ def save_stream(opts, task_id, arm, rep, stdout):
     return path
 
 
+def diff_name(task_id, arm, rep):
+    """`<task>-<arm>-<rep>.diff`, beside the run's stream, where `replay_judge` looks for it."""
+    return str(Path(replay_detect.raw_name(task_id, arm, rep)).with_suffix(".diff"))
+
+
+def save_diff(opts, task_id, arm, rep, workdir, base):
+    """`{diff_path, diff_bytes, diff_error}`: the run's final tree against the task's `base` commit,
+    as `git diff --binary`, kept under `--raw` as `diff_name`, new files included.
+
+    Taken after the run, while the mounted tree still exists and before the scorer copies held-back
+    tests into it. Git runs with a fresh git dir of its own, borrowing the tree's objects, and a
+    throwaway index: the agent could write the tree's own `.git/config`, and a filter, fsmonitor or
+    diff driver named there would otherwise run on the host. A failure is recorded, never a
+    missing diff passed off as an empty one."""
+    path = Path(opts["raw"]) / diff_name(task_id, arm, rep)
+    scratch = Path(tempfile.mkdtemp(prefix="cost-diff-", dir=opts.get("tmp")))
+    try:
+        gitdir = scratch / "git"
+        done = subprocess.run(["git", "init", "-q", "--bare", str(gitdir)], env=scrubbed_env(),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        if done.returncode:
+            return {"diff_path": None, "diff_bytes": None, "diff_error": "git init: " + done.stdout.strip()}
+        (gitdir / "objects" / "info" / "alternates").write_text(
+            str((Path(workdir) / ".git" / "objects").resolve()) + "\n", encoding="utf-8")
+        env = scrubbed_env({"GIT_DIR": str(gitdir), "GIT_WORK_TREE": str(workdir),
+                            "GIT_INDEX_FILE": str(scratch / "index")})
+        git = ["git", "-c", "core.bare=false", "-c", "core.fsmonitor=false"]
+        for args in (["read-tree", base], ["add", "-A"],
+                     ["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", base]):
+            done = subprocess.run(git + args, env=env, cwd=str(workdir), stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE)
+            if done.returncode:
+                detail = done.stderr.decode("utf-8", errors="replace").strip().splitlines()
+                return {"diff_path": None, "diff_bytes": None,
+                        "diff_error": "git %s: %s" % (args[0], detail[-1] if detail else "exit %d" % done.returncode)}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(done.stdout)
+        return {"diff_path": str(path), "diff_bytes": len(done.stdout), "diff_error": None}
+    except OSError as exc:
+        return {"diff_path": None, "diff_bytes": None, "diff_error": "%s: %s" % (type(exc).__name__, exc)}
+    finally:
+        shutil.rmtree(str(scratch), ignore_errors=True)
+
+
 def _attempt(task, rep, arm, opts, launch):
     record = opts["arms"][arm]
     effort = record["declaration"]["effort"]
@@ -1437,7 +1610,9 @@ def _attempt(task, rep, arm, opts, launch):
                context_attribution=arm_attribution(arm, env, opts),
                **dict(arm_stamp(record), **{kind: None for kind in TOKEN_KINDS},
                       **{field: None for field in SURFACE_FIELDS + SURFACE_HASH_FIELDS}))
-    row.update(session_ids=[], respawns_up=None, spawns_unranked=None)
+    row.update(session_ids=[], respawns_up=None, spawns_unranked=None,
+               arm_config=(opts.get("arm_configs") or {}).get(arm))
+    row.update(diff_path=None, diff_bytes=None, diff_error=None)
     row.update(oracle_metrics.row_fields(task.get("metrics")))  # nothing for a task declaring none
     if opts.get("ablation") is not None:
         row.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
@@ -1466,6 +1641,8 @@ def _attempt(task, rep, arm, opts, launch):
     try:
         observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
         task_workdir(task, opts["repo"], workdir)
+        base = _git_required(workdir, "rev-parse", "--verify", "HEAD^{commit}").stdout.strip() \
+            if opts.get("raw") else None  # read before the agent can move it
         memory, row["cache_nonce"] = trial_memory(workdir.parent)
         argv = arm_command("claude", opts["model"], prompt_of(task), opts["run_cap"], task["max_turns"], effort)
         name = container_name(task["id"], arm, rep)
@@ -1484,6 +1661,8 @@ def _attempt(task, rep, arm, opts, launch):
                 done = launch_arm(record, workdir, argv, opts, name, launch, arm, observed, memory)
             except subprocess.TimeoutExpired as exc:
                 timeout = exc
+        if base:
+            row.update(save_diff(opts, task["id"], arm, rep, workdir, base))
         if timeout is not None:
             exc = timeout
             partial = getattr(exc, "stdout", None)
@@ -1515,7 +1694,7 @@ def _attempt(task, rep, arm, opts, launch):
             return finish(dict(row, error=True, cache_miss_ratio=None,
                                error_kind=parsed["subtype"] or "exit %s" % done.returncode))
         try:
-            scored = _scorer(opts, launch)(task, workdir, opts["repo"])
+            scored = _scorer(opts, launch, session_stream(done.stdout, workdir.parent))(task, workdir, opts["repo"])
             row["passed"] = bool(scored[0])
             if len(scored) > 2 and scored[2] is not None:
                 row.update(scored[2])
@@ -1525,6 +1704,105 @@ def _attempt(task, rep, arm, opts, launch):
     finally:
         shutil.rmtree(str(workdir.parent), ignore_errors=True)  # removed, never reset
         discard_observation(observed)
+
+
+def session_base(task, rep, arm, opts):
+    """The fields every row of one long session carries: the run's stamp, the arm's container and
+    profile, and the session's identity, `(scenario, arm, rep)` with its CLI session id."""
+    record = opts["arms"][arm]
+    env = arm_env(arm, opts.get("stance_cost"), opts.get("proxy"), selection_of(opts, arm))
+    profile = arm_profile(arm, env, opts)
+    base = dict(opts["stamp"], tier=LONG_SESSION, scenario=task["id"], task=task["id"], arm=arm, tag=opts["tag"],
+                rep=rep, session_id=str(uuid.uuid4()), effort=record["declaration"]["effort"],
+                cache_basis=CACHE_COLD, cache_nonce=None, contamination_control=CONTAMINATION_CONTROL,
+                change_note=opts.get("change_note", ""), preflight=opts.get("preflight", "skipped"),
+                profile_fingerprint=profile, arm_config=(opts.get("arm_configs") or {}).get(arm),
+                **arm_stamp(record))
+    if opts.get("ablation") is not None:
+        base.update(ablations.row_stamp(opts["ablation"], arm, opts["schedule_seed"]))
+    return base, profile
+
+
+def turn_refusal(stdout, effort):
+    """Why a finished turn's stream disqualifies the session, or "": it read the installed
+    checkout, or it ran at another effort than the one pinned."""
+    try:
+        parsed = parse_diagnostics(stdout)
+    except ValueError:
+        return ""
+    if parsed["installed_checkout_reads"]:
+        return "installed-checkout-read"
+    if parsed["observed_effort"] is not None and parsed["observed_effort"] != effort:
+        return "effort: observed %s, pinned %s" % (parsed["observed_effort"], effort)
+    return ""
+
+
+def run_long_session(task, rep, arm, opts, launch=subprocess.run):
+    """The rows of one scripted session of a long-session scenario in one arm
+    (`replay_session.run_session`): each user turn is a fresh container of the arm on the same tree,
+    the same cache nonce and the same mounted session store, so turn 1 starts the CLI session and
+    every later turn resumes it by id. The check of each checkpoint runs on the tree with the
+    segment's stream, as a pack task's does (`score`). `opts["session_driver"]` replaces the
+    container launch in tests."""
+    base, profile = session_base(task, rep, arm, opts)
+    effort = base["effort"]
+    cap = replay_session.session_cap(task, opts.get("run_cap"))
+    parent = Path(tempfile.mkdtemp(prefix="cost-session-", dir=opts.get("tmp")))
+    workdir, store = parent / "repo", parent / "sessions"
+    observed = None
+    started = time.time()
+    try:
+        observed = observation_run(opts, "%s-%s-%d" % (task["id"], arm, rep), profile)
+        task_workdir(task, opts["repo"], workdir)
+        store.mkdir()
+        os.chmod(str(store), 0o777)  # the image's user writes the transcript, whatever its uid
+        memory, base["cache_nonce"] = trial_memory(parent)
+        saved = []
+
+        def container_turn(number, prompt, budget, resume):
+            argv = arm_command("claude", opts["model"], prompt, budget, task["caps"]["max_agent_turns_per_user_turn"],
+                               effort, session_id=base["session_id"], resume=resume)
+            name = container_name(task["id"], arm, rep, "turn", number)
+            try:
+                done = launch_arm(opts["arms"][arm], workdir, argv, opts, name, launch, arm, observed, memory,
+                                  session_store=store)
+            except subprocess.TimeoutExpired as exc:
+                partial = getattr(exc, "stdout", None)
+                return {"stdout": partial if isinstance(partial, str) else "", "timeout": True}
+            return {"stdout": done.stdout or "", "returncode": done.returncode,
+                    "error_kind": turn_refusal(done.stdout or "", effort)}
+
+        driver = opts.get("session_driver") or container_turn
+
+        def recording(number, prompt, budget, resume):
+            done = driver(number, prompt, budget, resume)
+            saved.append(done.get("stdout") or "")
+            return done
+
+        def checker(name, stream, baseline):
+            checkpoint = replay_pack.checkpoint_task(task, name)
+            path = parent / ("segment-%s.jsonl" % name)
+            path.write_text(stream, encoding="utf-8")
+            os.chmod(str(path), 0o644)
+            totals = session_baseline(baseline, parent / ("segment-%s-baseline.json" % name))
+            scorer = opts.get("session_scorer") or (lambda t, w, r, s, b: score(
+                t, w, r, opts["arms"]["bare"]["image"], launch, stream=s, baseline=b))
+            return scorer(checkpoint, workdir, opts["repo"], path, totals)
+
+        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS)
+        if opts.get("raw"):
+            save_stream(opts, task["id"], arm, rep, "".join(t if t.endswith("\n") or not t else t + "\n"
+                                                            for t in saved))
+        fields, problem = observation_result(observed)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)  # removed, never reset
+        discard_observation(observed)
+    summary = rows[-1]
+    summary.update(fields, wall_seconds=round(time.time() - started, 1))
+    if problem:
+        summary.update(error=True, passed=None, outcome="fail",
+                       error_kind="; ".join(x for x in (summary["error_kind"], problem) if x))
+    return rows
 
 
 def gate_output(stdout):
@@ -1683,20 +1961,26 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
     effort than the pinned one stops the set whatever the stamp says.
 
     A saved result is created exclusively before probes or model calls, so an existing path can
-    never mix attempts from two cohorts."""
+    never mix attempts from two cohorts. A set that stops early records why beside it
+    (`write_stop`), which `summarise` weighs against the plan's `Partial set` permission; a stop
+    record already beside a new result is refused the same way, since a complete rerun writes
+    none and `summarise` would read the earlier run's reason."""
     if not tasks:
         if out is not None and not Path(out).parent.joinpath(SPEND).exists():
             _write_spend_sidecar(out, opts, 0.0, 0.0, False)  # refused before any paid call
         raise SystemExit("cost-bench: no contamination-safe replay tasks are eligible")
     if out is None:
         return _replay(tasks, opts, launch, None, None)
+    stale = Path(out).parent / STOP
+    if stale.exists():
+        raise SystemExit("cost-bench: refusing to write results beside an existing stop record: %s" % stale)
     try:
         sink = open(str(out), "x", encoding="utf-8")
     except FileExistsError:
         # The earlier cohort's spend record beside it is left as it is.
         raise SystemExit("cost-bench: refusing to append to existing saved results: %s" % out)
     with sink:
-        return _replay(tasks, opts, launch, sink, out)
+        return _replay(tasks, opts, launch, sink, out, lambda reason: write_stop(out, reason))
 
 
 def admit_pair_arms(opts):
@@ -1735,7 +2019,7 @@ def admit_design_cells(opts):
     unit_economy.admit_cells(opts["arms"], fingerprints)
 
 
-def _replay(tasks, opts, launch, sink, out):
+def _replay(tasks, opts, launch, sink, out, stop=lambda reason: None):
     names = arm_names(opts)
     try:
         _admit_replay(tasks, opts, launch, names)
@@ -1755,7 +2039,7 @@ def _replay(tasks, opts, launch, sink, out):
             pass  # the $0 spend record below is written whatever the folder holds
         _write_spend_sidecar(out, opts, 0.0, 0.0, False)
         raise
-    return _run_replay(tasks, opts, launch, sink, out, names)
+    return _run_replay(tasks, opts, launch, sink, out, names, stop)
 
 
 def _admit_replay(tasks, opts, launch, names):
@@ -1772,6 +2056,8 @@ def _admit_replay(tasks, opts, launch, names):
         admit_ablation_arms(opts)
     if opts.get("design") is not None:
         admit_design_cells(opts)
+    if opts.get("arm_configs"):
+        admit_config_arms(opts)
     check_contamination = opts.get("contamination_checker", contamination_errors)
     contaminated = check_contamination(tasks, opts["repo"],
                                        opts["arms"][harness_arms[0]]["harness_commit"], opts.get("tmp"))
@@ -1783,14 +2069,19 @@ def _admit_replay(tasks, opts, launch, names):
     probe_workdirs(tasks, opts, launch)
 
 
-def _run_replay(tasks, opts, launch, sink, out, names):
+def _run_replay(tasks, opts, launch, sink, out, names, stop):
     rows, spent, preflight_spent = [], 0.0, 0.0
+    # A strata run's running record of what was spent, so a stratum that stops can report it.
+    ledger = opts.get("spend_ledger")
     if not opts.get("skip_preflight"):
         checks, spent = preflight(tasks, opts, launch, lambda current: _write_spend_sidecar(
             out, opts, current, current, False))
         preflight_spent = spent
+        if ledger is not None:
+            ledger.append(spent)
         red = [c for c in checks if not c["passed"]]
         if len(checks) != len(names):
+            stop(STOP_SPEND_CAP)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
         for check in red:
@@ -1810,30 +2101,63 @@ def _run_replay(tasks, opts, launch, sink, out, names):
     planned = ablations.schedule(tasks, opts["reps"], names, opts["schedule_seed"]) \
         if seeded else schedule(tasks, opts["reps"], names)
     for position, (task, rep, arm) in enumerate(planned):
+        if replay_pack.is_scenario(task):
+            cap = replay_session.session_cap(task, opts["run_cap"])
+            if spent + cap > opts["spend_cap"]:
+                stop(STOP_SPEND_CAP)
+                _write_spend_sidecar(out, opts, preflight_spent, spent, True)
+                return rows, True
+            session = run_long_session(task, rep, arm, opts, launch)
+            spent += session[-1]["cost_usd"]
+            if ledger is not None:
+                ledger.append(session[-1]["cost_usd"])
+            rows += session
+            if sink is not None:
+                for row in session:
+                    sink.write(json.dumps(row, sort_keys=True) + "\n")
+                sink.flush()
+            if session[-1]["error_kind"].startswith("effort:"):
+                stop(STOP_EFFORT)
+                _write_spend_sidecar(out, opts, preflight_spent, spent, True)
+                raise SystemExit("cost-bench: stopping the set: the %s arm's session of %s rep %d %s"
+                                 % (arm, task["id"], rep, session[-1]["error_kind"]))
+            if (spent > opts["spend_cap"]
+                    or spent >= opts["spend_cap"] and position < len(planned) - 1):
+                stop(STOP_SPEND_CAP)
+                _write_spend_sidecar(out, opts, preflight_spent, spent, True)
+                return rows, True
+            continue
         if spent + opts["run_cap"] > opts["spend_cap"]:
+            stop(STOP_SPEND_CAP)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
         row = run_one(task, rep, arm, opts, launch)
         surface = surface_of(row)
         if surface is not None:
             row["surface_drift"] = surface_drift(firsts.setdefault(arm, surface), surface)
-        spent += opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
+        cost = opts["run_cap"] if row["cost_usd"] is None else row["cost_usd"]
+        spent += cost
+        if ledger is not None:
+            ledger.append(cost)
         rows.append(row)
         if sink is not None:
             sink.write(json.dumps(row, sort_keys=True) + "\n")
             sink.flush()
         where = "the %s arm's run of %s rep %d" % (arm, task["id"], rep)
         if row.get("observed_effort") is not None and row["observed_effort"] != row["effort"]:
+            stop(STOP_EFFORT)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             raise SystemExit("cost-bench: stopping the set: %s ran at effort %s, pinned %s"
                              % (where, row["observed_effort"], row["effort"]))
         if row["surface_drift"] and not allowed:
+            stop(STOP_SURFACE_DRIFT)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             raise SystemExit("cost-bench: stopping the set: %s loaded a different surface from the arm's "
                              "first run:\n  %s\nthe %d row(s) so far are written; --allow-surface-drift "
                              "runs on and stamps every row" % (where, "\n  ".join(row["surface_drift"]), len(rows)))
         if (spent > opts["spend_cap"]
                 or spent >= opts["spend_cap"] and position < len(planned) - 1):
+            stop(STOP_SPEND_CAP)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
     _write_spend_sidecar(out, opts, preflight_spent, spent, False)
@@ -1954,6 +2278,8 @@ def history_row(rows, series, detections=None, break_even=delegation_verdict.BRE
            "delegation": delegation_verdict.report(rows, break_even)}
     if detections is not None:
         row["mechanisms"] = replay_detect.mechanisms(detections)
+    if first.get(strata.KEY):
+        row[strata.KEY] = first[strata.KEY]
     return row
 
 
@@ -2082,14 +2408,22 @@ def _span(interval):
         "undefined" if v is None else "%.3f" % v for v in interval)
 
 
-def cmd_summarise(args):
+BESIDE = object()  # cmd_summarise reads the detections saved beside its results file
+
+
+def cmd_summarise(args, rows=None, detections=BESIDE):
     """SM-2's report from a saved `results.jsonl` alone, then the delegation verdict per task
-    (`delegation_verdict`), which SM-2's analysis never reads; calls no model."""
+    (`delegation_verdict`), which SM-2's analysis never reads; calls no model. Rows from several
+    strata are reported per stratum (`summarise_strata`), which passes each stratum's `rows` and
+    `detections` in."""
     path = Path(args.results).expanduser()
     path = path / RESULTS if path.is_dir() else path
-    if not path.is_file():
-        raise SystemExit("cost-bench: %s does not exist" % path)
-    rows = read_jsonl(path)
+    if rows is None:
+        rows = read_jsonl(path) if path.is_file() else stratum_folder_rows(path)
+        if strata.is_stratified(rows) or getattr(args, "pool", False):
+            return summarise_strata(rows, path, args)
+    if replay_session.is_long_session(rows):
+        return summarise_long_session(rows, path, args, detections)
     if unit_economy.is_design(rows):
         return summarise_design(rows, path, args)
     if ablations.is_ablation(rows):
@@ -2098,8 +2432,17 @@ def cmd_summarise(args):
         raise SystemExit("cost-bench: --correction applies to an ablation run's arms only")
     if replay_pair.is_pair(rows):
         return summarise_pair(rows, path, args)
+    if set(replay_stats.arm_names(rows)) - set(ARMS):
+        return summarise_arms(rows, path, args, detections)
+    registered = delegation_verdict.registered(rows)
     try:
-        result = replay_stats.analyse(rows, args.seed, args.resamples)
+        allowed = registered and partial_claim_allowed(rows, stop_beside(path))
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise %s: %s" % (path, exc))
+    try:
+        result = replay_stats.analyse_set(rows, args.seed, args.resamples, registered, allowed)
+        if result.get("partial"):  # every later section reads the same balanced rows
+            rows = replay_stats.balance(rows)[0]
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot derive SM-2 from %s: %s" % (path, exc))
     if args.plot:
@@ -2115,18 +2458,252 @@ def cmd_summarise(args):
     except ValueError as exc:
         raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
     delegation = delegation_verdict.report(rows, args.break_even)
-    report = dict(result, delegation=delegation)
+    if detections is BESIDE:
+        detections = replay_reliability.detections_beside(path)
+    if detections is not None and result.get("partial"):  # a dropped trial's detections went with it
+        kept = {(r["task"], r["arm"], r.get("rep", r.get("trial"))) for r in rows}
+        detections = [d for d in detections if (d.get("task"), d.get("arm"), d.get("rep", d.get("trial"))) in kept]
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(rows, detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, delegation=delegation, reliability=reliability)
     if metrics is not None:  # a set without metrics reports exactly as before
         report["metrics"] = metrics
     write_report(report, cache_basis(rows), args.json,
-                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation))
+                 replay_stats.render(result) + oracle_metrics.render(metrics) + delegation_verdict.render(delegation)
+                 + reliability_text)
     return 0
+
+
+PRIMARY_FIELD = ("Run", "Primary arm comparisons")
+COMPARISON = re.compile(r"\b([a-z0-9][a-z0-9-]*) vs (bare|harness)\b")
+
+
+def primary_comparisons(rows, root=None):
+    """`(plan path or None, labels)`: the config-arm comparisons the rows' pre-registration names
+    primary in its **Primary arm comparisons** field under Run, each as `<arm> vs bare` or `<arm> vs
+    harness`. Rows that are not all one pre-registered plan name none, so every config comparison
+    is secondary. SystemExit when a named plan cannot be read at its commit, or when its field is
+    neither none nor names any comparison."""
+    plans = {(r.get("evidence"), r.get("pre_registration"), r.get("pre_registration_commit")) for r in rows}
+    if len(plans) != 1:
+        return None, ()
+    evidence, plan, commit = plans.pop()
+    if evidence != experiment_protocol.PREREGISTERED or not plan or not commit:
+        return None, ()
+    done = subprocess.run(["git", "-C", str(root or ROOT), "show", "%s:%s" % (commit, plan)], env=scrubbed_env(),
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if done.returncode:
+        raise SystemExit("cost-bench: cannot read the pre-registration %s at %s: %s"
+                         % (plan, commit, done.stderr.strip()))
+    section, name = PRIMARY_FIELD
+    value = experiment_protocol.fields(experiment_protocol.sections(done.stdout).get(section, "")).get(name, "")
+    if not value or experiment_protocol.PLACEHOLDER.search(value) or value.lower().startswith("none"):
+        return plan, ()
+    labels = tuple(dict.fromkeys("%s vs %s" % pair for pair in COMPARISON.findall(value)))
+    if not labels:  # a typo or a capitalised arm would otherwise mark every comparison secondary
+        raise SystemExit("cost-bench: the pre-registration %s names %r in Primary arm comparisons, which "
+                         "is neither none nor any `<arm> vs bare` or `<arm> vs harness`" % (plan, value))
+    return plan, labels
+
+
+def summarise_arms(rows, path, args, detections=BESIDE):
+    """A run with config arms: SM-2's report, harness against bare and unchanged, then every arm's
+    figures and each arm's paired comparisons against bare and against harness
+    (`replay_stats.analyse_arms`), each with its oracle-metric differences, then the delegation
+    verdict and the reliability section over every arm. A config arm's comparison is secondary
+    unless the pre-registration names it primary (`primary_comparisons`)."""
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws a two-arm result; a run with config arms reports text or JSON")
+    plan, primary = primary_comparisons(rows)
+    try:
+        result = replay_stats.analyse([r for r in rows if r.get("arm") in ARMS], args.seed, args.resamples)
+        every = replay_stats.analyse_arms(rows, args.seed, args.resamples, primary)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot summarise the arms in %s: %s" % (path, exc))
+    metrics_text = ""
+    try:
+        for comparison in every["comparisons"]:
+            pair = (comparison["reference"], comparison["treatment"])
+            metrics = oracle_metrics.summarise(rows, args.seed, args.resamples, pair)
+            comparison["metrics"] = metrics
+            metrics_text += oracle_metrics.render(metrics).replace(
+                "Oracle metrics:", "Oracle metrics, %s (%s):" % (comparison["label"], comparison["role"]), 1)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the oracle metrics of %s: %s" % (path, exc))
+    delegation = delegation_verdict.report(rows, args.break_even)
+    try:
+        reliability, reliability_text = replay_reliability.reliability_section(
+            rows, replay_reliability.detections_beside(path) if detections is BESIDE else detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    report = dict(result, arms=every["arms"], arm_names=every["arm_names"], comparisons=every["comparisons"],
+                  primary_named=every["primary_named"], pre_registration=plan,
+                  delegation=delegation, reliability=reliability)
+    sm2_metrics = every["comparisons"][0]["metrics"]  # harness against bare, as a two-arm report has it
+    if sm2_metrics is not None:
+        report["metrics"] = sm2_metrics
+    write_report(report, cache_basis(rows), args.json,
+                 replay_stats.render(result) + replay_stats.render_arms(every) + metrics_text
+                 + delegation_verdict.render(delegation) + reliability_text)
+    return 0
+
+
+def stratum_folder_rows(path):
+    """A multi-model run keeps each stratum's rows in its own folder under the tag's, with no
+    `results.jsonl` of its own. Subfolder rows count only when every one names its stratum: any
+    other nested set (per-tag folders under a version, say) would merge unrelated runs, so the
+    path stays missing whatever the flags."""
+    folders = sorted(path.parent.glob("*/" + RESULTS)) if path.parent.is_dir() else []
+    rows = [row for folder in folders for row in read_jsonl(folder)]
+    if not rows or any(row.get(strata.KEY) is None for row in rows):
+        raise SystemExit("cost-bench: %s does not exist" % path)
+    return rows
+
+
+def summarise_strata(rows, path, args, root=ROOT):
+    """Every section of the report once per stratum, in the order the rows name them, then the
+    pooled report only when `--pool` is given and the run's pre-registration names a pooled
+    analysis (`replay_strata.pool`). With `--json` the reports nest under `strata` and `pooled`.
+    The exit status is the worst of them."""
+    grouped = strata.groups(rows)
+    if not strata.is_stratified(rows):
+        raise SystemExit("cost-bench: --pool needs rows from two or more strata; %s holds one, so there "
+                         "is nothing to pool" % path)
+    if args.plot:
+        raise SystemExit("cost-bench: --plot draws one stratum; summarise each stratum's own results file")
+    pooled = strata.pool(rows, root) if getattr(args, "pool", False) else None  # refused before any output
+    reports, status = {}, 0
+    found = dict((name, stratum_detections(path, name)) for name in grouped)
+    parts = list(grouped.items()) + ([(strata.POOLED, pooled[1])] if pooled else [])
+    for name, mine in parts:
+        own = path.parent / strata.directory(str(name)) / RESULTS  # a pair's decisions sit beside its rows
+        one = argparse.Namespace(**dict(vars(args), pool=False, results=str(own if own.is_file() else path)))
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured):
+            status = max(status, cmd_summarise(one, mine, found.get(name, pooled_detections(found))) or 0)
+        if args.json:
+            reports[str(name)] = json.loads(captured.getvalue())
+        else:
+            heading = ("pooled across %d strata, as pre-registered: %s" % (len(grouped), pooled[0])
+                       if name == strata.POOLED and pooled else "stratum %s" % name)
+            sys.stdout.write("== %s ==\n%s\n" % (heading, captured.getvalue()))
+    if args.json:
+        document = {"strata": {name: report for name, report in reports.items() if name != strata.POOLED}}
+        if pooled:
+            document["pooled"] = dict(reports[strata.POOLED], analysis=pooled[0])
+        sys.stdout.write(json.dumps(document, indent=2, sort_keys=True) + "\n")
+    elif not pooled:
+        print("not pooled: strata are reported apart unless the pre-registration names a pooled analysis")
+    return status
+
+
+def stratum_detections(path, name):
+    """One stratum's detection rows, from its own folder; None when it has none. Rows in one
+    shared file carry no stratum, so their detections cannot be told apart and are not read."""
+    own = path.parent / strata.directory(str(name)) / RESULTS
+    return replay_reliability.detections_beside(own) if own.is_file() else None
+
+
+def pooled_detections(found):
+    """Every stratum's detection rows keyed as `replay_strata.pool` keys its tasks; None when no
+    stratum has any."""
+    if all(rows is None for rows in found.values()):
+        return None
+    return [dict(row, task="%s/%s" % (name, row.get("task")))
+            for name, rows in found.items() for row in rows or ()]
+
+
+PARTIAL_SET_FIELD = "Partial set"
+# Why the runner stopped a set early, as `write_stop` records it beside the results.
+STOP_SPEND_CAP, STOP_EFFORT, STOP_SURFACE_DRIFT = "spend-cap", "effort", "surface-drift"
+STOP_REASONS = (STOP_SPEND_CAP, STOP_EFFORT, STOP_SURFACE_DRIFT)
+STOP = "stop.json"
+ANY_STOP = frozenset(STOP_REASONS) | {None}  # plain `allowed`: whatever stopped the run, recorded or not
+
+
+def write_stop(results, reason):
+    """Record beside a `results.jsonl` the stop reason, one of `STOP_REASONS`, of a set that ended early."""
+    (Path(results).parent / STOP).write_text(json.dumps({"stop_reason": reason}) + "\n", encoding="utf-8")
+
+
+def stop_beside(results):
+    """The stop reason recorded beside a `results.jsonl`, or None when none was recorded or it
+    cannot be read."""
+    try:
+        reason = json.loads((Path(results).parent / STOP).read_text(encoding="utf-8")).get("stop_reason")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return reason if reason in STOP_REASONS else None
+
+
+def partial_set_permission(value):
+    """The stop reasons under which a plan's `Partial set` value lets a partial set support a
+    claim: `allowed` covers any stop, `allowed when <reason>[, <reason>]` only the named ones (each
+    of `STOP_REASONS`), and `not allowed` or an absent field none. ValueError naming any other value."""
+    text = (value or "").strip()
+    if not text or text == "not allowed":
+        return frozenset()
+    if text == "allowed":
+        return ANY_STOP
+    if text.startswith("allowed when "):
+        reasons = [part.strip() for part in text[len("allowed when "):].split(",")]
+        if reasons and all(reason in STOP_REASONS for reason in reasons):
+            return frozenset(reasons)
+    raise ValueError("the pre-registration's Partial set value %r is not `allowed`, `not allowed` or "
+                     "`allowed when <stop reason>[, <stop reason>]` over %s" % (value, ", ".join(STOP_REASONS)))
+
+
+def registered_partial_permission(rows):
+    """The `Partial set` permission (`partial_set_permission`) of the plan the rows name, read as
+    committed at the recorded commit; empty when the rows name no plan or it cannot be read."""
+    first = rows[0] if rows else {}
+    plan, commit = first.get("pre_registration"), first.get("pre_registration_commit")
+    if not plan or not commit:
+        return frozenset()
+    code, text = experiment_protocol._git(ROOT, "show", "%s:%s" % (commit, plan))
+    if code:
+        return frozenset()
+    rule = experiment_protocol.fields(experiment_protocol.sections(text).get("Stopping rule", ""))
+    return partial_set_permission(rule.get(PARTIAL_SET_FIELD))
+
+
+def partial_claim_allowed(rows, stop_reason=None):
+    """Whether the run's pre-registered stopping rule lets this partial set support a claim: its
+    `Stopping rule` section's `- **Partial set:**` value covers `stop_reason`, the reason the
+    runner recorded (`stop_beside`), None when it recorded none. False when the field is absent,
+    says `not allowed`, or the plan cannot be read, so the default is no claim; ValueError when the
+    value is outside the grammar."""
+    return stop_reason in registered_partial_permission(rows)
 
 
 def write_report(result, basis, as_json, text):
     """Print one summary, in any format, with the cache basis its costs stand on (`cache_basis`)."""
     sys.stdout.write(json.dumps(dict(result, cache_basis=basis), indent=2, sort_keys=True) + "\n" if as_json
                      else CACHE_BASIS_TEXT[basis] + text)
+
+
+def summarise_long_session(rows, path, args, detections=BESIDE):
+    """A long-session set's report (`replay_session.summarise`): per arm, checkpoint pass rates,
+    cost per session, the cost-per-turn slope and curve, peak context and the cost share on cheaper
+    tiers, with scenarios as the bootstrap's clusters; then the reliability section over the
+    session rows, one trial per session."""
+    if args.plot or getattr(args, "correction", None):
+        raise SystemExit("cost-bench: --plot and --correction do not apply to a long-session set")
+    try:
+        result = replay_session.summarise(rows, None, TIERS, args.seed, args.resamples)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SystemExit("cost-bench: cannot summarise the long-session set in %s: %s" % (path, exc))
+    sessions = [r for r in rows if r.get("row_kind") == replay_session.SESSION]
+    try:  # one trial per session row: its pass is every checkpoint passing
+        reliability, reliability_text = replay_reliability.reliability_section(
+            sessions, replay_reliability.detections_beside(path) if detections is BESIDE else detections)
+    except ValueError as exc:
+        raise SystemExit("cost-bench: cannot report the reliability of %s: %s" % (path, exc))
+    write_report(dict(result, reliability=reliability), cache_basis(sessions),
+                 args.json, "" if args.json else replay_session.render(result) + reliability_text)
+    return 0
 
 
 def summarise_ablation(rows, path, args):
@@ -2310,7 +2887,10 @@ def open_pack_for(args):
                                  getattr(args, "tmp", None))
     try:
         tier = getattr(args, "tier", None) or micro.PRODUCTION
-        tasks, manifest = replay_pack.load_set(pack, getattr(args, "pack_set", None) or tier, tier)
+        if tier == LONG_SESSION:
+            tasks, manifest = replay_pack.load_scenarios(pack, getattr(args, "pack_set", None) or tier)
+        else:
+            tasks, manifest = replay_pack.load_set(pack, getattr(args, "pack_set", None) or tier, tier)
     except BaseException:
         replay_pack.close_pack(pack)
         raise
@@ -2333,6 +2913,8 @@ def resolve_tier(args, pack=None):
     real run needs `--raw`, since the offline detectors score the mechanisms from the streams.
     Namespaces built without `tier`, as older callers build them, are the production tier."""
     args.tier = getattr(args, "tier", None) or micro.PRODUCTION
+    if args.tier == LONG_SESSION:
+        return resolve_long_session(args, pack)
     if args.tier != micro.MICRO:
         if pack is None:
             args.tasks = args.tasks or str(ROOT / TASKS)
@@ -2360,7 +2942,58 @@ def resolve_tier(args, pack=None):
     return document
 
 
+def resolve_long_session(args, pack):
+    """The long-session tier's defaults and refusals. Its scenarios live only in an evaluator pack;
+    the set's pinned model is the model, which a flag may name but never change; reps default to
+    `LONG_SESSION_REPS`; and `--run-cap`, when given, caps every session at the lower of it and the
+    scenario's own `max_cost_usd_hint`, which is the cap without it. `args.run_cap` is left at the
+    highest session cap, so a line naming one cap names the largest. A pair or a grid is refused:
+    each launches one prompt per run."""
+    if pack is None:
+        raise SystemExit("cost-bench: --tier long-session needs --pack: its scenarios live in the evaluator pack")
+    for flag in ("pair", "design"):
+        if getattr(args, flag, None):
+            raise SystemExit("cost-bench: --%s is refused with --tier long-session: it launches one prompt "
+                             "per run, not a scripted session" % flag)
+    if getattr(args, "verify_tasks", False):
+        raise SystemExit("cost-bench: --verify-tasks does not read scenarios; the pack's own "
+                         "tools/verify_scenarios.py proves each checkpoint against its solution")
+    document = pack["manifest"]
+    if args.model and document.get("model") and args.model != document["model"]:
+        raise SystemExit("cost-bench: the long-session set pins model %s, not %s" % (document["model"], args.model))
+    args.model = args.model or document.get("model")
+    args.reps = LONG_SESSION_REPS if args.reps is None else args.reps
+    if args.run_cap is not None and args.run_cap <= 0:
+        raise SystemExit("cost-bench: --run-cap must be positive")
+    args.run_cap = max(replay_session.session_cap(s, args.run_cap) for s in pack["tasks"])
+    return document
+
+
+def long_session_lines(scenarios, reps, arm_count, run_cap, preflight_cap, source):
+    """The dry run's price of a long-session plan: each scenario's session cap, then the ceiling."""
+    cap = ("the lower of --run-cap and the scenario's max_cost_usd_hint" if source == "--run-cap"
+           else "the scenario's max_cost_usd_hint")
+    lines = ["long-session tier: %d session(s): %d scenario(s) x %d arm(s) x %d rep(s), each turn after the first "
+             "resuming the session with --resume; per-session cap %s"
+             % (len(scenarios) * arm_count * reps, len(scenarios), arm_count, reps, cap)]
+    for scenario in scenarios:
+        caps = scenario["caps"]
+        lines.append("  scenario %s: %d user turn(s) (cap %d), %d checkpoint(s), %d agent turns per user turn, "
+                     "%g USD per session" % (scenario["id"], len(scenario["turns"]), caps["max_user_turns"],
+                                             len(scenario["checkpoint_order"]),
+                                             caps["max_agent_turns_per_user_turn"],
+                                             replay_session.session_cap(scenario, run_cap)))
+    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap and all %d preflight(s) "
+                 "reach %g USD" % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
+                                   arm_count, preflight_cap))
+    return lines
+
+
 def cmd_replay(args):
+    models = strata.parse_models(getattr(args, "model", None))
+    if len(models) > 1:
+        return replay_strata(args, models)
+    args.model = models[0] if models else None
     pack = open_pack_for(args)
     try:
         return _cmd_replay(args, pack)
@@ -2368,9 +3001,69 @@ def cmd_replay(args):
         replay_pack.close_pack(pack)
 
 
+def replay_strata(args, models):
+    """Every model `--model` names as its own stratum (`replay_strata`): the whole replay once per
+    model, with its own schedule, caps, preflight, results folder and history row, in the order
+    named. A stratum that fails, by a refusal, an error or a stop at its spend cap, stops the run:
+    the strata after it never start, the ones before it keep their results, what has been spent
+    is reported, and its exit status is the run's. A dry run spends nothing, so it lists every
+    stratum and exits with the worst status."""
+    if (getattr(args, "tier", None) or micro.PRODUCTION) == micro.MICRO:
+        raise SystemExit("cost-bench: --tier micro pins its manifest's one model; it takes no strata")
+    if getattr(args, "tier", None) == LONG_SESSION:
+        pinned = long_session_pinned_model(args, models[0])
+        if pinned:  # refused before the first stratum spends, not when the second reaches the pin
+            raise SystemExit("cost-bench: the long-session set pins model %s; it takes no strata" % pinned)
+    print("%d strata, each run and reported on its own: %s" % (len(models), ", ".join(models)))
+    ledger, worst = [], 0
+    for number, model in enumerate(models, 1):
+        print("stratum %d of %d: model %s" % (number, len(models), model))
+        one = argparse.Namespace(**dict(vars(args), model=model, stratum=model, strata=list(models),
+                                        spend_ledger=ledger))
+        pack = open_pack_for(one)
+        try:
+            status = _cmd_replay(one, pack) or 0
+        except SystemExit as stop:
+            status = stratum_exit(stop)
+        finally:
+            replay_pack.close_pack(pack)
+        worst = max(worst, status)
+        if status and not args.dry_run:
+            print("cost-bench: stratum %d of %d (model %s) failed with exit %d; stopping the run. Not run: "
+                  "%s. Spent so far: %.4f USD, a run with no readable cost counted at its run cap; the "
+                  "strata already run keep their results"
+                  % (number, len(models), model, status, ", ".join(models[number:]) or "none", sum(ledger)),
+                  file=sys.stderr)
+            return status
+    return worst
+
+
+def long_session_pinned_model(args, model):
+    """The model the long-session set's manifest pins, or None when it pins none (or no pack is
+    named, which `resolve_long_session` refuses on its own)."""
+    pack = open_pack_for(argparse.Namespace(**dict(vars(args), model=model)))
+    try:
+        return (pack or {}).get("manifest", {}).get("model")
+    finally:
+        replay_pack.close_pack(pack)
+
+
+def stratum_exit(stop):
+    """The exit status a stratum's `SystemExit` carries, its message printed as the interpreter
+    would print it: a message exits 1, as it does when nothing catches it."""
+    if stop.code is None:
+        return 0
+    if isinstance(stop.code, int):
+        return stop.code
+    print(stop.code, file=sys.stderr)
+    return 1
+
+
 def _cmd_replay(args, pack):
     # Named in the cost lines, so a figure built on the default cap never reads as a chosen one.
     args.run_cap_source = "--run-cap" if getattr(args, "run_cap", None) is not None else "default run cap"
+    # Read before `resolve_tier`, which fills the micro tier's two-arm default.
+    spend_cap_given = getattr(args, "spend_cap", None) is not None
     resolve_tier(args, pack)
     tasks = list(pack["tasks"]) if pack else load_tasks(args.tasks)
     args.set_size = len(tasks)
@@ -2386,6 +3079,12 @@ def _cmd_replay(args, pack):
     if args.verify_tasks:
         return verify_command(args, tasks)
     protocol = experiment_protocol.admit(args.pre_registration, args.exploratory, ROOT, "cost-bench")
+    try:  # an ungrammatical Partial set permission is refused before any spend, not at summarise
+        registered_partial_permission([protocol])
+    except ValueError as exc:
+        print("cost-bench: %s" % exc, file=sys.stderr)
+        raise SystemExit(2)
+    configs = arm_configs(args)
     if getattr(args, "design", None):
         return replay_design(args, tasks, protocol)
     if getattr(args, "unit", None):
@@ -2394,24 +3093,46 @@ def _cmd_replay(args, pack):
     if manifest is not None:
         return replay_ablations(args, tasks, protocol, manifest, pack)
     pair = pair_manifest(args)
-    if not pair and args.spend_cap is None:
+    long_session = args.tier == LONG_SESSION
+    if long_session and not configs and args.spend_cap is None:
+        args.spend_cap = replay_session.ceiling_usd(tasks, args.reps, len(ARMS), args.run_cap,
+                                                    0.0 if args.skip_preflight else PREFLIGHT_CAP_USD)
+    if not pair and not configs and args.spend_cap is None:
         args.spend_cap = SPEND_CAP_USD
+    if configs and not spend_cap_given:
+        args.spend_cap = None  # every tier's default is sized for two arms; the operator names this one
     tags = args.tag or []
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
     bare_decl, harness_decls = declarations(tags, effort=args.effort)  # every ref resolves before anything is built
-    names = replay_pair.ARMS if pair else ARMS
+    if configs:
+        errors = [error for _tag, decl in harness_decls
+                  for error in arm_config_errors(configs, decl["harness"]["commit"], args.tmp)]
+        if errors:
+            raise SystemExit("cost-bench: refusing the arm config(s) before any spend:\n  %s" % "\n  ".join(errors))
+    names = replay_pair.ARMS if pair else ARMS + tuple(name for name, _ in configs)
     plan = schedule(tasks, args.reps, names)
     print("%d run(s) per tag, %d tag(s) (%s): %d task(s) x %s x %d rep(s), model %s at effort %s, "
           "%g USD per run, stop at %s USD reported per tag"
           % (len(plan), len(tags), ", ".join(tags), len(tasks), " + ".join(names), args.reps,
              args.model, args.effort, args.run_cap, "%g" % args.spend_cap if args.spend_cap is not None
-             else "the --spend-cap a pair must name"))
+             else "the --spend-cap a %s must name" % ("pair" if pair else "run with config arms")))
     if args.tier == micro.MICRO:
         print("micro tier: %g USD if every run and preflight reaches its cap; its rows go to %s only"
               % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, micro.PREFLIGHT_CAP_USD),
                  micro.HISTORY_NAME))
+    if long_session:
+        for line in long_session_lines(tasks, args.reps, len(names), args.run_cap,
+                                       0.0 if args.skip_preflight else PREFLIGHT_CAP_USD, args.run_cap_source):
+            print(line)
+    if getattr(args, "stratum", None):
+        preflights = 0 if args.skip_preflight else len(names) * len(tags)
+        print("stratum %s: worst case %.2f USD if all %d run(s) reach %g USD and all %d preflight(s) reach "
+              "%g USD; its own spend cap applies" % (
+                  args.stratum, strata.ceiling_usd(len(plan) * len(tags), args.run_cap, preflights,
+                                                   PREFLIGHT_CAP_USD),
+                  len(plan) * len(tags), args.run_cap, preflights, PREFLIGHT_CAP_USD))
     if pair:
         print("pair %s: %s, reference %r, treatment %r; one harness image, the factor set by value"
               % (pair["name"], pair["factor"], pair["reference"], pair["treatment"]))
@@ -2420,13 +3141,18 @@ def _cmd_replay(args, pack):
               "row says surface_drift_allowed")
     if args.dry_run:  # nothing is built and nothing is spent; the contamination check is local
         print("  arm %s: %s" % (arms.label(bare_decl), arms.image_name(bare_decl)))
-        for task in tasks if pack else ():
+        for task in tasks if pack and not long_session else ():
             print("  task %s: %s, expected absorbed calls %s" % (
                 task["id"], "long" if task.get("long") else "short", task.get("expected_absorbed_calls")))
         refused = 0
         for tag, decl in harness_decls:
             print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],
                                                    arms.image_name(decl)))
+            for (name, config), (_name, config_decl) in zip(configs, config_declarations(configs, decl, args.effort)):
+                print("    arm %s (config sha256 %s) sets %s: %s" % (
+                    name, arms.arm_config_sha256(config)[:12],
+                    ", ".join("%s to %s" % kv for kv in sorted(config["stances"].items())),
+                    arms.image_name(config_decl)))
             for task_id, errors in contamination_by_task(tasks, ROOT, decl["harness"]["commit"], args.tmp):
                 print("    contamination %s: %s" % (task_id, "; ".join(errors) if errors else "clean"))
                 refused += bool(errors)
@@ -2443,6 +3169,9 @@ def _cmd_replay(args, pack):
     if pair and args.spend_cap is None:
         raise SystemExit("cost-bench: a pair needs --spend-cap: the default is sized for two arms, and a "
                          "pair runs three")
+    if configs and args.spend_cap is None:
+        raise SystemExit("cost-bench: a run with config arms needs --spend-cap: the default is sized for "
+                         "two arms")
     if not os.environ.get(arms.CREDENTIAL):
         raise SystemExit("cost-bench: %s is not set; every arm authenticates with it, passed by name"
                          % arms.CREDENTIAL)
@@ -2460,9 +3189,74 @@ def _cmd_replay(args, pack):
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
             harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
-            status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"]),
-                                            harness))
+            extra = {}
+            if configs:
+                stamps = {name: arms.arm_config_stamp(name, config) for name, config in configs}
+                extra = {"arm_configs": stamps,
+                         "config_selections": {name: arms.arm_config_selection(config) for name, config in configs},
+                         "config_records": {name: arms.build_arm(config_decl, arms_dir, snapshot, tmp=args.tmp)
+                                            for name, config_decl in config_declarations(configs, decl, args.effort)}}
+            status = max(status, replay_tag(tag, args, dict(common, network=net["network"], proxy=net["url"],
+                                                            **extra), harness))
     return status
+
+
+def arm_configs(args):
+    """`[(name, config)]` for every `--arm-config NAME=PATH`, in the order given, each file read and
+    checked for shape (`replay_arms.load_arm_config`). A malformed flag, a reserved or repeated
+    name, or a mode that declares its own arms is refused before anything resolves."""
+    specs = getattr(args, "arm_config", None) or []
+    if specs and (getattr(args, "pair", None) or getattr(args, "ablations", None) or getattr(args, "design", None)):
+        raise SystemExit("cost-bench: --arm-config is refused with --pair, --ablations or --design, which "
+                         "declare their own arms")
+    if specs and args.stance_cost:
+        raise SystemExit("cost-bench: --stance-cost is refused with --arm-config: it would override every "
+                         "harness arm's cost stance, the config arms' included")
+    out, seen = [], set()
+    for spec in specs:
+        name, sep, path = spec.partition("=")
+        if not sep or not path:
+            raise SystemExit("cost-bench: --arm-config takes NAME=PATH, not %r" % spec)
+        problem = arms.arm_config_name_problem(name)
+        if problem:
+            raise SystemExit("cost-bench: --arm-config: %s" % problem)
+        if name in seen:
+            raise SystemExit("cost-bench: --arm-config names %s twice" % name)
+        seen.add(name)
+        out.append((name, arms.load_arm_config(Path(path).expanduser())))
+    return out
+
+
+def arm_config_errors(configs, commit, tmp=None):
+    """`replay_arms.arm_config_errors` for every config against a clone of `commit`, read by that
+    commit's own resolver with an empty home. No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-arm-config-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        posture = catalog.posture_module(root)
+        return [error for name, config in configs
+                for error in arms.arm_config_errors(name, config, posture, root)]
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def config_declarations(configs, harness_decl, effort):
+    """`[(name, declaration)]`: each config arm declared from the harness arm's own commit and
+    Claude Code version, so the two differ by the declared selection alone."""
+    inputs = arms.qualification_inputs()
+    return [(name, arms.declaration("harness", inputs, harness_decl["harness"], harness_decl["claude_code_version"],
+                                    effort, selection=arms.arm_config_selection(config)))
+            for name, config in configs]
+
+
+def admit_config_arms(opts):
+    """A run with config arms refuses, before any spend, a config arm whose declaration differs from
+    the harness arm's beyond its selection or whose selection resolves to the harness arm's own
+    profile (`ablations.admit_arms`, with the harness arm as control)."""
+    names = [arm for arm in arm_names(opts) if arm != "bare"]
+    fingerprints = {arm: arm_profile(arm, arm_env(arm, opts.get("stance_cost"), opts.get("proxy")), opts)
+                    for arm in names}
+    ablations.admit_arms({arm: opts["arms"][arm] for arm in names}, fingerprints)
 
 
 def ablation_manifest(args):
@@ -2523,7 +3317,7 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
     contaminated = [error for _, task_errors in contamination for error in task_errors]
     seed = args.schedule_seed if getattr(args, "schedule_seed", None) is not None else ablations.default_seed(manifest)
     names = ablations.arm_names(manifest)
-    plan = ablations.schedule(tasks, args.reps, names, seed)
+    plan = ablations.schedule(tasks, args.reps, names, seed, ablations.arm_task_filter(manifest))
     inputs = arms.qualification_inputs()
     selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
                                          control_decl["claude_code_version"], args.effort, selection=selection))
@@ -2535,10 +3329,16 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
           % (len(plan), len(tasks), len(names), len(selected), args.reps, args.model, args.effort, args.run_cap,
              cap_source, "stop at %g USD reported" % args.spend_cap if args.spend_cap is not None
              else "a real run must name its --spend-cap", seed))
-    print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
-          "reach %g USD" % (micro.ceiling_usd(len(tasks), args.reps, len(names), args.run_cap, preflight_cap),
-                            len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
-                            preflight_cap))
+    if getattr(args, "tier", None) == LONG_SESSION:
+        for line in long_session_lines(tasks, args.reps, len(names), args.run_cap, preflight_cap, cap_source):
+            print(line)
+    else:
+        # An arm runs only the named tasks it maps (`ablations.arm_task_filter`), so the plan's own
+        # length, not tasks x arms, is what every run reaching its cap would cost.
+        print("worst case, before any spend: %.2f USD if all %d run(s) reach %g USD (%s) and all %d preflight(s) "
+              "reach %g USD" % (len(plan) * args.run_cap + len(names) * preflight_cap,
+                                len(plan), args.run_cap, cap_source, 0 if args.skip_preflight else len(names),
+                                preflight_cap))
     print(ablations.render_mde(ablations.planned_mde(manifest, len(tasks), args.reps)))
     print("ablation %s (manifest %s); each arm's selection is declared into its own image"
           % (manifest["name"], manifest["sha256"][:12]))
@@ -2547,9 +3347,11 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
         print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), commit,
                                                         arms.image_name(control_decl)))
         for spec, (ident, decl) in zip(manifest["arms"], selected):
-            change = "removes %s" % spec["removes"] if "removes" in spec else \
+            change = "removes %s" % ablations.entry_of(spec) if "removes" in spec else \
                 "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
-            print("  arm %s %s: %s" % (ident, change, arms.image_name(decl)))
+            runs = [task["id"] for task in tasks if any(t is task and a == ident for t, _, a in plan)]
+            print("  arm %s %s: %s; runs %s" % (ident, change, arms.image_name(decl),
+                                               ", ".join(runs) or "no loaded task"))
         for task_id, task_errors in contamination:
             print("  contamination %s at %s: %s" % (task_id, commit, "; ".join(task_errors) if task_errors
                                                      else "clean"))
@@ -2705,13 +3507,14 @@ def replay_tag(tag, args, common, harness):
     # comparable with one whose harness arm read a host profile.
     tier = getattr(args, "tier", None) or micro.PRODUCTION
     is_micro = tier == micro.MICRO
+    is_long = tier == LONG_SESSION
     # The production series keeps its original seed; the micro tier's adds its name, so the two
     # can never share a series even over identical bytes.
     source = getattr(args, "series_source", None) or Path(args.tasks).read_bytes()
-    series = hashlib.sha256(source + args.model.encode()
-                            + b"|container" + (b"|micro" if is_micro else b"")).hexdigest()[:8]
+    series = hashlib.sha256(source + args.model.encode() + b"|container"
+                            + (b"|micro" if is_micro else b"|long-session" if is_long else b"")).hexdigest()[:8]
     home = micro.HISTORY_DIR if is_micro else Path("benchmarks")
-    out = (common["out"] or ROOT / home / version) / tag
+    out = strata.out_dir((common["out"] or ROOT / home / version) / tag, getattr(args, "stratum", None))
     streams = {}  # (task, arm, rep): (path, sha256) of each stream this tag's runs saved
     parent = Path(tempfile.mkdtemp(prefix="cost-profile-", dir=args.tmp))
     try:
@@ -2725,12 +3528,15 @@ def replay_tag(tag, args, common, harness):
                 "stance_cost": args.stance_cost, "raw": args.raw, "streams": streams, "tmp": args.tmp,
                 "change_note": args.change_note or "", "skip_preflight": args.skip_preflight,
                 "preflight_cap": micro.PREFLIGHT_CAP_USD if is_micro else PREFLIGHT_CAP_USD,
+                "spend_ledger": getattr(args, "spend_ledger", None),
                 "stamp": {"date": datetime.date.today().isoformat(), "model": args.model,
                           "cli_version": common["cli_version"],
                           "bucket": args.bucket, "predicted_ratio": args.predicted_ratio,
                           "harness_version": version, "harness_sha": commit,
                           "surface_drift_allowed": bool(args.allow_surface_drift),
-                          **({"tier": micro.MICRO} if is_micro else {}),
+                          **({strata.KEY: args.stratum, "strata": args.strata}
+                             if getattr(args, "stratum", None) else {}),
+                          **({"tier": micro.MICRO} if is_micro else {"tier": LONG_SESSION} if is_long else {}),
                           **common.get("pack_stamp", {}),
                           "os": "linux container on %s %s" % (platform.system(), platform.release()),
                           **common["protocol"]}}
@@ -2751,12 +3557,19 @@ def replay_tag(tag, args, common, harness):
                         schedule_seed=common["schedule_seed"],
                         ablation_selections=ablations.selections(ablation),
                         arms=dict({"bare": common["bare"], "harness": harness}, **common["ablation_records"]))
+        if common.get("config_records"):
+            # Each config arm is its own declared-selection image beside the tag's harness arm.
+            opts.update(arm_names=ARMS + tuple(common["config_records"]), arm_configs=common["arm_configs"],
+                        ablation_selections=common["config_selections"],
+                        arms=dict(opts["arms"], **common["config_records"]))
         design = common.get("design")
         if design:
             # Every cell is its own declared-selection image; there is no undeclared control.
             opts.update(arm_names=unit_economy.ARM_NAMES, design=design, schedule_seed=common["schedule_seed"],
                         ablation_selections=common["design_selections"],
                         arms=dict({"bare": common["bare"]}, **common["design_records"]))
+        # Resolved now, while the tag's checkout exists: which stance-gated detector applies to whom.
+        stances = dict((arm, arm_stances(arm, opts)) for arm in arm_names(opts))
         out.mkdir(parents=True, exist_ok=True)
         try:
             opts["observation_dir"] = prepare_observation_dir(out)
@@ -2770,10 +3583,11 @@ def replay_tag(tag, args, common, harness):
     finally:
         shutil.rmtree(str(parent), ignore_errors=True)
     detections = None
-    if args.raw and rows:
+    if args.raw and rows and not is_long:  # a session's rows are not one run each; detect reads the streams later
         # Now, before the next tag's runs overwrite these streams under the same names, and only
         # from the streams this tag's runs saved: a timeout saves none.
-        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors())
+        detections = replay_detect.detect_saved(rows, streams, cli_messages, replay_detect.load_detectors(),
+                                                lambda row: stances.get(row.get("arm")))
         write_jsonl(out / DETECTIONS, detections)
     design = common.get("design")
     if design and rows:
@@ -2792,9 +3606,13 @@ def replay_tag(tag, args, common, harness):
     if stopped:
         print("cost-bench: tag %s stopped at the spend cap after %d of %d run(s)"
               % (tag, len(rows), len(common["plan"])), file=sys.stderr)
-    if pair or common.get("ablation") or design:
+    if common.get("config_records"):
+        print("cost-bench: a run with config arms writes no history row; its rows are in %s, and summarise "
+              "reads them" % (out / RESULTS), file=sys.stderr)
+    elif pair or common.get("ablation") or design or is_long:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
-              % ("a pair" if pair else "a grid" if design else "an ablation run", out), file=sys.stderr)
+              % ("a pair" if pair else "a grid" if design else "a long-session set" if is_long
+                 else "an ablation run", out), file=sys.stderr)
     elif rows and not experiment_protocol.writes_history(rows):
         print("cost-bench: an exploratory run is not a history row; results are in %s" % out, file=sys.stderr)
     elif rows and len(tasks) == full_set_size(args) and not stopped:
@@ -2817,9 +3635,60 @@ def replay_tag(tag, args, common, harness):
     return 1 if stopped else 0
 
 
+_RESOLVED_STANCES = {}  # (root, env, config): stances, so a backfill resolves each selection once
+
+
+def resolved_stances(root, env, config=None):
+    """The `{dimension: variant}` a selection resolves to under `root`'s own resolver, with an empty
+    home and no other user configuration, as an arm's image holds: `env` the session variables,
+    `config` a declared selection in the user-config shape. None when it cannot be resolved."""
+    key = (str(root), json.dumps(env, sort_keys=True), json.dumps(config, sort_keys=True))
+    if key not in _RESOLVED_STANCES:
+        try:
+            module = catalog.posture_module(Path(root))
+            with tempfile.TemporaryDirectory() as home:
+                selected = module.selection(dict(env, HOME=home), strict=False, config=config or {},
+                                            root=Path(root))
+            _RESOLVED_STANCES[key] = dict(selected["stances"])
+        except Exception:
+            _RESOLVED_STANCES[key] = None
+    found = _RESOLVED_STANCES[key]
+    return None if found is None else dict(found)
+
+
+def arm_stances(arm, opts):
+    """The stances a replay arm ran with, resolved over the tag's checkout as its image resolves
+    them: none for bare; for the others the tag's defaults under the arm's own session variables
+    and declared selection. What decides which stance-gated detector scores the arm's runs."""
+    if arm == "bare":
+        return {}
+    env = dict((k, v) for k, v in arm_env(arm, opts.get("stance_cost"), opts.get("proxy"),
+                                          selection_of(opts, arm)).items() if k.startswith("HARNESS_"))
+    return resolved_stances(opts.get("profile_root") or ROOT, env, declared_selection(opts, arm))
+
+
+def recorded_stances(row):
+    """The stances a saved run's arm ran with, from what its row records, for an offline `detect`:
+    none for bare, a config arm's `arm_config` or a pair arm's `selection` over this checkout's
+    defaults, the defaults alone for the harness arm. None for any other arm, whose selection the
+    row does not hold by value, so its stance-gated detectors are unknown rather than guessed."""
+    arm = row.get("arm")
+    if arm == "bare":
+        return {}
+    config = row.get("arm_config")
+    if isinstance(config, dict) and isinstance(config.get("stances"), dict):
+        return resolved_stances(ROOT, {}, {"stances": config["stances"]})
+    if arm in replay_pair.HARNESS_ARMS and isinstance(row.get("selection"), dict):
+        return resolved_stances(ROOT, dict((k, v) for k, v in row["selection"].items() if isinstance(v, str)))
+    if arm == "harness":
+        return resolved_stances(ROOT, {})
+    return None
+
+
 def cmd_detect(args):
     """Every rule detector over saved streams, calling no model: one `--raw` directory, or every
-    set under a `--backfill` root, whose `results.jsonl` files are read and never written."""
+    set under a `--backfill` root, whose `results.jsonl` files are read and never written. A
+    stance-gated detector scores only the runs whose arm selected its stance (`recorded_stances`)."""
     module = replay_detect.load_detectors()
     if args.raw:
         raw = Path(args.raw).expanduser()
@@ -2827,7 +3696,8 @@ def cmd_detect(args):
             raise SystemExit("cost-bench: %s is not a directory" % raw)
         if (raw / DETECTIONS).exists() and not args.overwrite:
             raise SystemExit("cost-bench: %s exists; --overwrite replaces it" % (raw / DETECTIONS))
-        rows, runs = replay_detect.detect_dir(raw, DETECT_ARMS, cli_messages, module)
+        rows, runs = replay_detect.detect_dir(raw, DETECT_ARMS, cli_messages, module,
+                                              lambda task, arm, rep: recorded_stances({"arm": arm}))
         write_jsonl(raw / DETECTIONS, rows)
         unread = replay_detect.unreadable(rows, lambda r: r["source"])
         print("detected over %d run(s), %d unreadable, into %s" % (runs, unread, raw / DETECTIONS))
@@ -2835,7 +3705,8 @@ def cmd_detect(args):
     root = Path(args.backfill).expanduser()
     if not root.is_dir():
         raise SystemExit("cost-bench: %s is not a directory" % root)
-    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite)
+    report = replay_detect.backfill(root, cli_messages, module, overwrite=args.overwrite,
+                                    stances_of=recorded_stances)
     for target, runs, unread in report:
         if runs is None:
             print("cost-bench: %s exists, left alone; --overwrite replaces it" % target, file=sys.stderr)
@@ -2892,9 +3763,11 @@ def main(argv=None):
                       "unexplained growth of the total")
     run = sub.add_parser("replay", help="run the pinned tasks in a bare and a harness container; "
                          "spends usage")
-    run.add_argument("--tier", choices=micro.REPLAY_TIERS, default=micro.PRODUCTION,
-                     help="production, the cost comparison; or micro, whether each mechanism fires "
-                     "on the small model %s pins, with its own caps, series and history"
+    run.add_argument("--tier", choices=micro.REPLAY_TIERS + (LONG_SESSION,), default=micro.PRODUCTION,
+                     help="production, the cost comparison; micro, whether each mechanism fires "
+                     "on the small model %s pins, with its own caps, series and history; or "
+                     "long-session, a pack's scripted multi-turn scenarios, one resumed session per "
+                     "scenario, arm and rep, with --run-cap applying per session"
                      % micro.TASKS.as_posix())
     run.add_argument("--tasks", help="the task manifest; default the tier's own, %s or %s"
                      % (TASKS.as_posix(), micro.TASKS.as_posix()))
@@ -2911,7 +3784,8 @@ def main(argv=None):
     run.add_argument("--tag", action="append", help="the harness ref the harness arm is built from: a "
                      "release tag, or a full commit for a pre-release candidate; repeatable, each tag "
                      "writes its own history row. Required")
-    run.add_argument("--model", help="the one model id every arm runs")
+    run.add_argument("--model", action="append", help="the model id every arm runs; a comma list or a "
+                     "repeated flag names several, each run and reported as its own stratum")
     run.add_argument("--reps", type=int, help="trials per task and arm; default %d, the micro tier's %d"
                      % (DEFAULT_REPS, micro.REPS))
     run.add_argument("--effort", choices=arms.EFFORT_LEVELS, default=arms.DEFAULT_EFFORT,
@@ -2932,6 +3806,10 @@ def main(argv=None):
     run.add_argument("--ablations", help="an ablation manifest: benchmarks/ablations.json (schema 2) runs "
                      "bare, control and one declared-selection arm per entry, after stating the minimum "
                      "detectable effect; a schema-1 pair file runs as --pair does; writes no history row")
+    run.add_argument("--arm-config", action="append", metavar="NAME=PATH",
+                     help="a further harness arm built from the stance selection in an arm config "
+                     "(benchmarks/arms/<name>.json), beside bare and harness; repeatable; needs "
+                     "--spend-cap; writes no history row")
     run.add_argument("--schedule-seed", type=int, help="with --ablations or --design, the seed the schedule's order is "
                      "drawn from; default derived from the manifest's digest; recorded on every row")
     run.add_argument("--design", choices=(unit_economy.MANIFEST_DESIGN,),
@@ -2991,6 +3869,8 @@ def main(argv=None):
                       help="absorbed calls above which a task should delegate; default FR-34's "
                       "%(default)s, hypothetical")
     summ.add_argument("--plot", metavar="SVG", help="write the cost-versus-pass-rate plot as a standalone SVG")
+    summ.add_argument("--pool", action="store_true", help="with rows from several strata, report them "
+                      "pooled as well; refused unless the run's pre-registration names a pooled analysis")
     summ.add_argument("--correction", choices=("bonferroni",), help="for an ablation run, the multiplicity "
                       "correction its pre-registration names; without one, several arms read exploratory")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")

@@ -104,12 +104,11 @@ class SessionNudgeTests(Fixture):
         self.assertEqual(self.nudges(lines), [])
         self.assertEqual(self.state()["said_nudge"], [])
 
-    def test_the_shipped_variants_carry_their_starting_sizes(self):
-        # Starting points against a 200,000-token window, not measured figures; the follow-up to
-        # #321 replaces them from the ledger. Read from the sidecars so the docs cannot drift.
+    def test_the_shipped_variants_carry_their_soft_threshold(self):
+        # The soft threshold is where the per-call cost curve leaves its floor, which no posture
+        # moves; the variants differ in the hard one (#1197). Read from the sidecars.
         module = load_feed()
-        for name, sizes in (("frugal", [80000, 120000]), ("balanced", [120000, 160000]),
-                            ("max", [])):
+        for name, sizes in (("frugal", [160000]), ("balanced", [160000]), ("max", [])):
             self.variant(name)
             table = module.settings(self.env())[0]
             self.assertEqual(module.session_nudges(table), sizes, msg=name)

@@ -110,9 +110,33 @@
       "dependencies": [],
       "conflicts": []
     },
+    "session-caps": {
+      "claims": [
+        "Counts live subagents and web searches per session, warns past 80% of the cost variant's fan-out cap and the research rule's search cap, and denies a spawn or search at the cap."
+      ],
+      "surface": [
+        "hook-events"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
     "stage-user-files": {
       "claims": [
         "Copies a file SendUserFile names from outside the working directory into it, so a Remote Control client can open it."
+      ],
+      "surface": [
+        "hook-events"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
+    "steer-polling": {
+      "claims": [
+        "Notes a foreground sleep or polling loop with the background-notification or Monitor alternative, and denies a foreground sleep past five minutes."
       ],
       "surface": [
         "hook-events"

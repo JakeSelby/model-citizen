@@ -77,10 +77,11 @@ class CacheBasisTests(unittest.TestCase):
             args = argparse.Namespace(results=str(path), seed=1, resamples=10, plot=None, json=as_json,
                                       break_even=3, correction=None)
             out = io.StringIO()
-            with mock.patch.object(BENCH.replay_stats, "analyse", return_value={"verdict": "x"}), \
+            with mock.patch.object(BENCH.replay_stats, "analyse_set", return_value={"verdict": "x"}), \
                     mock.patch.object(BENCH.replay_stats, "render", return_value="report\n"), \
                     mock.patch.object(BENCH.delegation_verdict, "report", return_value={}), \
                     mock.patch.object(BENCH.delegation_verdict, "render", return_value=""), \
+                    mock.patch.object(BENCH.replay_reliability, "reliability_section", return_value=({}, "")), \
                     contextlib.redirect_stdout(out):
                 BENCH.cmd_summarise(args)
         return out.getvalue()

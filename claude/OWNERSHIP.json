@@ -15,6 +15,8 @@
       "tier-spawns": {"event": "PreToolUse", "always": true},
       "stage-files": {"event": "PreToolUse", "always": true},
       "intent-overlap": {"event": "PreToolUse", "always": true},
+      "steer-polling": {"event": "PreToolUse", "always": true},
+      "session-caps": {"event": "PreToolUse", "always": true},
 
    "brief-guard": {
     "event": "PreToolUse",

@@ -42,6 +42,8 @@ POLICIES = {
     "tier-spawns": "tier-agent-spawns.py",
     "stage-files": "stage-user-files.py",
     "intent-overlap": "intent-overlap.py",
+    "steer-polling": "steer-polling.py",
+    "session-caps": "session-caps.py",
     "brief-guard": "brief-guard.py",
     "plan-card": "validate-plan-card.py",
     "neutralize": "neutralize-tool-output.py",

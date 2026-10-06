@@ -28,6 +28,12 @@ The retry budget is counted per session, so sessions sharing a checkout do not r
 After a block, a final message with a line that starts `Gate cannot pass:` and gives a reason
 releases the turn as unverified and is logged as `declined`; any other finish is blocked again.
 Unexpected gate errors block. State writes are atomic.
+The hook runs a repository's `## Stop gate` block when it declares one and its `## Gate` block
+otherwise, so a repository whose full suite outlasts the hook's four-minute budget declares a
+subset that fits and keeps `## Gate` for the push. A timeout kills the gate's whole process group.
+A linked git worktree is trusted when its main checkout is. Every timeout, forced release, decline
+and mid-run tree change is logged with its reason and the seconds the gate ran: the decision
+row carries `release_reason` and `elapsed_seconds`, and every row whose gate ran names its `gate_block`.
 
 Constrained roles use [isolated CLI workers](role-workers.md), with shared role/stance resolution
 and fixed native tool controls. The harness validates and publishes planner content to a new
@@ -98,7 +104,9 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `harness-session` | SessionStart |
 | `intent-overlap` | PreToolUse on Edit, Write, MultiEdit and NotebookEdit: a live sibling's claim on the path |
 | `neutralize-tool-output` (core) | PostToolUse |
+| `session-caps` | PreToolUse on a spawn, a Workflow launch and WebSearch, plus SubagentStart and SubagentStop for the count, Claude Code only: warns past 80% of the cost variant's fan-out cap and the research rule's web-search cap and denies at either ([decision log](usage.md)); a Workflow script's own `agent()` calls cannot be refused |
 | `stage-user-files` | PreToolUse on SendUserFile, Claude Code only |
+| `steer-polling` | PreToolUse on Bash, Claude Code only: a foreground sleep or polling loop gets a note naming background notifications and Monitor; a foreground sleep past five minutes is denied |
 | `stop-gate` (core) | Stop |
 | `tier-agent-spawns` | band routing of a spawn, and the integration descriptor notice |
 | `usage-feed` | UserPromptSubmit, SubagentStart, SubagentStop and PostToolUse on a spawn, Claude Code only |
