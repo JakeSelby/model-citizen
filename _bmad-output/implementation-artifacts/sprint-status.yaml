@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-10-04"
+generated: "2026-10-06"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -346,6 +346,7 @@ development_status:
   ah-s287-library-every-module-with-its-manifest: ready-for-dev
   ah-s288-activity-what-the-harness-decided-and-what: ready-for-dev
   ah-s289-live-updates-a-change-from-the-cli-an-agent-or: ready-for-dev
+  ah-s360-restyle-the-studio-to-the-operational-look: ready-for-dev
   ah-sp017-spike-can-the-committed-ui-bundle-be-rebuilt: ready-for-dev
   ah-t035-write-the-studio-s-ux-specification: ready-for-dev
   ah-t036-record-the-studio-s-architecture-decisions-in: ready-for-dev
@@ -359,6 +360,8 @@ development_status:
   ah-s295-review-and-apply-a-draft-through-the-governed: ready-for-dev
   ah-s296-roll-back-an-applied-draft: ready-for-dev
   ah-s325-configure-composition-slots-and-superpowers-in: ready-for-dev
+  ah-s358-discount-switched-off-rules-in-the-context-cap: ready-for-dev
+  ah-s359-keep-the-rollback-result-on-screen-until-it-is: ready-for-dev
 
   ah-e024-run-from-the-studio-any-suite-or-single-test: in-progress
   ah-s297-suite-catalog-and-run-supervisor-with-citizen: ready-for-dev
@@ -374,6 +377,8 @@ development_status:
   ah-s319-import-claude-plugin-eval-reports-into-the-run: ready-for-dev
   ah-s324-adapt-studio-to-the-landed-measured-evaluation: ready-for-dev
   ah-s327-run-factorial-switch-screens-from-studio: ready-for-dev
+  ah-s355-build-the-replay-harness-arm-from-a-draft-s: ready-for-dev
+  ah-s356-test-a-draft-whose-configuration-was-edited: ready-for-dev
 
   ah-e025-judge-in-the-studio-whether-a-change-helped: in-progress
   ah-s307-compare-two-runs-with-paired-intervals: ready-for-dev
@@ -386,6 +391,7 @@ development_status:
   ah-s328-report-field-and-codex-evaluation-evidence-in: ready-for-dev
   ah-s345-show-and-launch-the-definitive-evaluation-in-the: backlog
   ah-s346-pre-register-a-draft-test-so-it-can-say-whether: ready-for-dev
+  ah-s361-show-an-advisory-ai-overview-of-system-health-on: ready-for-dev
 
   ah-e026-adopt-the-studio-from-install-to-a-tuned-harness: in-progress
   ah-s313-first-run-in-the-studio-from-install-to-an: ready-for-dev
@@ -394,6 +400,7 @@ development_status:
   ah-s316-end-to-end-and-performance-checks-for-the-studio: ready-for-dev
   ah-s317-document-the-studio-and-add-it-to-the-product: ready-for-dev
   ah-s318-qualify-the-studio-in-every-release: ready-for-dev
+  ah-s357-require-a-person-s-confirmation-for-spend-and: ready-for-dev
   ah-sp018-spike-reach-the-studio-from-a-phone-without: ready-for-dev
 
   ah-e027-definitive-evaluation-a-powered-pre-registered: in-progress
@@ -618,6 +625,7 @@ development_status:
   ah-c103-reserve-the-live-judge-story-s-id-and-write-its: ready-for-dev
   ah-c104-record-the-definitive-evaluation-epic-s-bmad: ready-for-dev
   ah-c105-reserve-the-record-protection-story-s-id-and: ready-for-dev
+  ah-c107-file-the-studio-follow-up-stories-decided-on: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
