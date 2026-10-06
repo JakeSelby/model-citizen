@@ -321,6 +321,10 @@ def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
                     % (record["base_revision"], record["revision"]),
             "Model, CLI and effort": "`%s`, the CLI version each row stamps, the default effort"
                                      % record["model"],
+            "Strata": "none; the run pins one model.",
+            "Pooled analysis": "none, so the one stratum is reported on its own.",
+            "Primary arm comparisons": "none; the draft test compares its checkpoint with its base "
+                                       "commit only.",
         },
         "Hypotheses": {
             "Primary": "the draft lowers Cost-of-Pass against its base by at least %s, and does "
@@ -351,6 +355,8 @@ def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
             "Minimum detectable effect": "%s at %d attempts per side; the change to detect is %s."
                                          % (_percent(power["minimum_detectable_effect"]),
                                             power["attempts_per_side"], effect),
+            "Assumed pass rate": "none; the power calculation reads the coefficient of variation "
+                                 "below, not a pass rate.",
             "Variance source": "coefficient of variation %g (%s)." % (power["cv"],
                                                                      power["cv_source"]),
             "Power calculation": "`replay_stats.minimum_detectable_effect(%d, %g)` gives %s, at "
@@ -365,6 +371,8 @@ def plan_text(record: Mapping[str, Any], sample: Mapping[str, Any], today: str,
             "Stop condition for the claim": "the decision rule below, on the whole set.",
         },
         "Multiplicity": {"Further confirmatory tests": "none."},
+        "Equivalence margins": {"Behaviour scores": "none; the draft test judges the decision "
+                                                    "rule only."},
         "Exclusions": {"Pre-stated exclusions": "none."},
     }
     # The template's own lines, rewritten only where its arms are harness and bare.

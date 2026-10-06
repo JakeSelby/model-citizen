@@ -191,7 +191,8 @@ class ReplayTagTests(unittest.TestCase):
                   "protocol": {"evidence": "pre-registered"}}
         if config_records:
             common.update(config_records=config_records, arm_configs={}, config_selections={})
-        rows = [{"arm": arm, "evidence": BENCH.experiment_protocol.PREREGISTERED} for arm in ("bare", "harness")]
+        rows = [{"arm": arm, "task": TASK["id"], "rep": 1, "evidence": BENCH.experiment_protocol.PREREGISTERED}
+                for arm in ("bare", "harness")]
         err = io.StringIO()
         with mock.patch.object(BENCH, "snapshot", lambda repo, sha, dest: dest), \
                 mock.patch.object(BENCH, "tag_version", lambda repo, commit, ref: "9.9.9"), \

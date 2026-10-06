@@ -167,6 +167,70 @@
         ],
         "ratio_undefined": null,
         "reason": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "reliability": {
+          "joint": null,
+          "pass_k": {
+            "arms": {
+              "bare": {
+                "all_passed": 3,
+                "all_passed_rate": 1.0,
+                "estimated_tasks": 3,
+                "pass_1": 1.0,
+                "pass_hat_k": 1.0,
+                "per_task": {
+                  "a": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "b": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "c": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  }
+                },
+                "tasks": 3
+              },
+              "harness": {
+                "all_passed": 3,
+                "all_passed_rate": 1.0,
+                "estimated_tasks": 3,
+                "pass_1": 1.0,
+                "pass_hat_k": 1.0,
+                "per_task": {
+                  "a": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "b": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "c": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  }
+                },
+                "tasks": 3
+              }
+            },
+            "k": 2
+          }
+        },
         "resamples": 10000,
         "seed": 795,
         "sm2_eligible": false,
@@ -393,6 +457,70 @@
         ],
         "ratio_undefined": null,
         "reason": "fewer than five paired trials per task and arm; exploratory diagnostic only",
+        "reliability": {
+          "joint": null,
+          "pass_k": {
+            "arms": {
+              "bare": {
+                "all_passed": 3,
+                "all_passed_rate": 1.0,
+                "estimated_tasks": 3,
+                "pass_1": 1.0,
+                "pass_hat_k": 1.0,
+                "per_task": {
+                  "a": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "b": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "c": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  }
+                },
+                "tasks": 3
+              },
+              "harness": {
+                "all_passed": 3,
+                "all_passed_rate": 1.0,
+                "estimated_tasks": 3,
+                "pass_1": 1.0,
+                "pass_hat_k": 1.0,
+                "per_task": {
+                  "a": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "b": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  },
+                  "c": {
+                    "all_passed": true,
+                    "pass_hat_k": 1.0,
+                    "passes": 2,
+                    "trials": 2
+                  }
+                },
+                "tasks": 3
+              }
+            },
+            "k": 2
+          }
+        },
         "resamples": 10000,
         "seed": 795,
         "sm2_eligible": false,
