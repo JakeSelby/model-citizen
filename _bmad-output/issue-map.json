@@ -9023,6 +9023,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B176",
+      "github_number": 1205,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1205",
+      "title": "fix(observability): hook decisions that cannot be measured from the logs",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B176.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B166",
       "github_number": 1206,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1206",
