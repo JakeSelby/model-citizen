@@ -20,7 +20,7 @@
     "planner": {"class": "strong", "effort": "high", "budget_output_tokens": null, "budget_tool_calls": null},
     "reviewer": {"class": "strong", "effort": "high", "budget_output_tokens": 22000, "budget_tool_calls": 30},
     "spec-reviewer": {"class": "standard", "effort": "high", "budget_output_tokens": 9000, "budget_tool_calls": 20},
-    "design-judge": {"budget_output_tokens": null, "budget_tool_calls": null},
+    "design-judge": {"class": "strong", "effort": "high", "budget_output_tokens": null, "budget_tool_calls": null},
     "log-compressor": {"class": "standard", "effort": "low", "budget_output_tokens": null, "budget_tool_calls": null},
     "A": {"class": "standard", "effort": "low", "budget_output_tokens": 17000, "budget_tool_calls": 35},
     "B": {"class": "strong", "effort": "low", "budget_output_tokens": 39000, "budget_tool_calls": 90},
