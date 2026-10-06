@@ -9,7 +9,7 @@
     "decision": 15,
     "epic": 28,
     "spike": 20,
-    "story": 352,
+    "story": 353,
     "task": 41
   },
   "items": [
@@ -8341,6 +8341,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B144.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S352",
+      "github_number": 1100,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1100",
+      "title": "Record a native Stop payload for the hook replay matrix",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S352.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
