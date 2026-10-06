@@ -53,4 +53,10 @@ RUN mkdir -p "$HOME/.config/agent-harness" \
     && test "$(git rev-parse HEAD)" = "${HARNESS_COMMIT}" \
     && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness sync \
     && PYTHONDONTWRITEBYTECODE=1 python3 bin/harness trust /work
+# A selection holding `"instructions": {"CLAUDE.md": "off"}` withholds the user-level CLAUDE.md,
+# which no selection switch removes and the sync always writes: this step deletes it, and fails
+# when there is none to delete. `scripts/ablations.py` (`WITHHOLDABLE`) names the selection and
+# the path, and its parity check admits the arm only when that file is its one difference.
+RUN if python3 -c 'import json, os, sys; c = json.load(open(os.path.expanduser("~/.config/agent-harness/config.json"))); sys.exit(0 if (c.get("instructions") or {}).get("CLAUDE.md") == "off" else 1)'; \
+    then { test -L "$HOME/.claude/CLAUDE.md" || test -e "$HOME/.claude/CLAUDE.md"; } && rm "$HOME/.claude/CLAUDE.md"; fi
 CMD ["bash"]

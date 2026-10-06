@@ -9,7 +9,7 @@
     "decision": 15,
     "epic": 28,
     "spike": 20,
-    "story": 350,
+    "story": 352,
     "task": 41
   },
   "items": [
@@ -9084,6 +9084,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B177.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S351",
+      "github_number": 1250,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1250",
+      "title": "Removal arms for CLAUDE.md and the stances without an off variant",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S351.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     }
