@@ -6,9 +6,18 @@ tail of the run.
 Invoked by `filter-output.py`, which rewrites a matching Bash command to pipe
 through it. Always exits 0, so the `pipefail` pipeline reports the status of the
 command being filtered.
+
+With `--session <id>`, which the rewrite passes, each run is one `filter-output`
+row in the decision log: `filtered`, or `unchanged` when too little matched and
+the whole run was kept, with `bytes_in`, `bytes_out`, `lines_in`, `lines_out` and
+the `runner` the rewrite matched. The input is the runner's name, never the run's
+output. Without it, as when run by hand, nothing is logged.
 """
+import importlib.util
+import os
 import re
 import sys
+from pathlib import Path
 
 KEEP = re.compile(
     r"FAILED|FAIL:|ERROR|error\[|error:|panicked|Traceback|AssertionError|assert |✗|✘|not ok|warning: unused"
@@ -58,15 +67,59 @@ def filter_text(text):
     return "\n".join(kept)
 
 
-def main():
+def option(argv, name):
+    """The value after `name` in `argv`, or None."""
+    if name in argv:
+        index = argv.index(name)
+        if index + 1 < len(argv):
+            return argv[index + 1]
+    return None
+
+
+def log_run(argv, text, out, size=None):
+    """One `filter-output` decision row for this run, when the rewrite named a session."""
+    session = option(argv, "--session")
+    if not session:
+        return
     try:
-        try:
-            sys.stdin.reconfigure(errors="replace")
-        except Exception:
-            pass
-        out = filter_text(sys.stdin.read())
+        location = Path(os.path.realpath(__file__)).parent / "decisions.py"
+        spec = importlib.util.spec_from_file_location("harness_filter_decisions", str(location))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        written = out + "\n" if out else ""
+        lines_in = len(text.splitlines())
+        lines_out = len(out.splitlines()) if out else 0
+        runner = option(argv, "--runner") or "unknown"
+        module.record("filter-output", "filtered" if out != "\n".join(text.splitlines()) else "unchanged",
+                      runner, {"session_id": session},
+                      fields={"runner": runner,
+                              "bytes_in": len(text.encode("utf-8", "replace")) if size is None else size,
+                              "bytes_out": len(written.encode("utf-8", "replace")),
+                              "lines_in": lines_in, "lines_out": lines_out})
+    except Exception:
+        pass
+
+
+def read_input(stream):
+    """The input as `(text, bytes read)`. The count is of the raw bytes: a byte the decoder
+    replaces becomes a three-byte U+FFFD in the text, so measuring the text overcounts it."""
+    raw = getattr(stream, "buffer", None)
+    if raw is None:
+        text = stream.read()
+        return text, len(text.encode("utf-8", "replace"))
+    data = raw.read()
+    return data.decode(getattr(stream, "encoding", None) or "utf-8", "replace"), len(data)
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    try:
+        text, size = read_input(sys.stdin)
+        out = filter_text(text)
         if out:
             sys.stdout.write(out + "\n")
+            sys.stdout.flush()
+        log_run(argv, text, out, size)
     except Exception:
         return
 
