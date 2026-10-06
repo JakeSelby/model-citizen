@@ -752,6 +752,8 @@ which is never refused unless `HARNESS_SESSION_CAPS_HEADLESS=enforce` is set. `c
 (`fan-out`, the cost variant's `max_parallel`, or `web-search`, the research rule's per-session
 figure), with `limit` and the `count` before the call. Live subagents are counted from
 `SubagentStart` to `SubagentStop`, and searches by every agent in the session, subagents included.
+A subagent whose stop another hook blocked stays live once its transcript shows the turn that
+followed, until its next stop; while the blocking hook itself runs, it counts as stopped.
 A `Workflow` launch is refused at the fan-out cap, but its script's `agent()` calls are not tool
 calls, so none can be refused once the launch is through, and they count toward the cap only if
 the runtime raises `SubagentStart` for them, which has not been measured. Claude Code only.
