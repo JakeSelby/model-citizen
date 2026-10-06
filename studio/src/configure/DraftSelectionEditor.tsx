@@ -30,7 +30,7 @@ function SnapshotDiff({ preview }: { preview: DraftSelectionPreview }) {
   const switchKinds = selectionSwitchKinds(before, after);
   const changedUnits = changedSwitchUnits(before, after);
   return (
-    <Paper aria-label="Selection projection preview" className="selection-preview" p="lg" withBorder>
+    <Paper aria-label="Selection projection preview" className="selection-preview">
       <Group justify="space-between" wrap="wrap">
         <div>
           <Title order={3}>Projected selection preview</Title>
@@ -306,12 +306,12 @@ export function DraftSelectionEditor({ draft, revision, onRevision }: Props) {
   );
 
   if (!controls || !current) {
-    return <Paper p="xl" withBorder><Text aria-live="polite" c={error ? "red" : "dimmed"}>{error || message}</Text></Paper>;
+    return <Paper><Text aria-live="polite" c={error ? "red" : "dimmed"}>{error || message}</Text></Paper>;
   }
 
   return (
     <Stack className="selection-editor" data-draft={draft} gap="lg">
-      <Paper className="settings-section" p="xl" withBorder>
+      <Paper className="settings-section">
         <Group justify="space-between" wrap="wrap">
           <div>
             <Title order={2}>Change selection in this draft</Title>
@@ -364,7 +364,7 @@ export function DraftSelectionEditor({ draft, revision, onRevision }: Props) {
         </SimpleGrid>
       </Paper>
 
-      <Paper className="settings-section" p="xl" withBorder>
+      <Paper className="settings-section">
         <Title order={2}>Module switches</Title>
         <Text c="dimmed" mt="xs" size="sm">Dependencies and core-hook policy are checked before a checkpoint is written.</Text>
         <Stack gap="xs" mt="lg">
@@ -389,7 +389,7 @@ export function DraftSelectionEditor({ draft, revision, onRevision }: Props) {
       {preview ? <SnapshotDiff preview={preview} /> : null}
 
       {lastCommands.length > 0 && (
-        <Paper p="lg" withBorder>
+        <Paper>
           <Title order={3}>Matching CLI commands</Title>
           <Stack gap="xs" mt="md">{lastCommands.map((command) => <CommandChip command={command} key={command} label="Selection change" />)}</Stack>
         </Paper>

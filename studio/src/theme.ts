@@ -6,17 +6,19 @@ import {
   type VariantColorsResolver,
 } from "@mantine/core";
 
+// The one accent: the operational study's muted teal (DESIGN.md, 2026-10-06). Shades 0-2 are its
+// wash, 6-9 its foreground; the dark scheme reads shade 3.
 const clear: MantineColorsTuple = [
-  "#E8F4F1",
-  "#E8F4F1",
-  "#E8F4F1",
-  "#7CDDD0",
-  "#7CDDD0",
-  "#14635E",
-  "#14635E",
-  "#14635E",
-  "#14635E",
-  "#14635E",
+  "#E6FCF5",
+  "#E6FCF5",
+  "#E6FCF5",
+  "#63E6BE",
+  "#63E6BE",
+  "#087F5B",
+  "#087F5B",
+  "#087F5B",
+  "#087F5B",
+  "#087F5B",
 ];
 
 // Every Mantine palette name the Studio uses resolves to a DESIGN.md semantic token, so a
@@ -83,22 +85,36 @@ export const studioCssVariables: CSSVariablesResolver = () => ({
   dark: paletteVariables(),
 });
 
+const SANS = "Inter, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+const MONO = "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
 export const studioTheme = createTheme({
   autoContrast: true,
   colors: { clear },
   primaryColor: "clear",
   primaryShade: { light: 6, dark: 3 },
   variantColorResolver: clearVariantColors,
-  fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-  fontFamilyMonospace: "ui-monospace, SFMono-Regular, Consolas, monospace",
-  defaultRadius: "md",
+  // Named first, never bundled: the Studio makes no network requests, so a machine without the
+  // face falls back to the system stack.
+  fontFamily: SANS,
+  fontFamilyMonospace: MONO,
+  defaultRadius: "sm",
+  fontSizes: { xs: "12px", sm: "13px", md: "14px", lg: "16px", xl: "18px" },
+  lineHeights: { xs: "1.4", sm: "1.45", md: "1.5", lg: "1.5", xl: "1.4" },
+  spacing: { xs: "6px", sm: "8px", md: "12px", lg: "16px", xl: "20px" },
   components: {
     // Mantine stacks two steppers in one 44 px field, under the 24 px target floor (WCAG 2.5.8).
     // The arrow keys still step the value, and typing is the primary input.
     NumberInput: { defaultProps: { hideControls: true } },
   },
   headings: {
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
-    fontWeight: "650",
+    fontFamily: SANS,
+    fontWeight: "600",
+    sizes: {
+      h1: { fontSize: "20px", lineHeight: "1.3" },
+      h2: { fontSize: "14px", lineHeight: "1.4" },
+      h3: { fontSize: "13px", lineHeight: "1.4" },
+      h4: { fontSize: "13px", lineHeight: "1.4" },
+    },
   },
 });

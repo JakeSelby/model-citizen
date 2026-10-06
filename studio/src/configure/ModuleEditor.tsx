@@ -427,7 +427,7 @@ export function ModuleEditor({ draft, revision, onRevision }: Props) {
   })), [modules]);
 
   return (
-    <Paper aria-labelledby="module-editor-title" className="settings-section module-editor" p="xl" withBorder>
+    <Paper aria-labelledby="module-editor-title" className="settings-section module-editor">
       <Group justify="space-between" wrap="wrap">
         <div>
           <Title id="module-editor-title" order={2}>Edit module text</Title>
@@ -474,7 +474,7 @@ export function ModuleEditor({ draft, revision, onRevision }: Props) {
 
         {preview && <>
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-            {preview.budgets.map((budget) => <Paper key={budget.runtime} p="md" withBorder>
+            {preview.budgets.map((budget) => <Paper key={budget.runtime}>
               <Group justify="space-between"><Text fw={650}>{budget.label} context</Text>
                 <Badge color={budget.over_cap ? "red" : "teal"}>{budget.over_cap ? "over cap" : "within cap"}</Badge></Group>
               <Text size="sm">{budget.tokens} tokens ({signed(budget.token_delta)}) / {budget.token_cap}</Text>
@@ -490,7 +490,7 @@ export function ModuleEditor({ draft, revision, onRevision }: Props) {
           </SimpleGrid>
         </>}
 
-        <Paper className="module-save-bar" p="md" withBorder>
+        <Paper className="module-save-bar">
           <Group justify="space-between" wrap="wrap">
             <div><Text fw={650}>{dirty ? "Unsaved module text" : "Checkpointed module text"}</Text>
               <Text c="dimmed" size="sm">Draft {draft} · checkpoint {loadedRevision.slice(0, 12)} · Nothing applied</Text></div>

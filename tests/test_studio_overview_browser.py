@@ -62,8 +62,10 @@ class StudioOverviewBrowserTests(unittest.TestCase):
             self.devtools.call("Input.dispatchKeyEvent", {"type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
             self._wait("document.querySelector('.doctor-repair, .doctor-information').open", "Doctor details did not expand from keyboard")
             self.assertNotEqual(self.devtools.evaluate("getComputedStyle(document.activeElement).outlineWidth"), "0px")
-        self.assertIn("Recent runs", self.devtools.evaluate("document.querySelector('.diagnostic-secondary').textContent"))
-        self.assertEqual(self.devtools.evaluate("getComputedStyle(document.querySelector('.diagnostic-grid')).alignItems"), "start")
+        self.assertIn("Recent runs", self.devtools.evaluate("document.querySelector('[aria-labelledby=recent-runs-title]').textContent"))
+        # Sections are divided by a single hairline, never boxed as cards.
+        self.assertEqual(self.devtools.evaluate("getComputedStyle(document.querySelector('.hub-section')).borderTopStyle"), "solid")
+        self.assertEqual(self.devtools.evaluate("getComputedStyle(document.querySelector('.hub-section')).borderLeftStyle"), "none")
 
         self.devtools.call("Emulation.setDeviceMetricsOverride", {
             "width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True,

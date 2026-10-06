@@ -125,12 +125,12 @@ export function RunDetailPage() {
   }, [detail, navigate, rerunPending]);
 
   return <Stack gap="xl">
-    <div><Text className="eyebrow">Studio / Experiments / Run</Text><Title order={1}>Run detail</Title>
+    <div className="page-heading"><Text className="eyebrow">Studio / Experiments / Run</Text><Title order={1}>Run detail</Title>
       <Text component={NavLink} to="/experiments">Back to experiments</Text></div>
     {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
     {!detail && !error && <EvidenceState kind="loading" title="Loading run">Reading indexed evidence.</EvidenceState>}
     {detail && <>
-      <Paper p="xl" withBorder><Stack gap="sm">
+      <Paper><Stack gap="sm">
         <Group justify="space-between"><Title order={2}>{detail.suite_id}</Title><StatusBadge>{detail.status}</StatusBadge></Group>
         <Text>Target: {displayUnknown(detail.target.ref ?? detail.target.kind)} · Commit: {displayUnknown(detail.target.commit)}</Text>
         <Text>Cost: {detail.cost_usd === null ? "Unknown" : `$${detail.cost_usd.toFixed(4)}`} · Duration: {displayUnknown(detail.duration_ms, " ms")}</Text>
@@ -141,22 +141,22 @@ export function RunDetailPage() {
         <Button disabled={!detail.rerun.available || rerunPending} loading={rerunPending} onClick={() => void startRerun()}>Rerun</Button>
         {!detail.rerun.available && <Text c="dimmed" size="sm">{detail.rerun.reason}</Text>}
       </Stack></Paper>
-      <Paper p="xl" withBorder><Title order={2}>Cases</Title><ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Cases", tabIndex: 0 }}><Table className="data-table">
+      <Paper><Title order={2}>Cases</Title><ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Cases", tabIndex: 0 }}><Table className="data-table">
         <Table.Thead><Table.Tr><Table.Th>Case</Table.Th><Table.Th>Outcome</Table.Th><Table.Th>Commit</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>{detail.cases.map((item) => <Table.Tr key={item.id}><Table.Td>
           <Button variant="subtle" onClick={() => void showCaseHistory(item.id)}>{item.id}</Button>
           {item.flaky && <Badge color="orange" ml="xs">Flaky</Badge>}</Table.Td><Table.Td>{item.outcome}</Table.Td><Table.Td>{displayUnknown(item.commit)}</Table.Td></Table.Tr>)}</Table.Tbody>
       </Table></ScrollArea></Paper>
       {caseError && <EvidenceState kind="error" title="Case history unavailable">{caseError}</EvidenceState>}
-      {caseHistory && <Paper p="xl" withBorder><Title order={2}>Case history: {caseHistory.case_id}</Title>
+      {caseHistory && <Paper><Title order={2}>Case history: {caseHistory.case_id}</Title>
         <Stack gap="xs">{caseHistory.items.map((item) => <Text key={item.run_id} component={NavLink} to={`/experiments/runs/${item.run_id}`}>{item.case?.outcome} · {displayUnknown(item.created_at)} {item.case?.flaky ? "· Flaky" : ""}</Text>)}</Stack>
         {caseHistory.next_cursor && <Button mt="sm" variant="default" onClick={() => void showCaseHistory(caseHistory.case_id, caseHistory.next_cursor)}>Load more</Button>}
       </Paper>}
-      {detail.evaluation && <Paper p="xl" withBorder><Title order={2}>Evaluation contract</Title>
+      {detail.evaluation && <Paper><Title order={2}>Evaluation contract</Title>
         <Table className="data-table" mt="sm"><Table.Tbody>{evaluationLines(detail.evaluation).map(([label, value], index) =>
           <Table.Tr key={`${label}-${index}`}><Table.Th scope="row">{label}</Table.Th><Table.Td><Text style={{ overflowWrap: "anywhere" }}>{value}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>}
-      <Paper p="xl" withBorder><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => {
+      <Paper><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => {
         const href = reportHref(item);
         return href
           ? <Button key={item.id} variant="default" component="a" href={href} target="_blank" rel="noopener noreferrer">{item.label}</Button>

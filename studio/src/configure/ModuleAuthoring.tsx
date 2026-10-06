@@ -153,7 +153,7 @@ export function ModuleAuthoring({ draft, revision, onRevision }: Props) {
 
   const owned = draftOwnedModules(modules);
   return (
-    <Paper className="module-authoring" component="section" p="lg" withBorder aria-label="Add or fork a module">
+    <Paper className="module-authoring" component="section" aria-label="Add or fork a module">
       <Stack gap="md">
         <div>
           <Title order={2}>Add or fork a module</Title>

@@ -16,3 +16,19 @@ export function pageTitle(pathname: string): string {
 export function documentTitle(pathname: string): string {
   return `${pageTitle(pathname)} · Model Citizen Studio`;
 }
+
+// The CLI command each page's evidence comes from, shown in the header beside the page title.
+const COMMANDS: ReadonlyArray<readonly [string, string]> = [
+  ["/setup", "citizen draft first-run"],
+  ["/configure", "citizen selection"],
+  ["/library", "citizen catalog --library"],
+  ["/experiments", "citizen runs history"],
+  ["/activity", "citizen activity"],
+  ["/reports/rules", "citizen usage --rules"],
+  ["/reports/usage", "citizen usage"],
+  ["/reports", "citizen reports trends"],
+];
+
+export function pageCommand(pathname: string): string {
+  return COMMANDS.find(([path]) => pathname === path || pathname.startsWith(`${path}/`))?.[1] ?? "citizen doctor";
+}

@@ -146,7 +146,7 @@ export function NativeAcceptancePanel({
         <Badge color="yellow" variant="light">Model usage</Badge>
       </Group>
 
-      <Paper p="xl" withBorder>
+      <Paper>
         <Stack gap="lg">
           <Select
             disabled={requesting}
@@ -228,7 +228,7 @@ export function NativeAcceptancePanel({
               "pricing_source", (value ?? "api_credit") as SpendRequest["pricing_source"],
             )}
           />
-          <Paper bg="var(--studio-surface-canvas)" p="sm" withBorder>
+          <Paper bg="var(--studio-surface-canvas)">
             <Text fw={600} size="sm">Immutable target</Text>
             <Text c="dimmed" size="xs">The target service resolves and snapshots the selection before launch.</Text>
             <Code mt="xs">{selection.source_commit || `${selection.target_kind}:${selection.target_ref} · commit resolves at launch`}</Code>
@@ -241,7 +241,7 @@ export function NativeAcceptancePanel({
           </Group>
           {error && <Alert color="red" title="Launch refused">{error}</Alert>}
           {preview && (
-            <Paper aria-label="Native acceptance spend preview" p="md" withBorder>
+            <Paper aria-label="Native acceptance spend preview">
               <Group align="flex-start" justify="space-between">
                 <div>
                   <Text fw={650}>Spend preview</Text>
@@ -267,7 +267,7 @@ export function NativeAcceptancePanel({
       </Paper>
 
       {snapshot && phase !== "starting" && (
-        <Paper aria-labelledby="native-progress-title" p="xl" withBorder>
+        <Paper aria-labelledby="native-progress-title">
           <Group justify="space-between">
             <div>
               <Title id="native-progress-title" order={3}>Case evidence</Title>
@@ -283,7 +283,7 @@ export function NativeAcceptancePanel({
           ))}
           <Stack gap="sm" mt="lg">
             {snapshot.cases.map((item) => (
-              <Paper key={item.id} p="md" withBorder>
+              <Paper key={item.id}>
                 <Group align="flex-start" justify="space-between" wrap="nowrap">
                   <div>
                     <Group gap="xs">

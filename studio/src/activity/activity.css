@@ -1,18 +1,8 @@
-.activity-row {
-  border-left: var(--studio-space-1) solid var(--studio-border-default);
-  background: var(--studio-surface-raised);
-}
-
-.activity-row:has(.status-badge[data-tone="danger"]) {
-  border-left-color: var(--studio-danger);
-}
-
-.activity-row:has(.status-badge[data-tone="warning"]) {
-  border-left-color: var(--studio-warning);
-}
+/* One entry is one hairline row; its outcome badge carries the status. */
+.activity-row { background: transparent; }
 
 .activity-row h2 {
-  font-size: var(--studio-text-lg);
+  font-size: var(--studio-text-md);
 }
 
 .activity-meta {
@@ -22,14 +12,14 @@
 .activity-facts {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);
-  gap: var(--studio-space-2) var(--studio-space-4);
-  margin: var(--studio-space-4) 0;
+  gap: var(--studio-space-1) var(--studio-space-4);
+  margin: var(--studio-space-2) 0;
   font-size: var(--studio-text-sm);
 }
 
 .activity-facts dt {
   color: var(--studio-ink-secondary);
-  font-weight: 650;
+  font-weight: 500;
 }
 
 .activity-facts dd {
@@ -39,7 +29,7 @@
 }
 
 .activity-files {
-  margin-top: var(--studio-space-4);
+  margin-top: var(--studio-space-2);
 }
 
 .activity-files ul {
@@ -64,7 +54,6 @@
 }
 
 .activity-row-focused {
-  border-left-color: var(--studio-primary);
   outline: var(--studio-focus-width) solid var(--studio-primary);
   outline-offset: var(--studio-focus-offset);
 }

@@ -29,7 +29,7 @@ type FieldProps = {
 export function GovernedSyncReview() {
   const [reviewed, setReviewed] = useState(false);
   return (
-    <Paper aria-labelledby="governed-sync-title" id="governed-sync" className="settings-section" p="xl" withBorder>
+    <Paper aria-labelledby="governed-sync-title" id="governed-sync" className="settings-section">
       <Title id="governed-sync-title" order={2}>Review projection sync</Title>
       <Text c="dimmed" mt="xs" size="sm">
         Preview every projection change first. Studio will not run either command or write to the installed harness.
@@ -267,7 +267,7 @@ export function ConfigurePage() {
   const unsaved = Object.keys(changes).length;
   return (
     <Stack gap="xl">
-      <Group align="flex-end" justify="space-between">
+      <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / Configure</Text>
           <Title order={1}>See what is in force. Change it in a draft.</Title>
@@ -278,7 +278,7 @@ export function ConfigurePage() {
 
       <SelectionPanel />
 
-      <Paper className="draft-loader" p="lg" withBorder>
+      <Paper className="draft-loader">
         <Group align="flex-end">
           <TextInput
             className="draft-name"
@@ -329,7 +329,7 @@ export function ConfigurePage() {
       )}
 
       {schema && baseRevision && schema.sections.map((section) => (
-        <Paper className="settings-section" key={section.id} p="xl" withBorder>
+        <Paper className="settings-section" key={section.id}>
           <Title order={2}>{section.label}</Title>
           <Text c="dimmed" mt="xs" size="sm">{section.description}</Text>
           {section.id === "telemetry" && (
@@ -355,7 +355,7 @@ export function ConfigurePage() {
       ))}
 
       {schema && baseRevision && (
-        <Paper aria-labelledby="configure-cli-title" className="settings-section" p="xl" withBorder>
+        <Paper aria-labelledby="configure-cli-title" className="settings-section">
           <Title id="configure-cli-title" order={2}>Exact CLI equivalents</Title>
           <Text c="dimmed" mt="xs" size="sm">
             Studio calls the same settings core as these headless commands. Put path-keyed changes in changes.json.
@@ -371,7 +371,7 @@ export function ConfigurePage() {
       )}
 
       {baseRevision && (
-        <Paper className="save-bar" p="lg" shadow="sm" withBorder>
+        <Paper className="save-bar" shadow="sm">
           <div>
             <Text fw={650}>{unsaved} unsaved field{unsaved === 1 ? "" : "s"}</Text>
             <Text c="dimmed" size="sm">Forms validate and checkpoint 750 ms after the last change; applying remains a separate governed action.</Text>

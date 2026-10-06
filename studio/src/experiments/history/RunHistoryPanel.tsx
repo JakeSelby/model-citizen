@@ -92,7 +92,7 @@ export function RunHistoryPanel() {
     setFilters((current) => ({ ...current, [name]: typeof value === "number" ? value : null }));
   }
 
-  return <Paper className="run-history" p="xl" withBorder>
+  return <Paper className="run-history">
     <Stack gap="md">
       <Group justify="space-between"><div><Text className="eyebrow">Every recorded run</Text><Title order={2}>Run history</Title></div>
         <Button variant="default" onClick={() => void refreshLoaded()}>Refresh</Button></Group>

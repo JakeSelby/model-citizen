@@ -199,7 +199,7 @@ export function ExperimentsPage() {
 
   return (
     <Stack gap="xl">
-      <div>
+      <div className="page-heading">
         <Text className="eyebrow">Studio / Experiments</Text>
         <Title order={1}>Run checks, native acceptance or a live replay.</Title>
         <Text c="dimmed" mt="xs">Free suites stay local. Paid experiments show their estimate, resolved targets and hard caps before any model process starts.</Text>
@@ -207,7 +207,7 @@ export function ExperimentsPage() {
 
       {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
       {!catalog && !error && <EvidenceState kind="loading" title="Discovering suites">Reading the installed checkout.</EvidenceState>}
-      {catalog && suite && <Paper className="experiment-launch" p="xl" withBorder>
+      {catalog && suite && <Paper className="experiment-launch">
         <Stack gap="md">
           <Group justify="space-between"><Title order={2}>Free local suites</Title><Badge color="teal" variant="light">No model usage</Badge></Group>
           <Select label="Suite" value={suiteId} onChange={(value) => { setSuiteId(value ?? "unit-tests"); setSelectedCase("all"); }}
@@ -260,7 +260,7 @@ export function ExperimentsPage() {
 
       <ComparePanel key={compareInitial ? JSON.stringify(compareInitial) : "empty"} initial={compareInitial} />
 
-      {update && <Paper className="run-console" p="xl" withBorder>
+      {update && <Paper className="run-console">
         <Stack gap="md">
           <Group justify="space-between"><div><Text className="eyebrow">Run detail</Text><Title order={2}>{update.run.suite_id}</Title></div><StatusBadge>{update.run.status}</StatusBadge></Group>
           <Text size="sm"><Code>{update.run.exact_command}</Code></Text>
@@ -271,7 +271,7 @@ export function ExperimentsPage() {
             {!paused && <Button variant="default" onClick={pause}>Pause updates</Button>}
             {paused && <Button variant="default" onClick={resume}>Resume ({queuedUpdates} queued)</Button>}
           </Group>
-          {update.progress.cases.length > 0 && <Stack gap="xs">{update.progress.cases.map((item) => <Paper key={item.id} p="sm" withBorder>
+          {update.progress.cases.length > 0 && <Stack gap="xs">{update.progress.cases.map((item) => <Paper key={item.id}>
             <Group justify="space-between"><Text size="sm">{item.id}</Text><StatusBadge>{item.status}</StatusBadge></Group>
             {item.detail && <Code block mt="xs">{item.detail}</Code>}
           </Paper>)}</Stack>}

@@ -232,7 +232,7 @@ export function DraftApply({ draft, revision, onApplied }: Props) {
   }
 
   return (
-    <Paper aria-labelledby="draft-apply-title" className="settings-section" id="draft-apply" p="xl" withBorder>
+    <Paper aria-labelledby="draft-apply-title" className="settings-section" id="draft-apply">
       <Title id="draft-apply-title" order={2}>Review and apply this draft</Title>
       <Text c="dimmed" mt="xs" size="sm">
         Apply runs the same locks, checks and commands as the CLI. A lock or check failure stops it before anything changes.

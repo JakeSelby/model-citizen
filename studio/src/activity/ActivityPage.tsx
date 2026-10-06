@@ -44,7 +44,7 @@ function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
   }, [focused]);
   return (
     <Paper aria-current={focused || undefined} className={focused ? "activity-row activity-row-focused" : "activity-row"}
-      component="article" p={{ base: "md", sm: "lg" }} ref={row} tabIndex={focused ? -1 : undefined} withBorder>
+      component="article" ref={row} tabIndex={focused ? -1 : undefined}>
       <Group align="flex-start" justify="space-between" wrap="wrap">
         <div>
           <Text className="activity-meta" c="dimmed" size="xs">
@@ -83,7 +83,7 @@ export function ActivityTimeline({ payload, focus = "", onChanged }: TimelinePro
   const missing = missingFocus(payload.entries, focus, payload.next_cursor !== "");
   return <Stack gap="md">
     {missing ? <Text c="dimmed" role="status" size="sm">{missing}</Text> : null}
-    <Paper className="activity-sources" p="md" withBorder>
+    <Paper className="activity-sources">
       <Text fw={650} size="sm">Evidence sources</Text>
       <Stack gap="xs" mt="xs">
         {payload.sources.map((source) => <Group justify="space-between" key={source.id} wrap="wrap">
@@ -178,7 +178,7 @@ export function ActivityPage() {
         {payload ? <Text c="dimmed" size="sm">{payload.entries.length} loaded</Text> : null}
       </Group>
 
-      <Paper component="form" onSubmit={applyFilters} p="lg" withBorder>
+      <Paper component="form" onSubmit={applyFilters}>
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="sm">
           <TextInput aria-label="Filter by session" onChange={(event) => update("session", event.currentTarget.value)} placeholder="Any session" value={draftFilters.session} />
           <TextInput aria-label="Filter by repository" onChange={(event) => update("repository", event.currentTarget.value)} placeholder="Any repository" value={draftFilters.repository} />

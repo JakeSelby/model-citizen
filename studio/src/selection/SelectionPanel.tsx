@@ -115,7 +115,7 @@ export function SelectionPanel() {
 
   return (
     <Stack gap="lg">
-      <Paper className="selection-controls" p="lg" withBorder>
+      <Paper className="selection-controls">
         <Group className="selection-fields" align="flex-end" grow>
           <TextInput
             label="Repository"
@@ -143,7 +143,7 @@ export function SelectionPanel() {
       {report && (
         <>
           <SimpleGrid cols={{ base: 1, md: 2 }} spacing="lg">
-            <Paper p="xl" withBorder>
+            <Paper>
               <Group justify="space-between">
                 <Title order={2}>Effective mode</Title>
                 <Badge color="teal" variant="light">{sourceLabel(report.mode)}</Badge>
@@ -154,7 +154,7 @@ export function SelectionPanel() {
                 <Text c="dimmed" mt="sm" size="sm">{report.mode.overridden.length} lower-precedence mode value{report.mode.overridden.length === 1 ? "" : "s"} retained in provenance.</Text>
               )}
             </Paper>
-            <Paper p="xl" withBorder>
+            <Paper>
               <Title order={2}>CLI parity</Title>
               <Text c="dimmed" mt="xs" size="sm">Studio resolves through the same policy kernel as these commands.</Text>
               <Stack gap="sm" mt="lg">
@@ -164,7 +164,7 @@ export function SelectionPanel() {
             </Paper>
           </SimpleGrid>
 
-          <Paper p="xl" withBorder>
+          <Paper>
             <Title order={2}>Always-loaded budget</Title>
             <Text c="dimmed" mt="xs" size="sm">The lint-enforced worst case is shown against both caps. The selected line total reflects this selection.</Text>
             <SimpleGrid cols={{ base: 1, sm: 2 }} mt="lg" spacing="lg">
@@ -181,7 +181,7 @@ export function SelectionPanel() {
 
           {status === "error" && <Alert color="red" title="Refresh failed">{message} The last resolved selection remains visible.</Alert>}
 
-          <Paper className="selection-report" p="xl" withBorder>
+          <Paper className="selection-report">
             <Title order={2}>Resolved values and source layers</Title>
             <Text c="dimmed" mt="xs" size="sm">Categories with overrides are expanded. Open a value to inspect its source layers.</Text>
             <Stack gap="xs" mt="lg">

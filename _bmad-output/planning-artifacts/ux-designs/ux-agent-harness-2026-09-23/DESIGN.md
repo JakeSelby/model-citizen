@@ -402,3 +402,48 @@ it does not add an unapproved chart package.
 Visual identity and component design remain unchanged. Current delivery assignments and later-engine Studio additions follow the roadmap amendment; planned stance-drift/proposal surfaces belong to 0.18. The existing Studio design effort under #961 is preserved.
 
 See [the authoritative roadmap amendment](../../roadmap-2026-09-28.md) and #1061 for the issue-level moves, scope splits and added integration stories. These changes remain planned, not shipped.
+
+## Amendment — 2026-10-06: the operational direction
+
+This amendment supersedes the "Briefing" direction and the "Clear" palette for the delivered Studio. The sections above stay as the record of the 2026-09-23 design; where they disagree with this one, this one governs. Chosen 2026-10-06 as option A of five rendered studies: [the target study](studies/2026-10-06-operational.html) and [its rendering](studies/2026-10-06-operational.png). The brief: clean, white, operational, data first, with nothing outside the metrics and information to catch the eye. Briefing read card-heavy, with too much margin.
+
+Only the look changes. Routes, data, workflows and product copy are as they were.
+
+### Shell
+
+- A Mantine `AppShell` in static mode: a 220 px white navbar with a hairline border on its right, and a header at least 52 px tall holding the page title, the Studio version and workspace context, and the CLI command the page's evidence comes from, beside the live, theme and drafts controls. On a narrow desktop the controls wrap and the header grows; it never paints over the page.
+- A white canvas, and a footer outside `<main>` that keeps its contentinfo landmark. Below 48em the shell is one column: the navbar wraps into a strip above the header, and every grid row stacks.
+
+### Pages
+
+- No cards and no bordered papers. A page opens on one quiet heading line under the header, which already names the page: no breadcrumb row, the heading at 14 px / 600, a 13 px muted description, and the page's action as a subtle, unfilled button. Sections follow, separated by single hairlines; an item inside a section is a hairline row.
+- The Hub opens on one number strip of three items split by vertical dividers: installed system, doctor checks (the checks the engine labels as needing attention, or "Unavailable" when the doctor read failed) and projection drift. The capped recent-runs list is never counted into a strip number. Then come the release line with the system summary, doctor checks, projection drift, recent runs, the AI health overview and the report links, each a hairline section of compact rows, in one column.
+- Tables and rows are compact: about 30 px a row, 13 px text, 12 px column labels in secondary ink. Monospace only for ids, commands and numbers that must align; tabular figures everywhere else.
+- Configure, Library, Experiments and run detail, Activity, Reports (trends, rule health and usage) and Setup use the same density.
+
+### Colour
+
+One muted teal accent, `#087F5B` on `#E6FCF5`, for the active navigation item, links, primary buttons and the focus ring. Red, amber and green carry status only, as a dot beside the status word; the word stays in body ink, and running or informational statuses take a neutral grey dot. Where a status colour is text, as in a strip value that needs attention, it uses a shade that keeps 4.5:1 on its canvas.
+
+| Token | Light | Dark |
+|---|---|---|
+| Canvas and raised surface | `#FFFFFF` | `#16181B` |
+| Subtle surface (code, hover) | `#F8F9FA` | `#1F2226` |
+| Ink | `#212529` | `#E9ECEF` |
+| Secondary ink | `#646C73` | `#A6A7AB` |
+| Hairline | `#E9ECEF` | `#2C2F34` |
+| Control border | `#868E96` | `#7C8189` |
+| Accent / wash | `#087F5B` / `#E6FCF5` | `#63E6BE` / `#0F2A22` |
+| Success text / dot / wash | `#237032` / `#2B8A3E` / `#EBFBEE` | `#8CE99A` / `#51CF66` / `#17301D` |
+| Warning text / dot / wash | `#A85500` / `#E67700` / `#FFF4E6` | `#FFC078` / `#FF922B` / `#33260F` |
+| Danger text / dot / wash | `#C92A2A` / `#C92A2A` / `#FFF5F5` | `#FF8787` / `#FF6B6B` / `#3A1A1A` |
+
+The study's secondary ink, `#868E96`, is 3.3:1 on white, under the AA floor for 13 px text; the Studio darkens it to `#646C73` (5.3:1) and keeps `#868E96` for control borders, which need 3:1. The study's amber `#E67700` and green `#2B8A3E` are kept for the dots; their text shades are darkened the same way.
+
+### Type
+
+Inter and JetBrains Mono are named first in their stacks, with system fallbacks. The Studio makes no network requests and bundles no font file, so a machine without them renders the system face. Bundling either would need a licensing review first. The page heading and section headings are 14 px / 600, body 14 px, rows and the page description 13 px, strip values 22 px.
+
+### Implementation
+
+`studio/src/theme.ts` carries the accent, the type scale and the tighter spacing scale; `studio/src/styles.css` carries the tokens above, the shell, the hairline sections and the compact rows. The accessibility suite (#999) and the bundle budgets (#1000) hold unchanged.

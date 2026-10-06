@@ -130,7 +130,7 @@ export function SpendReportView({ report }: { report: SpendReport }) {
   const { ledger, basis } = report;
   const notes = partialNotes(ledger);
   return <Stack gap="md">
-    <Paper className="spend-basis" p="md" withBorder>
+    <Paper className="spend-basis">
       <Text fw={650}>Every dollar figure is a {basis.label}, {pricingDate(basis)}.</Text>
       <Text c="dimmed" size="sm">Computed from token counts at list price; not an invoice. A Studio run's dollars are the spend its runner recorded and are labelled so. Read from the local usage ledger only; nothing is exported.</Text>
       {notes.length ? <Text className="spend-partial" size="sm">Partial data: {notes.join(" ")}</Text> : null}
@@ -153,7 +153,7 @@ export function SpendPage() {
     staleTime: 30_000,
   });
   return <Stack gap="lg">
-    <div>
+    <div className="page-heading">
       <Text className="eyebrow">Studio / Reports</Text>
       <Title order={1}>Spend and usage</Title>
       <Text c="dimmed" mt="xs">Spend by day, model, role, repository and session, exactly as <code>citizen usage --json</code> reports it.</Text>
