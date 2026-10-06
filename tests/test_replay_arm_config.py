@@ -215,11 +215,11 @@ class ReplayTagTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(written, [BENCH.HISTORY.name, BENCH.HISTORY_MD.name])
 
-    def test_the_config_arm_message_names_the_rows_and_offers_no_summarise(self):
+    def test_the_config_arm_message_names_the_rows_and_offers_summarise(self):
         with tempfile.TemporaryDirectory() as tmp:
             _status, err, _written = self.run_tag(tmp, {"maintainer": {}})
         self.assertIn(str(Path(tmp) / "out" / "v9.9.9" / BENCH.RESULTS), err)
-        self.assertNotIn("summarise", err)
+        self.assertIn("summarise reads them", err)
 
 
 class DryRunTests(unittest.TestCase):

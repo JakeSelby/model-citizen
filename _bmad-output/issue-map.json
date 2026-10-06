@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 178,
+    "bug": 180,
     "chore": 106,
     "decision": 15,
     "epic": 28,
@@ -8425,6 +8425,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B179",
+      "github_number": 1120,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1120",
+      "title": "Clear the plugin scanner's false-positive findings",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B179.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B142",
       "github_number": 1122,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1122",
@@ -8932,6 +8945,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B172",
+      "github_number": 1199,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1199",
+      "title": "fix(cost): fan-out and web-search caps are exceeded without a guard",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B172.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B169",
       "github_number": 1200,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1200",
@@ -8997,6 +9023,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B176",
+      "github_number": 1205,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1205",
+      "title": "fix(observability): hook decisions that cannot be measured from the logs",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B176.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B166",
       "github_number": 1206,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1206",
@@ -9030,6 +9069,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C105.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S350",
+      "github_number": 1228,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1228",
+      "title": "Summarise every declared arm, not only bare and harness",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S350.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
