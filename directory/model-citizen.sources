@@ -39,6 +39,7 @@ primitives/skills/plan-authoring/EXAMPLE.md
 primitives/skills/plan-authoring/SKILL.md
 primitives/skills/plan-authoring/TEMPLATE.md
 primitives/skills/sandbox/SKILL.md
+primitives/skills/sandbox/claude-settings.json
 primitives/skills/spike-contract/SKILL.md
 primitives/skills/transcript-hygiene/SKILL.md
 primitives/skills/upstream-contribution/SKILL.md
