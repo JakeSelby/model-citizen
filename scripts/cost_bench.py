@@ -1731,7 +1731,7 @@ def run_long_session(task, rep, arm, opts, launch=subprocess.run):
                 t, w, r, opts["arms"]["bare"]["image"], launch, stream=s, baseline=b))
             return scorer(checkpoint, workdir, opts["repo"], path, totals)
 
-        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS)
+        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS, opts.get("run_left"))
         if opts.get("raw"):
             save_stream(opts, task["id"], arm, rep, "".join(t if t.endswith("\n") or not t else t + "\n"
                                                             for t in saved))
@@ -1977,11 +1977,11 @@ def _replay(tasks, opts, launch, sink, stop=lambda reason: None):
         if seeded else schedule(tasks, opts["reps"], names)
     for task, rep, arm in order:
         if replay_pack.is_scenario(task):
-            cap = replay_session.session_cap(task, opts["run_cap"])
-            if spent + cap > opts["spend_cap"]:
+            # A session's worst case, not its cap: its last turn's budget may reach past the cap.
+            if spent + replay_session.session_ceiling(task, opts["run_cap"]) > opts["spend_cap"]:
                 stop(STOP_SPEND_CAP)
                 return rows, True
-            session = run_long_session(task, rep, arm, opts, launch)
+            session = run_long_session(task, rep, arm, dict(opts, run_left=opts["spend_cap"] - spent), launch)
             spent += session[-1]["cost_usd"]
             if ledger is not None:
                 ledger.append(session[-1]["cost_usd"])
@@ -2740,9 +2740,11 @@ def long_session_lines(scenarios, reps, arm_count, run_cap, preflight_cap, sourc
                                              len(scenario["checkpoint_order"]),
                                              caps["max_agent_turns_per_user_turn"],
                                              replay_session.session_cap(scenario, run_cap)))
-    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap and all %d preflight(s) "
-                 "reach %g USD" % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
-                                   arm_count, preflight_cap))
+    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap plus its last turn's "
+                 "%g USD minimum budget and all %d preflight(s) reach %g USD; an upper bound while each turn "
+                 "holds to its --max-budget-usd, which the CLI checks only between API calls"
+                 % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
+                    replay_session.MIN_TURN_BUDGET_USD, arm_count, preflight_cap))
     return lines
 
 
