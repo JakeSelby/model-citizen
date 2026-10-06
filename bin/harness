@@ -3992,6 +3992,34 @@ def cmd_keychain(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gate(args: argparse.Namespace) -> int:
+    """Run the repository's `## Gate` block and record the run (policy/hooks/gate-runs.py).
+
+    The record is what the Stop-time pass-claim check and the push check read, so a gate run any
+    other way leaves a push asking. Exits with the gate's own code; a green run on a tree that
+    changed while it ran is recorded as unverified and exits 1."""
+    runs = lifecycle.load("gate-runs")
+    start = Path(args.path).expanduser() if args.path else Path.cwd()
+    root = runs.toplevel(start)
+    if root is None:
+        raise SystemExit(f"{start}: not inside a git repository")
+    commands = runs.declared(root)
+    if not commands:
+        raise SystemExit(f"{root}: no `{runs.GATE_HEADING}` block in AGENTS.md or CLAUDE.md")
+    snap = runs.snapshot(root)
+    started = time.monotonic()
+    code = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", "\n".join(commands)],
+                          cwd=root).returncode
+    elapsed = round(time.monotonic() - started, 1)
+    status = "unverified" if code == 0 and runs.tree_digest(root) != snap["tree"] else None
+    row = runs.record(snap, runs.GATE_HEADING, code, "citizen-gate", status=status,
+                      elapsed=elapsed)
+    where = (snap.get("head") or "no commit")[:12] + (" with uncommitted changes" if snap.get("dirty") else "")
+    outcome = status or ("passed" if code == 0 else f"failed, exit {code}")
+    say(f"gate: {outcome} on {where} in {elapsed}s" + ("" if row else " (not recorded)"))
+    return code or (1 if status else 0)
+
+
 def cmd_trust(args: argparse.Namespace) -> int:
     """Record (or with --remove, forget) a repository root the stop-gate hook may run a gate in."""
     start = Path(args.path).expanduser() if args.path else Path.cwd()
@@ -6170,6 +6198,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("keychain", help="give a disposable HOME its own default keychain before a client is launched under it (macOS)")
     p.add_argument("home")
     p.set_defaults(func=cmd_keychain)
+
+    p = sub.add_parser("gate", help="run the repository's `## Gate` block and record the run for the pass-claim and push checks")
+    p.add_argument("path", nargs="?")
+    p.set_defaults(func=cmd_gate)
 
     p = sub.add_parser("trust", help="let the stop-gate hook run a repository's `## Gate` block (default: the current repo)")
     p.add_argument("path", nargs="?")

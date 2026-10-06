@@ -1367,6 +1367,16 @@ def _dispatch(runtime, payload):
             if grading and bool(grade) and not confirmed and not asked:
                 governed = grader.govern(command, event.get("cwd", ""), grade, variant, event, runtime)
                 asked = governed is not None
+            # A push needs a green `## Gate` run recorded for the commit it sends: without one it
+            # asks at any stance, and every checked push is a row naming the record's verdict.
+            unverified = None
+            push_check = getattr(grader, "gate_push", None) if grading else None
+            gated = (push_check(command, event.get("cwd", ""))
+                     if push_check and bool(grade) and not confirmed else None)
+            if gated is not None and any(v != "undeclared" for v in gated[2]):
+                note["gate"] = ",".join(gated[2])
+                if gated[0] == "ask" and not asked:
+                    asked, unverified = True, gated[1]
             if asked and governed is not None and governed[0] == "deny":
                 results.append({"hookSpecificOutput": {"permissionDecision": "deny",
                     "permissionDecisionReason": grader.reason(grade, verb, target, family, variant)
@@ -1384,6 +1394,8 @@ def _dispatch(runtime, payload):
                     why = grader.reason(grade, verb, target, family, variant)
                     if governed is not None:
                         why += " " + governed[1]
+                    if unverified:
+                        why += " " + unverified
                     code = grader.approval_code(mode, session, raw) if channel else None
                     if code:
                         note["approval"] = "offered"

@@ -5943,6 +5943,45 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
     return worst
 
 
+_GATE_RUNS = []
+PUSH_DELETE_RE = re.compile(r"\bpush\b[^;&|]*\s(?:--delete|-d)(?=\s|$)")
+
+
+def gate_push(command, cwd):
+    """The gate-run record's answer for a line that pushes: None when it pushes nothing.
+
+    Otherwise `(answer, sentence, verdicts)`: `ask` with the sentence `gate-runs.push_verdict`
+    gives when a push sends a commit no green `## Gate` run is recorded for, or from a directory
+    that cannot be known, else `allow`; `verdicts` holds one per push directory. Each push is
+    placed by the same walk `govern` uses, so `git -C` and an earlier `cd` move it. A lone
+    branch deletion sends no commit and is not checked. Only the commit at HEAD is checked: a
+    refspec naming another branch is matched against HEAD all the same."""
+    if "push" not in command:
+        return None
+    try:
+        found = governed_text(command, cwd or os.getcwd())
+    except Exception:
+        found = None
+    if found is None:
+        pushes = [None] if re.search(r"\bgit\b[^;&|]*\bpush\b", command) else []
+    else:
+        pushes = [where for action, _grade, where, _written in found if action == PUSH]
+    if not pushes or (len(pushes) == 1 and PUSH_DELETE_RE.search(command)):
+        return None
+    if not _GATE_RUNS:
+        _GATE_RUNS.append(_sibling("gate-runs.py", "grade_bash_gate_runs"))
+    module = _GATE_RUNS[0]
+    if module is None:
+        return None
+    verdicts, ask = [], None
+    for where in dict.fromkeys(pushes):
+        verdict, sentence = module.push_verdict(where)
+        verdicts.append(verdict)
+        if verdict in ("missing", "unknown") and ask is None:
+            ask = sentence
+    return ("ask" if ask else "allow"), ask or "", verdicts
+
+
 def govern_file(tool, tool_input, paths, event=None, runtime=""):
     """`(subject, sentence)` for a file-tool write to a policy file or the user config, or None.
 

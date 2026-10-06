@@ -33,7 +33,7 @@ MATCHES = [
 MATCH_PATTERNS = [
     re.compile(r"(?<![\w./-])" + r"\s+".join(re.escape(w) for w in m.split()) + r"(?![\w./-])")
     for m in MATCHES
-]
+] + [re.compile(r"(?:^|[\s/])(?:harness|citizen)\s+gate(?![\w-])")]  # the recorded gate run
 ENV_PREFIX = re.compile(r"""^\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)\s+""")
 CD_PREFIX = re.compile(r"""^\s*cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*&&\s*""")
 PAGED = re.compile(r"\|\s*(?:head|tail|grep|less|wc)\b")
