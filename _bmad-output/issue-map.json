@@ -5,11 +5,11 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 182,
-    "chore": 106,
+    "chore": 107,
     "decision": 15,
     "epic": 28,
     "spike": 20,
-    "story": 350,
+    "story": 353,
     "task": 41
   },
   "items": [
@@ -3299,7 +3299,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B095.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -3871,7 +3871,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S255.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -3884,7 +3884,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S256.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -3897,7 +3897,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S257.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -3910,7 +3910,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S258.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -3923,7 +3923,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S259.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -4534,7 +4534,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S215.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -4937,7 +4937,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S213.md",
       "parent_bmad_id": "AH-E003",
       "parent_github_number": 135,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -5756,7 +5756,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S227.md",
       "parent_bmad_id": "AH-E018",
       "parent_github_number": 745,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -5821,7 +5821,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S230.md",
       "parent_bmad_id": "AH-E003",
       "parent_github_number": 135,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6211,7 +6211,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S239.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6224,7 +6224,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S240.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6237,7 +6237,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S241.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6250,7 +6250,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S242.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6263,7 +6263,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S243.md",
       "parent_bmad_id": "AH-E014",
       "parent_github_number": 633,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6627,7 +6627,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-T038.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6640,7 +6640,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B126.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6770,7 +6770,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-T037.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6848,7 +6848,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B132.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6861,7 +6861,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S329.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6874,7 +6874,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B128.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6887,7 +6887,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B131.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6900,7 +6900,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C099.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6913,7 +6913,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C097.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6926,7 +6926,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C096.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6939,7 +6939,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S330.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6952,7 +6952,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C098.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6965,7 +6965,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B125.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -6978,7 +6978,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B129.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7004,7 +7004,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B152.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7017,7 +7017,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B130.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7745,7 +7745,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B133.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7914,7 +7914,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B115.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -7927,7 +7927,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B116.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8018,7 +8018,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B119.md",
       "parent_bmad_id": "AH-E013",
       "parent_github_number": 632,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8148,7 +8148,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B123.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8161,7 +8161,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B124.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8213,7 +8213,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C100.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8239,7 +8239,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C094.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8317,7 +8317,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C095.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8330,7 +8330,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B135.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8341,6 +8341,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B144.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S352",
+      "github_number": 1100,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1100",
+      "title": "Record a native Stop payload for the hook replay matrix",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S352.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8354,9 +8367,9 @@
       "type": "task",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-T040.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-S258",
+      "parent_github_number": 513,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8369,7 +8382,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B146.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8382,7 +8395,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S331.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8395,7 +8408,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B145.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8408,7 +8421,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B148.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8419,6 +8432,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B143.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B179",
+      "github_number": 1120,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1120",
+      "title": "Clear the plugin scanner's false-positive findings",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B179.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -8434,7 +8460,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B142.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8447,7 +8473,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B147.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8458,8 +8484,8 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C101.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
+      "parent_bmad_id": "AH-S257",
+      "parent_github_number": 512,
       "lifecycle": "active",
       "provenance": "authored"
     },
@@ -8473,7 +8499,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B149.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8486,7 +8512,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B150.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8499,7 +8525,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B151.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8512,7 +8538,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S344.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8523,9 +8549,9 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C102.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-S240",
+      "parent_github_number": 796,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8538,7 +8564,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S332.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8551,7 +8577,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B153.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8564,7 +8590,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B154.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8577,7 +8603,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B155.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8590,7 +8616,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B156.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8603,7 +8629,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B165.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8616,7 +8642,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B157.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8629,7 +8655,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B158.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8642,7 +8668,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B159.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8668,7 +8694,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C103.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8681,7 +8707,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B160.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8720,7 +8746,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S335.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8759,7 +8785,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S337.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8772,7 +8798,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S338.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8785,7 +8811,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S339.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8798,7 +8824,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S340.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8811,7 +8837,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S341.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8824,7 +8850,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S342.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8837,7 +8863,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S343.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8863,7 +8889,7 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C104.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
-      "lifecycle": "active",
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8874,9 +8900,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B161.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8887,9 +8913,9 @@
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S349.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8900,9 +8926,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B162.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8926,9 +8952,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B173.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8939,9 +8965,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B171.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8952,9 +8978,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B172.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8965,9 +8991,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B169.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8978,9 +9004,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B167.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -8991,9 +9017,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B163.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9004,9 +9030,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B164.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9017,6 +9043,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B168.md",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B176",
+      "github_number": 1205,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1205",
+      "title": "fix(observability): hook decisions that cannot be measured from the logs",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B176.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
@@ -9030,9 +9069,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B166.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9058,6 +9097,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C105.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S350",
+      "github_number": 1228,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1228",
+      "title": "Summarise every declared arm, not only bare and harness",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S350.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     },
@@ -9069,9 +9121,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B170.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9082,9 +9134,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B174.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9095,9 +9147,9 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B175.md",
-      "parent_bmad_id": null,
-      "parent_github_number": null,
-      "lifecycle": "active",
+      "parent_bmad_id": "AH-E027",
+      "parent_github_number": 1175,
+      "lifecycle": "completed",
       "provenance": "authored"
     },
     {
@@ -9110,6 +9162,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B177.md",
       "parent_bmad_id": "AH-E027",
       "parent_github_number": 1175,
+      "lifecycle": "completed",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C106",
+      "github_number": 1253,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1253",
+      "title": "Sync the BMad tracker: refresh the map, then apply",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C106.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     }

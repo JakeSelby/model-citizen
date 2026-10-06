@@ -544,11 +544,12 @@ says: a ledger it cannot write is skipped in silence.
 The hand-off block is recorded the same way, as `fresh-session-handoff`, so how often a blocked
 session actually ends is a rate of its own.
 
-The response is read from the observation ledger (`observation.jsonl`). A session that ends
-within three prompts of the line followed it, or within two of the block; one that carries on
-past them did not. Until the
-observation entry point is registered in live sessions, that ledger holds no rows, so every
-emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
+The response is read from the session's prompts and its end. A session that ends within three
+prompts of the line followed it, or within two of the block; one that carries on past them did
+not. Those events come from the observation ledger (`observation.jsonl`) for a session it holds,
+and otherwise from `session-events.jsonl`, where the dispatcher records each prompt and session
+end, identifiers only, whether or not the observation entry point is registered. An emission
+neither can answer is `unknown` once it is a day old, with reason `unobserved`. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
 
 `bin/citizen usage --by adherence` reports two figures per recommendation kind, in two sections

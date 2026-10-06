@@ -712,7 +712,7 @@ def conflict_summary(days, env=None, now=None):
     """Structured weekly merge and overlap figures, shared by text and JSON reports."""
     module = decisions()
     path = state_dir(env) / "decisions.jsonl"
-    rows = module.read_rows(path) if module is not None else []
+    rows = module.read_rows(path, history=True) if module is not None else []
     weeks = conflict_weeks(rows, days, now)
     groups = []
     for week, slot in weeks:
