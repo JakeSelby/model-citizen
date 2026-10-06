@@ -104,6 +104,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | `harness-session` | SessionStart |
 | `intent-overlap` | PreToolUse on Edit, Write, MultiEdit and NotebookEdit: a live sibling's claim on the path |
 | `neutralize-tool-output` (core) | PostToolUse |
+| `session-caps` | PreToolUse on a spawn, a Workflow launch and WebSearch, plus SubagentStart and SubagentStop for the count, Claude Code only: warns past 80% of the cost variant's fan-out cap and the research rule's web-search cap and denies at either ([decision log](usage.md)); a Workflow script's own `agent()` calls cannot be refused |
 | `stage-user-files` | PreToolUse on SendUserFile, Claude Code only |
 | `steer-polling` | PreToolUse on Bash, Claude Code only: a foreground sleep or polling loop gets a note naming background notifications and Monitor; a foreground sleep past five minutes is denied |
 | `stop-gate` (core) | Stop |
