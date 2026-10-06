@@ -43,7 +43,7 @@ export function HookMatrixGrid({ result, initialRow }: { result: HookMatrixResul
 
 export function PaidAnalysisView({ analysis, title }: { analysis: PaidAnalysis; title: string }) {
   return (
-    <Paper p="md" withBorder>
+    <Paper>
       <Text fw={600}>{title} (cost_bench.py summarise)</Text>
       <Text c="dimmed" size="xs">Exploratory: writes no history row and is never cited as evidence. Spent {analysis.spend_usd} USD{analysis.stopped_at_cap ? ", stopped at the cap" : ""}.</Text>
       <Code block className="wrapped-command">{analysis.command.join(" ")}</Code>
@@ -103,7 +103,7 @@ export function PaidTierForm({ suite, unit, catalog, onStarted }: {
             .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Start failed."));
         }}>Confirm and spend up to {preview.caps.spend_cap_usd} USD</Button>}
       </Group>
-      {preview && <Paper p="sm" withBorder>
+      {preview && <Paper>
         <Text size="sm">Revision <Code>{preview.request.revision.slice(0, 12)}</Code> · estimate {preview.estimate.amount_usd === null ? "unknown (no history)" : `${preview.estimate.amount_usd} USD`} · {preview.pricing.source}</Text>
         <Text c="dimmed" size="xs">Exploratory: writes no history row.</Text>
         <Code block>{preview.command}</Code>
@@ -124,11 +124,11 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
       .catch((caught: unknown) => setError(caught instanceof Error ? caught.message : "Start failed."));
   };
   return (
-    <Paper p="xl" withBorder>
+    <Paper>
       <Stack gap="md">
         <div><Text className="eyebrow">Evaluation tiers</Text><Title order={2}>Run an engine, read its own result.</Title></div>
         {catalog.tiers.length === 0 && <Text c="dimmed" size="sm">No evaluation engine is in this checkout.</Text>}
-        {catalog.tiers.map((tier) => <Paper key={tier.id} p="md" withBorder>
+        {catalog.tiers.map((tier) => <Paper key={tier.id}>
           <Stack gap="xs">
             <Group justify="space-between"><Text fw={600}>{tier.label}</Text><Badge color={tier.cost_class === "free" ? "green" : "orange"}>{tier.cost_class === "free" ? "Free" : "Spends usage"}</Badge></Group>
             <Text c="dimmed" size="sm">{tier.description}</Text>

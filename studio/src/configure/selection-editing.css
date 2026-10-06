@@ -1,6 +1,6 @@
 .selection-switch-group {
-  border: 1px solid var(--mantine-color-default-border);
-  border-radius: var(--mantine-radius-md);
+  border: 1px solid var(--studio-border-default);
+  border-radius: var(--studio-radius-sm);
   overflow: clip;
 }
 
@@ -10,13 +10,13 @@
   display: flex;
   font-weight: 650;
   justify-content: space-between;
-  min-height: 2.9rem;
-  padding: 0.65rem 0.9rem;
+  min-height: var(--studio-control-height);
+  padding: var(--studio-space-1) var(--studio-space-3);
 }
 
 .selection-switch-group[open] > summary {
   background: color-mix(in srgb, var(--mantine-primary-color-filled) 6%, transparent);
-  border-bottom: 1px solid var(--mantine-color-default-border);
+  border-bottom: 1px solid var(--studio-border-default);
 }
 
 .selection-preview-code {
@@ -27,6 +27,6 @@
 
 @media (max-width: 48em) {
   .selection-switch-group > summary {
-    min-height: 3.25rem;
+    min-height: 2.25rem;
   }
 }

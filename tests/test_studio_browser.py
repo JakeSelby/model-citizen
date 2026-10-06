@@ -292,7 +292,8 @@ class StudioBrowserTests(unittest.TestCase):
             "canvas:getComputedStyle(document.body).backgroundColor,"
             "buttonForeground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).color,"
             "buttonBackground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor,"
-            "direction:getComputedStyle(document.querySelector('.header-inner')).flexDirection,"
+            "direction:getComputedStyle(document.querySelector('.studio-shell')).flexDirection,"
+            "navbarWidth:document.querySelector('.studio-navbar').getBoundingClientRect().width,"
             "stylePadding:getComputedStyle(document.querySelector('.overview-card')).paddingTop,"
             "styleAttribute:document.querySelector('.overview-card').getAttribute('style'),"
             "nonce:document.querySelector('style[data-mantine-styles]')?.nonce,"
@@ -308,11 +309,13 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(rendered["navLabel"], "Studio")
         self.assertEqual(rendered["focused"], "main-content")
         self.assertEqual(rendered["scheme"], "dark")
-        self.assertEqual(rendered["canvas"], "rgb(16, 27, 30)")
+        self.assertEqual(rendered["canvas"], "rgb(22, 24, 27)")
         self.assertGreaterEqual(
             _contrast_ratio(rendered["buttonForeground"], rendered["buttonBackground"]), 4.5)
+        # One column on a phone: the navbar stacks above the header at the full viewport width.
         self.assertEqual(rendered["direction"], "column")
-        self.assertEqual(rendered["stylePadding"], "32px")
+        self.assertEqual(rendered["navbarWidth"], 390)
+        self.assertEqual(rendered["stylePadding"], "12px")
         self.assertIn("padding-block:", rendered["styleAttribute"])
         self.assertEqual(rendered["nonce"], rendered["declaredNonce"])
         self.assertEqual(rendered["violations"], [])
@@ -333,7 +336,7 @@ class StudioBrowserTests(unittest.TestCase):
             "background:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor"
             "})"))
         self.assertEqual(scheme, "light")
-        self.assertEqual(light["canvas"], "rgb(245, 248, 248)")
+        self.assertEqual(light["canvas"], "rgb(255, 255, 255)")
         self.assertGreaterEqual(_contrast_ratio(light["foreground"], light["background"]), 4.5)
 
         self.devtools.evaluate("location.hash = '#/reports'")

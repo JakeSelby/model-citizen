@@ -1,9 +1,8 @@
 import {
   Anchor,
+  AppShell,
   Badge,
   Button,
-  Container,
-  Group,
   Paper,
   Stack,
   Text,
@@ -14,7 +13,7 @@ import {
 import { type ChangeEvent, type MouseEvent, useEffect, useState } from "react";
 import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
-import { documentTitle, NAVIGATION, pageTitle } from "./navigation";
+import { documentTitle, NAVIGATION, pageCommand, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
@@ -39,7 +38,7 @@ function FoundationPage({ title, description }: { title: string; description: st
         <Title order={1}>{title}</Title>
         <Text c="dimmed" mt="xs">{description}</Text>
       </div>
-      <Paper className="foundation-panel" px={{ base: "var(--studio-space-5)", xs: "xl" }} py="xl" withBorder>
+      <Paper className="foundation-panel">
         <Badge color="gray" variant="light">Preview</Badge>
         <Title mt="md" order={2}>The interface is available.</Title>
         <Text c="dimmed" mt="xs">
@@ -59,6 +58,7 @@ const pages = {
 function StudioFrame() {
   const location = useLocation();
   const title = pageTitle(location.pathname);
+  const command = pageCommand(location.pathname);
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const [themeReady, setThemeReady] = useState(false);
 
@@ -89,69 +89,78 @@ function StudioFrame() {
   }
 
   return (
-    <div className="studio-frame">
+    <AppShell
+      className="studio-frame studio-shell"
+      header={{ height: 52 }}
+      layout="alt"
+      mode="static"
+      navbar={{ width: 220, breakpoint: "sm" }}
+      padding={0}
+    >
       <a className="skip-link" href="#main-content" onClick={skipNavigation}>Skip navigation</a>
-      <header className="studio-header">
-        <Container className="header-inner" size="xl">
-          <Anchor className="brand" component={NavLink} to="/" underline="never">
-            <span className="brand-mark" aria-hidden="true">mc</span>
-            <span>Model Citizen <small>Studio</small></span>
-          </Anchor>
-          <nav aria-label="Studio">
-            <Group className="primary-navigation" gap="xs">
-              {NAVIGATION.map((item) => (
-                <Anchor
-                  aria-label={item.label}
-                  className="nav-link"
-                  component={NavLink}
-                  end={item.path === "/"}
-                  key={item.path}
-                  to={item.path}
-                  underline="never"
-                >
-                  {item.label}
-                </Anchor>
-              ))}
-            </Group>
-          </nav>
-        </Container>
-      </header>
-      <section aria-label="Workspace" className="workspace-bar">
-        <Container className="workspace-inner" size="xl">
-          <Text fw={600}>Personal workspace <Text c="dimmed" component="span" fw={400}>/ local</Text></Text>
-          <div className="workspace-tools">
-            <Text className="version-label" size="xs">Studio {version}</Text>
-            <LiveUpdateControls />
-            <NativeSelect aria-label="Color theme" className="theme-picker" disabled={!themeReady} value={colorScheme} onChange={changeTheme} data={[{ value: "auto", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
-            <Button component={NavLink} size="compact-md" to="/configure#drafts" variant="default">Drafts</Button>
-          </div>
-        </Container>
-      </section>
-      <Container component="main" id="main-content" className="main-content" size="xl" tabIndex={-1}>
-        <Text className="visually-hidden" component="span">Current page: {title}</Text>
-        <Routes>
-          <Route path="/" element={<><FirstRunEntry /><OverviewPage /></>} />
-          <Route path="/setup" element={<FirstRunPage />} />
-          <Route path="/configure" element={<ConfigurePage />} />
-          <Route path="/library" element={<LibraryPage />} />
-          <Route path="/experiments" element={<ExperimentsPage />} />
-          <Route path="/experiments/runs/:runId" element={<RunDetailPage />} />
-          <Route path="/activity" element={<ActivityPage />} />
-          <Route path="/reports/rules" element={<RuleHealthPage />} />
-          <Route path="/reports/usage" element={<SpendPage />} />
-          <Route path="/reports/trends" element={<TrendsPage />} />
-          {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
-            <Route
-              element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
-              key={path}
-              path={`/${path}`}
-            />
+      <AppShell.Navbar aria-label="Studio" className="studio-navbar">
+        <Anchor className="brand" component={NavLink} to="/" underline="never">
+          Model Citizen <small>Studio</small>
+        </Anchor>
+        <div className="primary-navigation">
+          {NAVIGATION.map((item) => (
+            <Anchor
+              aria-label={item.label}
+              className="nav-link"
+              component={NavLink}
+              end={item.path === "/"}
+              key={item.path}
+              to={item.path}
+              underline="never"
+            >
+              {item.label}
+            </Anchor>
           ))}
-          <Route path="*" element={<Navigate replace to="/" />} />
-        </Routes>
-      </Container>
-      <Container component="footer" className="studio-footer" size="xl"><Text size="xs">Local workspace · Evidence stays linked to its source</Text><Text size="xs">Model Citizen Studio {version}</Text></Container>
-    </div>
+        </div>
+      </AppShell.Navbar>
+      <AppShell.Header className="studio-header">
+        <div className="header-title">
+          <Text className="header-page" component="span">{title}</Text>
+          <Text className="header-context" component="span">
+            <span className="version-label">Studio {version}</span>
+            <span aria-hidden="true"> · </span>
+            <span>Personal workspace / local</span>
+          </Text>
+        </div>
+        <div className="workspace-tools">
+          <code className="page-command">{command}</code>
+          <LiveUpdateControls />
+          <NativeSelect aria-label="Color theme" className="theme-picker" size="xs" disabled={!themeReady} value={colorScheme} onChange={changeTheme} data={[{ value: "auto", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
+          <Button component={NavLink} size="compact-sm" to="/configure#drafts" variant="default">Drafts</Button>
+        </div>
+      </AppShell.Header>
+      <AppShell.Main className="main-shell">
+        <div className="main-content" id="main-content" tabIndex={-1}>
+          <Text className="visually-hidden" component="span">Current page: {title}</Text>
+          <Routes>
+            <Route path="/" element={<><FirstRunEntry /><OverviewPage /></>} />
+            <Route path="/setup" element={<FirstRunPage />} />
+            <Route path="/configure" element={<ConfigurePage />} />
+            <Route path="/library" element={<LibraryPage />} />
+            <Route path="/experiments" element={<ExperimentsPage />} />
+            <Route path="/experiments/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/activity" element={<ActivityPage />} />
+            <Route path="/reports/rules" element={<RuleHealthPage />} />
+            <Route path="/reports/usage" element={<SpendPage />} />
+            <Route path="/reports/trends" element={<TrendsPage />} />
+            {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
+              <Route
+                element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
+                key={path}
+                path={`/${path}`}
+              />
+            ))}
+            <Route path="*" element={<Navigate replace to="/" />} />
+          </Routes>
+        </div>
+        <footer className="studio-footer"><Text size="xs">Local workspace · Evidence stays linked to its source</Text><Text size="xs">Model Citizen Studio {version}</Text></footer>
+      </AppShell.Main>
+    </AppShell>
   );
 }
 

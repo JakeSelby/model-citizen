@@ -21,7 +21,7 @@ function verdictStyle(direction: Direction): { color: string; variant: "filled" 
 
 function SideColumn({ title, side }: { title: string; side: CompareSide }) {
   return (
-    <Paper p="md" withBorder>
+    <Paper>
       <Stack gap="xs">
         <Text fw={600}>{title}</Text>
         <Text size="sm">{sideLine(side)}</Text>
@@ -71,7 +71,7 @@ export function CompareReport({ result }: { result: CompareResult }) {
         <SideColumn title="Base" side={result.base} />
         <SideColumn title="Candidate" side={result.candidate} />
       </SimpleGrid>
-      {result.result !== null && <Paper p="md" withBorder>
+      {result.result !== null && <Paper>
         <Text fw={600}>Engine output ({result.engine})</Text>
         <Table className="leaf-table"><Table.Tbody>{engineLeaves(result.result).map(([label, value]) => <Table.Tr key={label}>
           <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
@@ -116,7 +116,7 @@ export function ComparePanel({ initial = null }: { initial?: CompareInput | null
         <Text className="eyebrow">Experiments / Compare</Text>
         <Title order={2}>Compare two runs, paired by task.</Title>
       </div>
-      <Paper p="lg" withBorder>
+      <Paper>
         <Stack>
           {(["base", "candidate"] as const).map((name) => (
             <Group align="flex-end" grow key={name}>

@@ -62,7 +62,7 @@ function LinePanel({ line, measure }: { line: Line; measure: Measure }) {
       <Anchor component={NavLink} size="xs" to="/reports/rules" aria-label={`Rule health: current reading, adherence and precision (beside ${pointLabel(point)})`}>Rule health: current reading</Anchor>
     </Stack> },
   ];
-  return <Paper p="lg" withBorder>
+  return <Paper>
     <Stack gap="sm">
       <Group gap="sm">
         <Title order={2}>Series {line.series}{line.bucket ? `, bucket ${line.bucket}` : ""}</Title>
@@ -109,7 +109,7 @@ function SectionState({ name, section, maximum }: { name: "history" | "static"; 
 }
 
 export function ProofSet({ proof }: { proof: Trends["proof"] }) {
-  return <Paper p="lg" withBorder>
+  return <Paper>
     <Stack gap="sm">
       <Title order={2}>The project's proof set</Title>
       <Text>{proofSummary(proof)}</Text>
@@ -129,7 +129,7 @@ export function TrendsReport({ trends, measure, onMeasure }: { trends: Trends; m
   ];
   return <Stack gap="lg">
     <ProofSet proof={trends.proof} />
-    <Paper p="lg" withBorder>
+    <Paper>
       <Stack gap="xs">
         <Text>{trends.ratio_note}</Text>
         <Text c="dimmed" size="sm">Each point and interval is the row's own, from benchmarks/history.jsonl through the run index. A hollow point is exploratory; the table beside each chart says so in words.</Text>

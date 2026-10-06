@@ -114,7 +114,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
         <Text c="dimmed">Each target is built in its own isolated profile. The installed harness is not an implicit fallback.</Text>
         <Text c="dimmed" size="sm">{SOURCE_ONLY_NOTE}</Text>
       </div>
-      <Paper p="lg" withBorder>
+      <Paper>
         <Stack>
           {([0, 1] as const).map((index) => (
             <Group align="flex-end" grow key={index}>
@@ -176,7 +176,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           {samplingLines(preview.sampling).length > 0 && <Alert color={preview.sampling?.evidence === "pre-registered" ? "teal" : "yellow"} title={preview.sampling?.evidence === "pre-registered" ? "Pre-registered sample" : "Exploratory run"}>
             {samplingLines(preview.sampling).map((line) => <Text key={line} size="sm">{line}</Text>)}
           </Alert>}
-          <Paper p="md" withBorder>
+          <Paper>
             <Text fw={600}>Resolved target revisions</Text>
             {preview.request.targets.map((target) => (
               <Text key={`${target.kind}:${target.ref}`} size="sm">
@@ -213,12 +213,12 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
         </Table.ScrollContainer>
       )}
       {analysisError && <Alert color="yellow" title="Engine analysis unknown">{analysisError}</Alert>}
-      {analysis && analysis.map((entry) => <Paper key={entry.target} p="md" withBorder>
+      {analysis && analysis.map((entry) => <Paper key={entry.target}>
         <Text fw={600}>Engine analysis, target {entry.target} (cost_bench.py summarise)</Text>
         <Table className="leaf-table"><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
           <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>)}
-      {comparisons.length > 0 && <Paper p="md" withBorder>
+      {comparisons.length > 0 && <Paper>
         <Text fw={600}>Matched draft comparisons</Text>
         {comparisons.map((item) => <Text key={item.key + item.draft} size="sm">{comparisonLine(item)}</Text>)}
       </Paper>}

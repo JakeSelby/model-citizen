@@ -12,7 +12,7 @@
 .module-editor-surface .cm-focused { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: calc(-1 * var(--studio-focus-width)); }
 .module-editor-surface .cm-module-diagnostic-line { background: color-mix(in srgb, var(--studio-danger-wash) 80%, transparent); }
 .module-save-bar { position: sticky; bottom: var(--studio-space-3); z-index: 2; background: var(--studio-surface-raised); }
+.main-content .mantine-Paper-root.module-save-bar { padding: var(--studio-space-2) var(--studio-space-3); border: var(--studio-border-width) solid var(--studio-primary); border-radius: var(--studio-radius-sm); background: var(--studio-surface-raised); }
 @media (max-width: 30rem) {
-  .module-editor { padding: var(--studio-space-4) !important; }
   .module-editor-surface .cm-editor { min-height: 14rem; }
 }

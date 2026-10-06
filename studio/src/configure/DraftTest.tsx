@@ -37,7 +37,7 @@ export function VerdictCard({ test, current, count }: { test: DraftTestVerdict; 
     }
   }
   return (
-    <Paper p="md" withBorder>
+    <Paper>
       <Stack gap="xs">
         <Group gap="xs">
           <Text fw={650} size="sm">Checkpoint <Code>{test.revision.slice(0, 12)}</Code>{current ? " (current)" : ""}</Text>
@@ -83,7 +83,7 @@ export function RegistrationList({ registrations }: { registrations: DraftTestRe
   return (
     <Stack gap="xs">
       {registrations.map((item) => (
-        <Paper key={item.registration_id} p="sm" withBorder>
+        <Paper key={item.registration_id}>
           <Group gap="xs">
             <Text size="sm">Registered checkpoint <Code>{item.revision.slice(0, 12)}</Code>: {item.tasks.length} task(s), {item.repetitions} trial(s) per task, {item.model}, a {(item.effect * 100).toFixed(1)}% change</Text>
             {item.stale && <Badge color="yellow" variant="outline">Stale</Badge>}
@@ -213,7 +213,7 @@ export function DraftTest({ draft, revision }: Props) {
 
   const tasks = catalog ? tasksFor(catalog.packs, form.pack?.digest ?? null, catalog.tasks.map((task) => task.id)) : [];
   return (
-    <Paper className="settings-section" p="xl" withBorder>
+    <Paper className="settings-section">
       <Stack gap="md">
         <div>
           <Title order={2}>Test this draft</Title>

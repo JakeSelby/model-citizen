@@ -36,20 +36,27 @@ class StudioFrontendTests(unittest.TestCase):
         self.assertIn("studio/dist/** linguist-generated=true", attributes)
         self.assertIn('"!studio/dist/**"', reviewer)
 
-    def test_clear_theme_uses_the_approved_semantic_tokens(self):
+    def test_operational_theme_uses_the_approved_semantic_tokens(self):
         theme = (STUDIO / "src" / "theme.ts").read_text(encoding="utf-8")
         styles = (STUDIO / "src" / "styles.css").read_text(encoding="utf-8")
         app = (STUDIO / "src" / "StudioApp.tsx").read_text(encoding="utf-8")
         for token in (
-            "#F5F8F8", "#FFFFFF", "#182B2D", "#4E6265", "#CBD8DA", "#73888B",
-            "#14635E", "#E8F4F1", "#176443", "#EAF6EE", "#805008", "#FFF4DE",
-            "#B42318", "#FEE4E2", "#101B1E", "#18272A", "#EDF5F5", "#B0C2C5",
-            "#3C5459", "#83989D", "#7CDDD0", "#213F3D", "#94DDB0", "#213A2B",
-            "#F1CA86", "#43351F", "#FDA29B", "#4A1D1D",
+            "#FFFFFF", "#F8F9FA", "#212529", "#646C73", "#E9ECEF", "#868E96",
+            "#087F5B", "#E6FCF5", "#237032", "#2B8A3E", "#EBFBEE", "#A85500",
+            "#E67700", "#FFF4E6", "#C92A2A", "#FFF5F5", "#16181B", "#1F2226",
+            "#E9ECEF", "#A6A7AB", "#2C2F34", "#7C8189", "#63E6BE", "#0F2A22",
+            "#8CE99A", "#17301D", "#FFC078", "#33260F", "#FF8787", "#3A1A1A",
         ):
             self.assertIn(token, styles + theme)
-        self.assertIn('fontFamily: "system-ui, -apple-system', theme)
-        self.assertNotIn("Inter", theme)
+        # The faces are named first and never bundled: the Studio makes no network requests.
+        self.assertIn('const SANS = "Inter, system-ui, -apple-system', theme)
+        self.assertIn('const MONO = "JetBrains Mono, ui-monospace', theme)
+        self.assertNotRegex(styles + theme, r"@font-face|url\(|\.woff2?")
+        self.assertFalse([path for path in (STUDIO / "dist").rglob("*")
+                          if path.suffix in {".woff", ".woff2", ".ttf", ".otf"}])
+        self.assertIn("<AppShell", app)
+        self.assertIn("navbar={{ width: 220,", app)
+        self.assertIn("header={{ height: 52 }}", app)
         self.assertNotIn("Nothing needs attention", app)
         self.assertNotIn("No active work", app)
 

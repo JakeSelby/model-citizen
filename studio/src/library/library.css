@@ -1,7 +1,8 @@
 .library-group { overflow: hidden; }
+.main-content .library-group.mantine-Paper-root { padding-block: var(--studio-space-2) 0; }
 .library-group-heading {
-  padding: var(--studio-space-4) var(--studio-space-5);
-  background: var(--studio-surface-canvas);
+  padding: var(--studio-space-2) 0;
+  background: transparent;
 }
 .library-group-heading h2 { font-size: var(--studio-text-md); text-transform: capitalize; }
 .library-module { border-top: var(--studio-border-width) solid var(--studio-border-default); }
@@ -11,19 +12,19 @@
   align-items: center;
   gap: var(--studio-space-3);
   min-height: var(--studio-control-height);
-  padding: var(--studio-space-3) var(--studio-space-5);
+  padding: 5px var(--studio-space-1);
   cursor: pointer;
   list-style: none;
 }
 .library-module-summary::-webkit-details-marker { display: none; }
 .library-module-summary::before { content: "+"; color: var(--studio-primary); font-weight: 650; }
 .library-module[open] > summary::before { content: "−"; }
-.library-module-summary:hover { background: var(--studio-surface-canvas); }
+.library-module-summary:hover { background: var(--studio-surface-subtle); }
 .library-module-summary:focus-visible { outline-offset: calc(-1 * var(--studio-space-1)); }
-.library-module-name { font-weight: 650; font-size: var(--studio-text-sm); overflow-wrap: anywhere; }
+.library-module-name { font-weight: 600; font-size: var(--studio-text-sm); overflow-wrap: anywhere; }
 .library-module-root { grid-column: 2; grid-row: 2; color: var(--studio-ink-secondary); font-size: var(--studio-text-sm); overflow-wrap: anywhere; }
 .library-module-state { grid-column: 3; grid-row: 1; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--studio-space-2); }
-.library-module-body { padding: var(--studio-space-3) var(--studio-space-5) var(--studio-space-5); }
+.library-module-body { padding: var(--studio-space-2) var(--studio-space-1) var(--studio-space-4); }
 .library-source-line { display: block; min-width: max-content; padding-inline: var(--studio-space-2); }
 .library-source-line.focused { background: var(--studio-warning-wash); box-shadow: inset var(--studio-focus-width) 0 var(--studio-primary); }
 @media (max-width: 48rem) {

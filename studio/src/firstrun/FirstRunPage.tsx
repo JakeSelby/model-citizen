@@ -75,7 +75,7 @@ export function HealthSummary({ overview }: { overview: Overview | null }) {
 
 export function ReproduceCommands({ status }: { status: FirstRunStatus }) {
   return (
-    <Paper aria-labelledby="first-run-cli-title" className="settings-section" p="xl" withBorder>
+    <Paper aria-labelledby="first-run-cli-title" className="settings-section">
       <Title id="first-run-cli-title" order={2}>The same setup from the CLI</Title>
       <Text c="dimmed" mt="xs" size="sm">
         Run these in order on another machine to reach the same configuration without a draft.
@@ -336,7 +336,7 @@ export function FirstRunPage() {
       <GuideProgress active={step} onSelect={go} status={status} />
       <LiveMessages error={error} message={message} />
 
-      <Paper className="settings-section first-run-step" p="xl" withBorder>
+      <Paper className="settings-section first-run-step">
         <Title className="first-run-heading" order={2} ref={heading} tabIndex={-1}>{label}</Title>
         {step === "health" && (
           <Stack gap="md" mt="md">

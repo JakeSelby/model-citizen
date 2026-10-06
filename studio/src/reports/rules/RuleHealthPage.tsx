@@ -57,7 +57,7 @@ export function RuleHealthReport({ health, onTry, trying }: {
     },
   ];
   return <Stack gap="lg">
-    <Paper p="lg" withBorder>
+    <Paper>
       <Stack gap="xs">
         <Text fw={600}>rules: {summaryLine(health)}</Text>
         <Text size="sm">Statuses and hit windows read from <code>{health.working_directory}</code>, the directory the Studio was started in, as <code>citizen usage --rules</code> run there would. A project with its own <code>.ruleprobe/detectors.yaml</code> reads differently; start the Studio there to see it.</Text>
@@ -68,7 +68,7 @@ export function RuleHealthReport({ health, onTry, trying }: {
       </Stack>
     </Paper>
     <DataTable caption={`Every loaded rule, generated ${health.generated_at}`} columns={columns} rows={sortRows(health.rows)} rowKey={(row) => row.id} empty="No rule is loaded" />
-    {health.findings.length > 0 && <Paper p="md" withBorder><Stack gap={4}>
+    {health.findings.length > 0 && <Paper><Stack gap={4}>
       <Text fw={600}>findings: {health.findings.length} (everything else still loaded)</Text>
       {health.findings.map((finding) => <Text key={`${finding.path}:${finding.line}`} size="sm">{finding.path}:{finding.line} {finding.reason}</Text>)}
     </Stack></Paper>}
@@ -82,7 +82,7 @@ export function RuleHealthReport({ health, onTry, trying }: {
 /** What "Try without it" leaves: the draft, its CLI steps and its test, ready to run. */
 export function TriedDraft({ result }: { result: TryWithoutResult }) {
   const switched = result.status === "switched";
-  return <Paper p="lg" withBorder>
+  return <Paper>
     <Stack gap="sm">
       <Title order={2}>Draft {result.draft.name}</Title>
       {switched

@@ -122,7 +122,7 @@ export function LibraryGroups({ modules, focusedPath = "", focusedLine = null, r
       roots.set(item.root.id, { label: item.root.label, count: (roots.get(item.root.id)?.count ?? 0) + 1 });
     }
     const [sharedRoot, ownership] = [...roots.entries()].sort((a, b) => b[1].count - a[1].count)[0];
-    return <Paper className="library-group" component="section" key={kind} withBorder aria-label={`${kind} modules`}>
+    return <Paper className="library-group" component="section" key={kind} aria-label={`${kind} modules`}>
       <Group className="library-group-heading" justify="space-between">
         <Group gap="xs"><Title order={2}>{kind}</Title><Text c="dimmed" size="sm">{ownership.label}{roots.size > 1 ? " + others" : ""}</Text></Group>
         <Badge variant="light">{items.length}</Badge>
@@ -208,7 +208,7 @@ export function LibraryPage() {
         </Group>
       </Group>
 
-      <Paper p="lg" withBorder>
+      <Paper>
         <SimpleGrid cols={{ base: 1, sm: 2, lg: 5 }} spacing="sm">
           <TextInput aria-label="Search modules" onChange={(event) => update("query")(event.currentTarget.value)} placeholder="Search modules" value={filters.query} />
           <Select aria-label="Filter by kind" clearable data={kinds} onChange={update("kind")} placeholder="All kinds" value={filters.kind || null} />
