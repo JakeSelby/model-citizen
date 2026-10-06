@@ -545,6 +545,8 @@ development_status:
   ah-b159-fix-hooks-the-stop-gate-ignores-a-stated-reason: done
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: done
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: done
+  ah-b176-fix-observability-hook-decisions-that-cannot-be: ready-for-dev
+  ah-b179-clear-the-plugin-scanner-s-false-positive: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -717,6 +719,8 @@ development_status:
   ah-s331-add-a-codex-plugin-manifest-for-the-skills: done
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: done
   ah-s344-admit-oracle-scorers-that-return-named-metrics: done
+  ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
+  ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
