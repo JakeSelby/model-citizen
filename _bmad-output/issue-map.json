@@ -9,7 +9,7 @@
     "decision": 15,
     "epic": 28,
     "spike": 20,
-    "story": 350,
+    "story": 351,
     "task": 41
   },
   "items": [
@@ -9043,6 +9043,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C105.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S350",
+      "github_number": 1228,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1228",
+      "title": "Summarise every declared arm, not only bare and harness",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S350.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

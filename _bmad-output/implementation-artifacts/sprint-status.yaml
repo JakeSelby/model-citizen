@@ -715,6 +715,7 @@ development_status:
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: ready-for-dev
   ah-s344-admit-oracle-scorers-that-return-named-metrics: ready-for-dev
   ah-s349-long-session-tier-simulated-deep-coding-and: ready-for-dev
+  ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
