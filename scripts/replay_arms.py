@@ -977,6 +977,9 @@ OBSERVATION_MOUNT = "/observations"
 MANAGED_MEMORY = "/etc/claude-code/CLAUDE.md"
 # Where a check container sees the scored run's saved stream-json, read-only (`check_command`).
 SESSION_STREAM = "/session-stream.jsonl"
+# Where a long-session checkpoint's check sees the session's totals before its segment, read-only:
+# `{"total_cost_usd": n, "modelUsage": {model: usage}}` (`replay_session.session_totals`).
+SESSION_BASELINE = "/session-baseline.json"
 # Where the image's CLI keeps its session transcripts: the `agent` user's home in both arms. A
 # long-session run mounts one empty host directory here for each session, so a later turn's fresh
 # container can `--resume` the session an earlier one wrote.
@@ -1004,7 +1007,7 @@ def observation_mount(path):
 
 def run_command(image, workdir, argv, network, env=None, name=None, credential=True, stdin=False,
                 observation_dir=None, keep=False, managed_memory=None, session_stream=None,
-                session_store=None):
+                session_store=None, session_baseline=None):
     """`docker run --rm` of an arm with the snapshot and optional marked observation output.
 
     `env` goes by value,
@@ -1016,9 +1019,12 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     leaves out `--rm`, so a file can be copied out of the stopped container (`copy_command`) before
     it is removed by name; it needs a `name`. `managed_memory` is a file mounted read-only as
     `MANAGED_MEMORY`, the per-trial cache nonce; `session_stream` a run's saved stream mounted
-    read-only as `SESSION_STREAM`, for the check that scores it; `session_store` one session's
-    transcript directory mounted writable as `SESSION_STORE`, so the next turn can resume it."""
-    sources = [str(p) for p in (workdir, managed_memory, session_stream, session_store) if p is not None]
+    read-only as `SESSION_STREAM`, for the check that scores it, and `session_baseline` the
+    session's totals before a checkpoint's segment, read-only as `SESSION_BASELINE`;
+    `session_store` one session's transcript directory mounted writable as `SESSION_STORE`, so the
+    next turn can resume it."""
+    sources = [str(p) for p in (workdir, managed_memory, session_stream, session_baseline, session_store)
+               if p is not None]
     reason = host_path_reason(sources, env)
     if reason:
         raise SystemExit("replay-arms: refusing to launch %s: %s" % (image, reason))
@@ -1037,6 +1043,8 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
         command += ["-v", "%s:%s:ro" % (managed_memory, MANAGED_MEMORY)]
     if session_stream is not None:
         command += ["-v", "%s:%s:ro" % (session_stream, SESSION_STREAM)]
+    if session_baseline is not None:
+        command += ["-v", "%s:%s:ro" % (session_baseline, SESSION_BASELINE)]
     if session_store is not None:
         command += ["-v", "%s:%s" % (session_store, SESSION_STORE)]
     if credential:
@@ -1046,10 +1054,11 @@ def run_command(image, workdir, argv, network, env=None, name=None, credential=T
     return command + [image] + list(argv)
 
 
-def check_command(image, workdir, argv, env=None, name=None, stdin=False, session_stream=None):
+def check_command(image, workdir, argv, env=None, name=None, stdin=False, session_stream=None,
+                  session_baseline=None):
     """A held-back check in a fresh container: no network and no credential."""
     return run_command(image, workdir, argv, "none", env, name, credential=False, stdin=stdin,
-                       session_stream=session_stream)
+                       session_stream=session_stream, session_baseline=session_baseline)
 
 
 def kill_command(name):

@@ -109,6 +109,13 @@ an appended entry in the deviation log, never an edit above it.
 - **Stop condition for the claim:** a saving claim needs the hypothesis supported on the whole set
   and a win on the long-task subset, a win meaning the subset's ratio interval lies wholly below 1.0.
   Without that win the instrument findings are published as the result.
+- **Partial set:** not allowed
+
+**Partial set** says whether a set the runner stopped early may support a claim: `not allowed`, the
+default and the meaning of an omitted field; `allowed`, for any stop; or `allowed when` followed by
+a comma-separated list of the stop reasons it covers, from `spend-cap`, `effort` and
+`surface-drift`, as in `allowed when spend-cap`. Any other value is refused before the run. The
+stop reasons and the partial-set report are in [benchmarks](benchmarks.md).
 
 ## Multiplicity
 

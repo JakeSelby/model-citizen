@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from test_cost_bench import BENCH, TASK, Launch, options, result
-from test_experiment_protocol import commit_plan, filled_plan
+from test_experiment_protocol import PROTOCOL, filled_plan
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import replay_judge  # noqa: E402
@@ -62,6 +62,32 @@ def summarise(results, as_json, **over):
 
 def by_label(comparisons):
     return {c["label"]: c for c in comparisons}
+
+
+def git(repo, *args):
+    """Git in `repo` alone: `-C` does not override an inherited GIT_DIR or GIT_WORK_TREE, so every
+    fixture call runs with the scrubbed environment the bench itself gives git."""
+    return subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t"] + list(args),
+                          check=True, env=BENCH.scrubbed_env(), stdout=subprocess.PIPE,
+                          stderr=subprocess.DEVNULL, universal_newlines=True).stdout.strip()
+
+
+def committed_plan(repo, name, text):
+    """(plan path relative to `repo`, commit): `text` committed to a new repository at `repo`."""
+    git(repo, "init", "-q")
+    path = Path(repo) / PROTOCOL.DIRECTORY / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    git(repo, "add", "--", str(path))
+    git(repo, "commit", "-qm", "docs(benchmarks): pre-register %s" % name)
+    return path.relative_to(repo).as_posix(), git(repo, "rev-parse", "HEAD")
+
+
+def stray_repository(tmp):
+    """Variables naming another repository, as a caller inside a Git hook or worktree passes on."""
+    other = Path(tmp) / "other"
+    git(tmp, "init", "-q", str(other))
+    return {"GIT_DIR": git(other, "rev-parse", "--absolute-git-dir"), "GIT_WORK_TREE": str(other)}
 
 
 class AnalyseArmsTests(unittest.TestCase):
@@ -157,55 +183,56 @@ class SummariseEveryArmTests(unittest.TestCase):
 
     def test_a_pre_registration_can_name_a_config_comparison_primary(self):
         with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp) / "repo"
-            repo.mkdir()
-            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-            today = datetime.date.today().isoformat()
-            text = re.sub(r"- \*\*Primary arm comparisons:\*\*.*\n(  .*\n)*",
-                          "- **Primary arm comparisons:** `frugal vs bare`, because the claim is frugal's\n",
-                          filled_plan(today))
-            plan = commit_plan(repo, "%s-arms.md" % today, text)
-            commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                                    stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-            stamp = {"evidence": "pre-registered", "pre_registration": plan.relative_to(repo).as_posix(),
-                     "pre_registration_commit": commit}
-            results = Path(tmp) / BENCH.RESULTS
-            write_rows(results, arm_rows(stamp=stamp))
-            with mock.patch.object(BENCH, "ROOT", repo):
-                _code, out = summarise(results, True)
-        report = json.loads(out)
+            report = self.summarise_named_primary(Path(tmp), {})
         found = by_label(report["comparisons"])
         self.assertEqual(found["frugal vs bare"]["role"], "primary")
         self.assertEqual(found["frugal vs harness"]["role"], "secondary")
         self.assertEqual(report["primary_named"], ["frugal vs bare"])
+
+    def test_an_inherited_git_dir_does_not_redirect_the_plan_lookup_or_the_fixture(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stray = stray_repository(tmp)
+            report = self.summarise_named_primary(Path(tmp), stray)
+            self.assertEqual(git(stray["GIT_WORK_TREE"], "rev-list", "--all"), "")  # nothing landed there
+        self.assertEqual(report["primary_named"], ["frugal vs bare"])
+
+    def summarise_named_primary(self, tmp, inherited):
+        """The JSON report of a run whose plan names `frugal vs bare` primary, with `inherited`
+        variables in the environment while the plan is committed and the run summarised."""
+        repo = tmp / "repo"
+        repo.mkdir()
+        today = datetime.date.today().isoformat()
+        text = re.sub(r"- \*\*Primary arm comparisons:\*\*.*\n(  .*\n)*",
+                      "- **Primary arm comparisons:** `frugal vs bare`, because the claim is frugal's\n",
+                      filled_plan(today))
+        with mock.patch.dict("os.environ", inherited):
+            plan, commit = committed_plan(repo, "%s-arms.md" % today, text)
+            stamp = {"evidence": "pre-registered", "pre_registration": plan, "pre_registration_commit": commit}
+            results = tmp / BENCH.RESULTS
+            write_rows(results, arm_rows(stamp=stamp))
+            with mock.patch.object(BENCH, "ROOT", repo):
+                _code, out = summarise(results, True)
+        return json.loads(out)
 
     def test_the_template_names_no_primary_comparison(self):
         template = (Path(__file__).resolve().parents[1] / "docs" / "pre-registration-template.md").read_text()
         self.assertIn("- **Primary arm comparisons:**", template)
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-            plan = commit_plan(repo, "2026-01-01-arms.md", template)
-            commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                                    stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-            rows = [{"evidence": "pre-registered", "pre_registration": plan.relative_to(repo).as_posix(),
-                     "pre_registration_commit": commit}]
+            plan, commit = committed_plan(repo, "2026-01-01-arms.md", template)
+            rows = [{"evidence": "pre-registered", "pre_registration": plan, "pre_registration_commit": commit}]
             self.assertEqual(BENCH.primary_comparisons(rows, repo)[1], ())
 
     def test_a_field_that_names_no_comparison_is_refused(self):
         for value in ("`Frugal vs bare`", "`frugal versus bare`"):
             with self.subTest(value=value), tempfile.TemporaryDirectory() as tmp:
                 repo = Path(tmp)
-                subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
                 today = datetime.date.today().isoformat()
                 text = re.sub(r"- \*\*Primary arm comparisons:\*\*.*\n(  .*\n)*",
                               "- **Primary arm comparisons:** %s, because the claim is frugal's\n" % value,
                               filled_plan(today))
-                plan = commit_plan(repo, "%s-arms.md" % today, text)
-                commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                                        stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
-                rows = [{"evidence": "pre-registered", "pre_registration": plan.relative_to(repo).as_posix(),
-                         "pre_registration_commit": commit}]
+                plan, commit = committed_plan(repo, "%s-arms.md" % today, text)
+                rows = [{"evidence": "pre-registered", "pre_registration": plan, "pre_registration_commit": commit}]
                 with self.assertRaises(SystemExit) as caught:
                     BENCH.primary_comparisons(rows, repo)
                 self.assertIn(value, str(caught.exception))
