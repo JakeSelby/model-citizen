@@ -8,7 +8,8 @@ attempt whose cost is in the figure. The harness-over-bare ratio and the pass-ra
 resamples tasks with replacement and keeps both arms' trials of a task together; it is
 deterministic for a seed, and the seed and resample count are recorded with the result. Each
 arm's own pass rate carries a Wilson interval, which is descriptive only. The verdict applies
-SM-2's decision rule; reading and limits: docs/benchmarks.md and docs/evidence-standard.md.
+SM-2's decision rule; reading and limits: docs/benchmarks.md and docs/evidence-standard.md. A run
+with config arms adds every arm's figures and its paired comparisons (`analyse_arms`).
 
 Standard library only, and no model call: every figure here re-derives from `results.jsonl`.
 """
@@ -302,6 +303,97 @@ def analyse(rows, seed=SEED, resamples=RESAMPLES, arms=ARMS, fixed_sample=True):
             "difference_interval": diff_ci, "long": long, "sm2_eligible": eligible,
             "limitation": limitation,
             "verdict": verdict, "reason": reason, "claim": claim}
+
+
+# --- Every declared arm (#1228) --------------------------------------------------------------------
+#
+# A run with config arms (`--arm-config`) holds bare, harness and one arm per config. Each arm is
+# reported on its own, and each is compared against bare and against the harness default with the
+# same task-clustered bootstrap as SM-2. Harness against bare stays the SM-2 comparison; a config
+# arm's comparison is secondary unless the pre-registration names it primary.
+
+PRIMARY, SECONDARY = "primary", "secondary"
+
+
+def arm_names(rows):
+    """Every arm the rows name: SM-2's pair first in its order, then the rest sorted."""
+    named = set(row.get("arm") for row in rows if isinstance(row, dict))
+    return tuple(a for a in ARMS if a in named) + tuple(sorted((a for a in named if a not in ARMS), key=str))
+
+
+def comparison_label(reference, treatment):
+    return "%s vs %s" % (treatment, reference)
+
+
+def comparison_pairs(names):
+    """`(reference, treatment)` pairs: every arm against bare, then every config arm against harness."""
+    return [("bare", arm) for arm in names if arm != "bare"] + \
+           [("harness", arm) for arm in names if arm not in ARMS]
+
+
+def analyse_arms(rows, seed=SEED, resamples=RESAMPLES, primary=()):
+    """Every arm's own figures and its paired comparisons; ValueError when they cannot be derived.
+
+    Every task must hold the same trial ids in every arm, as SM-2 requires of its two. Each
+    comparison carries the Cost-of-Pass ratio (treatment over reference) and the pass-rate
+    difference (treatment minus reference) with task-clustered 95% intervals, and its `role`:
+    harness against bare is `primary`, being SM-2's own; any other is `secondary` unless its label
+    (`comparison_label`) is in `primary`, the comparisons a pre-registration names. No comparison
+    but SM-2's has a verdict."""
+    rows = list(rows)
+    names = arm_names(rows)
+    for arm in ARMS:
+        if arm not in names:
+            raise ValueError("the rows hold no %s arm; every arm is compared against bare and the harness "
+                             "default" % arm)
+    _cells(attempts(rows, names), names)  # every task in every arm, on one trial set
+    pairs = comparison_pairs(names)
+    labels = [comparison_label(*pair) for pair in pairs]
+    unknown = sorted(set(primary) - set(labels))
+    if unknown:
+        raise ValueError("the pre-registration names %s primary, which this run does not compare; it "
+                         "compares %s" % (", ".join(unknown), ", ".join(labels)))
+    arms, comparisons = {}, []
+    for (reference, treatment), label in zip(pairs, labels):
+        mine = analyse([r for r in rows if r.get("arm") in (reference, treatment)], seed, resamples,
+                       (reference, treatment))
+        arms.update(mine["arms"])
+        sm2 = (reference, treatment) == ARMS
+        comparisons.append({"reference": reference, "treatment": treatment, "label": label,
+                            "role": PRIMARY if sm2 or label in primary else SECONDARY, "sm2": sm2,
+                            "tasks": mine["tasks"], "ratio": mine["ratio"],
+                            "ratio_undefined": mine["ratio_undefined"], "ratio_interval": mine["ratio_interval"],
+                            "undefined_resamples": mine["undefined_resamples"],
+                            "difference": mine["difference"], "difference_interval": mine["difference_interval"],
+                            "sm2_eligible": mine["sm2_eligible"]})
+    return {"method": METHOD, "seed": seed, "resamples": resamples, "confidence": CONFIDENCE,
+            "arm_names": list(names), "arms": {arm: arms[arm] for arm in names},
+            "primary_named": sorted(primary), "comparisons": comparisons}
+
+
+def render_arms(result):
+    """Every arm's figures, then each paired comparison with its role, as text."""
+    lines = ["", "Every arm: %d arm(s), %s, seed %d, %d resamples, %d%% intervals"
+             % (len(result["arm_names"]), result["method"], result["seed"], result["resamples"],
+                round(result["confidence"] * 100))]
+    for arm in result["arm_names"]:
+        a = result["arms"][arm]
+        lines.append("  %s: %d/%d passed (%d errored), pass rate %s, Wilson %s (descriptive), "
+                     "Cost-of-Pass %s USD, total %s USD"
+                     % (arm, a["passes"], a["attempts"], a["errors"], _num(a["pass_rate"]),
+                        _interval(a["pass_rate_interval_descriptive"]), _num(a["cost_of_pass"], 4),
+                        _num(a["cost_usd"], 4)))
+    lines.append("Paired comparisons, task-clustered; only SM-2's has a verdict:")
+    for c in result["comparisons"]:
+        ratio = _num(c["ratio"])
+        if c["ratio_undefined"]:
+            ratio += " (%s)" % c["ratio_undefined"]
+        lines.append("  %s (%s%s): Cost-of-Pass ratio %s, interval %s; pass-rate difference %s, interval %s"
+                     "%s" % (c["label"], c["role"], ", SM-2" if c["sm2"] else "", ratio,
+                             _interval(c["ratio_interval"]), _num(c["difference"]),
+                             _interval(c["difference_interval"]),
+                             "" if c["sm2_eligible"] else "; fewer than five paired trials, exploratory"))
+    return "\n".join(lines) + "\n"
 
 
 PARTIAL, PARTIAL_NO_CLAIM = "partial", "partial: no claim"

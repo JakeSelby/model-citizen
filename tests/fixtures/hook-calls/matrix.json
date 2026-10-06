@@ -33,6 +33,7 @@
   "harness-session",
   "intent-overlap",
   "neutralize-tool-output",
+  "session-caps",
   "stage-user-files",
   "steer-polling",
   "stop-gate",
