@@ -153,6 +153,28 @@ class HookMatrixTests(unittest.TestCase):
         self.assertEqual((payload["session_id"], payload["prompt_id"], payload["last_assistant_message"]),
                          ("s-recorded", "p-recorded", "<placeholder>"))
         self.assertIs(payload["stop_hook_active"], False)
+        # The capture is committed (home directory redacted), so the fixture must be its
+        # normalization, not a lookalike.
+        artifact = (FIXTURE / provenance["artifact"]).read_bytes()
+        self.assertEqual(hashlib.sha256(artifact).hexdigest(), provenance["artifact_sha256"])
+        self.assertEqual(self._normalize_stop(json.loads(artifact)), payload)
+
+    @staticmethod
+    def _normalize_stop(captured):
+        """The fixture's documented normalization of a raw native Stop input."""
+        fixed = {"session_id": "s-recorded", "transcript_path": "/workspace/transcripts/session.jsonl",
+                 "cwd": "/workspace/example-repo", "prompt_id": "p-recorded"}
+        verbatim = {"hook_event_name", "permission_mode", "stop_hook_active"}
+
+        def scrub(value, key=None):
+            if isinstance(value, dict):
+                return {k: scrub(v, k) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return "<placeholder>" if isinstance(value, str) and key != "level" else value
+
+        return {k: fixed[k] if k in fixed else v if k in verbatim else scrub(v, k)
+                for k, v in captured.items()}
 
     def test_repository_copy_survives_a_vanishing_file_and_skips_locks(self):
         # Git's background maintenance creates and removes `maintenance.lock` inside the template

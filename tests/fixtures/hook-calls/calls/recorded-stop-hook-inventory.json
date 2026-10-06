@@ -3,8 +3,10 @@
  "provenance": {
   "run": "stop-capture-2026-10-05",
   "image": "model-citizen-arm-bare:a904eb2f983d",
-  "artifact": "stop-capture.json",
+  "artifact": "sources/stop-capture.json",
   "sha256": "2d5344300c885ecd043c6e29580499da0a62b0ffcb571bb5c77757eecb989ad2",
+  "artifact_sha256": "6ffec7be7f768b44b7f742912b5544b5d76037955f5d5f09354100bddfd9a8e3",
+  "artifact_redaction": "The committed artifact is the raw capture with the container home directory written as {container_home}; sha256 covers the raw bytes, artifact_sha256 the committed ones.",
   "record_index": 0,
   "claude_code_version": "2.1.280",
   "native_keys": [
