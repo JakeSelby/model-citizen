@@ -155,8 +155,9 @@ Class `standard`, or `strong` at low effort, or Band A plus a verifier.
 
 ### Band C — never down-class
 
-Class `strong`, or a named role. Never `frontier` by request: that class is reached through a
-role whose contract declares it, and effort above `high` is not available to a spawn at all.
+Class `strong`, or a named role. Never `frontier` by request: that class is reached only through a
+role whose contract declares it with a `frontier_exception` reason, and effort above `high` is not
+available to a spawn at all.
 
 Branching on an intermediate result · multi-source synthesis with conflicting evidence ·
 long-horizon agentic coding · retrieval over >256K or mid-document · security-relevant review ·
@@ -380,7 +381,9 @@ reviewer's cost and capability a side effect of whatever the session ran, and fr
 the scarcest tier it did the very thing the next rule forbids. A reviewer's value is fresh
 context first and tier third, so `strong` keeps most of it. The inherited model was also a crude
 difficulty signal — *this session was escalated, so review it hard* — and that signal now has to
-be a decision: a role that declares `frontier`, as `design-judge` and `designer` do.
+be a decision: a role that declares `frontier` and records why in a `frontier_exception: <reason>`
+line of its contract. No shipped role does; `designer` and `design-judge` run on `strong` at
+high effort, and a generation test fails any role that resolves to `frontier` without the line.
 
 **Never spawn subagents on the orchestrator's own tier when that tier is rate-limited or
 capacity-gated.** One notch down costs a few points; two notches costs many. Step once.

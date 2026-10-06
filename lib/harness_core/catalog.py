@@ -109,11 +109,12 @@ def stance_constraints(root, config):
 
 
 def excluded_roles(root, condition):
-    """Shipped roles whose frontmatter matches `condition`, minus the ones it allows by name.
+    """Shipped roles whose frontmatter matches `condition`, minus the ones it exempts.
 
     The stance layer chooses variants, but a variant's text can also contradict a role contract:
-    `delegation/tiered` refuses the frontier class while two design roles declare it. `allow` is
-    how a constraint carries the skill-level exception instead of leaving it in prose only.
+    `delegation/tiered` refuses the frontier class, so a role declaring it is a finding. A role
+    is exempt when `allow` names it, or, for a `tier: frontier` condition, when its contract
+    records a `frontier_exception` reason, which is where the exception is documented.
     """
     if not condition:
         return []
@@ -126,6 +127,8 @@ def excluded_roles(root, condition):
         if path.stem in allowed:
             continue
         header, _ = frontmatter(path)
+        if fields.get("tier") == TIER_CLASSES[0] and str(header.get("frontier_exception", "")).strip():
+            continue
         if all(header.get(key) == value for key, value in fields.items()):
             hits.append(path.stem)
     return hits
@@ -233,6 +236,11 @@ def role_contract(root, name):
         raise ValueError("unsupported role context or delegation contract: " + name)
     if fields.get("tier") not in TIER_CLASSES:
         raise ValueError("shared role tier must be one of " + ", ".join(TIER_CLASSES) + ": " + name)
+    # `frontier_exception: <reason>` is the one way a role may declare the frontier class under
+    # `delegation: tiered`; the reason is the documentation, so it is required to say something.
+    if "frontier_exception" in fields and (fields["tier"] != TIER_CLASSES[0]
+                                           or not str(fields["frontier_exception"]).strip()):
+        raise ValueError("frontier_exception states a reason and only on a tier: frontier role: " + name)
     # `posture: fixed` is the role's refusal of a cost variant's class and effort; its budgets
     # still apply. Absent means the variant decides, which is the default for every other role.
     if fields.get("posture", "fixed") != "fixed":
