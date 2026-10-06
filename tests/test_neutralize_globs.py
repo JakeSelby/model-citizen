@@ -35,6 +35,10 @@ class GlobTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"HARNESS_HOME": str(root / "home")})
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The fixture stands in for a registered worktree; trust is tested in the own-files suite.
+        trusted = mock.patch.object(hook, "trusted_roots", return_value=(self.checkout,))
+        trusted.start()
+        self.addCleanup(trusted.stop)
 
     def own(self, command):
         return hook.bash_reads_managed(command, str(self.checkout))

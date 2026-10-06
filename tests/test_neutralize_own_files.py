@@ -57,6 +57,12 @@ class OwnFileTests(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"HARNESS_HOME": str(self.home)})
         patcher.start()
         self.addCleanup(patcher.stop)
+        # The fixture stands in for a worktree the installed checkout registers; the cases in
+        # `TrustTests` show a folder is never trusted for holding the same files.
+        real = hook.trusted_roots()
+        trusted = mock.patch.object(hook, "trusted_roots", return_value=real + (self.checkout,))
+        trusted.start()
+        self.addCleanup(trusted.stop)
 
     def own(self, tool, cwd=None, **tool_input):
         return hook.own_output({"tool_name": tool, "tool_input": tool_input,
@@ -91,6 +97,20 @@ class OwnFileTests(unittest.TestCase):
                 cwd = self.other if command == "cat notes.txt" else self.checkout
                 self.assertFalse(self.own("Bash", cwd=cwd, command=command))
 
+    def test_a_git_read_pointed_at_another_repository_is_scanned(self):
+        other_git = str(self.other / ".git")
+        for command in ("git --git-dir=" + other_git + " show HEAD:notes.txt",
+                        "git --git-dir " + other_git + " show HEAD:notes.txt",
+                        "git show --git-dir=" + other_git + " HEAD:notes.txt",
+                        "git --work-tree=" + str(self.other) + " diff",
+                        "git -C " + str(self.other) + " show HEAD:notes.txt",
+                        "git -c core.pager=cat show HEAD:notes.txt",
+                        "git diff --no-index docs/a.md " + str(self.other / "notes.txt"),
+                        "git log --output=out.txt"):
+            with self.subTest(command=command):
+                self.assertFalse(self.own("Bash", cwd=self.checkout, command=command))
+        self.assertTrue(self.own("Bash", cwd=self.checkout, command="git show HEAD:docs/a.md"))
+
     def run_hook(self, payload):
         env = without_harness_vars()
         env.update({"HOME": str(self.home), "HARNESS_HOME": str(self.home)})
@@ -101,7 +121,7 @@ class OwnFileTests(unittest.TestCase):
 
     def test_a_managed_file_gets_no_notice_and_every_match_is_logged(self):
         own = self.run_hook({"tool_name": "Read", "session_id": "s-1",
-                             "tool_input": {"file_path": str(self.checkout / "docs" / "a.md")},
+                             "tool_input": {"file_path": str(REPO / "AGENTS.md")},
                              "tool_response": {"file": {"content": SHAPED}}})
         self.assertEqual(own.strip(), "")
         other = self.run_hook({"tool_name": "Read", "session_id": "s-1",
@@ -115,6 +135,70 @@ class OwnFileTests(unittest.TestCase):
                           ("neutralize-tool-output", "warn", "Read")])
         self.assertIn("settings-json", rows[0]["patterns"])
         self.assertEqual(rows[0]["input"], "Read")
+
+    def test_a_lookalike_checkout_run_through_the_hook_is_warned(self):
+        out = self.run_hook({"tool_name": "Read", "session_id": "s-1",
+                             "tool_input": {"file_path": str(self.checkout / "docs" / "a.md")},
+                             "tool_response": {"file": {"content": SHAPED}}})
+        self.assertIn("settings-json", out)
+
+
+def _git(*args, cwd):
+    identity = ["-c", "user.name=t", "-c", "user.email=t", "-c", "commit.gpgsign=false"]
+    subprocess.run(["git"] + identity + list(args), cwd=str(cwd), env=without_harness_vars(),
+                   check=True, capture_output=True, timeout=60)
+
+
+class TrustTests(unittest.TestCase):
+    """Only the checkout the hook is installed in, and its registered worktrees, are trusted."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(os.path.realpath(tmp.name))
+
+    def fake_checkout(self, folder):
+        (folder / "policy" / "hooks").mkdir(parents=True)
+        (folder / "bin").mkdir()
+        (folder / "policy" / "hooks" / "neutralize-tool-output.py").write_text("")
+        (folder / "bin" / "harness").write_text("")
+        (folder / "docs").mkdir()
+        (folder / "docs" / "a.md").write_text(SHAPED)
+        return folder
+
+    def test_a_lookalike_repository_is_not_trusted(self):
+        lookalike = self.fake_checkout(self.root / "cloned")
+        _git("init", "-q", cwd=lookalike)
+        self.assertNotIn(lookalike, hook.trusted_roots())
+        self.assertFalse(hook.managed(lookalike / "docs" / "a.md"))
+        payload = {"tool_name": "Bash", "cwd": str(lookalike),
+                   "tool_input": {"command": "cat docs/a.md"}}
+        self.assertFalse(hook.own_output(payload))
+
+    def test_the_installed_checkout_is_trusted(self):
+        self.assertIn(Path(os.path.realpath(str(REPO))), hook.trusted_roots())
+        self.assertTrue(hook.managed(REPO / "AGENTS.md"))
+
+    def test_a_worktree_the_installed_checkout_registers_is_trusted(self):
+        main = self.fake_checkout(self.root / "main")
+        _git("init", "-q", cwd=main)
+        _git("add", "-A", cwd=main)
+        _git("commit", "-q", "-m", "init", cwd=main)
+        worktree = self.root / "wt"
+        _git("worktree", "add", "-q", str(worktree), cwd=main)
+        stranger = self.fake_checkout(self.root / "stranger")
+        for installed in (main, worktree):
+            with self.subTest(installed=installed.name):
+                roots = hook.trusted_roots(installed / "policy" / "hooks" /
+                                           "neutralize-tool-output.py")
+                self.assertIn(main, roots)
+                self.assertIn(worktree, roots)
+                self.assertNotIn(stranger, roots)
+
+    def test_a_hook_outside_a_checkout_trusts_nothing(self):
+        loose = self.root / "loose" / "policy" / "hooks"
+        loose.mkdir(parents=True)
+        self.assertEqual(hook.trusted_roots(loose / "neutralize-tool-output.py"), ())
 
 
 if __name__ == "__main__":

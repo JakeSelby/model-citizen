@@ -65,6 +65,13 @@ EVENTS = "session-events.jsonl"
 # The rotation, each append and the two-file read share `events_lock`, on a `.lock` sibling: a
 # rotation replaces the file, so a lock on the file itself would not be held across it.
 EVENTS_MAX_BYTES = 2 * 1024 * 1024
+# A rotation replaces the `.1` before it, and a session still open then would lose the prompts in
+# it, so a response read later would count too few and settle `unknown`. Before the replace, those
+# rows are folded into this per-session summary: the prompt count, the last prompt's time and each
+# other event with the count it followed. `observed_rows` expands it back in front of the files.
+# An entry untouched for `CARRY_FOR` is dropped, since every emission it could answer has settled.
+CARRIED = "session-events.carried.json"
+CARRY_FOR = 2 * 86400
 OUTCOMES = ("followed", "not_followed", "unknown")
 PROMPT = "UserPromptSubmit"
 # An emission that neither outcome has reached in a day is not going to be read: a session idle
@@ -114,6 +121,97 @@ def events_path(env=None):
     return state_dir(env) / EVENTS
 
 
+def carried_path(env=None):
+    return state_dir(env) / CARRIED
+
+
+def read_carried(env=None):
+    """The carried summary, `{session: {"prompts", "ts", "events", "touched"}}`, or `{}`."""
+    try:
+        with open(str(carried_path(env)), "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {key: value for key, value in data.items()
+            if isinstance(key, str) and isinstance(value, dict) and whole(value.get("prompts"))
+            and isinstance(value.get("events"), list)}
+
+
+def fold(carried, rows, now):
+    """`carried` with `rows`, the rotated-away file's rows in order, added after what it holds."""
+    out = dict(carried)
+    for row in rows:
+        session, event = row.get("session_id"), row.get("event")
+        if not isinstance(session, str) or not session or not isinstance(event, str):
+            continue
+        entry = out.get(session)
+        entry = dict(entry, events=list(entry["events"])) if entry else \
+            {"prompts": 0, "ts": None, "events": []}
+        if event == PROMPT:
+            entry["prompts"] += 1
+            entry["ts"] = row.get("ts")
+        else:
+            entry["events"].append([event, entry["prompts"], row.get("ts")])
+        entry["touched"] = now
+        out[session] = entry
+    return {key: value for key, value in out.items()
+            if not isinstance(value.get("touched"), (int, float))
+            or now - value["touched"] < CARRY_FOR}
+
+
+def write_carried(carried, env=None):
+    """Replace the summary in one rename, so a reader sees the old one or the new one."""
+    target = carried_path(env)
+    temporary = Path(str(target) + ".tmp")
+    fd = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(fd, json.dumps(carried, sort_keys=True).encode("utf-8"))
+    finally:
+        os.close(fd)
+    os.replace(str(temporary), str(target))
+
+
+def carried_rows(carried):
+    """The summary as event rows, each session's in its original order."""
+    rows = []
+    for session in sorted(carried):
+        entry = carried[session]
+        events = sorted((item for item in entry["events"]
+                         if isinstance(item, list) and len(item) == 3 and whole(item[1])),
+                        key=lambda item: item[1])
+        position = 0
+        for count in range(entry["prompts"] + 1):
+            while position < len(events) and events[position][1] <= count:
+                rows.append({"ts": events[position][2], "event": events[position][0],
+                             "session_id": session, "source": "carried"})
+                position += 1
+            if count < entry["prompts"]:
+                rows.append({"ts": entry.get("ts"), "event": PROMPT, "session_id": session,
+                             "source": "carried"})
+        rows.extend({"ts": item[2], "event": item[0], "session_id": session, "source": "carried"}
+                    for item in events[position:])
+    return rows
+
+
+def rotate(target, env=None, now=None):
+    """Move a full events file to `.1`, first carrying the `.1` it replaces into the summary."""
+    moment = time.time() if now is None else now
+    previous = read_carried(env)
+    rotated = str(target) + ".1"
+    carried = fold(previous, read_rows(rotated), moment)
+    if carried != previous:
+        write_carried(carried, env)
+    try:
+        os.replace(str(target), rotated)
+    except OSError:
+        # The `.1` is still there, so the summary must not hold it twice.
+        if carried != previous:
+            write_carried(previous, env)
+        raise
+
+
 def noted():
     """The events `note_event` keeps: a prompt, and every event a recommendation counts as acting."""
     names = {PROMPT}
@@ -141,7 +239,7 @@ def note_event(event, session_id, runtime="", env=None, now=None):
             if held:
                 try:
                     if os.path.getsize(str(target)) >= EVENTS_MAX_BYTES:
-                        os.replace(str(target), str(target) + ".1")
+                        rotate(target, env, now)
                 except OSError:
                     pass
             _append(row, target)
@@ -156,7 +254,8 @@ def observed_rows(env=None):
     there the observation entry point saw every event. One the ledger holds only part of, as when
     `observation.enabled` is turned on mid-session, is read from the events file, whose prompt
     count the emitting turn matches; from the ledger only when the events file has none of it,
-    as in the bare arm. The two events files are read under `events_lock`, so no rotation lands
+    as in the bare arm. The carried summary and the two events files are read under
+    `events_lock`, so no rotation lands
     between the reads; None when it cannot be taken, because a reading with a rotated file
     missing would answer wrongly.
     """
@@ -165,7 +264,8 @@ def observed_rows(env=None):
     with events_lock(env) as held:
         if not held:
             return None
-        events = read_rows(str(target) + ".1") + read_rows(target)
+        events = (carried_rows(read_carried(env)) + read_rows(str(target) + ".1")
+                  + read_rows(target))
     started = set(row.get("session_id") for row in observed if row.get("event") == "SessionStart")
     noted = set(row.get("session_id") for row in events)
     covered = set(row.get("session_id") for row in observed

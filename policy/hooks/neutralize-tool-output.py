@@ -11,9 +11,13 @@ The harness's own files are full of these shapes, since they are where its rules
 settings are written, and they were most of what this flagged. Output read from them is not
 flagged: a file tool or `Grep` whose path is under a managed location, or a Bash command made
 only of plain readers (`READERS`), with no unquoted glob or brace, whose every existing path
-operand, or the working directory when it names none, is under one. A managed location is any harness checkout or worktree (a
-folder holding this hook's own `policy/hooks` file and `bin/harness`), the harness
-configuration folder, and the runtime files `sync` writes (`MANAGED`). Anything else, a
+operand, or the working directory when it names none, is under one. A managed location is the
+harness checkout this hook runs from and every worktree that checkout's Git directory registers
+(`trusted_roots`), the harness configuration folder, and the runtime files `sync` writes
+(`MANAGED`). A folder is never trusted for what it holds: a repository can ship a lookalike
+`policy/hooks` file and `bin/harness`, so only where this hook is installed decides. A `git`
+command is a plain reader only when its read subcommand follows `git` directly and it names no
+option that points Git at another repository or file (`GIT_OVERRIDES`). Anything else, a
 substitution, a redirect, a network tool or a path outside them, is scanned as before.
 
 Every match is one `neutralize-tool-output` row in the decision log: `warn`, or `excluded` for a
@@ -109,30 +113,84 @@ MANAGED = (".claude/settings.json", ".claude/settings.local.json", ".claude/CLAU
            ".claude/CLAUDE.personal.md", ".claude/rules", ".claude/skills", ".claude/hooks",
            ".claude/agents", ".claude/output-styles", ".codex/config.toml", ".codex/hooks.json",
            ".codex/AGENTS.md", ".codex/skills", ".codex/agents", ".config/agent-harness")
-MARKER = Path("policy") / "hooks" / "neutralize-tool-output.py"
 FILE_TOOLS = ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit", "Grep", "Glob")
 # Commands that only print what they read. A command not named here is never excluded.
 READERS = {"cat", "head", "tail", "sed", "grep", "rg", "wc", "ls", "diff", "nl", "jq", "cd",
            "sort", "uniq", "cut", "stat", "file"}
 GIT_READS = {"diff", "show", "log", "grep", "status", "blame", "ls-files"}
+# Options that make Git read a repository, a work tree or a file other than the working
+# directory's, or write one. A `git` command naming any of them is scanned.
+GIT_OVERRIDES = ("--git-dir", "--work-tree", "--namespace", "--no-index", "--output",
+                 "--exec-path", "--config-env", "--super-prefix")
 SEPARATORS = {"|", "||", "&&", ";"}
 # Quoted text, which the shell neither globs nor brace-expands; what is left of a command after
 # it is removed must hold no `GLOB` character.
 QUOTED = re.compile(r"'[^']*'|\"(?:\\.|[^\"\\])*\"")
 GLOB = "*?[{"
-DEPTH = 12
 
 
 def home():
     return Path(os.environ.get("HARNESS_HOME") or os.environ.get("HOME") or Path.home())
 
 
+def common_dir(checkout):
+    """The Git directory `checkout`'s worktrees are registered in, or None."""
+    dot = checkout / ".git"
+    if dot.is_dir():
+        return dot
+    try:
+        line = dot.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    if not line.startswith("gitdir:"):
+        return None
+    own = Path(line[len("gitdir:"):].strip())
+    own = own if own.is_absolute() else checkout / own
+    try:
+        named = (own / "commondir").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):
+        return None
+    shared = Path(named)
+    return Path(os.path.realpath(str(shared if shared.is_absolute() else own / shared)))
+
+
+def trusted_roots(hook_file=None):
+    """The checkout this hook runs from, and every worktree its Git directory registers.
+
+    Read from where the hook is installed, never from the folder being read: the checkout is
+    the one holding this file, and each worktree is named by a `gitdir` file inside the trusted
+    Git directory, which a repository being read cannot write.
+    """
+    hook = Path(os.path.realpath(str(hook_file or __file__)))
+    checkout = hook.parent.parent.parent
+    if not (checkout / "bin" / "harness").is_file():
+        return ()
+    roots = [checkout]
+    shared = common_dir(checkout)
+    if shared is not None:
+        if shared.name == ".git":
+            roots.append(Path(os.path.realpath(str(shared.parent))))
+        try:
+            entries = sorted((shared / "worktrees").iterdir())
+        except OSError:
+            entries = []
+        for entry in entries:
+            try:
+                gitdir = (entry / "gitdir").read_text(encoding="utf-8").strip()
+            except (OSError, ValueError):
+                continue
+            if gitdir and os.path.isabs(gitdir):
+                roots.append(Path(os.path.realpath(os.path.dirname(gitdir))))
+    unique = []
+    for root in roots:
+        if root not in unique:
+            unique.append(root)
+    return tuple(unique)
+
+
 def in_checkout(path):
-    """Whether `path` is inside a harness checkout or worktree."""
-    for folder in [path] + list(path.parents)[:DEPTH]:
-        if (folder / MARKER).is_file() and (folder / "bin" / "harness").is_file():
-            return True
-    return False
+    """Whether `path` is inside a trusted harness checkout or worktree (`trusted_roots`)."""
+    return any(path == root or root in path.parents for root in trusted_roots())
 
 
 def managed(path):
@@ -176,11 +234,14 @@ def bash_reads_managed(command, cwd):
             if token not in READERS and token != "git":
                 return False
             if token == "git":
-                rest = [t for t in tokens[index + 1:] if t not in SEPARATORS][:3]
-                if not any(t in GIT_READS for t in rest):
+                # A global option before the subcommand, such as `-C` or `-c`, is not a read.
+                following = tokens[index + 1] if index + 1 < len(tokens) else None
+                if following not in GIT_READS:
                     return False
             continue
         if token.startswith("-"):
+            if verb == "git" and token.split("=", 1)[0] in GIT_OVERRIDES:
+                return False
             continue
         candidate = Path(os.path.expanduser(token))
         candidate = candidate if candidate.is_absolute() else Path(cwd) / candidate
