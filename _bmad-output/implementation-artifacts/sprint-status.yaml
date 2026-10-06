@@ -537,6 +537,7 @@ development_status:
   ah-b169-fix-hooks-the-stop-gate-mostly-times-out-or: ready-for-dev
   ah-b170-fix-security-grade-bash-grades-a-read-of-the: ready-for-dev
   ah-b171-fix-cost-sleep-and-poll-loops-instead-of: ready-for-dev
+  ah-b172-fix-cost-fan-out-and-web-search-caps-are: ready-for-dev
   ah-b173-fix-cost-the-fresh-session-thresholds-are: ready-for-dev
   ah-b174-fix-benchmarks-a-voice-bound-detector-scores: ready-for-dev
   ah-b175-fix-benchmarks-summarise-refuses-a-partial-set: ready-for-dev
@@ -714,6 +715,7 @@ development_status:
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: ready-for-dev
   ah-s344-admit-oracle-scorers-that-return-named-metrics: ready-for-dev
   ah-s349-long-session-tier-simulated-deep-coding-and: ready-for-dev
+  ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
   ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
