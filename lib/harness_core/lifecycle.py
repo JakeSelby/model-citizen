@@ -940,6 +940,21 @@ def workflow_results(runtime, event):
     return results
 
 
+def caps_results(runtime, event, results):
+    """`session-caps` on a spawn, a `Workflow` launch or a web search, last in the chain.
+
+    Asked only when nothing earlier denied the call, so a refused spawn takes no slot and a
+    refused call is not counted. Claude Code only: the live count falls on `SubagentStop`, which
+    Codex does not raise.
+    """
+    if runtime != "claude-code":
+        return []
+    if any((r.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny" for r in results):
+        return []
+    answer = invoke("session-caps", event)
+    return [answer] if answer else []
+
+
 def framework_deny(runtime, session_id, prompt, subagent_type):
     """The refusal a declared integration's spawn gets, or None when this call is not one.
 
@@ -1472,8 +1487,12 @@ def _dispatch(runtime, payload):
                 if runtime == "claude-code":
                     results.append(invoke("tier-agent-spawns", event))
                 results.append(invoke("brief-guard", event))
+            results.extend(caps_results(runtime, event, results))
         elif tool == "Workflow":
             results.extend(workflow_results(runtime, event))
+            results.extend(caps_results(runtime, event, results))
+        elif tool == "WebSearch":
+            results.extend(caps_results(runtime, event, results))
         elif tool == "WebFetch":
             results.append(invoke("allow-plan-webfetch", event))
         elif enabled("allow-readonly-bash") and investigating(runtime, event) and plan_allowed_tool(tool):
@@ -1514,6 +1533,9 @@ def _dispatch(runtime, payload):
             return {}
         if kind == "UserPromptSubmit":
             invoke("approvals", event)
+        else:
+            # Journals the start or stop the fan-out count reads; it never answers these events.
+            invoke("session-caps", event)
         return invoke("usage-feed", event)
     if kind == "SessionStart":
         settle_adherence()
