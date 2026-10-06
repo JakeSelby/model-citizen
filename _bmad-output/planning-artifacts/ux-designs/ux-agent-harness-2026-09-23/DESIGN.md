@@ -411,19 +411,19 @@ Only the look changes. Routes, data, workflows and product copy are as they were
 
 ### Shell
 
-- A Mantine `AppShell` in static mode: a 220 px white navbar with a hairline border on its right, and a 52 px header holding the page title, the Studio version and workspace context, and the CLI command the page's evidence comes from, beside the live, theme and drafts controls.
-- A white canvas. Below 48em the shell is one column: the navbar wraps into a strip above the header, and every grid row stacks.
+- A Mantine `AppShell` in static mode: a 220 px white navbar with a hairline border on its right, and a header at least 52 px tall holding the page title, the Studio version and workspace context, and the CLI command the page's evidence comes from, beside the live, theme and drafts controls. On a narrow desktop the controls wrap and the header grows; it never paints over the page.
+- A white canvas, and a footer outside `<main>` that keeps its contentinfo landmark. Below 48em the shell is one column: the navbar wraps into a strip above the header, and every grid row stacks.
 
 ### Pages
 
-- No cards and no bordered papers. A page is a heading, then sections separated by single hairlines; an item inside a section is a hairline row.
-- The Hub opens on one number strip split by vertical dividers (installed system, doctor checks, projection drift, recent runs), then the release line, doctor checks, projection drift, recent runs, the AI health overview and the report links, each a hairline section of compact rows.
+- No cards and no bordered papers. A page opens on one quiet heading line under the header, which already names the page: no breadcrumb row, the heading at 14 px / 600, a 13 px muted description, and the page's action as a subtle, unfilled button. Sections follow, separated by single hairlines; an item inside a section is a hairline row.
+- The Hub opens on one number strip of three items split by vertical dividers: installed system, doctor checks (the checks the engine labels as needing attention, or "Unavailable" when the doctor read failed) and projection drift. The capped recent-runs list is never counted into a strip number. Then come the release line with the system summary, doctor checks, projection drift, recent runs, the AI health overview and the report links, each a hairline section of compact rows, in one column.
 - Tables and rows are compact: about 30 px a row, 13 px text, 12 px column labels in secondary ink. Monospace only for ids, commands and numbers that must align; tabular figures everywhere else.
-- Configure, Library, Experiments, Activity, Reports (trends and rule health) and Setup use the same density.
+- Configure, Library, Experiments and run detail, Activity, Reports (trends, rule health and usage) and Setup use the same density.
 
 ### Colour
 
-One muted teal accent, `#087F5B` on `#E6FCF5`, for the active navigation item, links, primary buttons and the focus ring. Red, amber and green carry status only, as a dot beside the status word; the word stays in body ink. Where a status colour is text, it uses a shade that keeps 4.5:1 on its canvas.
+One muted teal accent, `#087F5B` on `#E6FCF5`, for the active navigation item, links, primary buttons and the focus ring. Red, amber and green carry status only, as a dot beside the status word; the word stays in body ink, and running or informational statuses take a neutral grey dot. Where a status colour is text, as in a strip value that needs attention, it uses a shade that keeps 4.5:1 on its canvas.
 
 | Token | Light | Dark |
 |---|---|---|
@@ -442,7 +442,7 @@ The study's secondary ink, `#868E96`, is 3.3:1 on white, under the AA floor for 
 
 ### Type
 
-Inter and JetBrains Mono are named first in their stacks, with system fallbacks. The Studio makes no network requests and bundles no font file, so a machine without them renders the system face. Bundling either would need a licensing review first. The page heading is 20 px, section headings 14 px, body 14 px, rows 13 px.
+Inter and JetBrains Mono are named first in their stacks, with system fallbacks. The Studio makes no network requests and bundles no font file, so a machine without them renders the system face. Bundling either would need a licensing review first. The page heading and section headings are 14 px / 600, body 14 px, rows and the page description 13 px, strip values 22 px.
 
 ### Implementation
 

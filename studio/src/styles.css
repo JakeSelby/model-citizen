@@ -333,7 +333,7 @@ textarea:focus-visible {
 .strip-item:first-child { padding-left: 0; border-left: 0; }
 /* Wrapped rows start without a divider: the strip clips each item's left edge at its own row start. */
 .number-strip { overflow: hidden; }
-.strip-item { margin-left: -1px; }
+.strip-item:not(:first-child) { margin-left: -1px; }
 .strip-item dt { color: var(--studio-ink-secondary); font-size: var(--studio-text-xs); }
 .strip-item dd { margin: 0; }
 

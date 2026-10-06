@@ -8,7 +8,8 @@ import unittest
 import test_studio_accessibility_browser as a11y
 
 # Every page restyled from cards and papers to hairline sections.
-PAGES = ("/configure", "/library", "/experiments", "/activity", "/reports/trends", "/reports/rules", "/setup")
+PAGES = ("/configure", "/library", "/experiments", "/experiments/runs/no-such-run", "/activity",
+         "/reports/trends", "/reports/rules", "/reports/usage", "/setup")
 SHELL = """JSON.stringify((() => {
   const navbar = document.querySelector('.studio-navbar');
   const header = document.querySelector('.studio-header');
