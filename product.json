@@ -17,7 +17,7 @@
       "features": [
         {
           "name": "Graded shell commands",
-          "line": "Every command is graded from read-only to irreversible, and your autonomy stance, plus any per-repository levels in a local policy, decides which grades stop and ask.",
+          "line": "Every command is graded read-only to irreversible, your autonomy stance decides which grades ask, a risky one is snapshotted first, and an opt-in OS sandbox fences it.",
           "doc": "claude/hooks/grade-bash.py"
         },
         {

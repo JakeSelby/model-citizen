@@ -2,6 +2,13 @@
   "plansDirectory": ".agent-harness/plans",
   "useAutoModeDuringPlan": true,
   "showThinkingSummaries": true,
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "filesystem": {
+      "allowWrite": []
+    }
+  },
   "permissions": {
     "allow": [
       "Read(~/**)",

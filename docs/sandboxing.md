@@ -27,13 +27,20 @@ The `sandbox` skill carries the exact keys, the quoted defaults, the `docker run
 failure modes of each. Neither shape isolates branches; `worktree-per-agent` does that, and the two
 compose.
 
-## Why the harness writes none of it
+## What the harness writes, and only when you ask
 
-`sandbox.*` is not an owned key and not a posture key. It is user-level configuration with a real
-blast radius: a sync that widened `allowedDomains` or dropped a `denyRead` entry would quietly undo
-a security boundary the user set, and a sync that narrowed one would break their builds with no
-error anyone could trace. `OWNERSHIP.json` already covers this case by default — "Everything not
-listed as owned is left exactly as found" — so the keys stay yours.
+The settings template carries a `sandbox` block that turns the built-in sandbox on, and `sync`
+writes it only for a user who opts in: `bin/citizen config set sandbox.enabled true`, then
+`bin/citizen sync`. `sync` derives `filesystem.allowWrite` from the workspace each time it runs,
+and `sandbox.strict` closes the retry outside the boundary. Until you opt in, nothing changes.
 
-Configure them yourself, in your own settings file or per session with `--settings`. The skill
-exists to tell you which keys to write; it does not write them for you.
+`sandbox` is user-level configuration with a real blast radius: a sync that widened
+`allowedDomains` or dropped a `denyRead` entry would quietly undo a boundary you set. So the key
+is owned the way the native telemetry keys are. A `sandbox` block you wrote yourself is reported
+and left exactly as it is, and switching `sandbox.enabled` off restores what the key held before
+the harness first wrote it. To tune your own block, leave the switch off and configure the keys
+yourself, in your settings file or per session with `--settings`; the skill tells you which.
+
+The sandbox is one of three layers under a shell command, with `grade-bash` as the accident guard
+and snapshots that make a discard recoverable: [runtime controls](runtime-controls.md#three-layers-under-a-shell-command)
+describes all three and what each one does not cover.

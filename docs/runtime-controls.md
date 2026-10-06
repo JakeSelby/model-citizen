@@ -21,6 +21,35 @@ check a file run without hooks, the fsmonitor hook, filter drivers, or inherited
 variables and global configuration, so a configuration planted in the repository cannot run code
 while a command is graded.
 
+### Three layers under a shell command
+
+1. **The sandbox is the boundary.** With `sandbox.enabled` set in the user config (`bin/citizen
+   config set sandbox.enabled true`, then `sync`), Claude Code runs the agent's Bash inside its OS
+   sandbox, and a command can write only to the working tree, the per-user temp directory and the
+   paths `sync` derives: the harness's state directory, the task-worktree root, Claude Code's
+   scratch root and every folder of every workspace in `workspaces_dir`. The block comes from
+   `claude/settings.template.json`, keeps `autoAllowBashIfSandboxed` off so no prompt you get
+   today disappears, and is owned like the telemetry keys: a `sandbox` block you wrote yourself is
+   reported and left alone, and switching the key off restores what was there. It is off until
+   you opt in, and opting out is per user. Without `sandbox.strict`, a command the sandbox blocks
+   can be retried outside it, which `bypassPermissions` runs with no prompt; `sandbox.strict`
+   sets `allowUnsandboxedCommands: false` and `failIfUnavailable: true`, so nothing leaves the
+   boundary and a missing sandbox stops Claude Code at startup. Network egress goes through the
+   sandbox proxy, which prompts for a host not yet allowed. Codex uses its own `sandbox_mode`; the
+   [sandbox skill](../primitives/skills/sandbox/SKILL.md) covers both.
+2. **`grade-bash` is the accident guard**, as above: it asks before a command it knows destroys
+   work, and a rephrased command gets past it.
+3. **Snapshots make a discard recoverable.** Before any command graded 2 or more runs in a git
+   working tree, the hook keeps the tree's uncommitted state, working tree and index, as a
+   `git stash create` commit under `refs/harness/snapshots/<time>`, whatever the answer and the
+   confirmed and approved commands included. Nothing is changed or discarded to take it.
+   `bin/citizen snapshot list` shows them, `snapshot restore [latest|<time>]` applies one to the
+   current worktree and keeps it, and `snapshot prune --days N` deletes older ones; each new
+   snapshot prunes those past fourteen days. A snapshot holds tracked files only: untracked and
+   ignored files are not in it, a clean tree takes none, and it covers the directory the command
+   starts in, not one a `cd` or `git -C` moves to. The same hardened git runs it, filter drivers
+   off, so the bytes kept are the bytes on disk.
+
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.

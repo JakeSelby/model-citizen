@@ -66,6 +66,9 @@ Behaviour:
     set governance...`, is always asked about, as a level-1 action. Each
     decision is one `governance` row in the decision log. Under `none` nothing is imported and
     the output is exactly the stance's.
+  - Before a command graded 2 or more, in a git working tree, a snapshot of the tree and index
+    is kept under `refs/harness/snapshots/` (`snapshot_before`), so a discard the grade lets
+    through, or the user approves, can be restored with `harness snapshot restore`.
   - Never raises: a missing sibling grammar and any unexpected error are a silent exit 0, so a
     fault here can only cost a prompt that native would not have shown either. The one thing it
     will not guess at is the stance, above.
@@ -115,6 +118,28 @@ def stance():
     return variant, variant
 
 
+SNAPSHOT_GRADE = 2
+SNAPSHOTS = Path(__file__).resolve().parents[2] / "lib" / "harness_core" / "snapshots.py"
+
+
+def snapshot_before(grade, cwd, verb=""):
+    """Record a recoverable snapshot of the working tree at `cwd` before a command graded
+    `SNAPSHOT_GRADE` or more runs (`harness_core.snapshots`); the ref written, or None.
+
+    Taken whatever the decision, the confirmed and approved commands included, since those are
+    the ones that run. Outside a repository, below the grade, or on any failure it does nothing:
+    a snapshot is a recovery aid, never a reason to block."""
+    if not isinstance(grade, int) or grade < SNAPSHOT_GRADE or not cwd:
+        return None
+    try:
+        spec = importlib.util.spec_from_file_location("harness_snapshots", str(SNAPSHOTS))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.take(cwd, "before grade %d %s" % (grade, verb or "command"))
+    except Exception:
+        return None
+
+
 def emit(decision, reason):
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -161,12 +186,13 @@ def main():
         return
     raw = command
     command, confirmed = strip_marker(command)
+    (grade, verb, target, family), _timed = grade_within(command, payload.get("cwd") or "",
+                                                         grade=grade_text)
+    snapshot_before(grade, payload.get("cwd") or "", verb)
     if confirmed:
         return
     variant, label = stance()
     threshold = THRESHOLDS.get(variant, THRESHOLDS[STRICTEST])
-    (grade, verb, target, family), _timed = grade_within(command, payload.get("cwd") or "",
-                                                         grade=grade_text)
     if grade == 0:
         return
     text = reason(grade, verb, target, family, label)
