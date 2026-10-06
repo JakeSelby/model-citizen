@@ -1,22 +1,41 @@
 {
- "about": "Synthetic Stop envelope derived from a recorded successful result; not a native recorded Stop payload.",
+ "about": "Native Stop hook input recorded from a real Claude Code run, sanitized.",
  "provenance": {
-  "run": "cost-replay-baseline-v2-2026-09-22",
-  "artifact": "hook-inventory-harness-1.json",
-  "sha256": "1724400c70db80220a60ee69efc07d4551a913207fc658970402a2fe3b8c2386",
-  "record_index": 21,
-  "normalization": "Session and workspace metadata replaced; tool input and output preserved. Stop is derived from the successful result record.",
-  "source_excerpt": "sources/hook-inventory-excerpt.json",
-  "source_excerpt_sha256": "c47027990550e04b2db3efc25f4184cd645a599defc3bf4230dfbd595c2f7115",
-  "excerpt_index": 2,
-  "kind": "derived-terminal-event"
+  "run": "stop-capture-2026-10-05",
+  "image": "model-citizen-arm-bare:a904eb2f983d",
+  "artifact": "stop-capture.json",
+  "sha256": "2d5344300c885ecd043c6e29580499da0a62b0ffcb571bb5c77757eecb989ad2",
+  "record_index": 0,
+  "claude_code_version": "2.1.280",
+  "native_keys": [
+   "background_tasks",
+   "cwd",
+   "effort",
+   "hook_event_name",
+   "last_assistant_message",
+   "permission_mode",
+   "prompt_id",
+   "session_crons",
+   "session_id",
+   "stop_hook_active",
+   "transcript_path"
+  ],
+  "normalization": "Session id, prompt id, transcript path and cwd replaced with fixed synthetic values; free-text strings replaced with a placeholder; keys, booleans, enum values and structure kept as recorded.",
+  "kind": "recorded-native-stop"
  },
  "payload": {
   "session_id": "s-recorded",
   "transcript_path": "/workspace/transcripts/session.jsonl",
   "cwd": "/workspace/example-repo",
+  "prompt_id": "p-recorded",
   "permission_mode": "default",
+  "effort": {
+   "level": "high"
+  },
   "hook_event_name": "Stop",
-  "stop_hook_active": false
+  "stop_hook_active": false,
+  "last_assistant_message": "<placeholder>",
+  "background_tasks": [],
+  "session_crons": []
  }
 }

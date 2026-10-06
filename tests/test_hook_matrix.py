@@ -114,28 +114,45 @@ class HookMatrixTests(unittest.TestCase):
             self.assertIsInstance(document["provenance"]["record_index"], int)
             self.assertTrue(document["provenance"]["normalization"])
             provenance = document["provenance"]
+            event = document["payload"]["hook_event_name"]
+            if event == "Stop":
+                self.assertEqual(provenance["kind"], "recorded-native-stop")
+                continue
             source = (FIXTURE / provenance["source_excerpt"]).resolve()
             self.assertTrue(source.is_relative_to(FIXTURE.resolve()))
             content = source.read_bytes()
             self.assertEqual(hashlib.sha256(content).hexdigest(), provenance["source_excerpt_sha256"])
             record = json.loads(content)["records"][provenance["excerpt_index"]]
-            event = document["payload"]["hook_event_name"]
             if event == "PreToolUse":
                 block = record["message"]["content"][0]
                 self.assertEqual(document["payload"]["tool_name"], block["name"])
                 self.assertEqual(document["payload"]["tool_input"], block["input"])
-            elif event == "PostToolUse":
+            else:
                 self.assertEqual(document["payload"]["tool_response"]["stdout"],
                                  record["message"]["content"][0]["content"])
-            else:
-                self.assertEqual(provenance["kind"], "derived-terminal-event")
-                self.assertEqual(record, {"type": "result", "subtype": "success"})
         for name, document in HM.calls().items():
             self.assertEqual(sorted(set(document) - {"files", "git", "provenance"}), ["about", "payload"], name)
             payload = document["payload"]
             self.assertIn(payload["hook_event_name"], EVENTS, name)
             self.assertIn(payload["cwd"], ("/workspace/example-repo", "{repo}"), name)
             self.assertIsNone(home.search(json.dumps(document)), name)
+
+    def test_stop_call_is_a_recorded_native_payload_with_its_source(self):
+        stops = {name: d for name, d in HM.calls().items()
+                 if "provenance" in d and d["payload"]["hook_event_name"] == "Stop"}
+        self.assertEqual(list(stops), ["recorded-stop-hook-inventory"])
+        document = stops["recorded-stop-hook-inventory"]
+        provenance, payload = document["provenance"], document["payload"]
+        self.assertEqual(provenance["kind"], "recorded-native-stop")
+        self.assertEqual(provenance["run"], "stop-capture-2026-10-05")
+        self.assertEqual(provenance["image"], "model-citizen-arm-bare:a904eb2f983d")
+        self.assertEqual(provenance["claude_code_version"], "2.1.280")
+        self.assertRegex(provenance["sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn("Synthetic", document["about"])
+        self.assertEqual(provenance["native_keys"], sorted(payload))
+        self.assertEqual((payload["session_id"], payload["prompt_id"], payload["last_assistant_message"]),
+                         ("s-recorded", "p-recorded", "<placeholder>"))
+        self.assertIs(payload["stop_hook_active"], False)
 
     def test_repository_copy_survives_a_vanishing_file_and_skips_locks(self):
         # Git's background maintenance creates and removes `maintenance.lock` inside the template
