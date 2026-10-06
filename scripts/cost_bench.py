@@ -1973,6 +1973,8 @@ def replay(tasks, opts, launch=subprocess.run, out=None):
         return _replay(tasks, opts, launch, None, None)
     stale = Path(out).parent / STOP
     if stale.exists():
+        if not Path(out).parent.joinpath(SPEND).exists():
+            _write_spend_sidecar(out, opts, 0.0, 0.0, False)  # refused before any paid call
         raise SystemExit("cost-bench: refusing to write results beside an existing stop record: %s" % stale)
     try:
         sink = open(str(out), "x", encoding="utf-8")
@@ -2121,8 +2123,9 @@ def _run_replay(tasks, opts, launch, sink, out, names, stop):
                 _write_spend_sidecar(out, opts, preflight_spent, spent, True)
                 raise SystemExit("cost-bench: stopping the set: the %s arm's session of %s rep %d %s"
                                  % (arm, task["id"], rep, session[-1]["error_kind"]))
-            if (spent > opts["spend_cap"]
-                    or spent >= opts["spend_cap"] and position < len(planned) - 1):
+            # Work remains past the cap; an overspent last run completes the set, and spend.json
+            # records the charge above the cap.
+            if spent >= opts["spend_cap"] and position < len(planned) - 1:
                 stop(STOP_SPEND_CAP)
                 _write_spend_sidecar(out, opts, preflight_spent, spent, True)
                 return rows, True
@@ -2155,8 +2158,9 @@ def _run_replay(tasks, opts, launch, sink, out, names, stop):
             raise SystemExit("cost-bench: stopping the set: %s loaded a different surface from the arm's "
                              "first run:\n  %s\nthe %d row(s) so far are written; --allow-surface-drift "
                              "runs on and stamps every row" % (where, "\n  ".join(row["surface_drift"]), len(rows)))
-        if (spent > opts["spend_cap"]
-                or spent >= opts["spend_cap"] and position < len(planned) - 1):
+        # Work remains past the cap; an overspent last run completes the set, and spend.json
+        # records the charge above the cap.
+        if spent >= opts["spend_cap"] and position < len(planned) - 1:
             stop(STOP_SPEND_CAP)
             _write_spend_sidecar(out, opts, preflight_spent, spent, True)
             return rows, True
