@@ -481,8 +481,8 @@ number of its own:
 - `context_cost_curve` — `[size, multiple]` pairs, sizes ascending: from that size up, a call
   costs about that multiple of one under the first size. `balanced` ships 1.3 from 160,000, 1.7
   from 200,000 and 3.3 from 400,000, and the other variants inherit it.
-- `max_parallel` — the width the running-agent note measures against. `null`, which `max` ships,
-  means the note never appears.
+- `max_parallel` — the width the running-agent note measures against, and the fan-out cap the
+  `session-caps` hook denies a spawn at. `null`, which `max` ships, means neither applies.
 
 ### State, and why it is two files
 
@@ -620,6 +620,7 @@ one field that holds prose is [the completion claim](#the-completion-claim), whi
 | `integration-descriptor` | `ignored`, when an integration descriptor cannot be loaded; recorded with the session's notice | not labelled yet |
 | `governance` | the governance permission answer, `allow`, `ask` or `deny`; protected configuration writes and unavailable providers produce `ask` | not labelled yet |
 | `workflow-launch` | `allow`, `deny`, `over-ceiling` when a script's `agent()` `model` or `effort` exceeds the cost variant's ceiling, or `unresolved` when one cannot be judged, on every `Workflow` tool launch | not labelled yet |
+| `session-caps` | `allow`, `warn` past 80% of a cap, `deny` at it, or `would-deny` in a headless run, on a spawn, `Workflow` launch or web search; `cap`, `limit` and `count` say which cap and how close | not labelled yet |
 
 An approved Bash command is not *graded*. The harness answers the permission question on a small
 minority of calls, and "it ran" says nothing about whether declining to interrupt was right; a
@@ -744,6 +745,16 @@ that happened to be labelled is not evidence about the point.
 
 A `steer-polling` row is a foreground wait the Bash hook noted (`note`) or refused (`deny`), or one
 it left alone because it ran in the background (`background`); its `input` is the command.
+
+A `session-caps` row is a spawn, a `Workflow` launch or a web search held to the session's caps:
+`allow`, `warn` past 80% of a cap, `deny` at it, or `would-deny` in a headless `claude -p` run,
+which is never refused unless `HARNESS_SESSION_CAPS_HEADLESS=enforce` is set. `cap` says which one
+(`fan-out`, the cost variant's `max_parallel`, or `web-search`, the research rule's per-session
+figure), with `limit` and the `count` before the call. Live subagents are counted from
+`SubagentStart` to `SubagentStop`, and searches by every agent in the session, subagents included.
+A `Workflow` launch is refused at the fan-out cap, but its script's `agent()` calls are not tool
+calls, so none can be refused once the launch is through, and they count toward the cap only if
+the runtime raises `SubagentStart` for them, which has not been measured. Claude Code only.
 
 An `intent-overlap` row is an edit the write-intent check warned on or denied, and `bin/citizen intent
 merge` writes one row per landing saying whether bringing in the base branch conflicted.
