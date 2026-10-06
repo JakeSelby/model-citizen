@@ -22,29 +22,19 @@ work that requires a hard boundary. Client qualification remains in the compatib
 ## The Claude Code sandbox
 
 It "runs on macOS, Linux, and WSL2. Native Windows is not supported"; Linux and WSL2 need
-`bubblewrap` and `socat` installed first. Put this in `~/.claude/settings.json` to cover every
-project; the `/sandbox` panel writes `enabled` to `.claude/settings.local.json` for one project.
-
-```json
-{
-  "sandbox": {
-    "enabled": true,
-    "failIfUnavailable": true,
-    "allowUnsandboxedCommands": false,
-    "network": { "allowedDomains": [], "strictAllowlist": true },
-    "filesystem": { "denyRead": ["~/.ssh", "~/.aws", "~/.config/gh"] }
-  }
-}
-```
+`bubblewrap` and `socat` installed first. Merge [claude-settings.json](claude-settings.json) into
+`~/.claude/settings.json` to cover every project; the `/sandbox` panel writes `enabled` to
+`.claude/settings.local.json` for one project. Its `denyRead` list blocks the SSH key directory,
+AWS credentials and the GitHub CLI's config. The example lives in its own file because catalog
+scanners match the SSH path in skill text and cannot tell a deny entry from an instruction to read.
 
 `strictAllowlist` over an empty `allowedDomains` is network off: Claude Code then "denies sandboxed
 commands access to any host outside the allowlist instead of prompting". Only user, managed and
 `--settings` settings set it; a repository's own file cannot. The deny entries are load-bearing —
-the default read policy covers the whole disk, and "this default still allows reading credential
-files such as `~/.aws/credentials` and `~/.ssh/`." Add `sandbox.credentials.envVars` entries with
-`"mode": "deny"` to unset tokens for sandboxed commands too. `failIfUnavailable` makes a missing
-dependency a hard stop rather than a silent unsandboxed fallback, and `allowUnsandboxedCommands:
-false` removes the retry-outside escape hatch. Subagents inherit the session's sandbox; commands
+the default read policy covers most of the machine, credential files included. Add
+`sandbox.credentials.envVars` entries with `"mode": "deny"` to unset tokens for sandboxed commands
+too. `failIfUnavailable` makes a missing dependency a hard stop rather than a silent unsandboxed
+fallback, and `allowUnsandboxedCommands: false` removes the retry-outside escape hatch. Subagents inherit the session's sandbox; commands
 you type at the `!` prompt do not.
 
 For one session, writing no file: `claude --settings '{"sandbox":{"enabled":true}}'`. Confirm with
