@@ -1684,7 +1684,8 @@ def export(records):
     """Offer rows to a configured OTLP endpoint, after the ledger already holds them.
 
     Off by default, and silent in every failure mode: the row is on disk, so a collector that
-    is down, slow or misconfigured costs a line in `usage.errors.jsonl` and nothing else.
+    is down, slow or misconfigured costs a line in `usage.errors.jsonl` and nothing else, and
+    one that is not listening at all is not tried again until `export.backoff.json` says so.
     `harness usage export --since` replays what was missed. See `telemetry.py`.
     """
     module = sibling("telemetry", required=False)
@@ -1692,7 +1693,8 @@ def export(records):
         return 0, 0
     try:
         return module.export_rows(records, version=harness_version() or "",
-                                  errors_path=usage_path().with_suffix(".errors.jsonl"))
+                                  errors_path=usage_path().with_suffix(".errors.jsonl"),
+                                  backoff_path=usage_path().with_name("export.backoff.json"))
     except Exception:
         return 0, 0
 

@@ -48,6 +48,11 @@ from pathlib import Path
 # so a typo in a call site is a test failure rather than a silent new group.
 POINTS = ("grade-bash", "stop-gate", "tier-agent-spawns", "delegation-nudge",
           "brief-guard", "evasion-deny")
+# The points that only record what an advisory hook did. Kept apart from POINTS, which is also
+# the set a decision provider's modes may name (`decisions/controls.py`): none of these asks one.
+HOOK_POINTS = ("filter-output", "allow-readonly-bash", "validate-plan-card", "harness-session",
+               "workspace-session", "allow-plan-webfetch", "stage-user-files",
+               "neutralize-tool-output")
 
 # The module that owns each point's decision (AD-23): the hook id whose logic made it, named as a
 # selection reference, `hooks/<id>`. The integration notice runs in the spawn path
@@ -68,10 +73,20 @@ POINT_MODULES = {
     "integration-descriptor": "hooks/tier-agent-spawns",
     "intent-overlap": "hooks/intent-overlap",
     "steer-polling": "hooks/steer-polling",
+    "session-caps": "hooks/session-caps",
     # `citizen intent merge` records a landing from the command line; no hook makes it.
     "landing-merge": None,
     # One row per decision `grade-bash` asks the configured decision provider for.
     "governance": "hooks/grade-bash",
+    # The hooks that answer for themselves; what each row carries is in docs/runtime-controls.md.
+    "filter-output": "hooks/filter-output",
+    "allow-readonly-bash": "hooks/allow-readonly-bash",
+    "validate-plan-card": "hooks/validate-plan-card",
+    "harness-session": "hooks/harness-session",
+    "workspace-session": "hooks/workspace-session",
+    "allow-plan-webfetch": "hooks/allow-plan-webfetch",
+    "stage-user-files": "hooks/stage-user-files",
+    "neutralize-tool-output": "hooks/neutralize-tool-output",
 }
 
 # 2 KiB. Far past any command or the head of a brief, and small enough that a session's worth of
@@ -235,6 +250,98 @@ def in_sample(text, rate):
     if not rate or not text:
         return False
     return int(digest(text)[:8], 16) % rate == 0
+
+
+# Retention. The log is append-only, so without a cap it grows for as long as the harness runs:
+# 20 MB in its first thirteen days, most of it routine provider approvals. When an append finds
+# the file at `telemetry.decision_log_max_bytes` or past it, the file is renamed to
+# `decisions.jsonl.1`, each older `.N` moves up one, and the one past
+# `telemetry.decision_log_keep` is removed; the next row starts a new file. A rotated file is never
+# rewritten either, so a row still reads exactly as the hook wrote it. `max_bytes` of 0 turns
+# rotation off; `keep` of 0 keeps no rotated file at all.
+DEFAULT_MAX_BYTES = 8 * 1024 * 1024
+DEFAULT_KEEP = 3
+
+
+def _whole_setting(name, default, cfg=None):
+    """A non-negative whole number from the `telemetry` block, or `default` for anything else.
+
+    `telemetry.settings` refuses a bad value by name when the CLI reads the block; a hook that
+    meets one keeps the default, because retention that stops working is a disk that fills.
+    """
+    cfg = read_config() if cfg is None else cfg
+    block = cfg.get("telemetry") if isinstance(cfg, dict) else None
+    value = block.get(name, default) if isinstance(block, dict) else default
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return default
+    return value
+
+
+def max_bytes(cfg=None):
+    """The size at which the log rotates: `telemetry.decision_log_max_bytes`, 0 for never."""
+    return _whole_setting("decision_log_max_bytes", DEFAULT_MAX_BYTES, cfg)
+
+
+def keep(cfg=None):
+    """How many rotated files are kept: `telemetry.decision_log_keep`."""
+    return _whole_setting("decision_log_keep", DEFAULT_KEEP, cfg)
+
+
+def rotated(target, count):
+    """`target`'s rotated siblings, `.1` (newest) to `.count`."""
+    target = Path(target)
+    return [target.with_name(target.name + "." + str(n)) for n in range(1, count + 1)]
+
+
+def rotate(target, cap=None, count=None):
+    """Rotate `target` when it has reached `cap` bytes. Returns whether it rotated. Never raises.
+
+    Only the process that takes the rotation lock rotates, and it checks the size again under the
+    lock, so two appends that both see a full file shift the rotated files once, not twice. A
+    process that cannot take the lock appends to the full file and leaves rotating to the next.
+    """
+    try:
+        cap = max_bytes() if cap is None else cap
+        count = keep() if count is None else count
+        target = Path(target)
+        if not cap or os.path.getsize(str(target)) < cap:
+            return False
+    except OSError:
+        return False
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - a platform with no advisory locking
+        return False
+    lock = None
+    try:
+        lock = os.open(str(target) + ".lock", os.O_WRONLY | os.O_CREAT, 0o600)
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if os.path.getsize(str(target)) < cap:
+            return False
+        older = rotated(target, count)
+        # A lowered `decision_log_keep` leaves files numbered past it, which no reader reaches.
+        prefix = target.name + "."
+        for sibling in target.parent.iterdir():
+            suffix = sibling.name[len(prefix):]
+            if (sibling.name.startswith(prefix) and suffix.isascii() and suffix.isdigit()
+                    and int(suffix) > count):
+                sibling.unlink()
+        if not older:
+            target.unlink()
+            return True
+        if older[-1].exists():
+            older[-1].unlink()
+        for newer, next_older in reversed(list(zip(older, older[1:]))):
+            if newer.exists():
+                os.replace(str(newer), str(next_older))
+        os.replace(str(target), str(older[0]))
+        return True
+    except (OSError, ValueError):
+        _ERRORS[0] += 1
+        return False
+    finally:
+        if lock is not None:
+            os.close(lock)
 
 
 def secret_shapes():
@@ -578,6 +685,7 @@ def _append(row, target=None):
         os.chmod(str(target.parent), 0o700)
     except OSError:
         pass
+    rotate(target)
     fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         os.write(fd, (json.dumps(row, sort_keys=True) + "\n").encode("utf-8"))
@@ -702,17 +810,108 @@ def observe_if_logged(identity, outcome, point="", session_id="", target=None, n
     return observe(identity, outcome, point, session_id, target, now)
 
 
-def read_rows(target=None, folds=None):
+# A count summary instead of a row per answer, for a point that answers on most tool calls: the
+# read-only Bash allow answers tens of thousands of times a month, and a row each would be most of
+# the file. Each answer appends one short line, its kind, to a per-session tally file, which is
+# one `write` and needs no lock; SessionEnd turns the file into one decision row whose `counts`
+# holds how many of each kind the session gave, and removes it. A tally whose session never
+# ended is flushed by the next flush that finds it a day old, marked `stale`.
+TALLY_DIR = "tallies"
+TALLY_STALE = 86400
+SESSION_NAME = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+
+def _tally_file(point, session_id, base=None):
+    """The tally file for one session at one point, or None for an id unfit for a file name."""
+    if not isinstance(session_id, str) or not SESSION_NAME.match(session_id) or session_id[0] == ".":
+        return None
+    return (Path(base) if base else state_dir()) / TALLY_DIR / point / (session_id + ".tally")
+
+
+def tally(point, session_id, kind, base=None):
+    """Count one answer of `kind` for the session. Never raises; returns whether it counted."""
+    try:
+        if not enabled() or not isinstance(kind, str) or not re.match(r"^[a-z0-9-]{1,40}$", kind):
+            return False
+        target = _tally_file(point, session_id, base)
+        if target is None:
+            return False
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(target), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.write(fd, (kind + "\n").encode("ascii"))
+        finally:
+            os.close(fd)
+        return True
+    except Exception:
+        _ERRORS[0] += 1
+        return False
+
+
+def _flush_one(point, source, session_id, runtime, target, now, stale):
+    # Taken out of the way first, so an answer counted while this reads starts a new tally.
+    taken = source.with_name(source.name + "." + uuid.uuid4().hex[:8])
+    os.replace(str(source), str(taken))
+    counts = {}
+    try:
+        for line in taken.read_text(encoding="ascii", errors="replace").splitlines():
+            if line:
+                counts[line] = counts.get(line, 0) + 1
+    finally:
+        taken.unlink()
+    if not counts:
+        return None
+    fields = {"counts": counts, "total": sum(counts.values())}
+    if stale:
+        fields["stale"] = True
+    return record(point, "summary", "", {"session_id": session_id}, runtime, target=target,
+                  now=now, fields=fields)
+
+
+def flush_tally(point, session_id, runtime="", base=None, target=None, now=None):
+    """Write the session's count summary for `point` and any day-old orphan. Never raises.
+
+    Returns the summary's `decision_id`, or None when the session counted nothing.
+    """
+    identity = None
+    try:
+        if not enabled():
+            return None
+        source = _tally_file(point, session_id, base)
+        if source is not None and source.is_file():
+            identity = _flush_one(point, source, session_id, runtime, target, now, False)
+        folder = (Path(base) if base else state_dir()) / TALLY_DIR / point
+        moment = time.time() if now is None else now
+        for orphan in (sorted(folder.glob("*.tally")) if folder.is_dir() else []):
+            try:
+                if moment - orphan.stat().st_mtime >= TALLY_STALE:
+                    _flush_one(point, orphan, orphan.name[:-len(".tally")], runtime, target, now, True)
+            except OSError:
+                continue
+    except Exception:
+        _ERRORS[0] += 1
+    return identity
+
+
+def read_rows(target=None, folds=None, history=False):
     """Every well-formed record in the log, folded, oldest first. An unreadable file is no rows.
 
-    A field or a schema version this reader does not know is carried, never refused.
+    A field or a schema version this reader does not know is carried, never refused. With
+    `history`, the rotated files are read first, oldest to newest, so a report sees every row
+    retention kept; without it only the current file is read, which is what a hook on a time
+    budget wants.
     """
     target = Path(target) if target else path()
     rows = []
-    try:
-        text = target.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return rows
+    files = (list(reversed(rotated(target, keep()))) if history else []) + [target]
+    text = ""
+    for source in files:
+        try:
+            text += source.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not text.endswith("\n"):
+            text += "\n"
     for line in text.splitlines():
         try:
             row = json.loads(line)
