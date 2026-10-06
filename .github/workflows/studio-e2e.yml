@@ -41,3 +41,11 @@ jobs:
           # fail every check instead of skipping it.
           STUDIO_E2E: "1"
         run: python3 -m unittest -v test_e2e_studio_flows test_e2e_studio_budgets
+      # WCAG 2.2 AA rule set on every route at 320, 390 and 1280 px in both themes (AH-S315). The
+      # plain unit-suite run also reaches it where Chrome happens to exist; here a missing Chrome
+      # fails it instead of skipping.
+      - name: Accessibility rule set and keyboard walk
+        working-directory: tests
+        env:
+          STUDIO_E2E: "1"
+        run: python3 -m unittest -v test_studio_accessibility_browser

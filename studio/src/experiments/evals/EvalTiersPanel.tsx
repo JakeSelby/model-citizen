@@ -28,7 +28,7 @@ export function HookMatrixGrid({ result, initialRow }: { result: HookMatrixResul
           </Alert>
         : <Text c="dimmed" size="sm">Every cell matches the committed matrix.</Text>}
       <Select data={result.rows} label="Hook" onChange={(value) => setRow(value ?? "")} value={row || null} />
-      <Table.ScrollContainer minWidth={900}>
+      <Table.ScrollContainer minWidth={900} scrollAreaProps={{ viewportProps: { role: "region", "aria-label": "Hook matrix", tabIndex: 0 } }}>
         <Table aria-label={`Hook matrix for ${row}`} striped withTableBorder>
           <Table.Thead><Table.Tr><Table.Th>Recorded call</Table.Th>{result.variants.map((variant) => <Table.Th key={variant}>{variant}</Table.Th>)}</Table.Tr></Table.Thead>
           <Table.Tbody>{grid.map((line) => <Table.Tr key={line.call}>
@@ -46,8 +46,8 @@ export function PaidAnalysisView({ analysis, title }: { analysis: PaidAnalysis; 
     <Paper p="md" withBorder>
       <Text fw={600}>{title} (cost_bench.py summarise)</Text>
       <Text c="dimmed" size="xs">Exploratory: writes no history row and is never cited as evidence. Spent {analysis.spend_usd} USD{analysis.stopped_at_cap ? ", stopped at the cap" : ""}.</Text>
-      <Code block>{analysis.command.join(" ")}</Code>
-      <Table><Table.Tbody>{paidAnalysisLines(analysis).map(([label, value]) => <Table.Tr key={label}>
+      <Code block className="wrapped-command">{analysis.command.join(" ")}</Code>
+      <Table className="leaf-table"><Table.Tbody>{paidAnalysisLines(analysis).map(([label, value]) => <Table.Tr key={label}>
         <Table.Td><Code>{label}</Code></Table.Td><Table.Td>{value}</Table.Td>
       </Table.Tr>)}</Table.Tbody></Table>
     </Paper>

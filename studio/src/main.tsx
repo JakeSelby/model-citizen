@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 import { HashRouter } from "react-router-dom";
 
 import { StudioApp } from "./StudioApp";
-import { studioTheme } from "./theme";
+import { studioCssVariables, studioTheme } from "./theme";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: Infinity } },
@@ -21,7 +21,7 @@ const getStyleNonce = styleNonce && !styleNonce.startsWith("__STUDIO_")
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <MantineProvider defaultColorScheme="auto" getStyleNonce={getStyleNonce} theme={studioTheme}>
+    <MantineProvider cssVariablesResolver={studioCssVariables} defaultColorScheme="auto" getStyleNonce={getStyleNonce} theme={studioTheme}>
       <QueryClientProvider client={queryClient}>
         <HashRouter>
           <StudioApp />

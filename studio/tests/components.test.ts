@@ -56,7 +56,7 @@ test("table keeps its accessible caption, column headings, empty and many-row st
 test("commands render the caller's exact string, and code remains inert and focusable", () => {
   const command = "citizen configure save --draft 'review first' --changes changes.json --base-revision abc";
   const html = render(h(ToastProvider, {}, h(CommandChip, { command, label: "Save checkpoint" })));
-  assert.match(html, /Copy Save checkpoint/); assert.match(html, /citizen configure save/);
+  assert.match(html, /Copy command: Save checkpoint/); assert.match(html, /citizen configure save/);
   assert.match(html, /&#x27;review first&#x27;/);
   const code = render(h(CodeView, {}, "<img onerror=bad()>"));
   assert.match(code, /tabindex="0"/); assert.ok(!code.includes("<img"));

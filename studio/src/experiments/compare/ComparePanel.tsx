@@ -26,7 +26,7 @@ function SideColumn({ title, side }: { title: string; side: CompareSide }) {
         <Text fw={600}>{title}</Text>
         <Text size="sm">{sideLine(side)}</Text>
         {side.analysis
-          ? <Table><Table.Caption>This target against its own bare arm (cost_bench.py summarise)</Table.Caption>
+          ? <Table className="leaf-table"><Table.Caption>This target against its own bare arm (cost_bench.py summarise)</Table.Caption>
               <Table.Tbody>{analysisLines(side.analysis).map(([label, value]) => <Table.Tr key={label}>
                 <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
           : <Text c="dimmed" size="sm">No engine analysis was recorded for this target.</Text>}
@@ -58,7 +58,7 @@ export function CompareReport({ result }: { result: CompareResult }) {
         {`No reading is labelled better or worse: ${result.direction_withheld.join("; ")}.`}
       </Text>}
       {result.error !== null && <Alert color="yellow" title="Engine refused">{result.error}</Alert>}
-      {headlines.length > 0 && <Table.ScrollContainer minWidth={720} type="native">
+      {headlines.length > 0 && <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Comparison readings" tabIndex={0}>
         <Table striped>
           <Table.Caption>{`${headlines[0].arm} against ${result.control}, paired by task (${result.engine}). Each reading is the engine's; an interval spanning no effect reads inconclusive.`}</Table.Caption>
           <Table.Tbody>{headlines.map((item) => <Table.Tr key={`${item.arm}:${item.key}`}>
@@ -73,7 +73,7 @@ export function CompareReport({ result }: { result: CompareResult }) {
       </SimpleGrid>
       {result.result !== null && <Paper p="md" withBorder>
         <Text fw={600}>Engine output ({result.engine})</Text>
-        <Table><Table.Tbody>{engineLeaves(result.result).map(([label, value]) => <Table.Tr key={label}>
+        <Table className="leaf-table"><Table.Tbody>{engineLeaves(result.result).map(([label, value]) => <Table.Tr key={label}>
           <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>}
     </Stack>

@@ -215,7 +215,7 @@ export function ExperimentsPage() {
           {suite.id === "unit-tests" && <Select searchable limit={50} label="Test scope" value={selectedCase}
             onChange={(value) => setSelectedCase(value ?? "all")} data={cases} allowDeselect={false}
             description={`${suite.case_count} discovered tests; search by module, class, or test.`} />}
-          <div><Text fw={600} size="sm">Exact command</Text><ScrollArea type="auto"><Code block>{command}</Code></ScrollArea></div>
+          <div><Text fw={600} size="sm">Exact command</Text><ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Exact command", tabIndex: 0 }}><Code block>{command}</Code></ScrollArea></div>
           <Group><Button onClick={() => void launch(suite)} disabled={Boolean(update && !terminal(update.run.status))}>Run {suite.label}</Button>
             <Text c="dimmed" size="sm">Installed checkout · isolated profile · about {suite.expected_duration_seconds}s</Text></Group>
         </Stack>
@@ -282,7 +282,7 @@ export function ExperimentsPage() {
             : <Text key={`${finding.path}:${finding.line}`} size="sm">
                 {finding.path}:{finding.line} — {finding.message}
               </Text>)}
-          <div><Text fw={600} size="sm">Live log</Text><ScrollArea className="run-log" h={260}><Code block>{stdout}{stderr}</Code></ScrollArea></div>
+          <div><Text fw={600} size="sm">Live log</Text><ScrollArea className="run-log" h={260} viewportProps={{ role: "region", "aria-label": "Live log", tabIndex: 0 }}><Code block>{stdout}{stderr}</Code></ScrollArea></div>
         </Stack>
       </Paper>}
       <RunHistoryPanel />

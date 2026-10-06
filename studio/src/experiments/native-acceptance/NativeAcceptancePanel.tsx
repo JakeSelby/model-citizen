@@ -228,7 +228,7 @@ export function NativeAcceptancePanel({
               "pricing_source", (value ?? "api_credit") as SpendRequest["pricing_source"],
             )}
           />
-          <Paper bg="var(--mantine-color-gray-0)" p="sm" withBorder>
+          <Paper bg="var(--studio-surface-canvas)" p="sm" withBorder>
             <Text fw={600} size="sm">Immutable target</Text>
             <Text c="dimmed" size="xs">The target service resolves and snapshots the selection before launch.</Text>
             <Code mt="xs">{selection.source_commit || `${selection.target_kind}:${selection.target_ref} · commit resolves at launch`}</Code>

@@ -19,11 +19,11 @@ export function EvidenceState({ kind, title, children, action }: {
 }
 
 export function CodeView({ children, label = "Code" }: { children: string; label?: string }) {
-  return <pre className="code-view" aria-label={label} tabIndex={0}><code>{children}</code></pre>;
+  return <pre className="code-view" role="region" aria-label={label} tabIndex={0}><code>{children}</code></pre>;
 }
 
 export function DiffView({ before, after, label = "Changes" }: { before: string; after: string; label?: string }) {
-  return <pre className="code-view diff-view" aria-label={label} tabIndex={0}><code>{compareLines(before, after).map((line, index) =>
+  return <pre className="code-view diff-view" role="region" aria-label={label} tabIndex={0}><code>{compareLines(before, after).map((line, index) =>
     <span className="diff-line" data-kind={line.kind} key={index}><span className="visually-hidden">{line.kind}: </span><span aria-hidden="true">{line.kind === "added" ? "+ " : line.kind === "removed" ? "− " : "  "}</span>{line.text}{"\n"}</span>)}</code></pre>;
 }
 
@@ -73,7 +73,7 @@ export function CommandChip({ command, label = "CLI equivalent" }: { command: st
       setCopying(false);
     }
   }
-  return <div className="command-chip"><div className="command-heading"><Text size="sm" fw={650}>{label}</Text><Button variant="subtle" size="compact-sm" loading={copying} aria-label={`Copy ${label}`} onClick={copy}>Copy command</Button></div><CodeView label={label}>{command}</CodeView></div>;
+  return <div className="command-chip"><div className="command-heading"><Text size="sm" fw={650}>{label}</Text><Button variant="subtle" size="compact-sm" loading={copying} aria-label={`Copy command: ${label}`} onClick={copy}>Copy command</Button></div><CodeView label={label}>{command}</CodeView></div>;
 }
 
 export function SectionHeading({ title, children }: { title: string; children?: ReactNode }) {

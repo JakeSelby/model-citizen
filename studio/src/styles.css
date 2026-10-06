@@ -77,6 +77,11 @@
 
 * { box-sizing: border-box; }
 
+/* Focus moved by Tab stops clear of Configure's sticky save bar, which wraps to about 200 px tall
+   on a phone. */
+html:has(.save-bar) { scroll-padding-bottom: 8rem; }
+@media (max-width: 48em) { html:has(.save-bar) { scroll-padding-bottom: 14rem; } }
+
 html,
 body {
   min-width: var(--studio-min-width);
@@ -398,17 +403,43 @@ textarea:focus-visible {
 .command-heading { margin-bottom: var(--studio-space-2); }
 .command-chip .code-view { white-space: pre-wrap; overflow-wrap: anywhere; }
 .interval-display { color: var(--studio-ink-secondary); font-variant-numeric: tabular-nums; }
-.data-table-scroll { max-width: 100%; overflow: auto; }
+.data-table-scroll { position: relative; max-width: 100%; overflow: auto; }
+/* An engine's field-by-field output: long dotted paths and values wrap instead of widening a phone. */
+.leaf-table { table-layout: fixed; width: 100%; }
+.leaf-table :where(th, td, code) { overflow-wrap: anywhere; white-space: normal; }
+.wrapped-command { white-space: pre-wrap; overflow-wrap: anywhere; }
 .data-table { width: 100%; border-collapse: collapse; font-size: var(--studio-text-sm); }
 .data-table caption { padding-block: var(--studio-space-4); color: var(--studio-ink-primary); font-weight: 650; text-align: left; }
 .data-table th, .data-table td { padding: var(--studio-space-3) var(--studio-space-4); border-bottom: var(--studio-border-width) solid var(--studio-border-default); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
 .data-table th { color: var(--studio-ink-secondary); font-weight: 600; white-space: nowrap; background: var(--studio-surface-canvas); }
 .data-table .evidence-state { margin: 0; border: 0; }
-.toast-region { position: fixed; z-index: 200; right: var(--studio-space-4); bottom: var(--studio-space-4); width: min(var(--studio-toast-width), calc(100% - var(--studio-space-8))); display: grid; gap: var(--studio-space-2); }
+/* Both insets and a max-width, not a width: a fixed width can hold a widened phone viewport open. */
+.toast-region { position: fixed; z-index: 200; right: var(--studio-space-4); bottom: var(--studio-space-4); left: var(--studio-space-4); max-width: var(--studio-toast-width); margin-left: auto; display: grid; gap: var(--studio-space-2); pointer-events: none; }
+.toast-region > * { pointer-events: auto; }
 .studio-toast { display: flex; align-items: center; justify-content: space-between; gap: var(--studio-space-3); padding: var(--studio-space-3) var(--studio-space-4); border: var(--studio-border-width) solid currentColor; border-radius: var(--studio-radius-md); box-shadow: var(--studio-toast-shadow); overflow-wrap: anywhere; }
 .studio-toast .mantine-Button-root { flex-shrink: 0; }
 
 :where(a, button, input, textarea, select, [tabindex]):focus-visible { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+/* Mantine fields drop the outline for a 1px border change, and summaries keep the browser ring;
+   every focus stop gets the Studio ring instead. */
+.studio-frame :focus-visible { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+/* A scroll viewport fills a root that clips its overflow, so an outside ring would be cut away:
+   its ring is drawn inside its own edge. */
+.studio-frame .mantine-ScrollArea-viewport:focus-visible { outline-offset: calc(-1 * var(--studio-focus-width)); }
+/* A multi-select's typing field can be a sliver inside a clipping box: the box carries the ring. */
+.studio-frame .mantine-Input-input:has(.mantine-PillsInputField-field:focus-visible) { outline: var(--studio-focus-width) solid var(--studio-primary); outline-offset: var(--studio-focus-offset); }
+.studio-frame .mantine-PillsInputField-field:focus-visible { outline: none; }
+/* A switch group clips its rounded corners, so its summary's ring is drawn inside the summary. */
+.studio-frame .selection-switch-group > summary:focus-visible { outline-offset: calc(-1 * var(--studio-focus-width)); }
+/* An alert's message box clips by default; a field inside one keeps its ring. */
+.studio-frame .mantine-Alert-message { overflow: visible; }
+/* A block of code inside a scroll area lets the area scroll, so the area's Tab stop reaches it. */
+.studio-frame .mantine-ScrollArea-viewport .mantine-Code-root[data-block] { overflow: visible; }
+/* An inline hash or path breaks anywhere rather than widen a phone. */
+.studio-frame .mantine-Code-root:not([data-block]) { overflow-wrap: anywhere; }
+/* Chart labels paint with `fill`, which defaults to black; they take the page ink instead. */
+.trend-chart { display: block; min-width: 640px; color: var(--studio-ink-primary); }
+.trend-chart-scroll { max-width: 100%; overflow-x: auto; }
 
 .save-bar {
   position: sticky;
@@ -423,6 +454,9 @@ textarea:focus-visible {
 
 .visually-hidden {
   position: absolute;
+  /* Pinned to its containing block's edge: at its static place inside a scrolled table it would
+     widen the page past a phone viewport. */
+  left: 0;
   width: var(--studio-border-width);
   height: var(--studio-border-width);
   overflow: hidden;

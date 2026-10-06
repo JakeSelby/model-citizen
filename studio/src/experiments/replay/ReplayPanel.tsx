@@ -159,7 +159,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           {preview
             ? <Stack gap={4}>
                 <Text size="sm">Native commands, one per target. The Studio gives target two only what target one left of the cap.</Text>
-                <Code block>{preview.command}</Code>
+                <Code block className="wrapped-command">{preview.command}</Code>
               </Stack>
             : <Text c="dimmed" size="sm">The native benchmark commands appear once the preview resolves both targets.</Text>}
           <Group justify="flex-end">
@@ -190,7 +190,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       {runStatus && <Alert color={runStatus === "succeeded" ? "teal" : "blue"} title="Replay status">
         {runStatus === "succeeded" ? "Replay complete. Native rows are indexed below." : runStatus}
       </Alert>}
-      {progress.length > 0 && <Table.ScrollContainer minWidth={720} type="native">
+      {progress.length > 0 && <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Live replay progress" tabIndex={0}>
         <Table striped>
           <Table.Caption>Live progress by target, task, repetition and arm</Table.Caption>
           <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Rep</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Status</Table.Th><Table.Th>Result</Table.Th><Table.Th>Cost</Table.Th></Table.Tr></Table.Thead>
@@ -201,7 +201,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
         </Table>
       </Table.ScrollContainer>}
       {rows.length > 0 && (
-        <Table.ScrollContainer minWidth={720} type="native">
+        <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Cost and pass rate" tabIndex={0}>
           <Table striped highlightOnHover>
             <Table.Caption>Cost and pass rate by target, task and arm. Source only: target configuration was not applied.</Table.Caption>
             <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Cost per passed task</Table.Th><Table.Th>Pass rate</Table.Th></Table.Tr></Table.Thead>
@@ -215,7 +215,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       {analysisError && <Alert color="yellow" title="Engine analysis unknown">{analysisError}</Alert>}
       {analysis && analysis.map((entry) => <Paper key={entry.target} p="md" withBorder>
         <Text fw={600}>Engine analysis, target {entry.target} (cost_bench.py summarise)</Text>
-        <Table><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
+        <Table className="leaf-table"><Table.Tbody>{analysisLines(entry).map(([label, value]) => <Table.Tr key={label}>
           <Table.Th scope="row">{label}</Table.Th><Table.Td><Code>{value}</Code></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>)}
       {comparisons.length > 0 && <Paper p="md" withBorder>
