@@ -18,7 +18,8 @@ through one fetch stub:
 - a run page with its exact command, cases and case evidence;
 - Configure with a real draft loaded, its draft-test verdicts, the apply review and the apply
   result;
-- Activity with an apply entry, its rollback preview, and a refused rollback's result.
+- Activity with an apply entry, its rollback preview, and the engine's busy refusal of a rollback;
+- the replay launch's spend preview, with its exploratory alert and resolved target revisions.
 
 Engine payloads are the files the frontend unit tests read; the other states are in
 `a11y-states.json`, each entry naming the unit test or response type it is copied from. The stub
@@ -39,7 +40,7 @@ Chrome fails it instead of skipping it; the plain unit-suite run reaches it wher
 | ARIA references resolve; images, canvases and progress bars are named | 1.1.1, 4.1.2 |
 | A scrolling region is a Tab stop, with a name on a region or landmark role | 2.1.1, 4.1.2 |
 | Trend chart labels are at least 11 px as drawn, at every width; a phone scrolls the chart inside its region | 1.4.4, 1.4.10 |
-| `Tab` from the skip link reaches every focusable control (compared as sets) and leaves the page; each stop's look changes from its unfocused state, by a ring of 3:1 against what it paints over that clipping ancestors leave at least half of, or a shadow of 3:1, and is not covered. Walked at 320 px light and 1280 px dark, and on each populated state at 320 px | 2.1.1, 2.1.2, 2.4.7, 2.4.11 |
+| `Tab` from the skip link reaches every focusable control (compared as sets) and leaves the page; each stop's look changes from its unfocused state, by a ring of 3:1 against what it paints over that clipping ancestors leave at least half of, or a shadow of 3:1, and is not covered. Walked at 320 px light and 1280 px dark, and on each populated state, reports included, at 320 px light | 2.1.1, 2.1.2, 2.4.7, 2.4.11 |
 
 Two planted-defect tests prove the rules fire before the real screens are trusted: one plants a
 defect for every rule the checker can report, and asserts that list against the checker's own

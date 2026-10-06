@@ -159,7 +159,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
           {preview
             ? <Stack gap={4}>
                 <Text size="sm">Native commands, one per target. The Studio gives target two only what target one left of the cap.</Text>
-                <Code block>{preview.command}</Code>
+                <Code block className="wrapped-command">{preview.command}</Code>
               </Stack>
             : <Text c="dimmed" size="sm">The native benchmark commands appear once the preview resolves both targets.</Text>}
           <Group justify="flex-end">

@@ -82,9 +82,7 @@ STUBS = r"""
       case '/api/runs/replay/catalog': return original(input, init).then((answer) => answer.json())
         .then((catalog) => reply({ ...catalog, packs: [], default_pack: null,
           tasks: [{ id: 'fixture-task', label: 'fixture-task' }] }));
-      case '/api/runs/replay/preview': return reply({ valid: true, errors: [], request: body.request,
-        estimate: { amount_usd: 1.25, basis: 'fixture', sample_count: 6 }, confirmation_token: 'fixture',
-        caps: { max_budget_usd: '2', spend_cap_usd: '20' }, command: 'citizen runs replay --fixture' });
+      case '/api/runs/replay/preview': return reply(states.replayPreview);
       case '/api/runs/replay/start': return reply({ run_id: 'fixture-replay' });
       case '/api/runs/replay/result': return reply({ schema_version: 1, progress: states.replayProgress.rows,
         run: { run_id: 'fixture-replay', status: 'succeeded' },
@@ -111,8 +109,8 @@ STUBS = r"""
       case '/api/configure/apply': return reply({ ...states.applyResult, message: 'Applied draft ' + body.draft + '.' });
       case '/api/configure/apply/rollback/preview': return reply(states.rollbackPreview);
       // A completed rollback reloads the timeline at once, so its result view never stays on screen;
-      // the refused one stays, and is the result view the audit can read.
-      case '/api/configure/apply/rollback': return reply({ ...states.rollbackRefused, review: states.rollbackPreview });
+      // the engine's busy refusal stays, and is the result view the audit can read.
+      case '/api/configure/apply/rollback': return reply(states.rollbackRefused);
     }
     if (url === '/api/activity') return reply(states.activity);
     if (method !== 'GET' && !READS.has(url)) {
@@ -172,8 +170,13 @@ UNREACHED = r"""
 """
 
 # Settled: no loader or busy region, a level-one heading, and the text unchanged across polls.
+# The page's text and the colours its headings and paragraphs resolve to must hold across two polls,
+# so a theme switch that lands after the route renders is waited out too.
 SETTLED = ("(() => { const busy = document.querySelector('[aria-busy=true], .mantine-Loader-root');"
-           " const text = document.body.innerText; const stable = text === globalThis.__a11yText;"
+           " const paint = [...document.querySelectorAll('main h1, main h2, main p')].slice(0, 40)"
+           ".map(node => getComputedStyle(node).color).join();"
+           " const text = document.documentElement.dataset.mantineColorScheme + paint + document.body.innerText;"
+           " const stable = text === globalThis.__a11yText;"
            " globalThis.__a11yText = text;"
            " const heading = document.querySelector('main h1');"
            " return !busy && heading !== null && !heading.dataset.a11yStale && stable; })()")
@@ -311,6 +314,11 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             "httpOnly": True, "sameSite": "Strict",
         })
         self._viewport(width, scheme)
+        # Navigating to `#/` from another route stays in the page, so the old page is marked first.
+        try:
+            self.devtools.evaluate(LEAVE)
+        except RuntimeError:
+            pass
         self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
@@ -499,6 +507,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                         failures.append("%s populated @%dpx %s [%s] %s: %s" % (
                             route, width, scheme, violation["rule"], violation["node"],
                             violation["detail"]))
+                    if width == PHONE and scheme == "light":
+                        failures.extend(self._tab_walk(route + " populated"))
         self._report(failures)
 
     def test_every_rule_fires_on_a_planted_violation(self):
@@ -649,17 +659,18 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                 self._open(width, scheme)
                 self._install_stubs()
                 self._visit("/experiments", scheme)
-                self._fill_experiments()
-                self._audit_into(failures, "/experiments populated @%dpx %s" % (width, scheme))
+                label = "/experiments populated @%dpx %s" % (width, scheme)
+                self._fill_experiments(failures, label)
+                self._audit_into(failures, label)
                 if width == PHONE and scheme == "light":
                     failures.extend(self._tab_walk("/experiments populated"))
                 self._assert_nothing_refused()
         self._report(failures)
 
-    def _fill_experiments(self) -> None:
+    def _fill_experiments(self, failures: List[str], label: str) -> None:
         self._wait("__has('Compare two runs, paired by task.')", "the compare panel did not render")
-        for label in ("Base run id", "Candidate run id"):
-            self._set_label(label, "00000000-0000-4000-8000-000000000011")
+        for field in ("Base run id", "Candidate run id"):
+            self._set_label(field, "00000000-0000-4000-8000-000000000011")
         self._click("Compare")
         self._wait("__has('Compared by the engine.')", "the compare fixture did not render")
 
@@ -694,6 +705,10 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         self._wait("[...(%s).querySelectorAll('button')].some(b => b.textContent === 'Preview spend' && !b.disabled)" % replay,
                    "the replay preview never became ready")
         self.devtools.evaluate("[...(%s).querySelectorAll('button')].find(b => b.textContent === 'Preview spend').click()" % replay)
+        self._wait("__has('Exploratory: a task subset') && __has('aaaaaaaaaaaa')",
+                   "the replay preview's sampling and resolved revisions did not render")
+        # The preview gives way to the run once it starts, so it is audited here.
+        self._audit_into(failures, label + " replay preview")
         self._click("Confirm and run")
         self._wait("__has('Engine analysis, target ') && document.querySelector('[aria-label=\"Live replay progress\"]') !== null"
                    " && document.querySelector('[aria-label=\"Cost and pass rate\"]') !== null",
@@ -773,7 +788,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                     failures.extend(self._tab_walk("/activity rollback preview"))
                 self._set_label("Confirm the applied draft to roll back", "tuning")
                 self._click("Roll back tuning")
-                self._wait("__has('citizen sync (pid 1) holds the sync lock')", "the rollback result fixture did not render")
+                self._wait("__has('citizen sync (pid 1) holds the sync lock') && __has('nothing was changed')",
+                           "the rollback result fixture did not render")
                 self._audit_into(failures, label + " rollback refused")
                 self._assert_nothing_refused()
         self._report(failures)

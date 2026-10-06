@@ -224,21 +224,108 @@
     "log": []
   },
   "rollbackRefused": {
-    "_from": "studio/tests/rollback.test.ts result({ status: \"refused\", error_code: \"busy\", holder: \"citizen sync (pid 1)\" }); its review is rollbackPreview at run time",
+    "_from": "the engine's busy refusal: lib/harness_core/studio/rollback.py rollback() through apply.py _result(), with the lock message from reconcile.lock()",
     "schema_version": 1,
     "status": "refused",
     "applied": false,
     "error_code": "busy",
-    "message": "Rolled back.",
+    "message": "another harness configuration operation is running: citizen sync (pid 1); nothing was changed",
     "holder": "citizen sync (pid 1)",
-    "apply_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "apply_id": "",
     "review": {},
     "doctor": {
-      "status": "passed",
+      "status": "skipped",
       "checks": []
     },
-    "restored": true,
+    "restored": false,
     "log": []
+  },
+  "replayPreview": {
+    "_from": "lib/harness_core/studio/replay.py preview_resolved(): the supervisor's spend preview with valid, errors, the resolved request, command and sampling_payload()",
+    "estimate": {
+      "amount_usd": null,
+      "basis": "no_history",
+      "sample_count": 0,
+      "suite_id": "live-replay",
+      "case_count": 4
+    },
+    "caps": {
+      "max_budget_usd": "2",
+      "spend_cap_usd": "20"
+    },
+    "pricing": {
+      "source": "api_credit",
+      "basis": "money charged to API credit"
+    },
+    "confirmation_required": true,
+    "confirmation_token": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "case_identities": [],
+    "valid": true,
+    "errors": [],
+    "request": {
+      "targets": [
+        {
+          "kind": "release",
+          "ref": "v0.17.0",
+          "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "version": "0.17.0",
+          "draft": null,
+          "config_digest": null
+        },
+        {
+          "kind": "draft",
+          "ref": "fixture-draft",
+          "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "version": null,
+          "draft": "fixture-draft",
+          "config_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ],
+      "model": "claude-test",
+      "repetitions": 2,
+      "tasks": [
+        "fixture-task"
+      ],
+      "max_budget_usd": "2",
+      "spend_cap_usd": "20",
+      "pre_registration": "fixture pre-registration",
+      "pack": null,
+      "evidence": "exploratory"
+    },
+    "command": "python3 scripts/cost_bench.py replay --tag v0.17.0 --tasks fixture-task --reps 2 --spend-cap 20\npython3 scripts/cost_bench.py replay --tag fixture-draft --tasks fixture-task --reps 2 --spend-cap 20",
+    "sampling": {
+      "evidence": "exploratory",
+      "targets": [
+        {
+          "target": {
+            "kind": "release",
+            "ref": "v0.17.0",
+            "revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "version": "0.17.0",
+            "draft": null,
+            "config_digest": null
+          },
+          "evidence": "exploratory"
+        },
+        {
+          "target": {
+            "kind": "draft",
+            "ref": "fixture-draft",
+            "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "version": null,
+            "draft": "fixture-draft",
+            "config_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          },
+          "evidence": "exploratory"
+        }
+      ],
+      "registered": null,
+      "requested": {
+        "tasks": 1,
+        "trials": 2
+      },
+      "note": "Exploratory: a task subset, a draft or a replay with no pre-registration writes no history row and is never cited as evidence."
+    }
   },
   "nativeCatalog": {
     "_from": "studio/tests/native-acceptance.test.ts catalog",
