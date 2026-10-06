@@ -244,12 +244,12 @@ recognised:
 - **agents** — the spawn's `subagent_type` is one of the framework's own layer names. Nothing else
   puts that name there, so it is enough on its own.
 - **identifiers** — a literal only the framework's routed text carries, such as the path of one of
-  its prompt files. Never enough alone, because a brief that edits the override templates quotes
-  the same path; an identifier counts only with a phrase beside it, or when a sentence tells the
-  subagent to follow or apply it. A client writing the brief itself keeps the prompt file, because
-  the subagent must read it, and drops the framework's sentences, so the directive is what
-  separates the layer's work from a brief that edits the file or reads it for another reason
-  (#739).
+  its prompt files. A client writing the brief itself keeps the prompt file, because the subagent
+  must read it, and drops the framework's sentences, so a declared prompt file in an unnamed
+  spawn's brief is refused by default. It runs only when every mention of the file is work on the
+  file: an edit, or a brief that only summarises, counts, copies, explains or compares it. Telling
+  the layer's work apart by its verbs ("follow", "apply") leaked, because most rewordings use
+  none of them (#739).
 - **phrases** — whole sentences of the framework's own prompt text. One is a coincidence;
   `corroboration` of them, two by default, is not.
 

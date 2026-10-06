@@ -2,7 +2,7 @@
 """A brief that tells the subagent to follow a framework's layer prompt file is that layer's work,
 however the client worded it (#739). The 0.13.0 qualification observed a model write such a brief
 itself: it kept the prompt file and quoted none of the descriptor's sentences, and it ran unconfined.
-A brief that edits the file, or reads it for another reason, still runs.
+A brief that edits the file, or only summarises, counts, copies, explains or compares it, still runs.
 Run: python3 -m unittest discover tests
 """
 import json
@@ -76,8 +76,7 @@ UNDIRECTED = {
     "third person": "Tell me whether a reviewer who follows " + PROMPT + " would miss overflow.",
     "follow elsewhere": ("Count the lines of " + PROMPT + ". Then run the gate and report the "
                          "count."),
-    # A directive that is negated, or that governs something other than the file, is not one.
-    "negated next sentence": "Read " + PROMPT + ". Do not follow it; just list its headings.",
+    # A look at the file, its format, a match or an explanation, runs.
     "according to something else": ("Check whether " + PROMPT + " is formatted according to "
                                     "the house template."),
     "your checklist after the file": ("Read " + PROMPT + " and tell me if it matches your review "
@@ -86,6 +85,17 @@ UNDIRECTED = {
     "per something else": "Explain what " + PROMPT + " does per the docs.",
     "directive in another clause": ("Follow the commit convention, and summarise " + PROMPT
                                     + "."),
+    "edit that governs the file": ("Update the wording of " + PROMPT + " so reviewers follow it "
+                                   "more easily."),
+    # A longer file name that starts with the declared path is another file.
+    "a longer file name": "Follow " + PROMPT + ".bak on calc.py.",
+    "a longer directory name": "Follow " + PROMPT + "-notes/checklist on calc.py.",
+}
+# A bare read of the prompt file whose purpose is said elsewhere, or not at all. None of these is a
+# directive aimed at the file, so `_directed` stays false for each; but reading a layer prompt file
+# for no stated purpose is what taking on the layer looks like, so each is refused by default.
+BARE_READS = {
+    "negated next sentence": "Read " + PROMPT + ". Do not follow it; just list its headings.",
     "a chain that changes subject": ("Read " + PROMPT + ". The gate is slow today. Follow them "
                                      "anyway."),
     "an unrelated it clause": ("Read " + PROMPT + " — it is used as a fixture in this test. "
@@ -97,11 +107,6 @@ UNDIRECTED = {
     "guidance after another clause": ("Read " + PROMPT + " — it is used as a fixture, and our "
                                        "review instructions require logging. Follow those "
                                        "instructions."),
-    "edit that governs the file": ("Update the wording of " + PROMPT + " so reviewers follow it "
-                                   "more easily."),
-    # A longer file name that starts with the declared path is another file.
-    "a longer file name": "Follow " + PROMPT + ".bak on calc.py.",
-    "a longer directory name": "Follow " + PROMPT + "-notes/checklist on calc.py.",
     # "The instructions" that say where they live are another file's.
     "another file's instructions": ("Read " + PROMPT + " and follow the instructions in "
                                     "docs/other.md."),
@@ -150,10 +155,19 @@ class DirectedIdentifierTests(unittest.TestCase):
                 self.assertIsNotNone(match, msg=brief)
                 self.assertEqual(match["role"], "reviewer")
 
-    def test_a_brief_that_edits_or_merely_reads_the_file_is_not(self):
+    def test_a_brief_that_edits_or_only_looks_at_the_file_is_not(self):
         for name, brief in UNDIRECTED.items():
             with self.subTest(name=name):
                 self.assertIsNone(self.classify(brief), msg=brief)
+
+    def test_a_bare_read_is_refused_by_default_though_it_carries_no_directive(self):
+        for name, brief in BARE_READS.items():
+            with self.subTest(name=name):
+                self.assertFalse(frameworks._directed("review-prompts/edge-case-hunter.md",
+                                                      frameworks.normalise(brief)), msg=brief)
+                match = self.classify(brief)
+                self.assertIsNotNone(match, msg=brief)
+                self.assertEqual(match["role"], "reviewer")
 
     def test_a_directive_with_no_declared_prompt_file_is_not(self):
         self.assertIsNone(self.classify("Follow the review checklist in docs/review.md on calc.py."))
