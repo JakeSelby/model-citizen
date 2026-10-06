@@ -267,7 +267,7 @@ export function ConfigurePage() {
   const unsaved = Object.keys(changes).length;
   return (
     <Stack gap="xl">
-      <Group align="flex-end" justify="space-between">
+      <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / Configure</Text>
           <Title order={1}>See what is in force. Change it in a draft.</Title>

@@ -125,7 +125,7 @@ export function RunDetailPage() {
   }, [detail, navigate, rerunPending]);
 
   return <Stack gap="xl">
-    <div><Text className="eyebrow">Studio / Experiments / Run</Text><Title order={1}>Run detail</Title>
+    <div className="page-heading"><Text className="eyebrow">Studio / Experiments / Run</Text><Title order={1}>Run detail</Title>
       <Text component={NavLink} to="/experiments">Back to experiments</Text></div>
     {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
     {!detail && !error && <EvidenceState kind="loading" title="Loading run">Reading indexed evidence.</EvidenceState>}

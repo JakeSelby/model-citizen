@@ -131,7 +131,7 @@ export function RuleHealthPage() {
         <Title order={1}>Every rule, measured or not.</Title>
         <Text c="dimmed" mt="xs">Status, detector hits, precision and context cost, each as its engine reports it. Nothing is switched off for you.</Text>
       </div>
-      <Button variant="default" onClick={() => void refresh()} loading={loading}>Refresh</Button>
+      <Button loading={loading} onClick={() => void refresh()} size="compact-sm" variant="subtle">Refresh</Button>
     </Group>
     {/* Only this one line is live, so the draft test's own updates are not read out. */}
     <Text aria-live="polite" className="visually-hidden" component="p" role="status">{tryStatusLine(trying?.result ?? null, trying?.error ?? "")}</Text>

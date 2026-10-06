@@ -153,7 +153,7 @@ export function SpendPage() {
     staleTime: 30_000,
   });
   return <Stack gap="lg">
-    <div>
+    <div className="page-heading">
       <Text className="eyebrow">Studio / Reports</Text>
       <Title order={1}>Spend and usage</Title>
       <Text c="dimmed" mt="xs">Spend by day, model, role, repository and session, exactly as <code>citizen usage --json</code> reports it.</Text>

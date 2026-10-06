@@ -55,7 +55,7 @@ function DoctorRow({ check }: { check: DoctorCheck }) {
 }
 
 function runTone(status: string) {
-  return status === "succeeded" ? "success" : status === "failed" ? "danger" : "info";
+  return status === "succeeded" ? "success" : status === "failed" ? "danger" : "neutral";
 }
 
 export function DeterministicOverview({ overview, children }: { overview: Overview; children?: ReactNode }) {
@@ -75,19 +75,20 @@ export function DeterministicOverview({ overview, children }: { overview: Overvi
         </div>
         <div className="strip-item">
           <dt>Doctor checks</dt>
-          <dd className="strip-value" data-tone={summary.tone}>{summary.label}</dd>
-          <dd className="strip-note">{overview.doctor.checks.length} checks</dd>
+          {overview.doctor.status === "failed"
+            ? <dd className="strip-value" data-tone="danger">Unavailable</dd>
+            : <>
+              <dd className="strip-value" data-tone={attention.length ? "warning" : undefined}>{attention.length}</dd>
+              <dd className="strip-note">Needs attention · {overview.doctor.checks.length} checks</dd>
+            </>}
         </div>
         <div className="strip-item">
           <dt>Projection drift</dt>
           <dd className="strip-value" data-tone={driftTone}>{driftLabel}</dd>
         </div>
-        <div className="strip-item">
-          <dt>Recent runs</dt>
-          <dd className="strip-value">{overview.runs.items.length}</dd>
-        </div>
       </dl>
       <div className="release-line">
+        <StatusBadge tone={summary.tone}>{summary.label}</StatusBadge>
         <Text fw={600} size="sm">{releaseSummary(overview)}</Text>
         <Text c="dimmed" size="sm">Updates are never installed automatically.</Text>
         {overview.release.changelog_url && <Anchor href={overview.release.changelog_url} size="sm" target="_blank" rel="noreferrer">Read changelog</Anchor>}
@@ -144,7 +145,7 @@ export function OverviewPage() {
   return <Stack gap={0}>
     <Group align="flex-end" className="page-heading" justify="space-between">
       <div><Text className="eyebrow">Studio / Hub</Text><Title order={1}>Your harness at a glance.</Title><Text c="dimmed" size="sm">Installed state, local evidence, and the next useful action.</Text></div>
-      <Button component={NavLink} size="compact-sm" to="/experiments" variant="filled">Open experiments</Button>
+      <Button component={NavLink} size="compact-sm" to="/experiments" variant="subtle">Open experiments</Button>
     </Group>
 
     {overview.isPending && <section className="hub-section"><EvidenceState kind="loading" title="Loading operational evidence">Reading the same local sources as citizen doctor, diff, and catalog.</EvidenceState></section>}

@@ -25,6 +25,7 @@ const overview: Overview = {
   runs: { status: "current", message: null, items: [
     { run_id: "r-0193", suite_id: "live-replay", status: "succeeded", created_at: "2026-10-06T08:00:00Z", target_kind: "draft" },
     { run_id: "r-0191", suite_id: "hook-matrix", status: "failed", created_at: "2026-10-05T08:00:00Z", target_kind: "release" },
+    { run_id: "r-0194", suite_id: "unit", status: "running", created_at: "2026-10-06T09:00:00Z", target_kind: "installed" },
   ] },
   commands: { doctor: "citizen doctor", diff: "citizen diff", catalog: "citizen catalog", sync: "citizen sync" },
 };
@@ -56,13 +57,16 @@ test("the Hub opens on one number strip, not a card", () => {
     .map(([, label, value]) => [label, value]);
   assert.deepEqual(items, [
     ["Installed system", "v0.15.0"],
-    ["Doctor checks", "5 items to review"],
+    ["Doctor checks", "2"],
     ["Projection drift", "3 changed"],
-    ["Recent runs", "2"],
   ]);
-  // Status colour is reserved for status: the attention and drift values carry a tone, the counts do not.
-  assert.match(strip, /<dd class="strip-value" data-tone="warning">5 items to review<\/dd>/);
-  assert.match(strip, /<dd class="strip-value">2<\/dd>/);
+  // The doctor value is the engine's own attention labels, not the system summary with drift.
+  assert.match(strip, /<dd class="strip-value" data-tone="warning">2<\/dd><dd class="strip-note">Needs attention · 3 checks<\/dd>/);
+  // The capped run list is never counted into a number.
+  assert.doesNotMatch(strip, /Recent runs/);
+  const failed = render(h(DeterministicOverview, { overview: { ...overview,
+    doctor: { status: "failed", message: "Doctor checks are unavailable.", checks: [] } } }));
+  assert.match(failed, /<dt>Doctor checks<\/dt><dd class="strip-value" data-tone="danger">Unavailable<\/dd>/);
 });
 
 test("the Hub lists doctor checks and runs as compact rows with their ids and status", () => {
@@ -71,6 +75,9 @@ test("the Hub lists doctor checks and runs as compact rows with their ids and st
   assert.match(html, /checkout not trusted/);
   const runs = html.match(/<ul class="run-list">(.*?)<\/ul>/)?.[1] ?? "";
   assert.match(runs, /<code class="run-id">r-0193<\/code>.*live-replay.*data-tone="success">succeeded/);
+  // A running status takes the neutral dot: teal is the accent, never a status.
+  assert.match(runs, /<code class="run-id">r-0194<\/code>.*data-tone="neutral">running/);
+  assert.doesNotMatch(runs, /data-tone="info"/);
   assert.match(runs, /<code class="run-id">r-0191<\/code>.*hook-matrix.*data-tone="danger">failed/);
 });
 

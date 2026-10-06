@@ -181,7 +181,7 @@ export function TrendsPage() {
         <Title order={1}>Each measure across versions, beside the proof set.</Title>
         <Text c="dimmed" mt="xs">Ratios, pass rates and the static figure by version and date, each as its engine stored it, with the proof set as citizen evidence verify reports it.</Text>
       </div>
-      <Button variant="default" onClick={() => void refresh()} loading={loading}>Refresh</Button>
+      <Button loading={loading} onClick={() => void refresh()} size="compact-sm" variant="subtle">Refresh</Button>
     </Group>
     {error && <EvidenceState kind="error" title="Trends could not be read">{error}</EvidenceState>}
     {!trends && loading && <EvidenceState kind="loading" title="Reading the run index and the proof set" />}

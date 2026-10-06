@@ -315,7 +315,7 @@ export function FirstRunPage() {
 
   if (!status) {
     return (
-      <Stack gap="md">
+      <Stack className="page-heading" gap="md">
         <Title order={1}>Set up Model Citizen</Title>
         <LiveMessages error={error} message={error ? "" : "Reading where setup stands…"} />
       </Stack>
@@ -325,13 +325,13 @@ export function FirstRunPage() {
   const label = status.steps.find((item) => item.id === step)?.label ?? "";
   return (
     <Stack gap="xl">
-      <Group align="flex-end" justify="space-between">
+      <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / First run</Text>
           <Title order={1}>From this install to an applied setup.</Title>
           <Text c="dimmed" mt="xs">{liveChangeNotice(status)}</Text>
         </div>
-        <Button component={NavLink} to="/" variant="default">Leave setup</Button>
+        <Button component={NavLink} size="compact-sm" to="/" variant="subtle">Leave setup</Button>
       </Group>
       <GuideProgress active={step} onSelect={go} status={status} />
       <LiveMessages error={error} message={message} />

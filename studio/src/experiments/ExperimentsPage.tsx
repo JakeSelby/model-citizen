@@ -199,7 +199,7 @@ export function ExperimentsPage() {
 
   return (
     <Stack gap="xl">
-      <div>
+      <div className="page-heading">
         <Text className="eyebrow">Studio / Experiments</Text>
         <Title order={1}>Run checks, native acceptance or a live replay.</Title>
         <Text c="dimmed" mt="xs">Free suites stay local. Paid experiments show their estimate, resolved targets and hard caps before any model process starts.</Text>

@@ -291,7 +291,7 @@ class StudioBrowserTests(unittest.TestCase):
             "scheme:document.documentElement.dataset.mantineColorScheme,"
             "canvas:getComputedStyle(document.body).backgroundColor,"
             "buttonForeground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).color,"
-            "buttonBackground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor,"
+            "buttonBackground:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor),"
             "direction:getComputedStyle(document.querySelector('.studio-shell')).flexDirection,"
             "navbarWidth:document.querySelector('.studio-navbar').getBoundingClientRect().width,"
             "stylePadding:getComputedStyle(document.querySelector('.overview-card')).paddingTop,"
@@ -333,7 +333,7 @@ class StudioBrowserTests(unittest.TestCase):
         light = json.loads(self.devtools.evaluate("JSON.stringify({"
             "canvas:getComputedStyle(document.body).backgroundColor,"
             "foreground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).color,"
-            "background:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor"
+            "background:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor)"
             "})"))
         self.assertEqual(scheme, "light")
         self.assertEqual(light["canvas"], "rgb(255, 255, 255)")

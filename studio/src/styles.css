@@ -129,7 +129,6 @@ textarea:focus-visible {
   --mantine-color-text: var(--studio-ink-primary);
   --mantine-color-body: var(--studio-surface-raised);
   --mantine-color-default-border: var(--studio-control-border);
-  --app-shell-border-color: var(--studio-border-default);
   /* A busy or disabled control stays readable at AA while it waits. */
   --mantine-color-disabled: var(--studio-surface-subtle);
   --mantine-color-disabled-color: var(--studio-ink-secondary);
@@ -141,6 +140,9 @@ textarea:focus-visible {
 /* Mantine's static shell scrolls its own overflow; the page scrolls instead, so a too-wide
    child shows as page overflow (and the reflow audit sees it) rather than a hidden inner scroller. */
 .studio-shell.studio-shell { overflow: visible; }
+
+/* Above Mantine's own scheme rule, so the navbar and header hairlines are the token. */
+.studio-shell.studio-frame.studio-frame { --app-shell-border-color: var(--studio-border-default); }
 
 .studio-navbar {
   gap: var(--studio-space-1);
@@ -198,8 +200,11 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: var(--studio-space-4);
   min-width: 0;
-  height: var(--studio-header-height);
-  padding: 0 var(--studio-space-6);
+  height: auto;
+  min-height: var(--studio-header-height);
+  flex-wrap: wrap;
+  row-gap: var(--studio-space-1);
+  padding: var(--studio-space-1) var(--studio-space-6);
   background: var(--studio-surface-raised);
 }
 
@@ -249,7 +254,7 @@ textarea:focus-visible {
 .main-content { min-width: 0; padding: var(--studio-space-4) var(--studio-space-6) var(--studio-space-6); }
 .main-content:focus { outline: none; }
 .main-content :where(h1, h2, p) { overflow-wrap: anywhere; }
-.studio-footer { display: flex; justify-content: space-between; gap: var(--studio-space-4); padding: var(--studio-space-4) var(--studio-space-6); border-top: var(--studio-border-width) solid var(--studio-border-default); color: var(--studio-ink-secondary); }
+.studio-shell .studio-footer { position: static; display: flex; height: auto; justify-content: space-between; gap: var(--studio-space-4); padding: var(--studio-space-4) var(--studio-space-6); border-top: var(--studio-border-width) solid var(--studio-border-default); color: var(--studio-ink-secondary); background: var(--studio-surface-canvas); }
 
 .skip-link {
   position: fixed;
@@ -277,7 +282,12 @@ textarea:focus-visible {
   letter-spacing: var(--studio-label-tracking);
 }
 
-.page-heading { padding-bottom: var(--studio-space-4); }
+.page-heading { padding-bottom: var(--studio-space-3); }
+/* The header already names the page: the heading block is demoted to one quiet line. */
+.page-heading .eyebrow { display: none; }
+.page-heading h1,
+.main-content .page-heading h1 { font-size: var(--studio-text-md); font-weight: 600; line-height: 1.4; letter-spacing: 0; }
+.page-heading .mantine-Text-root[data-c="dimmed"] { margin-top: 0 !important; font-size: var(--studio-text-sm); }
 
 .page-heading h1,
 .main-content h1 {
@@ -321,6 +331,9 @@ textarea:focus-visible {
 }
 
 .strip-item:first-child { padding-left: 0; border-left: 0; }
+/* Wrapped rows start without a divider: the strip clips each item's left edge at its own row start. */
+.number-strip { overflow: hidden; }
+.strip-item { margin-left: -1px; }
 .strip-item dt { color: var(--studio-ink-secondary); font-size: var(--studio-text-xs); }
 .strip-item dd { margin: 0; }
 
@@ -347,10 +360,11 @@ textarea:focus-visible {
   border-top: var(--studio-border-width) solid var(--studio-border-default);
 }
 
+/* One column, so each report row keeps its detail on one 30 px line. */
 .hub-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
-  gap: var(--studio-space-8);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--studio-space-4);
 }
 
 .overview-card { min-width: 0; }
@@ -492,7 +506,7 @@ textarea:focus-visible {
 .status-badge[data-tone="success"]::before { background: var(--studio-success-mark); }
 .status-badge[data-tone="warning"]::before { background: var(--studio-warning-mark); }
 .status-badge[data-tone="danger"]::before { background: var(--studio-danger-mark); }
-.status-badge[data-tone="info"]::before { background: var(--studio-primary); }
+.status-badge[data-tone="info"]::before { background: var(--studio-neutral-mark); }
 
 [data-tone="success"], .diff-line[data-kind="added"] { color: var(--studio-success); background: var(--studio-success-wash); }
 [data-tone="warning"] { color: var(--studio-warning); background: var(--studio-warning-wash); }
@@ -650,9 +664,7 @@ textarea:focus-visible {
 }
 
 @media (max-width: 64rem) {
-  .hub-grid { grid-template-columns: 1fr; gap: var(--studio-space-4); }
   .settings-grid { grid-template-columns: 1fr; }
-  .studio-header { flex-wrap: wrap; height: auto; min-height: var(--studio-header-height); padding-block: var(--studio-space-2); }
 }
 
 /* One column on a phone: the navbar becomes a wrapping strip above the header, and every grid row

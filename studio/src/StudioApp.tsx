@@ -33,7 +33,7 @@ import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
 function FoundationPage({ title, description }: { title: string; description: string }) {
   return (
     <Stack gap="lg">
-      <div>
+      <div className="page-heading">
         <Text className="eyebrow">Studio / {title}</Text>
         <Title order={1}>{title}</Title>
         <Text c="dimmed" mt="xs">{description}</Text>
@@ -158,8 +158,9 @@ function StudioFrame() {
             <Route path="*" element={<Navigate replace to="/" />} />
           </Routes>
         </div>
-        <footer className="studio-footer"><Text size="xs">Local workspace · Evidence stays linked to its source</Text><Text size="xs">Model Citizen Studio {version}</Text></footer>
       </AppShell.Main>
+      {/* Outside <main>, so the footer keeps its contentinfo landmark. */}
+      <AppShell.Footer className="studio-footer"><Text size="xs">Local workspace · Evidence stays linked to its source</Text><Text size="xs">Model Citizen Studio {version}</Text></AppShell.Footer>
     </AppShell>
   );
 }
