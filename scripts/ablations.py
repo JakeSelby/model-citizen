@@ -20,6 +20,9 @@ and `attribution_problems` names a row whose removed entry is still in its attri
 A `removes` may also be a list of one kind's entries, a whole listing (`skills/*`): `check_entries`
 then refuses it unless it names every unit of that kind the tag holds switched on. A core hook's
 removal declares `core_switches_acknowledged` in its selection, as a user must to switch one off.
+A file no switch removes, the user-level CLAUDE.md, is withheld from the image instead
+(`WITHHOLDABLE`), and such an arm is admitted by `withheld_differences`, its image manifest
+against control's, since the resolver cannot see the file.
 
 The extended sweep (#1184) adds what each arm is judged on. An arm may name its `layer`, `what`
 it removes in words, its own pack `tasks`, its `long_session` scenarios and its pre-registered
@@ -70,7 +73,19 @@ CORE_ACK = "core_switches_acknowledged"
 SURFACE_MOVES = {"skills": ("init_skills", "init_slash_commands"),
                  "workflows": ("init_skills", "init_slash_commands"),
                  "roles": ("init_agents",), "rules": ("init_memory_paths",),
-                 "stances": ("init_memory_paths",), "hooks": ()}
+                 "stances": ("init_memory_paths",), "hooks": (), "instructions": ("init_memory_paths",)}
+# Files the sync always writes that no selection switch removes, by the `kind/unit` entry an arm
+# withholds each with, as the image manifest names it. The arm's selection holds the entry `off`;
+# the resolver ignores a user-configuration key that is no selection kind, so only the image
+# changes: the `harness-selected` stage of scripts/replay-arm.Dockerfile deletes the file after
+# the sync. The user-level CLAUDE.md also carries the `@` import of CLAUDE.personal.md, which
+# stays on disk and is no longer loaded.
+WITHHOLDABLE = {"instructions/CLAUDE.md": "home:.claude/CLAUDE.md"}
+# The source a tag must ship for its sync to write each withholdable file.
+WITHHOLDABLE_SOURCES = {"instructions/CLAUDE.md": "primitives/instructions.md"}
+# What a withholding arm's image may hold differently from control's besides the withheld file:
+# its installed selection and the sync's own records of the run, which no session loads.
+WITHHELD_MOVES = ("home:.config/agent-harness/config.json", "home:.local/state/agent-harness/")
 KEEP, TRIM, NO_EVIDENCE = "keep", "trim", "no evidence"
 OUTCOME_METRIC = equivalence.DIFFERENCE
 COST_METRIC = equivalence.RATIO
@@ -292,6 +307,50 @@ def selection(arm):
     return out
 
 
+def withheld(selection):
+    """The manifest paths `selection` withholds from its image (`WITHHOLDABLE`), sorted; [] for none."""
+    if not isinstance(selection, dict):
+        return []
+    out = []
+    for entry, path in WITHHOLDABLE.items():
+        kind, unit = ENTRY.match(entry).groups()
+        if isinstance(selection.get(kind), dict) and selection[kind].get(unit) == "off":
+            out.append(path)
+    return sorted(out)
+
+
+def _withheld_moves(path):
+    return any(path == move or (move.endswith("/") and path.startswith(move)) for move in WITHHELD_MOVES)
+
+
+def withheld_differences(control, arm, held):
+    """The parity check for an arm that withholds files: every way its image manifest differs from
+    control's other than lacking each path in `held`, its installed selection and the sync's own
+    records (`WITHHELD_MOVES`), one line each; empty when the withheld files are the only difference.
+    The resolver cannot see a withheld file, so this, not the profile fingerprint, admits the arm."""
+    control, arm = control or {}, arm or {}
+    out = ["manifest %s: control %r, arm %r" % (key, control.get(key), arm.get(key))
+           for key in sorted((set(control) | set(arm)) - {"entries", "summary"}) if control.get(key) != arm.get(key)]
+
+    def entries(manifest):
+        return {e["path"]: e for e in manifest.get("entries") or []
+                if isinstance(e, dict) and isinstance(e.get("path"), str)}
+    ours, theirs = entries(control), entries(arm)
+    for path in held:
+        if path not in ours:
+            out.append("control's image holds no %s to withhold" % path)
+        if path in theirs:
+            out.append("the arm's image still holds %s" % path)
+    for path in sorted((set(ours) | set(theirs)) - set(held)):
+        if path not in theirs:
+            out.append("only in control's image: %s" % path)
+        elif path not in ours:
+            out.append("only in the arm's image: %s" % path)
+        elif ours[path] != theirs[path] and not _withheld_moves(path):
+            out.append("differs from control's image: %s" % path)
+    return out
+
+
 def arm_ids(manifest):
     return tuple(arm["id"] for arm in manifest["arms"])
 
@@ -315,10 +374,21 @@ def check_entries(manifest, posture, root, env=None):
     kinds = posture.selection_kinds(root)
     default = posture.selection(env, strict=False, config={}, root=root)
     errors = []
+    withholdable = {e.split("/", 1)[0] for e in WITHHOLDABLE}
     for arm in manifest["arms"]:
         entry = entries_of(arm)[0]
         kind, unit = ENTRY.match(entry).groups()
         spec = kinds.get(kind)
+        if kind in withholdable and spec is None:
+            problems = _withhold_errors(arm, entry, root)
+            errors += problems
+            if not problems:
+                try:
+                    posture.selection(env, strict=True, config=selection(arm), root=root)
+                except ValueError as exc:
+                    errors.append("%s: the tag's resolver refuses its selection: %s"
+                                  % (arm["id"], str(exc).splitlines()[0]))
+            continue
         switch = (spec or {}).get("value") == "switch"
         current = (default.get(kind) or {}).get(unit)
         if spec is None:
@@ -383,6 +453,21 @@ def _listing_errors(removes, kind, default, root):
     return errors
 
 
+def _withhold_errors(arm, entry, root):
+    """Why the tag cannot run an arm that withholds a file from its image, one line each: it must
+    remove one known withholdable entry, and the tag must ship the source its sync writes it from."""
+    if "sets" in arm:
+        return ["%s: sets %s, but %s is withheld from the image; use removes" % (arm["id"], entry, entry)]
+    if isinstance(arm.get("removes"), list):
+        return ["%s: withholds %s, which is one file; name it alone" % (arm["id"], entry)]
+    if entry not in WITHHOLDABLE:
+        return ["%s: removes an unknown id %s" % (arm["id"], entry)]
+    if not (Path(root) / WITHHOLDABLE_SOURCES[entry]).is_file():
+        return ["%s: the tag ships no %s, so its sync writes no %s to withhold"
+                % (arm["id"], WITHHOLDABLE_SOURCES[entry], WITHHOLDABLE[entry])]
+    return []
+
+
 def _variant_exists(posture, kind, spec, unit, variant, root):
     directory = spec.get("directory")
     if not directory:
@@ -409,7 +494,8 @@ def admit_arms(records, fingerprints):
     """SystemExit naming every arm that may not run; None when all may. `records` maps arm name to
     its built record and `fingerprints` arm name to its resolved profile fingerprint. An arm whose
     declaration differs from control's beyond its selection, or whose selection resolves to
-    control's own profile (it toggles nothing the resolver sees), is refused before any spend."""
+    control's own profile (it toggles nothing the resolver sees), is refused before any spend. An
+    arm that withholds a file the resolver cannot see is held to `withheld_differences` instead."""
     reasons = []
     control = records[CONTROL]
     for name, record in records.items():
@@ -420,8 +506,12 @@ def admit_arms(records, fingerprints):
         if record.get("declaration", {}).get("selection") is None:
             reasons.append("%s: declares no selection" % name)
         mine, theirs = fingerprints.get(name), fingerprints.get(CONTROL)
+        held = withheld((record.get("declaration") or {}).get("selection"))
         if mine is None or theirs is None:
             reasons.append("%s: its profile fingerprint or control's cannot be resolved" % name)
+        elif held:
+            reasons += ["%s: %s" % (name, line) for line in
+                        withheld_differences(control.get("manifest"), record.get("manifest"), held)]
         elif mine == theirs:
             reasons.append("%s: its selection resolves to control's profile %s, so it toggles nothing" % (name, mine))
     if reasons:
@@ -587,6 +677,14 @@ def verification(arm):
     """How the arm's removal is proven to be the only difference from control, in words."""
     entries = entries_of(arm) if "removes" in arm else [entry_of(arm)]
     moves = sorted({f for e in entries for f in allowance(e)})
+    held = withheld(selection(arm))
+    if held:
+        return ("declares %s into its image, whose build deletes %s after the sync; refused before any "
+                "spend unless its declaration differs from control's only in that selection and its image "
+                "manifest differs from control's only by that file, its installed selection and the sync's "
+                "own records; after the run its loaded surface may differ from control's only in %s"
+                % (json.dumps(selection(arm), sort_keys=True), ", ".join(held),
+                   ", ".join(f for f in moves if not f.endswith("_sha256"))))
     return ("declares %s into its image; refused before any spend unless its declaration differs from "
             "control's only in that selection and its profile fingerprint differs from control's; after "
             "the run its loaded surface may differ from control's only in %s, and its attribution may not "

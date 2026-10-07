@@ -59,11 +59,10 @@ class ShippedSweepTests(unittest.TestCase):
     def test_every_named_layer_has_a_removal_arm(self):
         for entry in ("hooks/tier-agent-spawns", "hooks/filter-output", "hooks/usage-feed", "hooks/stop-gate",
                       "hooks/grade-bash", "skills/*", "roles/*", "workflows/*", "stances/cost",
-                      "rules/secrets", "stances/voice"):
+                      "rules/secrets", "stances/voice", "instructions/CLAUDE.md", "stances/autonomy",
+                      "stances/plan-ceremony"):
             self.assertIn(entry, self.entries)
-        unbuilt = " ".join(item["what"] for item in self.data["unbuilt"])
-        for layer in ("CLAUDE.md", "autonomy", "plan-ceremony"):
-            self.assertIn(layer, unbuilt)
+        self.assertEqual(self.data["unbuilt"], [])
 
     def test_every_arm_names_its_layer_what_it_removes_its_tasks_and_its_scores(self):
         for spec in self.data["arms"]:
