@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Unit tests for the shipped stance constraints and the conflict engine that reads them.
 
-The repository's own contradiction is the fixture: `delegation/tiered` says never to reach the
-frontier class by request, while `designer` and `design-judge` declare `tier: frontier`. The
-exception lived only in the delegation-tiering skill's prose; `primitives/constraints.json` is
-where it now holds as data, and dropping a role from its `allow` must make the engine speak up.
+The frontier rule is the fixture: `delegation/tiered` says never to reach the frontier class, so
+`primitives/constraints.json` reports any role declaring `tier: frontier` unless its contract
+records a `frontier_exception` reason. No shipped role declares it, so synthetic roles stand in.
 
 Synthetic constraints are written into temporary roots, never into a real primitive root.
 
@@ -65,23 +64,44 @@ class ShippedConstraintsTests(unittest.TestCase):
 
 
 class FrontierRoleFixtureTests(unittest.TestCase):
-    """The delegation/frontier contradiction, which the shipped exception is what settles."""
+    """The delegation/frontier rule, which only a recorded `frontier_exception` settles."""
 
     def frontier_rule(self):
         rules = [r for _, r in catalog.stance_constraints(REPO, config()) if "excludes_roles" in r]
         self.assertEqual(len(rules), 1)
         return rules[0]
 
-    def test_the_design_roles_are_the_frontier_roles_the_constraint_exempts(self):
+    def roles_root(self, temp, **headers):
+        """A root whose only roles are `headers`: name -> the frontmatter lines after `name:`."""
+        roles = Path(temp) / "primitives" / "roles"
+        roles.mkdir(parents=True)
+        for name, lines in headers.items():
+            (roles / (name + ".md")).write_text("---\nname: " + name + "\n" + lines + "---\n\nBody.\n")
+        return Path(temp)
+
+    def test_no_shipped_role_declares_frontier_and_none_is_exempted_by_name(self):
         declared = sorted(p.stem for p in ROLES.glob("*.md")
                           if catalog.frontmatter(p)[0].get("tier") == "frontier")
-        self.assertEqual(declared, ["design-judge", "designer"])
-        self.assertEqual(sorted(self.frontier_rule()["excludes_roles"]["allow"]), declared)
+        self.assertEqual(declared, [])
+        self.assertEqual(self.frontier_rule()["excludes_roles"], {"tier": "frontier"})
+        self.assertEqual(catalog.excluded_roles(REPO, self.frontier_rule()["excludes_roles"]), [])
 
-    def test_a_frontier_role_outside_the_exception_is_reported_with_the_reason(self):
+    def test_a_frontier_role_without_an_exception_is_excluded(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = self.roles_root(temp, plain="tier: frontier\n", blank="tier: frontier\nfrontier_exception:\n",
+                                   other="tier: strong\n")
+            self.assertEqual(catalog.excluded_roles(root, self.frontier_rule()["excludes_roles"]), ["blank", "plain"])
+
+    def test_a_recorded_frontier_exception_exempts_the_role(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = self.roles_root(temp, special="tier: frontier\nfrontier_exception: measured win on X\n")
+            self.assertEqual(catalog.excluded_roles(root, self.frontier_rule()["excludes_roles"]), [])
+            # The exception is about the frontier class only; another condition still matches.
+            self.assertEqual(catalog.excluded_roles(root, {"name": "special"}), ["special"])
+
+    def test_an_excluded_role_is_reported_with_the_reason(self):
         rule = copy.deepcopy(self.frontier_rule())
-        rule["excludes_roles"]["allow"] = ["design-judge"]
-        self.assertEqual(catalog.excluded_roles(REPO, rule["excludes_roles"]), ["designer"])
+        rule["excludes_roles"] = {"name": "designer"}
         with tempfile.TemporaryDirectory() as temp:
             conflicts = self.conflicts_for(Path(temp), rule)
         self.assertEqual(len(conflicts), 1)

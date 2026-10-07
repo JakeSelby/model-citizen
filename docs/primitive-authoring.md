@@ -63,14 +63,15 @@ every requirement must match and no excluded choice may be selected. Any other f
 authoring error rather than a key a later version might read.
 
 `excludes_roles` is the one condition that reads something other than the selection: the
-frontmatter of the shipped role contracts, with `allow` naming the roles a skill exempts by
-name. It is how the harness states in data that `delegation: tiered` refuses the frontier class
-while `designer` and `design-judge` are allowed to declare it:
+frontmatter of the shipped role contracts, with `allow` naming any role exempted by name. It is
+how the harness states in data that `delegation: tiered` refuses the frontier class. A role that
+must declare `tier: frontier` anyway records why in a `frontier_exception: <reason>` frontmatter
+line, which also exempts it from a `tier: frontier` condition; no shipped role carries one:
 
 ```json
 {"stances": [{"when": {"delegation": "tiered"},
-  "excludes_roles": {"tier": "frontier", "allow": ["designer", "design-judge"]},
-  "reason": "Only the design roles the delegation-tiering skill exempts may declare frontier"}]}
+  "excludes_roles": {"tier": "frontier"},
+  "reason": "Only a role with a frontier_exception reason may declare frontier"}]}
 ```
 
 A violated constraint is a finding in `bin/citizen stances --json` (a `conflicts` array) and in
