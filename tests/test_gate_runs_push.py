@@ -100,11 +100,22 @@ class Verdicts(Fixture):
         runs.record(runs.snapshot(self.repo), "## Stop gate", 0, "stop-gate")
         self.assertEqual(self.check()[0], "ask")
 
-    def test_a_docs_only_last_commit_is_exempt(self):
+    def test_a_docs_only_push_is_exempt(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.commit("docs/guide.md", "words\n")
         self.assertEqual(self.check()[0::2], ("allow", ["docs"]))
         self.commit("README.md", "more\n")
         self.assertEqual(self.check()[0::2], ("allow", ["docs"]))
+
+    def test_a_first_push_counts_every_commit_the_branch_adds(self):
+        self.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.commit("lib.py", "y = 1\n")
+        self.commit("docs/guide.md", "words\n")
+        self.assertEqual(self.check("git push -u origin topic")[0::2], ("ask", ["missing"]))
+
+    def test_a_push_with_no_resolvable_base_asks(self):
+        self.commit("docs/guide.md", "words\n")
+        self.assertEqual(self.check()[0::2], ("ask", ["missing"]))
 
     def test_a_markdown_rule_is_not_documentation(self):
         self.commit("rules/style.md", "be brief\n")
@@ -130,6 +141,9 @@ class Verdicts(Fixture):
         self.assertIsNone(self.check("git push origin --delete old-branch"))
         self.assertIsNone(self.check("git status"))
         self.assertIsNone(self.check('echo "git push"'))
+
+    def test_a_deletion_flag_on_a_later_line_does_not_exempt_the_push(self):
+        self.assertEqual(self.check("git push origin main\necho -d")[0], "ask")
 
 
 class Dispatch(Fixture):

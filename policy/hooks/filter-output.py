@@ -8,8 +8,9 @@ output narrowly, the whole run is already in context and every later turn pays f
 it. Trimming it is a computational job.
 
 Behaviour:
-  - Rewrites a command that runs one of MATCHES, after leading environment
-    assignments and `cd ... &&` prefixes are stripped.
+  - Rewrites a command that runs one of MATCHES or the recorded gate run,
+    after leading environment assignments and `cd ... &&` prefixes are
+    stripped.
   - Leaves the command alone when it is already filtered, already pipes to a
     pager, redirects to a file, or watches.
   - Emits `updatedInput` only. It never returns a permission decision, so the
@@ -33,10 +34,11 @@ MATCHES = [
     "cargo clippy", "cargo build", "npm test", "npm run test", "pnpm test",
     "yarn test", "go test", "npx tsc", "tsc", "npx vitest run", "npx jest",
 ]
+# Each runner name paired with its pattern; the name is what the log records.
 MATCH_PATTERNS = [
-    re.compile(r"(?<![\w./-])" + r"\s+".join(re.escape(w) for w in m.split()) + r"(?![\w./-])")
+    (m, re.compile(r"(?<![\w./-])" + r"\s+".join(re.escape(w) for w in m.split()) + r"(?![\w./-])"))
     for m in MATCHES
-] + [re.compile(r"(?:^|[\s/])(?:harness|citizen)\s+gate(?![\w-])")]  # the recorded gate run
+] + [("harness gate", re.compile(r"(?:^|[\s/])(?:harness|citizen)\s+gate(?![\w-])"))]
 ENV_PREFIX = re.compile(r"""^\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)\s+""")
 CD_PREFIX = re.compile(r"""^\s*cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*&&\s*""")
 PAGED = re.compile(r"\|\s*(?:head|tail|grep|less|wc)\b")
@@ -64,9 +66,9 @@ def should_filter(cmd):
 
 
 def runner(cmd):
-    """The longest of MATCHES the command runs, after its prefixes are stripped, or None."""
+    """The longest runner name in MATCH_PATTERNS the command runs, after its prefixes are stripped, or None."""
     stripped = strip_prefixes(cmd)
-    found = [m for m, p in zip(MATCHES, MATCH_PATTERNS) if p.search(stripped)]
+    found = [m for m, p in MATCH_PATTERNS if p.search(stripped)]
     return max(found, key=len) if found else None
 
 

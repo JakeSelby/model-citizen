@@ -5944,7 +5944,7 @@ def govern(command, cwd, grade, variant, event=None, runtime=""):
 
 
 _GATE_RUNS = []
-PUSH_DELETE_RE = re.compile(r"\bpush\b[^;&|]*\s(?:--delete|-d)(?=\s|$)")
+PUSH_DELETE_RE = re.compile(r"\bpush\b[^;&|\n]*\s(?:--delete|-d)(?=\s|$)")
 
 
 def gate_push(command, cwd):

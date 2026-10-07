@@ -261,6 +261,14 @@ class OutputFilter(unittest.TestCase):
         for command in ("citizen gates", "citizen trust", "echo gate"):
             self.assertFalse(module.should_filter(command), command)
 
+    def test_a_gate_run_is_logged_under_its_own_runner_name(self):
+        spec = importlib.util.spec_from_file_location("filter_output_runner", HOOKS / "filter-output.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.assertEqual(module.runner("citizen gate"), "harness gate")
+        self.assertIn("--runner 'harness gate'", module.rewrite("citizen gate", session="s1"))
+        self.assertEqual(module.runner("python3 -m unittest"), "python3 -m unittest")
+
 
 if __name__ == "__main__":
     unittest.main()

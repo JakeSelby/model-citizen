@@ -205,14 +205,32 @@ def is_doc(path):
     return path.startswith(DOC_PREFIXES) or ("/" not in path and path.endswith(DOC_ROOT_SUFFIXES))
 
 
+DEFAULT_BRANCH_REFS = ("refs/remotes/origin/HEAD", "refs/remotes/origin/main",
+                       "refs/remotes/origin/master")
+
+
+def push_base(root):
+    """The commit the push's changes are measured from: the upstream where one is set, else the
+    merge base with origin's default branch, so a first push counts every commit the branch adds
+    and not only its last. None when neither resolves."""
+    out = git(root, "rev-parse", "--verify", "-q", "@{upstream}")
+    if out:
+        return out.decode().strip()
+    for ref in DEFAULT_BRANCH_REFS:
+        out = git(root, "rev-parse", "--verify", "-q", ref)
+        if out:
+            base = git(root, "merge-base", out.decode().strip(), "HEAD")
+            return base.decode().strip() if base else None
+    return None
+
+
 def pushed_paths(root):
-    """The paths the push adds: those changed between the upstream and HEAD where an upstream is
-    set, else those of the last commit. None when git cannot say."""
-    base = git(root, "rev-parse", "--verify", "-q", "@{upstream}")
-    if base:
-        out = git(root, "diff", "--name-only", "-z", base.decode().strip(), "HEAD")
-    else:
-        out = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", "HEAD")
+    """The paths the push adds, changed between `push_base` and HEAD. None when git cannot say,
+    so the push is asked about rather than waved through as documentation."""
+    base = push_base(root)
+    if not base:
+        return None
+    out = git(root, "diff", "--name-only", "-z", base, "HEAD")
     if out is None:
         return None
     return [p for p in out.decode("utf-8", "replace").split("\0") if p]
