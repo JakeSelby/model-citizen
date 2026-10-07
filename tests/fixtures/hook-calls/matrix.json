@@ -5,6 +5,7 @@
   "base",
   "autonomy=ask",
   "autonomy=confirm-writes",
+  "autonomy=off",
   "build-vs-buy=off",
   "commits=as-you-go",
   "commits=conventional",
@@ -17,6 +18,7 @@
   "licensing=off",
   "licensing=open-source",
   "plan-ceremony=light",
+  "plan-ceremony=off",
   "testing=off",
   "testing=pragmatic",
   "voice=answer-card",
@@ -159,7 +161,8 @@
   "validate-plan-card": {
    "post-write-plan-bad": {
     "base": "context",
-    "plan-ceremony=light": "as-dispatcher"
+    "plan-ceremony=light": "as-dispatcher",
+    "plan-ceremony=off": "as-dispatcher"
    }
   },
   "dispatcher": {

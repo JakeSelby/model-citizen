@@ -553,9 +553,12 @@ development_status:
   ah-b160-fix-benchmarks-replay-trials-share-a-warm-prompt: done
   ah-b165-test-benchmarks-keep-git-maintenance-out-of: done
   ah-b176-fix-observability-hook-decisions-that-cannot-be: ready-for-dev
+  ah-b178-fix-hooks-a-pass-claim-or-a-push-can-follow-an: ready-for-dev
   ah-b179-clear-the-plugin-scanner-s-false-positive: ready-for-dev
   ah-b181-fix-delegation-the-designer-role-is-pinned-to: ready-for-dev
+  ah-b182-fix-cost-a-subagent-whose-stop-is-blocked-still: ready-for-dev
   ah-b183-fix-benchmarks-micro-stop-gate-fails-the-only: ready-for-dev
+  ah-b185-test-tier-routing-a-frugal-tiering-arm-beside: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -730,6 +733,7 @@ development_status:
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: done
   ah-s344-admit-oracle-scorers-that-return-named-metrics: done
   ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
+  ah-s351-removal-arms-for-claude-md-and-the-stances: ready-for-dev
   ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
