@@ -34,6 +34,9 @@ The settings template carries a `sandbox` block that turns the built-in sandbox 
 writes it only for a user who opts in: `bin/citizen config set sandbox.enabled true`, then
 `bin/citizen sync`. `sync` derives `filesystem.allowWrite` from the workspace each time it runs,
 and `sandbox.strict` closes the retry outside the boundary. Until you opt in, nothing changes.
+The task-worktree root is in `allowWrite` so a sandboxed session can create and work in its own
+worktree; the cost is that a command in one task can also write a sibling task's worktree.
+Run each task in a container when tasks must not reach one another.
 
 `sandbox` is user-level configuration with a real blast radius: a sync that widened
 `allowedDomains` or dropped a `denyRead` entry would quietly undo a boundary you set. So the key
