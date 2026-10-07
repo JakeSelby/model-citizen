@@ -729,6 +729,7 @@ development_status:
   ah-s332-let-ablation-runs-use-a-pinned-evaluator-pack: done
   ah-s344-admit-oracle-scorers-that-return-named-metrics: done
   ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
+  ah-s351-removal-arms-for-claude-md-and-the-stances: ready-for-dev
   ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
