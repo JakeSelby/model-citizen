@@ -8,11 +8,11 @@ import { CompareReport } from "../experiments/compare/ComparePanel";
 import { compareRuns } from "../experiments/compare/api";
 import type { CompareResult } from "../experiments/compare/model";
 import { loadReplayCatalog } from "../experiments/replay/api";
-import { initialPack, packKey, packOptions, packSelection, type ReplayCatalog } from "../experiments/replay/model";
+import { packKey, packOptions, type ReplayCatalog } from "../experiments/replay/model";
 import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
-  currentRegistration, draftTestErrorMessage, draftTestTasks, evidenceBadge, initialForm, planBody, readingLines, registerBody,
-  spendLine, startBlocked, startedMessage, validateDraftTest, verdictBadge, withNeededTrials, withPack,
+  currentRegistration, draftTestErrorMessage, draftTestTasks, evidenceBadge, initialForm, planBody, readingLines, registerBlocked, registerBody,
+  spendLine, startBlocked, startedMessage, startingPack, validateDraftTest, verdictBadge, withNeededTrials, withPack,
   type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
@@ -126,6 +126,7 @@ export function DraftTest({ draft, revision }: Props) {
   const errors = validateDraftTest(form);
   const registration = currentRegistration(verdicts);
   const blocked = startBlocked(preRegister, registration);
+  const unregistrable = registerBlocked(form);
   // The server's deviations, for the registration this plan named; never recomputed here.
   const deviations = plan?.registration && plan.registration.registration_id === registration?.registration_id
     ? plan.registration.deviations : null;
@@ -135,9 +136,7 @@ export function DraftTest({ draft, revision }: Props) {
     void loadReplayCatalog().then((value) => {
       if (!active) return;
       setCatalog(value);
-      const pack = initialPack(value.packs, value.default_pack);
-      setForm((prior) => ({ ...prior, model: prior.model || value.default_model,
-        pack: prior.pack ?? (pack ? packSelection(pack) : null) }));
+      setForm((prior) => ({ ...prior, model: prior.model || value.default_model, pack: startingPack(value, prior.pack) }));
     }).catch(() => {});
     return () => { active = false; };
   }, []);
@@ -272,8 +271,9 @@ export function DraftTest({ draft, revision }: Props) {
             )}
             {!registration && <Text c="dimmed" size="sm">No current registration. Check power, then register before you start.</Text>}
             {form.cv.trim() !== "" && <Text c="dimmed" size="sm">A registration plans from the repository's declared variance; clear the coefficient of variation to register.</Text>}
+            {unregistrable && <Text c="dimmed" size="sm">{unregistrable}</Text>}
             <Group justify="flex-end">
-              <Button variant="light" disabled={busy || !plan?.power.enough || form.cv.trim() !== ""} loading={busy} onClick={register}>Register this test</Button>
+              <Button variant="light" disabled={busy || !plan?.power.enough || form.cv.trim() !== "" || unregistrable !== null} loading={busy} onClick={register}>Register this test</Button>
             </Group>
             {verdicts && <RegistrationList registrations={verdicts.registrations} />}
           </Stack>

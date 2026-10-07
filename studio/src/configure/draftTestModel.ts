@@ -1,4 +1,4 @@
-import { engineValue, packKey, packSelection, tasksFor, type ReplayCatalog, type ReplayPreview } from "../experiments/replay/model";
+import { engineValue, initialPack, packKey, packSelection, tasksFor, type ReplayCatalog, type ReplayPreview } from "../experiments/replay/model";
 import type { EngineMeasure } from "../experiments/compare/model";
 
 /** The pack set a draft test runs: name and digest, and the set unless it is the production set. */
@@ -90,6 +90,12 @@ export function draftTestTasks(catalog: ReplayCatalog | null, pack: DraftTestPac
   return catalog ? tasksFor(catalog.packs, pack ? packKey(pack) : null, catalog.tasks.map((task) => task.id)) : [];
 }
 
+/** The pack a draft test starts on: one already chosen, else the catalog's default set, keeping its set. */
+export function startingPack(catalog: ReplayCatalog, chosen: DraftTestPack | null): DraftTestPack | null {
+  const pack = initialPack(catalog.packs, catalog.default_pack);
+  return chosen ?? (pack ? packSelection(pack) : null);
+}
+
 /** The form with the pack set under `key` chosen and its tasks cleared; unchanged for an unknown key. */
 export function withPack(form: DraftTestForm, catalog: ReplayCatalog, key: string | null): DraftTestForm {
   const pack = catalog.packs.find((item) => packKey(item) === key);
@@ -164,6 +170,16 @@ export function startedMessage(value: DraftTestStarted): string {
 
 /** Why the test cannot start yet as asked; null when it can. Ticking pre-register without a
  * current registration would otherwise start an unregistered run the developer took for registered. */
+/**
+ * Why registering is refused, or null: a registration pins a pack by name and digest only, so it
+ * covers the production set; another set is never registered with its set silently dropped.
+ */
+export function registerBlocked(form: DraftTestForm): string | null {
+  return form.pack?.set !== undefined && form.pack.set !== "production"
+    ? "A registered test pins the production set only. Pick the production set to register."
+    : null;
+}
+
 export function startBlocked(preRegister: boolean, registration: DraftTestRegistration | null): string | null {
   return preRegister && !registration ? "Register the test before you start it, or untick pre-register." : null;
 }
