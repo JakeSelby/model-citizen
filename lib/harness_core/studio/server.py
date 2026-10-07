@@ -30,7 +30,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import eval_tiers, first_run, headless, rule_health, run_store, trends
+from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -758,6 +758,17 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
         handler.server.run_supervisor, handler.server.target_service)
 
 
+def _replay_launch(handler: Handler, value: Any) -> Any:
+    """The admission a replay request takes: the definitive launch, behind the engine's registered
+    budget, for a request the definitive-evaluation action flagged; the plain replay otherwise. The
+    flag only ever adds checks: the plain path refuses a flagged request, and the confirmation
+    digest binds the flag."""
+    admission = _replay_admission(handler)
+    if isinstance(value, dict) and value.get("definitive") is True:
+        return definitive_launch.DefinitiveLaunch(admission)
+    return admission
+
+
 def _replay_catalog(handler: Handler, route: Route) -> None:
     try:
         payload = replay.task_catalog(handler.server.repo_root)
@@ -775,7 +786,7 @@ def _replay_preview(handler: Handler, route: Route) -> None:
     try:
         # Resolving builds both targets (clone and sandboxed sync); it stays off the one
         # mutation thread so cancel and polling are never queued behind it.
-        admission = _replay_admission(handler)
+        admission = _replay_launch(handler, request["request"])
         resolved = admission.resolve(request["request"])
         payload = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except replay.ReplayError as exc:
@@ -793,7 +804,7 @@ def _replay_start(handler: Handler, route: Route) -> None:
         handler._error(400, "invalid_request")
         return
     try:
-        admission = _replay_admission(handler)
+        admission = _replay_launch(handler, request["request"])
         confirmed = admission.confirm(request["request"])
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
@@ -1245,13 +1256,19 @@ def _run_detail(handler: Handler, route: Route) -> None:
     if request is None:
         return
     try:
-        payload = handler.server.mutations.call(
-            lambda: handler.server.run_supervisor.run_detail(
-                request["run_id"], lineage_limit=request["lineage_limit"],
-                lineage_cursor=request["lineage_cursor"]))
+        supervisor = handler.server.run_supervisor
+        payload, source = handler.server.mutations.call(lambda: (
+            supervisor.run_detail(request["run_id"], reports=False,
+                                  lineage_limit=request["lineage_limit"],
+                                  lineage_cursor=request["lineage_cursor"]),
+            supervisor.engine_report_source(request["run_id"])))
     except (runs.RunError, TypeError):
         handler._error(404, "run_not_found")
         return
+    if source is not None:
+        # On this request's thread, never the mutation thread: the judge report may run a child
+        # for up to its timeout, one at a time (`definitive.judge_report`).
+        payload["engine_reports"] = definitive.engine_reports(supervisor.repository, source)
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -2102,7 +2119,8 @@ RUN_DETAIL = ResponseSchema("json-object", (
     ("duration_ms", "integer-or-null"), ("rerun_of", "string-or-null"),
     ("case_count", "integer"), ("flaky_count", "integer"), ("cases", "array"),
     ("reruns", "object"), ("exact_command", "string-or-null"), ("rerun", "object"),
-    ("artifacts", "array"), ("evaluation", "object-or-null")))
+    ("artifacts", "array"), ("evaluation", "object-or-null"),
+    ("engine_row", "object-or-null"), ("engine_reports", "object-or-null")))
 CASE_HISTORY = ResponseSchema("json-object", (("case_id", "string"),
                                                  ("items", "array"),
                                                  ("next_cursor", "string-or-null")))

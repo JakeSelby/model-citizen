@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store, open_shared
-from . import evaluation, free_suites, run_store, spend_guard, targets
+from . import definitive, evaluation, free_suites, run_store, spend_guard, targets
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -1210,6 +1210,7 @@ class RunSupervisor:
               case_identities: Optional[Sequence[str]] = None,
               rerun_of: Optional[str] = None,
               expected_target: Optional[Mapping[str, Any]] = None,
+              estimate_ceiling_usd: Any = None,
               expected_argv: Optional[Sequence[str]] = None,
               expected_cases: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         catalog = SuiteCatalog.load(self.catalog_path)
@@ -1258,6 +1259,9 @@ class RunSupervisor:
                             cases, spend_plan)
                         request_digest = spend_guard.confirmation_digest(request)
                         self._check_confirmation_locked(confirmed, request_digest)
+                        # The estimate made now, under the lock, against a caller's ceiling (a
+                        # registered whole-run budget): checked at start, not only at preview.
+                        spend_guard.check_ceiling(spend_plan, estimate_ceiling_usd)
                         argv = spend_guard.guarded_argv(argv, spend_plan)
                     except spend_guard.SpendGuardError as exc:
                         raise RunError(str(exc)) from exc
@@ -1461,7 +1465,10 @@ class RunSupervisor:
                 raise
             raise RunError("run evidence is unavailable") from exc
 
-    def run_detail(self, run_id: str, **lineage: Any) -> Dict[str, Any]:
+    def run_detail(self, run_id: str, *, reports: bool = True, **lineage: Any) -> Dict[str, Any]:
+        """One run's detail. `reports=False` leaves `engine_reports` None, for a caller on the
+        mutation thread that reads them afterwards on its own thread (`engine_report_source`):
+        the judge report may run a child for up to its timeout."""
         try:
             with self.lock():
                 detail = self.history.detail(run_id, **lineage)
@@ -1512,7 +1519,23 @@ class RunSupervisor:
                 detail["artifacts"].append(item)
         # The landed contract the source declared, as indexed; nothing is derived here.
         detail["evaluation"] = evaluation.detail_contract(indexed)
+        # A benchmark row's engine fields and the definitive evaluation's reports, verbatim.
+        imported_row = source_kind == "benchmark-result"
+        detail["engine_row"] = evaluation.engine_row(raw) if imported_row else None
+        detail["engine_reports"] = (definitive.engine_reports(
+            self.repository, (indexed.get("source") or {}).get("path"))
+            if imported_row and reports else None)
         return detail
+
+    def engine_report_source(self, run_id: str) -> Optional[str]:
+        """The results path an imported benchmark row's engine reports are found from, or None."""
+        try:
+            with self.lock():
+                indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        source = indexed.get("source") or {}
+        return source.get("path") if source.get("kind") == "benchmark-result" else None
 
     def run_evaluation(self, run_id: str) -> Optional[Dict[str, Any]]:
         """The landed evaluation contract an indexed source declared, carried as indexed; no

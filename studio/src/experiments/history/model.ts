@@ -1,3 +1,5 @@
+import { engineLeaves } from "../replay/model";
+
 export type RunCase = {
   id: string;
   outcome: "passed" | "failed" | "skipped" | "unknown";
@@ -50,11 +52,12 @@ export type ProofStatus = {
 
 /** The landed Measured contract an indexed source declared; the engine's values, never re-derived. */
 export type EvaluationContract = {
-  shape: "two-arm" | "pair" | "variable-arm" | "four-cell" | "proof-bundle";
+  shape: "two-arm" | "pair" | "variable-arm" | "four-cell" | "config-arm" | "proof-bundle";
   arms?: string[];
   pack?: { pack: string; pack_version: string; pack_commit: string; pack_digest: string } | null;
   ablation?: { name: string; sha256: string; schema: number } | null;
   design?: { name: string; schema: number; manifest_sha256: string } | null;
+  arm_config?: { name: string; sha256: string; schema?: number; stances?: Record<string, string> } | null;
   registration?: { evidence: string | null; pre_registration: string | null; pre_registration_commit: string | null } | null;
   proof?: ProofStatus;
 };
@@ -66,6 +69,16 @@ export type RunDetail = RunSummary & {
   rerun: { available: boolean; reason: string | null };
   artifacts: RunArtifact[];
   evaluation?: EvaluationContract | null;
+  /** An imported benchmark row's engine fields (stratum, arm config, metrics, cache basis, long-session keys), verbatim. */
+  engine_row?: Record<string, unknown> | null;
+  /** The definitive evaluation's engine documents found beside the row's results, verbatim. */
+  engine_reports?: EngineReports | null;
+};
+
+export type EngineReports = {
+  scorecard: Record<string, unknown> | null;
+  judge: Record<string, unknown> | null;
+  errors: string[];
 };
 
 export type CaseHistory = {
@@ -93,7 +106,7 @@ export function reportHref(artifact: RunArtifact): string | null {
 
 const SHAPE_LABELS: Record<EvaluationContract["shape"], string> = {
   "two-arm": "Two-arm replay", pair: "One-policy pair", "variable-arm": "Variable-arm ablation",
-  "four-cell": "Four-cell design", "proof-bundle": "Proof bundle",
+  "four-cell": "Four-cell design", "config-arm": "Config arm", "proof-bundle": "Proof bundle",
 };
 
 /**
@@ -111,6 +124,7 @@ export function evaluationLines(contract: EvaluationContract | null | undefined)
     ["Ablation digest", contract.ablation.sha256]);
   if (contract.design) lines.push(["Design", `${contract.design.name} (schema ${contract.design.schema})`],
     ["Design digest", contract.design.manifest_sha256]);
+  if (contract.arm_config) lines.push(["Arm config", contract.arm_config.name], ["Arm config digest", contract.arm_config.sha256]);
   if (contract.registration) {
     const label = contract.registration.evidence;
     lines.push(["Evidence label", label === "pre-registered" ? "Pre-registered" : label === "exploratory" ? "Exploratory" : "Unlabelled"]);
@@ -123,4 +137,44 @@ export function evaluationLines(contract: EvaluationContract | null | undefined)
     contract.proof.unknown.forEach((item) => lines.push(["Unknown, not verified", item]));
   }
   return lines;
+}
+
+/**
+ * The words an engine equivalence verdict reads as. Only the engine's own `equivalent` reads
+ * "Equivalent within bounds"; an informative null the engine called inconclusive, a missing
+ * verdict or an unknown word is never promoted to one.
+ */
+export function equivalenceLabel(value: unknown): string {
+  if (value === "equivalent") return "Equivalent within bounds";
+  if (value === "not equivalent") return "Not equivalent";
+  if (value === "inconclusive") return "Inconclusive";
+  return value === undefined || value === null ? "No equivalence verdict" : String(value);
+}
+
+const bare = (segment: string) => segment.replace(/\[\d+\]$/, "");
+
+/** True for the leaf holding an engine equivalence verdict: an `assessment`, or a `verdict` inside an `equivalence` record. */
+function isEquivalenceVerdict(path: string): boolean {
+  const segments = path.split(".").map(bare);
+  const key = segments[segments.length - 1];
+  return key === "assessment" || (key === "verdict" && segments.slice(0, -1).includes("equivalence"));
+}
+
+/**
+ * Every leaf of an engine document as a path and its text, in the engine's order. An engine
+ * equivalence verdict also carries the reading `equivalenceLabel` gives the engine's own word;
+ * nothing else is reworded and nothing is computed.
+ */
+export function reportLines(document: unknown): Array<[string, string]> {
+  return engineLeaves(document ?? {}).map(([path, text]) => {
+    if (!isEquivalenceVerdict(path)) return [path, text];
+    let value: unknown = text;
+    try { value = JSON.parse(text); } catch { /* the engine text stays as written */ }
+    return [path, `${text} (${equivalenceLabel(value)})`];
+  });
+}
+
+/** The engine row's fields as label and JSON text, in the engine's order, with nothing dropped. */
+export function engineRowLines(row: Record<string, unknown> | null | undefined): Array<[string, string]> {
+  return row && Object.keys(row).length ? engineLeaves(row) : [];
 }

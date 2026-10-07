@@ -2,12 +2,12 @@ import {
   Alert, Button, Code, Group, MultiSelect, NumberInput, Paper, Select, Stack,
   Table, Text, TextInput, Title,
 } from "@mantine/core";
-import { useRef, useState } from "react";
+import { useReducer, useRef, useState } from "react";
 
 import { previewReplay, startReplay } from "./api";
 import {
-  analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packOptions, samplingLines, progressResult, readinessSummary,
-  replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
+  analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packKey, packOptions, packSelection, samplingLines, progressResult, readinessSummary,
+  confirmableToken, failureMessage, launchKind, previewReducer, replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
   SOURCE_ONLY_NOTE,
   ReplayRequestGate, type DraftComparison, type ReplayAnalysis, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
@@ -47,10 +47,12 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
     model: defaultModel, repetitions: 2, tasks: [], max_budget_usd: "2", spend_cap_usd: "20",
     pre_registration: "",
-    pack: startingPack ? { name: startingPack.name, digest: startingPack.digest } : null,
+    pack: startingPack ? packSelection(startingPack) : null,
   });
-  const choices = tasksFor(packs, draft.pack?.digest ?? null, tasks);
-  const [preview, setPreview] = useState<ReplayPreview | null>(null);
+  const choices = tasksFor(packs, draft.pack ? packKey(draft.pack) : null, tasks);
+  const [slot, dispatch] = useReducer(previewReducer, { preview: null, generation: 0 });
+  const preview: ReplayPreview | null = slot.preview;
+  const token = confirmableToken(slot);
   const [message, setMessage] = useState("Choose two targets, tasks and one model.");
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -61,7 +63,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
     if (!requestGate.current.beginEdit()) return;
     setDraft(next);
     setTouched(true);
-    setPreview(null);
+    dispatch({ type: "clear" });
     setBusy(false);
   }
 
@@ -71,36 +73,40 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
     updateDraft({ ...draft, targets });
   }
 
-  async function estimate() {
+  async function estimate(definitive = false) {
     if (errors.length || requestGate.current.paidBusy()) return;
     const generation = requestGate.current.next();
+    dispatch({ type: "begin", generation });
     setBusy(true);
     try {
-      const value = await previewReplay(draft);
+      // The definitive action is the only place the flag is set; the server holds such a launch
+      // to the engine's registered budget, and the flag rides through to start in the request.
+      const value = await previewReplay(definitive ? { ...draft, definitive: true } : draft);
       if (!requestGate.current.accepts(generation)) return;
-      setPreview(value);
+      dispatch({ type: "loaded", generation, value });
       setMessage(value.valid ? "Estimate and caps are ready for confirmation." : "Nothing started.");
     } catch (error) {
+      dispatch({ type: "failed", generation });
       if (!requestGate.current.accepts(generation)) return;
-      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay preview failed.");
+      setMessage(failureMessage(error, "Replay preview failed."));
     } finally {
       if (requestGate.current.accepts(generation)) setBusy(false);
     }
   }
 
   async function start() {
-    if (!preview?.confirmation_token) return;
+    if (!preview || !token) return;
     const generation = requestGate.current.beginPaid();
     if (generation === null) return;
     setBusy(true);
     try {
-      const value = await startReplay(preview.request, preview.confirmation_token);
+      const value = await startReplay(preview.request, token);
       if (!requestGate.current.acceptsPaid(generation)) return;
       setMessage("Replay queued. Its two target records and native rows will be kept.");
       onStarted?.(value.run_id);
     } catch (error) {
       if (!requestGate.current.acceptsPaid(generation)) return;
-      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay could not start.");
+      setMessage(failureMessage(error, "Replay could not start."));
     } finally {
       if (requestGate.current.finishPaid(generation)) setBusy(false);
     }
@@ -135,10 +141,10 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
               onChange={(value) => updateDraft({ ...draft, repetitions: Number(value) })} />
           </Group>
           {packs.length > 0 && <Select label="Evaluator pack" data={packOptions(packs)}
-            value={draft.pack?.digest ?? null} allowDeselect={false} disabled={busy}
-            onChange={(digest) => {
-              const pack = packs.find((item) => item.digest === digest);
-              if (pack) updateDraft({ ...draft, pack: { name: pack.name, digest: pack.digest }, tasks: [] });
+            value={draft.pack ? packKey(draft.pack) : null} allowDeselect={false} disabled={busy}
+            onChange={(key) => {
+              const pack = packs.find((item) => packKey(item) === key);
+              if (pack) updateDraft({ ...draft, pack: packSelection(pack), tasks: [] });
             }} />}
           <MultiSelect label="Tasks" data={choices} value={draft.tasks}
             disabled={busy}
@@ -163,15 +169,16 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
               </Stack>
             : <Text c="dimmed" size="sm">The native benchmark commands appear once the preview resolves both targets.</Text>}
           <Group justify="flex-end">
-            <Button disabled={busy || errors.length > 0} loading={busy} variant="light" onClick={estimate}>Preview spend</Button>
-            <Button disabled={busy || !preview?.valid || !preview.confirmation_token} loading={busy} onClick={start}>Confirm and run</Button>
+            <Button disabled={busy || errors.length > 0} loading={busy} variant="light" onClick={() => void estimate()}>Preview spend</Button>
+            <Button disabled={busy || errors.length > 0} loading={busy} variant="subtle" onClick={() => void estimate(true)}>Preview definitive evaluation</Button>
+            <Button disabled={busy || token === null} loading={busy} onClick={start}>Confirm and run</Button>
           </Group>
         </Stack>
       </Paper>
       {preview && (
         <Stack gap="sm">
           <Alert color="blue" title="Spend guard">
-            Estimate: {preview.estimate.amount_usd === null ? "No matching history" : `$${preview.estimate.amount_usd.toFixed(2)}`}. Cap: ${preview.caps.spend_cap_usd}.
+            {launchKind(preview)}. Estimate: {preview.estimate.amount_usd === null ? "No matching history" : `$${preview.estimate.amount_usd.toFixed(2)}`}. Cap: ${preview.caps.spend_cap_usd}.
           </Alert>
           {samplingLines(preview.sampling).length > 0 && <Alert color={preview.sampling?.evidence === "pre-registered" ? "teal" : "yellow"} title={preview.sampling?.evidence === "pre-registered" ? "Pre-registered sample" : "Exploratory run"}>
             {samplingLines(preview.sampling).map((line) => <Text key={line} size="sm">{line}</Text>)}

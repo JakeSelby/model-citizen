@@ -6,7 +6,9 @@ the checkout: in the checkout's parent folder and, for a linked worktree, beside
 checkout it belongs to, unless `HARNESS_STUDIO_PACKS` names the folders to search instead
 (`os.pathsep`-separated), which is how a test points discovery at its own fixtures. Each candidate is opened the way `cost_bench.py replay --pack` opens it,
 at `HEAD` through `git archive`, so the name, version, commit and digest shown are the ones a run
-pins. The browser chooses a pack by name and digest; the path never comes from it.
+pins. Every production-tier set of a pack is its own choice, so a rule-targeted set or a public
+outcome subset is picked by name, version, digest and set exactly as the production set is. The
+browser chooses a pack by name, digest and set; the path never comes from it.
 """
 
 import importlib.util
@@ -73,16 +75,35 @@ def candidates(repository: Path) -> List[Path]:
     return found
 
 
-def _entry(module, source: Path, repository: Path) -> Dict[str, Any]:
+def _production_sets(module, pack) -> List[str]:
+    """The pack's production-tier sets in name order: the production set itself, and any other set
+    the pack declares at that tier, such as a rule-targeted set or a public outcome subset."""
+    sets = (pack.get("document") or {}).get("sets") or {}
+    return sorted(name for name, spec in sets.items()
+                  if module.set_tier(name, spec or {}) == TIER)
+
+
+def _entries(module, source: Path, repository: Path,
+             skipped: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """One entry per production-tier set of the pack at `source`, each pinned as a run pins it.
+    A set the pack loader refuses is skipped with its reason; the pack's other sets stay."""
     pack = module.open_pack(source, "HEAD", None, repository)
+    out = []
     try:
-        tasks, _manifest = module.load_set(pack, TIER, TIER)
+        for set_name in _production_sets(module, pack):
+            try:
+                tasks, _manifest = module.load_set(pack, set_name, TIER)
+            except (SystemExit, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                skipped.append({"source": str(source), "set": set_name, "reason": str(exc)})
+                continue
+            out.append({"name": pack["name"], "version": pack["version"], "commit": pack["commit"],
+                        "digest": pack["digest"], "short_digest": pack["digest"][:12],
+                        "set": set_name, "source": str(source),
+                        "tasks": [{"id": task["id"], "label": task["id"].replace("-", " ").title(),
+                                   "long": task.get("long") is True} for task in tasks]})
     finally:
         module.close_pack(pack)
-    return {"name": pack["name"], "version": pack["version"], "commit": pack["commit"],
-            "digest": pack["digest"], "short_digest": pack["digest"][:12], "source": str(source),
-            "tasks": [{"id": task["id"], "label": task["id"].replace("-", " ").title(),
-                       "long": task.get("long") is True} for task in tasks]}
+    return out
 
 
 def discover(repository: Path) -> Dict[str, Any]:
@@ -94,21 +115,25 @@ def discover(repository: Path) -> Dict[str, Any]:
     skipped: List[Dict[str, str]] = []
     for source in candidates(repository):
         try:
-            packs.append(_entry(module, source, repository))
+            packs.extend(_entries(module, source, repository, skipped))
         except (SystemExit, OSError, ValueError, KeyError, TypeError, AttributeError,
                 subprocess.SubprocessError) as exc:
             # A pack.json or task.json that is JSON but not an object is skipped, not a crash.
             skipped.append({"source": str(source), "reason": str(exc)})
-    packs.sort(key=lambda item: (item["name"], item["version"], item["source"]))
-    preferred = [item for item in packs if item["name"] == PREFERRED]
+    packs.sort(key=lambda item: (item["name"], item["version"], item["source"],
+                                 item["set"] != TIER, item["set"]))
+    preferred = [item for item in packs if item["name"] == PREFERRED and item["set"] == TIER]
     default = (preferred or packs or [None])[0]
     return {"packs": packs, "default_digest": default["digest"] if default else None,
             "skipped": skipped}
 
 
-def select(repository: Path, name: Any, digest: Any) -> Dict[str, Any]:
-    """The discovered pack with exactly this name and digest; ValueError when none matches."""
+def select(repository: Path, name: Any, digest: Any, set_name: Any = None) -> Dict[str, Any]:
+    """The discovered pack set with exactly this name, digest and set; a selection naming no set
+    is the production set, as a request saved before sets were offered reads. ValueError when none
+    matches."""
+    wanted = TIER if set_name is None else set_name
     for item in discover(repository)["packs"]:
-        if item["name"] == name and item["digest"] == digest:
+        if item["name"] == name and item["digest"] == digest and item["set"] == wanted:
             return item
-    raise ValueError("the chosen evaluator pack is not available at that digest")
+    raise ValueError("the chosen evaluator pack is not available at that digest and set")

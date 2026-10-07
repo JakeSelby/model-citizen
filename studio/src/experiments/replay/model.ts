@@ -20,12 +20,14 @@ export type ReplayLaunchInput = {
   max_budget_usd: string;
   spend_cap_usd: string;
   pre_registration: string;
-  /** The evaluator pack, chosen by name and digest; null runs the repository's own tasks. */
-  pack?: { name: string; digest: string } | null;
+  /** The evaluator pack, chosen by name, digest and set; null runs the repository's own tasks. */
+  pack?: { name: string; digest: string; set?: string } | null;
+  /** Set only by the definitive-evaluation action: the launch is held to the engine's registered budget. */
+  definitive?: true;
 };
 
 /** A pack as the server resolved and pinned it. */
-export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string };
+export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string; set?: string };
 
 export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration" | "pack"> & {
   targets: [ReplayTarget, ReplayTarget];
@@ -59,6 +61,8 @@ export type ReplayPack = {
   commit: string;
   digest: string;
   short_digest: string;
+  /** The pack's set at the production tier: its production set, a rule-targeted set or an outcome subset. */
+  set: string;
   tasks: Array<{ id: string; label: string }>;
 };
 
@@ -196,6 +200,13 @@ const refusals: Record<string, string> = {
   replay_worktree_dirty:
     "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
   replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
+  definitive_budget_unregistered:
+    "The engine has no registered budget for this run, so the definitive launch is refused. It waits on an engine budget reader; the Studio assumes no budget.",
+  definitive_budget_unestimated:
+    "The spend guard has no estimate for this run, so the definitive launch cannot be held to the registered whole-run cap and is refused.",
+  definitive_launch_required: "A definitive request is launched only by the definitive evaluation action.",
+  definitive_budget_exceeded:
+    "The definitive launch exceeds the engine's registered budget: its per-run budget, spend cap or estimated spend is above it.",
 };
 
 export function replayErrorMessage(code: string): string {
@@ -224,9 +235,22 @@ export function formatCost(value: number | null): string {
   return value === null ? "Unavailable" : `$${value.toFixed(4)}`;
 }
 
-/** One picker option per pack: its name, version and short digest, keyed by the full digest. */
+/** The picker key of one pack set: its full digest and its set name. */
+export function packKey(pack: { digest: string; set?: string }): string {
+  return `${pack.digest}/${pack.set ?? "production"}`;
+}
+
+/** One picker option per pack set: its name, version, set and short digest, keyed by `packKey`. */
 export function packOptions(packs: ReplayPack[]): Array<{ value: string; label: string }> {
-  return packs.map((pack) => ({ value: pack.digest, label: `${pack.name} ${pack.version} (${pack.short_digest})` }));
+  return packs.map((pack) => ({ value: packKey(pack), label: `${pack.name} ${pack.version}, set ${pack.set} (${pack.short_digest})` }));
+}
+
+/**
+ * The selection a chosen pack set sends: name and digest, and the set unless it is the production
+ * set, so a production replay's command and pinned identity are what they always were. Never a path.
+ */
+export function packSelection(pack: ReplayPack): { name: string; digest: string; set?: string } {
+  return pack.set === "production" ? { name: pack.name, digest: pack.digest } : { name: pack.name, digest: pack.digest, set: pack.set };
 }
 
 /** The pack a new replay starts on: the catalog's default, else the first, else none. */
@@ -234,9 +258,9 @@ export function initialPack(packs: ReplayPack[], defaultDigest: string | null): 
   return packs.find((pack) => pack.digest === defaultDigest) ?? packs[0] ?? null;
 }
 
-/** The task ids a replay may choose: the chosen pack's, or the repository's own without one. */
-export function tasksFor(packs: ReplayPack[], digest: string | null, repositoryTasks: string[]): string[] {
-  const pack = packs.find((item) => item.digest === digest);
+/** The task ids a replay may choose: the chosen pack set's (by `packKey`), or the repository's own without one. */
+export function tasksFor(packs: ReplayPack[], key: string | null, repositoryTasks: string[]): string[] {
+  const pack = packs.find((item) => packKey(item) === key);
   return pack ? pack.tasks.map((task) => task.id) : repositoryTasks;
 }
 
@@ -284,4 +308,42 @@ export function comparisonLine(item: DraftComparison): string {
   const state = item.stale ? `Stale: ${item.stale_reason ?? "the draft changed"}` : "Current";
   return `${item.draft} at ${item.revision.slice(0, 12)} against ${item.base.kind} ${item.base.ref}; ` +
     `${item.tasks.length} task(s), ${item.model}, ${item.trials} trial(s). ${state}.`;
+}
+
+/** The form's message for a failed preview or start: the refusal's plain words, or a fallback. */
+export function failureMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? replayErrorMessage(error.message) : fallback;
+}
+
+/** The preview a confirm may use, with the request generation that produced it. */
+export type PreviewSlot = { preview: ReplayPreview | null; generation: number };
+
+export type PreviewAction =
+  | { type: "begin"; generation: number }
+  | { type: "loaded"; generation: number; value: ReplayPreview }
+  | { type: "failed"; generation: number }
+  | { type: "clear" };
+
+/**
+ * Preview state for the replay form. Any preview request clears the previous preview and its
+ * token as it starts, and a failure leaves it cleared, so a refused definitive preview can never
+ * fall back on an earlier plain one. Only the newest request's answer is taken.
+ */
+export function previewReducer(state: PreviewSlot, action: PreviewAction): PreviewSlot {
+  switch (action.type) {
+    case "begin": return { preview: null, generation: action.generation };
+    case "loaded": return action.generation === state.generation ? { ...state, preview: action.value } : state;
+    case "failed": return action.generation === state.generation ? { ...state, preview: null } : state;
+    case "clear": return { ...state, preview: null };
+  }
+}
+
+/** The token "Confirm and run" may send, or null when nothing confirmable is previewed. */
+export function confirmableToken(slot: PreviewSlot): string | null {
+  return slot.preview?.valid && slot.preview.confirmation_token ? slot.preview.confirmation_token : null;
+}
+
+/** Which launch a preview is for, as the form names it. */
+export function launchKind(preview: ReplayPreview): string {
+  return preview.request.definitive ? "Definitive evaluation" : "Plain replay";
 }

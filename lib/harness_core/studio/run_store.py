@@ -34,6 +34,7 @@ DATABASE_NAME = "run-index.sqlite3"
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_RECORD_BYTES = 4 * 1024 * 1024
 MAX_RESULTS_FILES = 4096
+RESULTS_DEPTH = 3
 MAX_STATIC_REVISIONS = 200
 STATIC_PATH = "benchmarks/static.json"
 COST_BASIS = "list_price_equivalent"
@@ -1023,11 +1024,24 @@ def _benchmark_result(relative: str, number: int, row: Any) -> Dict[str, Any]:
         "arms": [row.get("arm")], "trials": row.get("rep"), "parameters": {}, "argv": [],
         "status": status, "times": {"created_at": row.get("date")}, "tokens": tokens,
         "cost": _cost(row.get("cost_usd"), row.get("cost_normalised_usd")),
-        "cases": {str(row.get("task")): {"passed": row.get("passed"),
+        "cases": {evaluation.case_key(row): {"passed": row.get("passed"),
                                             "error": row.get("error"),
                                             "error_kind": row.get("error_kind")}},
         "artifacts": [relative], "evaluation": contract, "raw": row,
     }
+
+
+def _results_files(benchmarks: Path) -> List[Path]:
+    """Every `results.jsonl` up to `RESULTS_DEPTH` folders below `benchmarks/`: a version's, a
+    tag's, and each stratum folder a multi-model run writes (`<tag>/<model>/results.jsonl`)."""
+    if not benchmarks.is_dir():
+        return []
+    found: List[Path] = []
+    for depth in range(1, RESULTS_DEPTH + 1):
+        found.extend(benchmarks.glob("/".join(["*"] * depth) + "/results.jsonl"))
+        if len(found) > MAX_RESULTS_FILES:
+            raise RunStoreError("too many benchmark result files")
+    return sorted(found)
 
 
 def _history_number(value: Any) -> bool:
@@ -1698,7 +1712,7 @@ class RunStore:
             candidates.append((history, "history"))
         if static.is_file() or static.is_symlink():
             candidates.append((static, "static"))
-        results = sorted((root / "benchmarks").glob("*/results.jsonl")) if (root / "benchmarks").is_dir() else []
+        results = _results_files(root / "benchmarks")
         if len(results) > MAX_RESULTS_FILES:
             raise RunStoreError("too many benchmark result files")
         candidates.extend((path, "results") for path in results)
