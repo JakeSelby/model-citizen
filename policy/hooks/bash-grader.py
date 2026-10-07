@@ -22,7 +22,9 @@ from pathlib import Path
 HOOK = "grade-bash hook"
 MARKER = "HARNESS_CONFIRMED=1"
 DEFAULT_STANCE = "execute"
-THRESHOLDS = {"execute": 3, "confirm-writes": 2, "ask": 1}
+# `off` removes the stance's text and keeps the default's threshold, so switching it off never
+# tightens or loosens the gate.
+THRESHOLDS = {"execute": 3, "confirm-writes": 2, "ask": 1, "off": 3}
 # What to grade under when the stance cannot be resolved: the variant that gates the most.
 STRICTEST = min(THRESHOLDS, key=THRESHOLDS.get)
 DENY_MODES = {"auto", "bypassPermissions"}

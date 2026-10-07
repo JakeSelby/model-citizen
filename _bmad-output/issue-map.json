@@ -9179,6 +9179,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S351",
+      "github_number": 1250,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1250",
+      "title": "Removal arms for CLAUDE.md and the stances without an off variant",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S351.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C106",
       "github_number": 1253,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1253",

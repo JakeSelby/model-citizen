@@ -50,7 +50,7 @@ ACTION_OUTCOMES = ("completed", "skipped", "failed")
 # What each autonomy variant implies when no policy names a level for the action. The same
 # thresholds `grade-bash.py` grades under, so a repository with no policy file behaves exactly
 # as the stance in force already says it should.
-STANCE_LEVELS = {"execute": 3, "confirm-writes": 2, "ask": 1}
+STANCE_LEVELS = {"execute": 3, "confirm-writes": 2, "ask": 1, "off": 3}
 # Unresolvable stance: the strictest variant, for `grade-bash.py`'s reason — a gate that cannot
 # read its own configuration must not widen authority on the strength of not knowing.
 STRICTEST_LEVEL = 1
