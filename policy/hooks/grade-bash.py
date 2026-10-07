@@ -66,6 +66,9 @@ Behaviour:
     set governance...`, is always asked about, as a level-1 action. Each
     decision is one `governance` row in the decision log. Under `none` nothing is imported and
     the output is exactly the stance's.
+  - A `git push` the stance lets through still asks when no green `## Gate` run is recorded for
+    the commit it sends (`gate_push`, reading `gate-runs.py`), unless everything it adds is
+    documentation or the repository declares no gate. The reason names the last run seen.
   - Never raises: a missing sibling grammar and any unexpected error are a silent exit 0, so a
     fault here can only cost a prompt that native would not have shown either. The one thing it
     will not guess at is the stance, above.
@@ -174,7 +177,10 @@ def main():
     if grade < threshold:
         governed = govern(command, payload.get("cwd") or "", grade, variant, payload)
         if governed is None:
-            return
+            gated = gate_push(command, payload.get("cwd") or "")
+            if gated is None or gated[0] != "ask":
+                return
+            governed = gated[:2]
         decision, sentence = governed
         text = text + " " + sentence
     mode, session_id = payload.get("permission_mode"), payload.get("session_id")
