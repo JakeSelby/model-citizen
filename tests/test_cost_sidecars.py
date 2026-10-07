@@ -250,7 +250,7 @@ class ShippedValues(unittest.TestCase):
                 self.assertEqual(row["class"], fields["tier"])
                 self.assertEqual(row["effort"], efforts[name]["effort"])
 
-    def test_the_new_frontier_role_takes_no_row_and_no_fixed_marking(self):
+    def test_the_designer_takes_no_row_and_no_fixed_marking(self):
         self.assertNotIn("designer", sidecar("balanced")["rows"])
         self.assertNotIn("designer", posture.fixed_roles())
 
