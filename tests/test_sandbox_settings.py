@@ -31,6 +31,16 @@ class Template(unittest.TestCase):
         self.assertIs(block["autoAllowBashIfSandboxed"], False)
         self.assertEqual(block["filesystem"]["allowWrite"], [])
 
+    def test_the_template_denies_credential_paths_and_variables(self):
+        # Claude Code has no built-in credential deny list: sandboxed commands read ~/.ssh and
+        # inherit tokens unless the block names them, and docs/sandboxing.md promises both.
+        block = TEMPLATE["sandbox"]
+        skill = json.loads((REPO / "primitives" / "skills" / "sandbox" / "claude-settings.json").read_text())
+        for path in skill["sandbox"]["filesystem"]["denyRead"]:
+            self.assertIn(path, block["filesystem"]["denyRead"])
+        denied = {entry["name"] for entry in block["credentials"]["envVars"] if entry["mode"] == "deny"}
+        self.assertLessEqual({"GITHUB_TOKEN", "GH_TOKEN"}, denied)
+
     def test_the_manifest_owns_the_key_only_while_opted_in(self):
         self.assertEqual(OWNERSHIP["claude"]["sandbox"]["settings_keys"], ["sandbox"])
         self.assertNotIn("sandbox", OWNERSHIP["claude"]["owned_keys"])
@@ -72,6 +82,8 @@ class Render(unittest.TestCase):
         self.assertIs(block["enabled"], True)
         self.assertIs(block["autoAllowBashIfSandboxed"], False)
         self.assertNotIn("allowUnsandboxedCommands", block)
+        self.assertEqual(block["filesystem"]["denyRead"], TEMPLATE["sandbox"]["filesystem"]["denyRead"])
+        self.assertEqual(block["credentials"], TEMPLATE["sandbox"]["credentials"])
         allow = block["filesystem"]["allowWrite"]
         self.assertEqual(allow[:2], [str(self.home / ".local" / "state" / "agent-harness"),
                                      str(self.home / "trees")])
