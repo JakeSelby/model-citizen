@@ -40,6 +40,14 @@
   },
   "arms": [
     {
+      "id": "no-claude-md",
+      "layer": "instructions",
+      "what": "CLAUDE.md, the user-level instructions sync renders from primitives/instructions.md, withheld from the image, and with it its import of CLAUDE.personal.md",
+      "removes": "instructions/CLAUDE.md",
+      "tasks": [],
+      "scores": []
+    },
+    {
       "id": "no-cache-hygiene",
       "layer": "rule",
       "what": "the cache-hygiene rule",
@@ -236,6 +244,36 @@
           ]
         }
       ]
+    },
+    {
+      "id": "autonomy-off",
+      "layer": "stance",
+      "what": "the autonomy stance's text; the command gate keeps the default's threshold",
+      "sets": {
+        "stances/autonomy": "off"
+      },
+      "tasks": [
+        "rt-autonomy-dep"
+      ],
+      "scores": [
+        {
+          "metric": "handed_back",
+          "bounds": [
+            -0.125,
+            0.125
+          ]
+        }
+      ]
+    },
+    {
+      "id": "plan-ceremony-off",
+      "layer": "stance",
+      "what": "the plan-ceremony stance, judged on the outcome subset alone since it has no headless behaviour",
+      "sets": {
+        "stances/plan-ceremony": "off"
+      },
+      "tasks": [],
+      "scores": []
     },
     {
       "id": "build-vs-buy-off",
@@ -625,23 +663,7 @@
       "scores": []
     }
   ],
-  "unbuilt": [
-    {
-      "layer": "instructions",
-      "what": "CLAUDE.md (the user-level instructions sync renders from primitives/instructions.md)",
-      "reason": "no selection switch withholds it, so an arm would need an image-level omission the arm build does not have; a follow-up adds one"
-    },
-    {
-      "layer": "stance",
-      "what": "the autonomy stance",
-      "reason": "the tag ships no off variant (ask, confirm-writes, execute), so any arm swaps a variant rather than removing one"
-    },
-    {
-      "layer": "stance",
-      "what": "the plan-ceremony stance",
-      "reason": "the tag ships no off variant (light, review-card), so any arm swaps a variant rather than removing one"
-    }
-  ],
+  "unbuilt": [],
   "excluded": [
     {
       "layer": "hook",

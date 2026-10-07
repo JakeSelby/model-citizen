@@ -9088,6 +9088,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B178",
+      "github_number": 1207,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1207",
+      "title": "fix(hooks): a pass claim or a push can follow an edit with no fresh gate",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B178.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S347",
       "github_number": 1212,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1212",
@@ -9179,6 +9192,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-S351",
+      "github_number": 1250,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1250",
+      "title": "Removal arms for CLAUDE.md and the stances without an off variant",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S351.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C106",
       "github_number": 1253,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1253",
@@ -9186,6 +9212,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C106.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B182",
+      "github_number": 1254,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1254",
+      "title": "fix(cost): a subagent whose stop is blocked still counts as stopped",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B182.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
