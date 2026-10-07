@@ -1,7 +1,7 @@
 ---
 name: design-judge
 description: Independent scored critique of a render or screenshot against the design loop's rubric and hard gates. Returns a score per criterion, a gate verdict and the three highest-leverage fixes. Never edits, never praises. Use each round of the design loop, from a context that did not build the thing.
-tier: frontier
+tier: strong
 authority: read-only
 context: fresh
 delegation: none
