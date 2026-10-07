@@ -1465,7 +1465,10 @@ class RunSupervisor:
                 raise
             raise RunError("run evidence is unavailable") from exc
 
-    def run_detail(self, run_id: str, **lineage: Any) -> Dict[str, Any]:
+    def run_detail(self, run_id: str, *, reports: bool = True, **lineage: Any) -> Dict[str, Any]:
+        """One run's detail. `reports=False` leaves `engine_reports` None, for a caller on the
+        mutation thread that reads them afterwards on its own thread (`engine_report_source`):
+        the judge report may run a child for up to its timeout."""
         try:
             with self.lock():
                 detail = self.history.detail(run_id, **lineage)
@@ -1520,8 +1523,19 @@ class RunSupervisor:
         imported_row = source_kind == "benchmark-result"
         detail["engine_row"] = evaluation.engine_row(raw) if imported_row else None
         detail["engine_reports"] = (definitive.engine_reports(
-            self.repository, (indexed.get("source") or {}).get("path")) if imported_row else None)
+            self.repository, (indexed.get("source") or {}).get("path"))
+            if imported_row and reports else None)
         return detail
+
+    def engine_report_source(self, run_id: str) -> Optional[str]:
+        """The results path an imported benchmark row's engine reports are found from, or None."""
+        try:
+            with self.lock():
+                indexed = self.history.get(run_id)
+        except run_store.RunStoreError as exc:
+            raise RunError(str(exc)) from exc
+        source = indexed.get("source") or {}
+        return source.get("path") if source.get("kind") == "benchmark-result" else None
 
     def run_evaluation(self, run_id: str) -> Optional[Dict[str, Any]]:
         """The landed evaluation contract an indexed source declared, carried as indexed; no

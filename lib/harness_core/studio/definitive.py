@@ -174,9 +174,16 @@ def engine_reports(repository: Optional[Path], relative: Any) -> Dict[str, Any]:
     # reason to show a farther folder's document instead.
     scorecard_seen = judge_seen = False
     for folder in _folders(Path(repository), relative):
-        if not scorecard_seen and _regular(folder / SCORECARD_NAME):
+        scorecard = folder / SCORECARD_NAME
+        if not scorecard_seen and (scorecard.is_symlink() or scorecard.exists()):
+            # A linked or odd nearest scorecard is this folder's answer, as an error: never a
+            # reason to read a farther one.
             scorecard_seen = True
-            if _outside(folder / SCORECARD_NAME, folder):
+            if scorecard.is_symlink():
+                reports["errors"].append("layer scorecard: the scorecard is a link; nothing is read through a link")
+            elif not _regular(scorecard):
+                reports["errors"].append("layer scorecard: the scorecard is not a regular file")
+            elif _outside(scorecard, folder):
                 reports["errors"].append("layer scorecard: the scorecard resolves outside the run folder")
             else:
                 try:

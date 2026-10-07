@@ -314,3 +314,36 @@ export function comparisonLine(item: DraftComparison): string {
 export function failureMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? replayErrorMessage(error.message) : fallback;
 }
+
+/** The preview a confirm may use, with the request generation that produced it. */
+export type PreviewSlot = { preview: ReplayPreview | null; generation: number };
+
+export type PreviewAction =
+  | { type: "begin"; generation: number }
+  | { type: "loaded"; generation: number; value: ReplayPreview }
+  | { type: "failed"; generation: number }
+  | { type: "clear" };
+
+/**
+ * Preview state for the replay form. Any preview request clears the previous preview and its
+ * token as it starts, and a failure leaves it cleared, so a refused definitive preview can never
+ * fall back on an earlier plain one. Only the newest request's answer is taken.
+ */
+export function previewReducer(state: PreviewSlot, action: PreviewAction): PreviewSlot {
+  switch (action.type) {
+    case "begin": return { preview: null, generation: action.generation };
+    case "loaded": return action.generation === state.generation ? { ...state, preview: action.value } : state;
+    case "failed": return action.generation === state.generation ? { ...state, preview: null } : state;
+    case "clear": return { ...state, preview: null };
+  }
+}
+
+/** The token "Confirm and run" may send, or null when nothing confirmable is previewed. */
+export function confirmableToken(slot: PreviewSlot): string | null {
+  return slot.preview?.valid && slot.preview.confirmation_token ? slot.preview.confirmation_token : null;
+}
+
+/** Which launch a preview is for, as the form names it. */
+export function launchKind(preview: ReplayPreview): string {
+  return preview.request.definitive ? "Definitive evaluation" : "Plain replay";
+}

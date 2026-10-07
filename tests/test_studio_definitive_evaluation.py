@@ -17,11 +17,13 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_harness import REPO  # noqa: E402
-from harness_core.studio import definitive, evaluation, packs, replay, runs  # noqa: E402
+from harness_core.studio import definitive, evaluation, packs, replay, runs, server  # noqa: E402
+from harness_core.studio.mutations import MutationExecutor  # noqa: E402
 import test_layer_scorecard as scorecard_fixture  # noqa: E402
 from test_replay_pack import make_pack, task_spec  # noqa: E402
 from test_studio_replay_packs import harness, target  # noqa: E402
@@ -181,6 +183,53 @@ class EngineReportTests(unittest.TestCase):
             self.assertIsNone(reports["scorecard"])
             self.assertEqual(reports["errors"], ["layer scorecard: " + definitive.SCORECARD_NAME + " " + reason]
                              if reason.startswith("is") else ["layer scorecard: " + reason])
+
+    def test_a_linked_nearest_scorecard_is_the_answer_as_an_error_never_a_farther_one(self):
+        (self.tag / "m-one" / definitive.SCORECARD_NAME).symlink_to(self.tag / definitive.SCORECARD_NAME)
+        reports = definitive.engine_reports(self.repository, self.relative)
+        self.assertIsNone(reports["scorecard"])
+        self.assertEqual(reports["errors"][0],
+                         "layer scorecard: the scorecard is a link; nothing is read through a link")
+
+    def test_a_slow_judge_runs_on_the_request_thread_and_never_blocks_a_mutation(self):
+        catalog = self.root / "suites.json"
+        catalog.write_text(json.dumps({"schema_version": 1, "suites": []}), encoding="utf-8")
+        mutations = MutationExecutor()
+        self.addCleanup(mutations.close)
+        # The index is SQLite, bound to the thread that opens it: the mutation thread, as served.
+        supervisor = mutations.call(lambda: runs.RunSupervisor(self.root / "state", catalog,
+                                                               repository=self.repository))
+        self.addCleanup(mutations.call, supervisor.close)
+        mutations.call(lambda: supervisor.reindex(self.repository))
+        run_id = next(record["run_id"] for record in mutations.call(lambda: supervisor.history.list(limit=10))
+                      if record["source"]["kind"] == "benchmark-result")
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_judge(_folder):
+            entered.set()
+            release.wait(30)
+            return {"pairs": []}
+
+        handler = SimpleNamespace(
+            request_json={"run_id": run_id, "lineage_limit": 50, "lineage_cursor": None},
+            server=SimpleNamespace(run_supervisor=supervisor, mutations=mutations), response=None)
+        handler._json = lambda code, payload: setattr(handler, "response", (code, payload))
+        handler._error = lambda code, name: setattr(handler, "response", (code, {"error": name}))
+        route = SimpleNamespace(response_schema=server.RUN_DETAIL)
+        definitive._JUDGE_CACHE.clear()
+        self.addCleanup(definitive._JUDGE_CACHE.clear)
+        with mock.patch.object(definitive, "judge_report", slow_judge):
+            worker = threading.Thread(target=server._run_detail, args=(handler, route))
+            worker.start()
+            self.assertTrue(entered.wait(30), "the judge was never asked")
+            # The judge is still running; a mutation gets the thread at once.
+            started = time.monotonic()
+            self.assertEqual(mutations.call(lambda: "free"), "free")
+            self.assertLess(time.monotonic() - started, 5)
+            release.set()
+            worker.join(30)
+        self.assertEqual(handler.response[0], 200, handler.response)
+        self.assertEqual(handler.response[1]["engine_reports"]["judge"], {"pairs": []})
 
     def test_a_judge_report_the_engine_refuses_is_named_not_shown(self):
         (self.tag / definitive.JUDGE_FOLDER / "pairs.key.json").write_text("{}", encoding="utf-8")

@@ -30,7 +30,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
+from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -1256,13 +1256,19 @@ def _run_detail(handler: Handler, route: Route) -> None:
     if request is None:
         return
     try:
-        payload = handler.server.mutations.call(
-            lambda: handler.server.run_supervisor.run_detail(
-                request["run_id"], lineage_limit=request["lineage_limit"],
-                lineage_cursor=request["lineage_cursor"]))
+        supervisor = handler.server.run_supervisor
+        payload, source = handler.server.mutations.call(lambda: (
+            supervisor.run_detail(request["run_id"], reports=False,
+                                  lineage_limit=request["lineage_limit"],
+                                  lineage_cursor=request["lineage_cursor"]),
+            supervisor.engine_report_source(request["run_id"])))
     except (runs.RunError, TypeError):
         handler._error(404, "run_not_found")
         return
+    if source is not None:
+        # On this request's thread, never the mutation thread: the judge report may run a child
+        # for up to its timeout, one at a time (`definitive.judge_report`).
+        payload["engine_reports"] = definitive.engine_reports(supervisor.repository, source)
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
