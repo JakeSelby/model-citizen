@@ -286,6 +286,7 @@ DIRECTIVE_BACK = re.compile(
     r"\b(?:(?:follow(?:ing)?|apply(?:ing)?|obey(?:ing)?) (?:it|them|that file|this file"
     r"|(?:those|these|its|the) (?:[\w-]+ ){0,3}instructions)"
     r"|use (?:those|these|its|the) (?:[\w-]+ ){0,3}instructions"
+    r"|use (?:it|them|that file|this file) (?:to|when|while|for|on|against)"
     r"|as (?:your |the )?(?:\w+ ){0,2}instructions"
     r"|do (?:exactly |just )?(?:what|whatever|as) (?:it|they|that file|this file)"
     r" (?:says|say|asks|instructs|tells you))\b")
@@ -426,6 +427,10 @@ def _directed(value, text):
         parts = path.split(sentence)
         pairs = [(parts[at - 1], parts[at]) for at in range(1, len(parts))]
         if any(_governs(EDIT, before) or _unnegated(EDIT_BACK, after) for before, after in pairs):
+            # An edit covers its own clause, not a later one that takes the file on: "edit <path>,
+            # then follow it" adopts, "update <path> so reviewers follow it" does not.
+            if any(_points_back(_after_clause(after), value) for _, after in pairs):
+                return True
             continue
         if any(_governs(DIRECTIVE, before) or _points_back(after, value) for before, after in pairs):
             return True
@@ -435,6 +440,12 @@ def _directed(value, text):
             if not _refers_back(following, value):
                 break
     return False
+
+
+def _after_clause(text):
+    """What follows the first clause break in `text`, or nothing when there is none."""
+    found = CLAUSE_BREAK.search(text)
+    return text[found.end():] if found else ""
 
 
 # Work that only looks at the file rather than working under it: summarise, count, copy, explain or

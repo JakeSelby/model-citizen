@@ -161,6 +161,30 @@ class ReviewFollowUpTests(unittest.TestCase):
                 self.assertIsNotNone(frameworks.classify(brief, None), msg=brief)
 
 
+class LaterAdoptionTests(unittest.TestCase):
+    """A look at or an edit of the file does not cover a later clause that takes it on."""
+
+    def test_a_look_then_use_it_to_review_is_the_review_layer(self):
+        for brief in ("Summarise " + P + ", then use it to review calc.py.",
+                      "Summarise " + P + ". Then use it to review calc.py."):
+            with self.subTest(brief=brief):
+                match = frameworks.classify(brief, None)
+                self.assertIsNotNone(match, msg=brief)
+                self.assertEqual(match["role"], "reviewer")
+
+    def test_an_edit_then_follow_it_in_another_clause_is_the_review_layer(self):
+        for brief in ("Edit " + P + ", then follow it when reviewing calc.py.",
+                      "Rewrite " + P + " and then follow it when reviewing calc.py."):
+            with self.subTest(brief=brief):
+                match = frameworks.classify(brief, None)
+                self.assertIsNotNone(match, msg=brief)
+                self.assertEqual(match["role"], "reviewer")
+
+    def test_an_edit_whose_own_clause_mentions_following_it_still_runs(self):
+        self.assertIsNone(frameworks.classify(
+            "Update the wording of " + P + " so reviewers follow it more easily.", None))
+
+
 class LeadGapTests(unittest.TestCase):
     def directed(self, words):
         # The bare declared path, so a `_bmad/` prefix is not counted as a ninth word.
