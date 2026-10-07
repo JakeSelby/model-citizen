@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 182,
+    "bug": 183,
     "chore": 108,
     "decision": 15,
     "epic": 28,
@@ -9186,6 +9186,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C106.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B182",
+      "github_number": 1254,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1254",
+      "title": "fix(cost): a subagent whose stop is blocked still counts as stopped",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B182.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
