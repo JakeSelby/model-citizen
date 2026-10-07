@@ -9075,6 +9075,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B178",
+      "github_number": 1207,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1207",
+      "title": "fix(hooks): a pass claim or a push can follow an edit with no fresh gate",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B178.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S347",
       "github_number": 1212,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1212",
