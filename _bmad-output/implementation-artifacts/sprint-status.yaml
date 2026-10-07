@@ -558,6 +558,7 @@ development_status:
   ah-b181-fix-delegation-the-designer-role-is-pinned-to: ready-for-dev
   ah-b182-fix-cost-a-subagent-whose-stop-is-blocked-still: ready-for-dev
   ah-b184-fix-confinement-refuse-a-framework-brief-that: ready-for-dev
+  ah-b185-test-tier-routing-a-frugal-tiering-arm-beside: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
