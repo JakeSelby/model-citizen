@@ -83,13 +83,19 @@ def _production_sets(module, pack) -> List[str]:
                   if module.set_tier(name, spec or {}) == TIER)
 
 
-def _entries(module, source: Path, repository: Path) -> List[Dict[str, Any]]:
-    """One entry per production-tier set of the pack at `source`, each pinned as a run pins it."""
+def _entries(module, source: Path, repository: Path,
+             skipped: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """One entry per production-tier set of the pack at `source`, each pinned as a run pins it.
+    A set the pack loader refuses is skipped with its reason; the pack's other sets stay."""
     pack = module.open_pack(source, "HEAD", None, repository)
     out = []
     try:
         for set_name in _production_sets(module, pack):
-            tasks, _manifest = module.load_set(pack, set_name, TIER)
+            try:
+                tasks, _manifest = module.load_set(pack, set_name, TIER)
+            except (SystemExit, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                skipped.append({"source": str(source), "set": set_name, "reason": str(exc)})
+                continue
             out.append({"name": pack["name"], "version": pack["version"], "commit": pack["commit"],
                         "digest": pack["digest"], "short_digest": pack["digest"][:12],
                         "set": set_name, "source": str(source),
@@ -109,7 +115,7 @@ def discover(repository: Path) -> Dict[str, Any]:
     skipped: List[Dict[str, str]] = []
     for source in candidates(repository):
         try:
-            packs.extend(_entries(module, source, repository))
+            packs.extend(_entries(module, source, repository, skipped))
         except (SystemExit, OSError, ValueError, KeyError, TypeError, AttributeError,
                 subprocess.SubprocessError) as exc:
             # A pack.json or task.json that is JSON but not an object is skipped, not a crash.

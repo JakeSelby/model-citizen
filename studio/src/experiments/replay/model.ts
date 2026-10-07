@@ -22,6 +22,8 @@ export type ReplayLaunchInput = {
   pre_registration: string;
   /** The evaluator pack, chosen by name, digest and set; null runs the repository's own tasks. */
   pack?: { name: string; digest: string; set?: string } | null;
+  /** Set only by the definitive-evaluation action: the launch is held to the engine's registered budget. */
+  definitive?: true;
 };
 
 /** A pack as the server resolved and pinned it. */
@@ -200,6 +202,9 @@ const refusals: Record<string, string> = {
   replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
   definitive_budget_unregistered:
     "The engine has no registered budget for this run, so the definitive launch is refused. It waits on an engine budget reader; the Studio assumes no budget.",
+  definitive_budget_unestimated:
+    "The spend guard has no estimate for this run, so the definitive launch cannot be held to the registered whole-run cap and is refused.",
+  definitive_launch_required: "A definitive request is launched only by the definitive evaluation action.",
   definitive_budget_exceeded:
     "The definitive launch exceeds the engine's registered budget: its per-run budget, spend cap or estimated spend is above it.",
 };
@@ -240,9 +245,12 @@ export function packOptions(packs: ReplayPack[]): Array<{ value: string; label: 
   return packs.map((pack) => ({ value: packKey(pack), label: `${pack.name} ${pack.version}, set ${pack.set} (${pack.short_digest})` }));
 }
 
-/** The selection a chosen pack set sends: name, digest and set, never a path. */
-export function packSelection(pack: ReplayPack): { name: string; digest: string; set: string } {
-  return { name: pack.name, digest: pack.digest, set: pack.set };
+/**
+ * The selection a chosen pack set sends: name and digest, and the set unless it is the production
+ * set, so a production replay's command and pinned identity are what they always were. Never a path.
+ */
+export function packSelection(pack: ReplayPack): { name: string; digest: string; set?: string } {
+  return pack.set === "production" ? { name: pack.name, digest: pack.digest } : { name: pack.name, digest: pack.digest, set: pack.set };
 }
 
 /** The pack a new replay starts on: the catalog's default, else the first, else none. */
@@ -300,4 +308,9 @@ export function comparisonLine(item: DraftComparison): string {
   const state = item.stale ? `Stale: ${item.stale_reason ?? "the draft changed"}` : "Current";
   return `${item.draft} at ${item.revision.slice(0, 12)} against ${item.base.kind} ${item.base.ref}; ` +
     `${item.tasks.length} task(s), ${item.model}, ${item.trials} trial(s). ${state}.`;
+}
+
+/** The form's message for a failed preview or start: the refusal's plain words, or a fallback. */
+export function failureMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? replayErrorMessage(error.message) : fallback;
 }

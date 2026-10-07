@@ -22,6 +22,9 @@ test("each set of one pack is its own option, chosen by name, digest and set", (
   assert.deepEqual(packOptions([evals, rules, outcome]).map((item) => item.value),
     ["production", "rule-targeted", "outcome-public"].map((set) => `${"a".repeat(64)}/${set}`));
   assert.deepEqual(packSelection(rules), { name: "model-citizen-evals", digest: "a".repeat(64), set: "rule-targeted" });
+  // The production set sends no set, so its native command and pinned identity are what they were.
+  assert.deepEqual(packSelection(evals), { name: "model-citizen-evals", digest: "a".repeat(64) });
+  assert.equal(packKey(packSelection(evals)), packKey(evals));
   assert.deepEqual(tasksFor([evals, rules, outcome], packKey(rules), []), ["rule-one"]);
   assert.deepEqual(tasksFor([evals, rules, outcome], packKey(outcome), []), ["two"]);
   // A selection saved before sets were offered names none and reads as the production set.

@@ -245,6 +245,20 @@ class PackSetTests(unittest.TestCase):
         self.assertNotIn("--pack-set", replay.command_for_target(
             request, request.targets[0], self.source, self.root / "out"))
 
+    def test_a_broken_secondary_set_is_skipped_and_the_production_set_stays(self):
+        broken = make_pack(self.root / "broken-sets", tasks=[task_spec("short-one")], name="broken-sets",
+                           sets={"production": {"tasks": ["short-one"]},
+                                 "rule-targeted": {"tier": "production", "tasks": ["missing-task"]}})
+        found = packs.discover(self.source)
+        listed = [(item["name"], item["set"]) for item in found["packs"] if item["name"] == "broken-sets"]
+        self.assertEqual(listed, [("broken-sets", "production")])
+        skipped = [item for item in found["skipped"] if item["source"] == str(broken.resolve())]
+        self.assertEqual([item["set"] for item in skipped], ["rule-targeted"])
+        self.assertTrue(skipped[0]["reason"])
+        digest = next(item["digest"] for item in found["packs"] if item["name"] == "broken-sets")
+        chosen = packs.select(self.source, "broken-sets", digest)
+        self.assertEqual(chosen["set"], "production")
+
     def test_an_unknown_set_is_refused(self):
         with self.assertRaisesRegex(ValueError, "not available at that digest and set"):
             packs.select(self.source, "model-citizen-evals", packs.discover(self.source)["packs"][0]["digest"],
@@ -317,6 +331,48 @@ class JudgeReadTests(unittest.TestCase):
         write_rows(real_tag / "m-one" / "results.jsonl", [row("t1", "harness", 1, "m-one")])
         self.assertEqual(definitive._judge_folder_problem(linked),
                          "the judge folder resolves outside the run folder")
+
+    def test_a_scorecard_and_judge_under_a_linked_parent_are_refused_through_engine_reports(self):
+        real_tag = self.root / "real-tag"
+        self.copy_judge(real_tag / definitive.JUDGE_FOLDER)
+        code, _out, err = scorecard_fixture.run(self.fixture.argv("--out", str(real_tag)))
+        self.assertEqual(code, 0, err)
+        write_rows(real_tag / "m-one" / "results.jsonl", [row("t1", "harness", 1, "m-one")])
+        (self.repository / "benchmarks" / "1.0.0" / "linked").symlink_to(real_tag, target_is_directory=True)
+        with mock.patch.object(definitive.subprocess, "run") as launch:
+            reports = definitive.engine_reports(self.repository, "benchmarks/1.0.0/linked/m-one/results.jsonl")
+        launch.assert_not_called()
+        self.assertIsNone(reports["scorecard"])
+        self.assertIsNone(reports["judge"])
+        self.assertEqual(reports["errors"], [
+            "layer scorecard: the scorecard resolves outside the run folder",
+            "diff-quality judge: the judge folder resolves outside the run folder"])
+
+    def test_a_judge_that_timed_out_is_retried_and_only_its_own_refusal_is_kept(self):
+        self.copy_judge(self.tag / definitive.JUDGE_FOLDER)
+        real, calls = subprocess.run, []
+
+        def flaky(*args, **kwargs):
+            calls.append(args[0])
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(args[0], definitive.JUDGE_TIMEOUT_SECONDS)
+            return real(*args, **kwargs)
+
+        with mock.patch.object(definitive.subprocess, "run", flaky):
+            first = definitive.engine_reports(self.repository, self.relative)
+            self.assertEqual(first["errors"], ["diff-quality judge: the judge report did not run: TimeoutExpired"])
+            second = definitive.engine_reports(self.repository, self.relative)
+            self.assertEqual(second["errors"], [])
+            self.assertIsNotNone(second["judge"])
+            self.assertEqual(len(calls), 2)
+        # The engine's own refusal is kept for that folder state: a reload starts no process.
+        (self.tag / definitive.JUDGE_FOLDER / "pairs.key.json").write_text("{}", encoding="utf-8")
+        with mock.patch.object(definitive.subprocess, "run", flaky):
+            refused = definitive.engine_reports(self.repository, self.relative)
+            again = definitive.engine_reports(self.repository, self.relative)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(refused["errors"], again["errors"])
+        self.assertTrue(refused["errors"][0].startswith("diff-quality judge: "))
 
 
 class EngineOutputTests(unittest.TestCase):

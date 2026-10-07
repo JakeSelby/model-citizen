@@ -7,7 +7,7 @@ import { useRef, useState } from "react";
 import { previewReplay, startReplay } from "./api";
 import {
   analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packKey, packOptions, packSelection, samplingLines, progressResult, readinessSummary,
-  replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
+  failureMessage, replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
   SOURCE_ONLY_NOTE,
   ReplayRequestGate, type DraftComparison, type ReplayAnalysis, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
@@ -71,18 +71,20 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
     updateDraft({ ...draft, targets });
   }
 
-  async function estimate() {
+  async function estimate(definitive = false) {
     if (errors.length || requestGate.current.paidBusy()) return;
     const generation = requestGate.current.next();
     setBusy(true);
     try {
-      const value = await previewReplay(draft);
+      // The definitive action is the only place the flag is set; the server holds such a launch
+      // to the engine's registered budget, and the flag rides through to start in the request.
+      const value = await previewReplay(definitive ? { ...draft, definitive: true } : draft);
       if (!requestGate.current.accepts(generation)) return;
       setPreview(value);
       setMessage(value.valid ? "Estimate and caps are ready for confirmation." : "Nothing started.");
     } catch (error) {
       if (!requestGate.current.accepts(generation)) return;
-      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay preview failed.");
+      setMessage(failureMessage(error, "Replay preview failed."));
     } finally {
       if (requestGate.current.accepts(generation)) setBusy(false);
     }
@@ -100,7 +102,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       onStarted?.(value.run_id);
     } catch (error) {
       if (!requestGate.current.acceptsPaid(generation)) return;
-      setMessage(error instanceof Error ? replayErrorMessage(error.message) : "Replay could not start.");
+      setMessage(failureMessage(error, "Replay could not start."));
     } finally {
       if (requestGate.current.finishPaid(generation)) setBusy(false);
     }
@@ -163,7 +165,8 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
               </Stack>
             : <Text c="dimmed" size="sm">The native benchmark commands appear once the preview resolves both targets.</Text>}
           <Group justify="flex-end">
-            <Button disabled={busy || errors.length > 0} loading={busy} variant="light" onClick={estimate}>Preview spend</Button>
+            <Button disabled={busy || errors.length > 0} loading={busy} variant="light" onClick={() => void estimate()}>Preview spend</Button>
+            <Button disabled={busy || errors.length > 0} loading={busy} variant="subtle" onClick={() => void estimate(true)}>Preview definitive evaluation</Button>
             <Button disabled={busy || !preview?.valid || !preview.confirmation_token} loading={busy} onClick={start}>Confirm and run</Button>
           </Group>
         </Stack>

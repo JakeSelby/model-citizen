@@ -30,7 +30,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                live_updates, module_authoring, module_editing, module_library,
                native_acceptance, replay, runs, selection, selection_editing, settings, targets)
 from . import apply as draft_apply
-from . import eval_tiers, first_run, headless, rule_health, run_store, trends
+from . import definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -758,6 +758,17 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
         handler.server.run_supervisor, handler.server.target_service)
 
 
+def _replay_launch(handler: Handler, value: Any) -> Any:
+    """The admission a replay request takes: the definitive launch, behind the engine's registered
+    budget, for a request the definitive-evaluation action flagged; the plain replay otherwise. The
+    flag only ever adds checks: the plain path refuses a flagged request, and the confirmation
+    digest binds the flag."""
+    admission = _replay_admission(handler)
+    if isinstance(value, dict) and value.get("definitive") is True:
+        return definitive_launch.DefinitiveLaunch(admission)
+    return admission
+
+
 def _replay_catalog(handler: Handler, route: Route) -> None:
     try:
         payload = replay.task_catalog(handler.server.repo_root)
@@ -775,7 +786,7 @@ def _replay_preview(handler: Handler, route: Route) -> None:
     try:
         # Resolving builds both targets (clone and sandboxed sync); it stays off the one
         # mutation thread so cancel and polling are never queued behind it.
-        admission = _replay_admission(handler)
+        admission = _replay_launch(handler, request["request"])
         resolved = admission.resolve(request["request"])
         payload = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except replay.ReplayError as exc:
@@ -793,7 +804,7 @@ def _replay_start(handler: Handler, route: Route) -> None:
         handler._error(400, "invalid_request")
         return
     try:
-        admission = _replay_admission(handler)
+        admission = _replay_launch(handler, request["request"])
         confirmed = admission.confirm(request["request"])
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))

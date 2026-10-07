@@ -170,14 +170,17 @@ class ReplayRequest:
     pre_registration: Optional[str]
     pack: Optional[Dict[str, str]] = None
     evidence: str = PREREGISTERED
+    # Set only by the Studio's definitive-evaluation action; such a request is admitted through
+    # `definitive_launch.DefinitiveLaunch` and its registered budget, never the plain path.
+    definitive: bool = False
 
     @classmethod
     def parse(cls, value: Any) -> "ReplayRequest":
         if not isinstance(value, dict):
             raise ReplayError("replay request must be an object")
         _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                             "spend_cap_usd", "pre_registration", "pack", "evidence"},
-                     "replay request")
+                             "spend_cap_usd", "pre_registration", "pack", "evidence",
+                             "definitive"}, "replay request")
         raw_targets = value.get("targets")
         if not isinstance(raw_targets, list) or len(raw_targets) != 2:
             raise ReplayError("replay requires exactly two explicit targets")
@@ -223,15 +226,21 @@ class ReplayRequest:
         if evidence not in (PREREGISTERED, EXPLORATORY) or (evidence == PREREGISTERED
                                                             and not registration):
             raise ReplayError("a pre-registered replay names its pre-registration")
+        definitive = value.get("definitive", False)
+        if definitive is not True and definitive is not False:
+            raise ReplayError("definitive must be true or false")
         return cls(targets, model, repetitions, tuple(raw_tasks), maximum, cap, registration,
-                   dict(pack) if pack is not None else None, evidence)
+                   dict(pack) if pack is not None else None, evidence, definitive)
 
     def as_dict(self) -> Dict[str, Any]:
         return {"targets": [target.as_dict() for target in self.targets], "model": self.model,
                 "repetitions": self.repetitions, "tasks": list(self.tasks),
                 "max_budget_usd": self.max_budget_usd, "spend_cap_usd": self.spend_cap_usd,
                 "pre_registration": self.pre_registration, "pack": self.pack,
-                "evidence": self.evidence}
+                "evidence": self.evidence,
+                # Only a definitive request names the flag, so every other request's JSON, and the
+                # confirmation digest bound to it, is what it was.
+                **({"definitive": True} if self.definitive else {})}
 
 
 def resolve_request(value: Any,
@@ -243,7 +252,8 @@ def resolve_request(value: Any,
     if not isinstance(value, dict):
         raise ReplayError("replay request must be an object")
     _strict_keys(value, {"targets", "model", "repetitions", "tasks", "max_budget_usd",
-                         "spend_cap_usd", "pre_registration", "pack"}, "replay request")
+                         "spend_cap_usd", "pre_registration", "pack", "definitive"},
+                 "replay request")
     # The evidence label is the server's to decide (`ReplayAdmission.resolve`), never the form's.
     supplied = value.get("targets")
     if not isinstance(supplied, list) or len(supplied) != 2:
@@ -442,8 +452,18 @@ class ReplayAdmission:
     def preview(self, value: Any) -> Dict[str, Any]:
         return self.preview_resolved(self.resolve(value))
 
-    def preview_resolved(self, request: ReplayRequest) -> Dict[str, Any]:
-        """The supervisor half of preview; the target builds in `resolve` stay outside it."""
+    @staticmethod
+    def _plain(request: ReplayRequest, definitive_admitted: bool) -> None:
+        if request.definitive and not definitive_admitted:
+            raise ReplayRefusal(
+                "definitive_launch_required",
+                "a definitive request is launched only by the definitive evaluation action")
+
+    def preview_resolved(self, request: ReplayRequest,
+                         definitive_admitted: bool = False) -> Dict[str, Any]:
+        """The supervisor half of preview; the target builds in `resolve` stay outside it. A
+        definitive request is refused unless `definitive_launch` has admitted it."""
+        self._plain(request, definitive_admitted)
         launch = launch_payload(request, "preview", self.repository)
         try:
             value = self.supervisor.spend_preview(
@@ -469,6 +489,7 @@ class ReplayAdmission:
         return self.start_confirmed(self.confirm(value), confirmation_token)
 
     def start_confirmed(self, request: ReplayRequest, confirmation_token: Any) -> Dict[str, Any]:
+        self._plain(request, False)  # a definitive start goes through `definitive_launch`
         launch = launch_payload(request, confirmation_token, self.repository)
         try:
             started = self.supervisor.start(

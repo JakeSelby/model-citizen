@@ -85,19 +85,28 @@ def _judge(folder: Path) -> Dict[str, Any]:
                               stderr=subprocess.PIPE, text=True, timeout=JUDGE_TIMEOUT_SECONDS,
                               check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError("the judge report did not run: " + type(exc).__name__) from exc
+        # The child never finished: nothing the engine said, so nothing to keep.
+        raise JudgeUnavailable("the judge report did not run: " + type(exc).__name__) from exc
     try:
         value = json.loads(done.stdout) if done.returncode == 0 else None
     except ValueError:
         value = None
     if not isinstance(value, dict):
         lines = (done.stderr or "").strip().splitlines()
-        raise ValueError(lines[-1] if lines else "the judge report printed no section")
+        raise JudgeRefused(lines[-1] if lines else "the judge report printed no section")
     return value
 
 
 class JudgeBusy(RuntimeError):
     """Another judge report is being read."""
+
+
+class JudgeRefused(ValueError):
+    """The judge's own refusal: it finished and printed no section. Kept per folder state."""
+
+
+class JudgeUnavailable(ValueError):
+    """The judge did not finish (timeout or launch failure). Never kept; the next read retries."""
 
 
 def _judge_state(folder: Path) -> Tuple[Any, ...]:
@@ -122,7 +131,7 @@ def judge_report(folder: Path) -> Dict[str, Any]:
             if cached is None:
                 try:
                     cached = (_judge(folder), None)
-                except ValueError as exc:
+                except JudgeRefused as exc:
                     cached = (None, str(exc))
                 if len(_JUDGE_CACHE) >= JUDGE_CACHE_LIMIT:
                     _JUDGE_CACHE.clear()
@@ -135,14 +144,21 @@ def judge_report(folder: Path) -> Dict[str, Any]:
     return dict(value or {})
 
 
+def _outside(path: Path, folder: Path) -> bool:
+    """True when `path`, or any folder on the way to it, resolves anywhere but where it lies:
+    `folder` is lexical under the resolved repository, so a link at any component moves it."""
+    lexical = Path(os.path.normpath(str(path)))
+    return Path(os.path.realpath(str(lexical))) != lexical or not str(lexical).startswith(
+        str(Path(os.path.normpath(str(folder)))) + os.sep)
+
+
 def _judge_folder_problem(folder: Path) -> Optional[str]:
     """Why `folder`'s `judge/` cannot be read as this run's: a link, or a path outside it."""
     judge = folder / JUDGE_FOLDER
     if judge.is_symlink():
         return "the judge folder is a link; nothing is read through a link"
     try:
-        # `folder` is lexical under the resolved repository, so any link on the way moves this.
-        if judge.resolve().parent != Path(os.path.normpath(str(folder))):
+        if _outside(judge, folder):
             return "the judge folder resolves outside the run folder"
     except OSError:
         return "the judge folder cannot be resolved"
@@ -160,10 +176,13 @@ def engine_reports(repository: Optional[Path], relative: Any) -> Dict[str, Any]:
     for folder in _folders(Path(repository), relative):
         if not scorecard_seen and _regular(folder / SCORECARD_NAME):
             scorecard_seen = True
-            try:
-                reports["scorecard"] = _scorecard(folder)
-            except (OSError, UnicodeError, ValueError, RecursionError) as exc:
-                reports["errors"].append("layer scorecard: " + str(exc))
+            if _outside(folder / SCORECARD_NAME, folder):
+                reports["errors"].append("layer scorecard: the scorecard resolves outside the run folder")
+            else:
+                try:
+                    reports["scorecard"] = _scorecard(folder)
+                except (OSError, UnicodeError, ValueError, RecursionError) as exc:
+                    reports["errors"].append("layer scorecard: " + str(exc))
         if judge_seen or not ((folder / JUDGE_FOLDER).is_dir() or (folder / JUDGE_FOLDER).is_symlink()):
             continue
         judge_seen = True
