@@ -29,6 +29,9 @@ FULL_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 PACK_KEYS = frozenset(("name", "version", "commit", "digest", "source"))
+# A pack's set (`--pack-set`); a request saved before sets were offered names none and runs the
+# production set, as `cost_bench.py replay --pack` does by default.
+PACK_SET = "set"
 PREREGISTERED, EXPLORATORY = "pre-registered", "exploratory"
 ANALYSIS_NAME = "analysis.json"
 MAX_ANALYSIS_BYTES = 4 * 1024 * 1024
@@ -207,9 +210,11 @@ class ReplayRequest:
             raise ReplayError("a release replay needs a pre-registration before it can write history")
         pack = value.get("pack")
         if pack is not None and (
-                not isinstance(pack, dict) or set(pack) != PACK_KEYS
+                not isinstance(pack, dict) or set(pack) - {PACK_SET} != PACK_KEYS
                 or any(not isinstance(pack[key], str) or not pack[key] or "\0" in pack[key]
                        for key in PACK_KEYS)
+                or (PACK_SET in pack and (not isinstance(pack[PACK_SET], str)
+                                          or not IDENTIFIER.fullmatch(pack[PACK_SET])))
                 or not HEX40.fullmatch(pack["commit"]) or not HEX64.fullmatch(pack["digest"])
                 or not Path(pack["source"]).is_absolute()):
             raise ReplayError("replay pack must be a resolved evaluator pack")
@@ -231,7 +236,7 @@ class ReplayRequest:
 
 def resolve_request(value: Any,
                     resolver: Callable[[str, str], Mapping[str, Any]],
-                    pack_resolver: Optional[Callable[[Any, Any], Mapping[str, Any]]] = None
+                    pack_resolver: Optional[Callable[..., Mapping[str, Any]]] = None
                     ) -> ReplayRequest:
     """Resolve the two UI references through AH-S301, and the chosen pack by name and digest,
     before spend preview or launch."""
@@ -256,14 +261,29 @@ def resolve_request(value: Any,
     normalized = dict(value, targets=resolved)
     chosen = value.get("pack")
     if chosen is not None:
-        if (not isinstance(chosen, dict) or set(chosen) != {"name", "digest"}
+        if (not isinstance(chosen, dict) or set(chosen) - {PACK_SET} != {"name", "digest"}
                 or pack_resolver is None):
-            raise ReplayError("pack selection must contain only name and digest")
-        found = pack_resolver(chosen["name"], chosen["digest"])
-        normalized["pack"] = {key: found[key] for key in PACK_KEYS}
+            raise ReplayError("pack selection must contain only name and digest, and optionally a set")
+        found = (pack_resolver(chosen["name"], chosen["digest"], chosen[PACK_SET])
+                 if PACK_SET in chosen else pack_resolver(chosen["name"], chosen["digest"]))
+        normalized["pack"] = pinned_pack(found, PACK_SET in chosen)
     if normalized.get("pre_registration") == "":
         normalized["pre_registration"] = None
     return ReplayRequest.parse(normalized)
+
+
+def pinned_pack(found: Mapping[str, Any], with_set: bool) -> Dict[str, str]:
+    """The pack identity a request pins: name, version, commit, digest and source, and the set
+    when the selection named one. A selection naming none keeps the identity it always had."""
+    pinned = {key: found[key] for key in PACK_KEYS}
+    if with_set:
+        pinned[PACK_SET] = found[PACK_SET]
+    return pinned
+
+
+def pack_set(pack: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The set a pinned pack names, or None for a request that named none (the production set)."""
+    return None if pack is None else pack.get(PACK_SET)
 
 
 def case_identities(request: ReplayRequest) -> List[str]:
@@ -397,9 +417,9 @@ class ReplayAdmission:
                 "from the commit's defaults and cannot apply it; checkpoint the change as "
                 "source or restore the inherited configuration" % name)
 
-    def _resolve_pack(self, name: Any, digest: Any) -> Mapping[str, Any]:
+    def _resolve_pack(self, name: Any, digest: Any, set_name: Any = None) -> Mapping[str, Any]:
         try:
-            return packs.select(self.repository, name, digest)
+            return packs.select(self.repository, name, digest, set_name)
         except ValueError as exc:
             raise ReplayError(str(exc)) from exc
 
@@ -410,8 +430,9 @@ class ReplayAdmission:
 
     def _confirm_resolved(self, request: ReplayRequest) -> None:
         if request.pack is not None:
-            found = self._resolve_pack(request.pack["name"], request.pack["digest"])
-            if {key: found[key] for key in PACK_KEYS} != request.pack:
+            found = self._resolve_pack(request.pack["name"], request.pack["digest"],
+                                       pack_set(request.pack))
+            if pinned_pack(found, PACK_SET in request.pack) != request.pack:
                 raise ReplayError("replay pack identity changed after spend preview")
         for expected in request.targets:
             actual = ReplayTarget.parse(self._resolve(expected.kind, expected.ref))
@@ -431,6 +452,9 @@ class ReplayAdmission:
                 "api_credit", case_identities=launch["case_identities"])
         except runs.RunError as exc:
             raise ReplayError(str(exc)) from exc
+        if request.evidence == PREREGISTERED:
+            within_registered_budget(self.repository, request,
+                                     (value.get("estimate") or {}).get("amount_usd"))
         return dict(value, valid=True, errors=[], request=request.as_dict(),
                     command=native_commands(request),
                     sampling=sampling_payload(self.repository, request))
@@ -484,6 +508,8 @@ def _native_arguments(request: ReplayRequest, target: ReplayTarget, cap: str) ->
         # Pinned: the run reads this commit and refuses any other content.
         arguments.extend(("--pack", request.pack["source"], "--pack-ref", request.pack["commit"],
                           "--pack-digest", request.pack["digest"]))
+        if pack_set(request.pack) is not None:
+            arguments.extend(("--pack-set", request.pack[PACK_SET]))
     for task in request.tasks:
         arguments.extend(("--task", task))
     return arguments
@@ -1079,6 +1105,9 @@ _LEADING_INT = re.compile(r"^\s*(\d+)\b")
 # `replay_power.py --have K N M`, as the pre-registration template asks the field to quote it.
 _HAVE = re.compile(r"--have\s+(\d+)\s+(\d+)\s+(\d+)")
 _LONG_COUNT = re.compile(r"of which\s+(\d+)\s+(?:are|is)\s+long", re.IGNORECASE)
+# The Spend guardrail as the template words it: "<n> USD per run" and "a whole-run cap of <n> USD".
+_PER_RUN = re.compile(r"(\d+(?:\.\d+)?)\s*USD\s+per\s+run\b", re.IGNORECASE)
+_WHOLE_RUN = re.compile(r"whole-run\s+(?:cap|stop)\s+of\s+(\d+(?:\.\d+)?)\s*USD", re.IGNORECASE)
 
 
 def registered_sample(repository: Path, registration: str) -> Dict[str, Any]:
@@ -1110,7 +1139,8 @@ def _long_count(repository: Path, request: ReplayRequest) -> int:
     """How many of the chosen tasks the pack or task list marks long."""
     if request.pack is not None:
         try:
-            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"],
+                                   pack_set(request.pack))
         except ValueError as exc:
             raise ReplayError(str(exc)) from exc
         flags = {item["id"]: item.get("long") is True for item in chosen["tasks"]}
@@ -1124,7 +1154,8 @@ def whole_set(repository: Path, request: ReplayRequest) -> bool:
     repository's own tasks. `cost_bench` writes history only for a whole set."""
     if request.pack is not None:
         try:
-            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"],
+                                   pack_set(request.pack))
         except ValueError as exc:
             raise ReplayError(str(exc)) from exc
         every = {item["id"] for item in chosen["tasks"]}
@@ -1156,7 +1187,53 @@ def label_evidence(repository: Path, request: ReplayRequest) -> ReplayRequest:
                "" if registered["have"] is None else
                ", and its power calculation sized k, n, m = %d, %d, %d" % registered["have"],
                len(request.tasks), long_tasks, request.repetitions))
+    within_registered_budget(repository, request)
     return _replace(request, evidence=PREREGISTERED)
+
+
+def registered_budget(repository: Path, registration: str) -> Optional[Dict[str, str]]:
+    """The budget a pre-registration registers, read through `experiment_protocol`'s section and
+    field readers from its Guardrails **Spend** field, as the template asks it to be written: the
+    per-run budget (`<n> USD per run`) and the whole-run cap (`a whole-run cap of <n> USD`, or
+    `stop`). None when the field states either in no form this reads: there is no default."""
+    path = _safe_file(repository, registration)
+    protocol = _engine_module("experiment_protocol")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise ReplayError("pre-registration is unreadable") from exc
+    spend = protocol.fields(protocol.sections(text).get("Guardrails", "")).get("Spend") or ""
+    per_run, whole_run = _PER_RUN.search(spend), _WHOLE_RUN.search(spend)
+    if per_run is None or whole_run is None:
+        return None
+    return {"per_run_usd": per_run.group(1), "whole_run_cap_usd": whole_run.group(1),
+            "spend": spend, "pre_registration": registration}
+
+
+def within_registered_budget(repository: Path, request: ReplayRequest,
+                             estimate_usd: Any = None) -> Dict[str, str]:
+    """Refuse a registered launch with no readable registered budget, or one whose per-run
+    budget, spend cap or estimated spend exceeds it; the registered budget otherwise."""
+    budget = registered_budget(repository, str(request.pre_registration))
+    if budget is None:
+        raise ReplayRefusal(
+            "replay_budget_unregistered",
+            "the pre-registration's Spend field registers no per-run budget and whole-run cap "
+            "in USD; a registered launch needs both, and the Studio assumes none")
+    exceeded = []
+    if Decimal(request.max_budget_usd) > Decimal(budget["per_run_usd"]):
+        exceeded.append("the per-run budget %s USD is above the registered %s USD"
+                        % (request.max_budget_usd, budget["per_run_usd"]))
+    if Decimal(request.spend_cap_usd) > Decimal(budget["whole_run_cap_usd"]):
+        exceeded.append("the spend cap %s USD is above the registered whole-run cap %s USD"
+                        % (request.spend_cap_usd, budget["whole_run_cap_usd"]))
+    if (isinstance(estimate_usd, (int, float)) and not isinstance(estimate_usd, bool)
+            and Decimal(str(estimate_usd)) > Decimal(budget["whole_run_cap_usd"])):
+        exceeded.append("the estimated spend %s USD is above the registered whole-run cap %s USD"
+                        % (estimate_usd, budget["whole_run_cap_usd"]))
+    if exceeded:
+        raise ReplayRefusal("replay_budget_exceeded", "; ".join(exceeded))
+    return budget
 
 
 def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]:
@@ -1166,6 +1243,7 @@ def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]
     if request.evidence == PREREGISTERED and request.pre_registration:
         registered = dict(registered_sample(repository, request.pre_registration))
         registered["have"] = list(registered["have"]) if registered["have"] else None
+        registered["budget"] = registered_budget(repository, request.pre_registration)
     labels = [{"target": target.as_dict(), "evidence": target_evidence(request, target)}
               for target in request.targets]
     evidence = replay_evidence(request)
@@ -1187,6 +1265,9 @@ def comparison_key(request: ReplayRequest) -> str:
     return hashlib.sha256(json.dumps({
         "tasks": sorted(request.tasks), "model": request.model, "trials": request.repetitions,
         "pack_digest": request.pack["digest"] if request.pack else None,
+        # Only a set other than production joins the key, so earlier keys still match.
+        **({"pack_set": pack_set(request.pack)}
+           if pack_set(request.pack) not in (None, packs.TIER) else {}),
     }, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -1319,12 +1400,13 @@ def _repository_tasks(repository: Path) -> List[Dict[str, str]]:
 
 def task_catalog(repository: Path) -> Dict[str, Any]:
     """Expose only stable task identities the replay form needs: the repository's own tasks, and
-    each evaluator pack found beside the checkout with its production tasks (`packs.discover`).
-    The path of a pack stays on the server; the form chooses one by name and digest."""
+    one entry per production-tier set of each evaluator pack found beside the checkout, with its
+    tasks (`packs.discover`). The path of a pack stays on the server; the form chooses one by
+    name, digest and set."""
     tasks = _repository_tasks(repository)
     found = packs.discover(Path(repository))
     public = [{key: item[key] for key in ("name", "version", "commit", "digest", "short_digest",
-                                           "tasks")} for item in found["packs"]]
+                                           "set", "tasks")} for item in found["packs"]]
     return {"schema_version": 1, "tasks": tasks, "packs": public,
             "default_pack": found["default_digest"], "target_kinds": sorted(TARGET_KINDS),
             "default_model": DEFAULT_MODEL,
@@ -1334,7 +1416,8 @@ def task_catalog(repository: Path) -> Dict[str, Any]:
 def validate_task_selection(repository: Path, request: ReplayRequest) -> None:
     if request.pack is not None:
         try:
-            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"])
+            chosen = packs.select(Path(repository), request.pack["name"], request.pack["digest"],
+                                   pack_set(request.pack))
         except ValueError as exc:
             raise ReplayError(str(exc)) from exc
         available = {item["id"] for item in chosen["tasks"]}

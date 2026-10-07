@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 from .state import StateError, Store, open_shared
-from . import evaluation, free_suites, run_store, spend_guard, targets
+from . import definitive, evaluation, free_suites, run_store, spend_guard, targets
 
 SCHEMA_VERSION = 1
 MAX_RUNNING = 3
@@ -1512,6 +1512,11 @@ class RunSupervisor:
                 detail["artifacts"].append(item)
         # The landed contract the source declared, as indexed; nothing is derived here.
         detail["evaluation"] = evaluation.detail_contract(indexed)
+        # A benchmark row's engine fields and the definitive evaluation's reports, verbatim.
+        imported_row = source_kind == "benchmark-result"
+        detail["engine_row"] = evaluation.engine_row(raw) if imported_row else None
+        detail["engine_reports"] = (definitive.engine_reports(
+            self.repository, (indexed.get("source") or {}).get("path")) if imported_row else None)
         return detail
 
     def run_evaluation(self, run_id: str) -> Optional[Dict[str, Any]]:

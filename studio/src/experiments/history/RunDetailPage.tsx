@@ -5,7 +5,35 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import { EvidenceState, StatusBadge } from "../../components/StudioKit";
 import { useLiveUpdates } from "../../live/LiveUpdates";
 import { loadCaseHistory, loadEvidence, loadRunDetail, rerun } from "./api";
-import { displayUnknown, evaluationLines, reportHref, type CaseHistory, type RunDetail } from "./model";
+import { displayUnknown, engineRowLines, evaluationLines, reportHref, reportLines, type CaseHistory, type RunDetail } from "./model";
+
+/** One engine document as a hairline table of its leaves, in the engine's order. */
+function EngineTable({ label, lines }: { label: string; lines: Array<[string, string]> }) {
+  return <ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": label, tabIndex: 0 }}>
+    <Table className="data-table" mt="sm"><Table.Thead><Table.Tr><Table.Th scope="col">Field</Table.Th><Table.Th scope="col">Engine value</Table.Th></Table.Tr></Table.Thead>
+      <Table.Tbody>{lines.map(([path, value], index) =>
+        <Table.Tr key={`${path}-${index}`}><Table.Th scope="row"><Text component="span" ff="monospace" size="sm" style={{ overflowWrap: "anywhere" }}>{path}</Text></Table.Th>
+          <Table.Td><Text component="span" size="sm" style={{ overflowWrap: "anywhere" }}>{value}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
+  </ScrollArea>;
+}
+
+/** The engine row's fields and the definitive evaluation's reports, each as the engine gave it. */
+export function EngineSections({ detail }: { detail: RunDetail }) {
+  return <>
+      {detail.engine_row && engineRowLines(detail.engine_row).length > 0 && <Paper><Title order={2}>Engine row fields</Title>
+        <Text c="dimmed" size="sm">Stratum, arm, metrics, cache basis and session keys exactly as the engine wrote them on this row.</Text>
+        <EngineTable label="Engine row fields" lines={engineRowLines(detail.engine_row)} /></Paper>}
+      {detail.engine_reports && <>
+        {detail.engine_reports.errors.map((item) => <EvidenceState key={item} kind="error" title="Engine report unavailable">{item}</EvidenceState>)}
+        {detail.engine_reports.scorecard && <Paper><Title order={2}>Layer scorecard</Title>
+          <Text c="dimmed" size="sm">As scripts/layer_scorecard.py wrote it; equivalence reads as the engine's verdict says.</Text>
+          <EngineTable label="Layer scorecard" lines={reportLines(detail.engine_reports.scorecard)} /></Paper>}
+        {detail.engine_reports.judge && <Paper><Title order={2}>Diff-quality judge</Title>
+          <Text c="dimmed" size="sm">As scripts/replay_judge.py report --json printed it.</Text>
+          <EngineTable label="Diff-quality judge" lines={reportLines(detail.engine_reports.judge)} /></Paper>}
+      </>}
+  </>;
+}
 
 export function RunDetailPage() {
   const { runId = "" } = useParams();
@@ -156,6 +184,7 @@ export function RunDetailPage() {
         <Table className="data-table" mt="sm"><Table.Tbody>{evaluationLines(detail.evaluation).map(([label, value], index) =>
           <Table.Tr key={`${label}-${index}`}><Table.Th scope="row">{label}</Table.Th><Table.Td><Text style={{ overflowWrap: "anywhere" }}>{value}</Text></Table.Td></Table.Tr>)}</Table.Tbody></Table>
       </Paper>}
+      <EngineSections detail={detail} />
       <Paper><Title order={2}>Evidence</Title><Group mt="sm">{detail.artifacts.map((item) => {
         const href = reportHref(item);
         return href

@@ -20,12 +20,12 @@ export type ReplayLaunchInput = {
   max_budget_usd: string;
   spend_cap_usd: string;
   pre_registration: string;
-  /** The evaluator pack, chosen by name and digest; null runs the repository's own tasks. */
-  pack?: { name: string; digest: string } | null;
+  /** The evaluator pack, chosen by name, digest and set; null runs the repository's own tasks. */
+  pack?: { name: string; digest: string; set?: string } | null;
 };
 
 /** A pack as the server resolved and pinned it. */
-export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string };
+export type ResolvedPack = { name: string; version: string; commit: string; digest: string; source: string; set?: string };
 
 export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registration" | "pack"> & {
   targets: [ReplayTarget, ReplayTarget];
@@ -38,10 +38,14 @@ export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registratio
 export type ReplaySampling = {
   evidence: "pre-registered" | "exploratory";
   targets?: Array<{ target: ReplayTarget; evidence: "pre-registered" | "exploratory" }>;
-  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null };
+  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null;
+    /** The registered per-run budget and whole-run cap, as the plan's Spend field states them; null when it states neither readably. */
+    budget?: RegisteredBudget | null };
   requested: { tasks: number; trials: number };
   note: string;
 };
+
+export type RegisteredBudget = { per_run_usd: string; whole_run_cap_usd: string; spend: string; pre_registration: string };
 
 /** One target's `cost_bench.py summarise --json` output, or the engine's refusal. */
 export type ReplayAnalysis = { target: number; result?: Record<string, unknown>; error?: string };
@@ -59,6 +63,8 @@ export type ReplayPack = {
   commit: string;
   digest: string;
   short_digest: string;
+  /** The pack's set at the production tier: its production set, a rule-targeted set or an outcome subset. */
+  set: string;
   tasks: Array<{ id: string; label: string }>;
 };
 
@@ -196,6 +202,10 @@ const refusals: Record<string, string> = {
   replay_worktree_dirty:
     "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
   replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
+  replay_budget_unregistered:
+    "The pre-registration registers no per-run budget and whole-run cap in USD. A registered launch needs both in its Spend field; the Studio assumes no budget.",
+  replay_budget_exceeded:
+    "The launch exceeds the registered budget: its per-run budget, spend cap or estimated spend is above what the pre-registration registers.",
 };
 
 export function replayErrorMessage(code: string): string {
@@ -224,9 +234,19 @@ export function formatCost(value: number | null): string {
   return value === null ? "Unavailable" : `$${value.toFixed(4)}`;
 }
 
-/** One picker option per pack: its name, version and short digest, keyed by the full digest. */
+/** The picker key of one pack set: its full digest and its set name. */
+export function packKey(pack: { digest: string; set?: string }): string {
+  return `${pack.digest}/${pack.set ?? "production"}`;
+}
+
+/** One picker option per pack set: its name, version, set and short digest, keyed by `packKey`. */
 export function packOptions(packs: ReplayPack[]): Array<{ value: string; label: string }> {
-  return packs.map((pack) => ({ value: pack.digest, label: `${pack.name} ${pack.version} (${pack.short_digest})` }));
+  return packs.map((pack) => ({ value: packKey(pack), label: `${pack.name} ${pack.version}, set ${pack.set} (${pack.short_digest})` }));
+}
+
+/** The selection a chosen pack set sends: name, digest and set, never a path. */
+export function packSelection(pack: ReplayPack): { name: string; digest: string; set: string } {
+  return { name: pack.name, digest: pack.digest, set: pack.set };
 }
 
 /** The pack a new replay starts on: the catalog's default, else the first, else none. */
@@ -234,9 +254,9 @@ export function initialPack(packs: ReplayPack[], defaultDigest: string | null): 
   return packs.find((pack) => pack.digest === defaultDigest) ?? packs[0] ?? null;
 }
 
-/** The task ids a replay may choose: the chosen pack's, or the repository's own without one. */
-export function tasksFor(packs: ReplayPack[], digest: string | null, repositoryTasks: string[]): string[] {
-  const pack = packs.find((item) => item.digest === digest);
+/** The task ids a replay may choose: the chosen pack set's (by `packKey`), or the repository's own without one. */
+export function tasksFor(packs: ReplayPack[], key: string | null, repositoryTasks: string[]): string[] {
+  const pack = packs.find((item) => packKey(item) === key);
   return pack ? pack.tasks.map((task) => task.id) : repositoryTasks;
 }
 
@@ -275,6 +295,9 @@ export function samplingLines(sampling: ReplaySampling | undefined): string[] {
   if (sampling.registered) {
     lines.push(`Registered: ${sampling.registered.tasks} task(s), ${sampling.registered.trials} trial(s) per task and arm (floor ${sampling.registered.min_trials}).`);
     if (sampling.registered.power_calculation) lines.push(`Power calculation: ${sampling.registered.power_calculation}`);
+    if (sampling.registered.budget) {
+      lines.push(`Registered budget: ${sampling.registered.budget.per_run_usd} USD per run, whole-run cap ${sampling.registered.budget.whole_run_cap_usd} USD.`);
+    }
   }
   return lines;
 }

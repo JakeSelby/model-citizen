@@ -13,6 +13,10 @@ Contracts read, each with the engine that writes it:
   and an `ablation` record at schema 2 naming those ids as its `arms`;
 - the four-cell design (`unit_economy.row_stamp`): `bare` plus four cells, and a `design` record at
   result schema 1;
+- the config arm (`replay_arms.arm_config_stamp`): a row whose `arm_config` names its own arm,
+  read beside `bare` and `harness` (`config-arm`);
+- the long-session tier (`replay_session`): `row_kind` `checkpoint` or `session` rows, one identity
+  per `(scenario, arm, rep, row_kind, checkpoint_index)`;
 - the evaluator pack (`replay_pack.identity`): `pack`, `pack_version`, `pack_commit` and
   `pack_digest` on every row of a pack run;
 - the proof bundle (`evidence_bundle.verify`): its result is carried whole, never re-judged.
@@ -32,6 +36,15 @@ DESIGN_NAME = "unit-economy-2x2"
 DESIGN_SCHEMA = 1
 DESIGN_CELLS = ("base", "unit", "economy", "both")
 PACK_FIELDS = ("pack", "pack_version", "pack_commit", "pack_digest")
+# Row fields the run detail shows exactly as the engine wrote them (`engine_row`): strata (#1233),
+# config arms (#1230), named metrics and their declared directions (#1220, #1222), the cache
+# basis (#1174), the saved diff (#1245) and the long-session keys (#1232). Nothing is derived.
+ENGINE_ROW_FIELDS = (
+    "stratum", "strata", "tier", "arm_config", "row_kind", "scenario", "session_id", "checkpoint",
+    "checkpoint_index", "reached", "stopped", "metrics", "metric_directions", "metric_errors",
+    "metric_stream", "cache_basis", "cache_nonce", "diff_path", "diff_bytes", "diff_error",
+)
+SESSION_KEYS = ("row_kind", "checkpoint_index")
 BUNDLE_SCRIPT = ("scripts", "evidence_bundle.py")
 
 
@@ -83,10 +96,22 @@ def _design(record: Any) -> Dict[str, Any]:
     return dict(record)
 
 
-def row_contract(row: Mapping[str, Any]) -> Dict[str, Any]:
-    """`{shape, arms, pack, ablation, design, registration}` for one native replay row.
+def _config_arm(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The row's `arm_config` stamp when it names the row's own arm, else None."""
+    stamp = row.get("arm_config")
+    if stamp is None:
+        return None
+    if (not isinstance(stamp, dict) or not _text(stamp.get("name"))
+            or not _text(stamp.get("sha256"))):
+        raise ContractError("replay row carries an arm config stamp with no name or digest")
+    return dict(stamp) if stamp["name"] == row.get("arm") else None
 
-    `shape` is `two-arm`, `pair`, `variable-arm` or `four-cell`. An unknown stamp version is a
+
+def row_contract(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """`{shape, arms, pack, ablation, design, arm_config, registration}` for one native replay row.
+
+    `shape` is `two-arm`, `pair`, `variable-arm`, `four-cell` or `config-arm`. An unknown stamp
+    version is a
     `ContractError` naming it, never a silent two-arm read. `registration` is the row's own
     `experiment_protocol` label as written (`evidence` None when the row carries none): Studio
     never promotes an exploratory or unlabelled row to a pre-registered one."""
@@ -99,6 +124,9 @@ def row_contract(row: Mapping[str, Any]) -> Dict[str, Any]:
         kind, ablation, ablation_arms = _ablation(row["ablation"])
         if design is None:
             shape, arms = kind, ablation_arms
+    config = _config_arm(row)
+    if config is not None and shape == "two-arm":
+        shape, arms = "config-arm", TWO_ARM + (config["name"],)
     if row.get("arm") not in arms:
         raise ContractError("replay row arm %s is not an arm of its %s contract"
                             % (json.dumps(row.get("arm")), shape))
@@ -107,7 +135,7 @@ def row_contract(row: Mapping[str, Any]) -> Dict[str, Any]:
                     "pre_registration": row.get("pre_registration"),
                     "pre_registration_commit": row.get("pre_registration_commit")}
     return {"shape": shape, "arms": list(arms), "pack": _pack(row), "ablation": ablation,
-            "design": design, "registration": registration}
+            "design": design, "arm_config": config, "registration": registration}
 
 
 def identity_fields(row: Mapping[str, Any], contract: Mapping[str, Any]) -> Dict[str, Any]:
@@ -119,8 +147,15 @@ def identity_fields(row: Mapping[str, Any], contract: Mapping[str, Any]) -> Dict
     record's `evaluation.pack`. Pair, ablation and design rows, which no earlier index admitted,
     add the manifest digest and schedule seed that tell two cohorts apart."""
     fields = {name: row.get(name) for name in ("task", "arm", "rep", "harness_sha", "tag")}
+    # A long-session scenario writes one checkpoint row per checkpoint and one session row under
+    # the same task, arm and rep; the row kind and checkpoint index keep them apart. Rows without
+    # them keep the identity they had.
+    if "row_kind" in row:
+        fields.update({name: row.get(name) for name in SESSION_KEYS})
     if contract["shape"] == "two-arm":
         return fields
+    if contract.get("arm_config"):
+        fields["arm_config_sha256"] = contract["arm_config"]["sha256"]
     if contract.get("pack"):
         fields["pack_digest"] = contract["pack"]["pack_digest"]
     if contract.get("ablation"):
@@ -130,6 +165,21 @@ def identity_fields(row: Mapping[str, Any], contract: Mapping[str, Any]) -> Dict
     if "schedule_seed" in row:
         fields["schedule_seed"] = row.get("schedule_seed")
     return fields
+
+
+def engine_row(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """The `ENGINE_ROW_FIELDS` one row carries, verbatim and in that order; absent fields are left out."""
+    return {name: row[name] for name in ENGINE_ROW_FIELDS if name in row}
+
+
+def case_key(row: Mapping[str, Any]) -> str:
+    """The case a row indexes under: its task, or for a long-session row its session id with the
+    row kind and checkpoint index, so a checkpoint never shares a case with a replay task."""
+    if "row_kind" not in row:
+        return str(row.get("task"))
+    index = row.get("checkpoint_index")
+    return "%s/%s/%s" % (row.get("session_id") or row.get("scenario") or row.get("task"),
+                         row.get("row_kind"), "-" if index is None else index)
 
 
 def _load_bundle_verifier():

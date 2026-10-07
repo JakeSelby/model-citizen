@@ -1,0 +1,942 @@
+{
+ "_source": "python3 tests/test_studio_definitive_evaluation.py --write: scripts/layer_scorecard.py --json and scripts/replay_judge.py report --json over the test_layer_scorecard fixture",
+ "judge": {
+  "admitted": [
+   "design"
+  ],
+  "inconsistency": {
+   "dimensions": {
+    "design": {
+     "inconsistent": 0,
+     "pairs": 4,
+     "rate": 0.0
+    }
+   },
+   "errors": 0
+  },
+  "method": "task-clustered percentile bootstrap",
+  "model": "judge",
+  "not_admitted": [],
+  "pairs": [
+   {
+    "dimensions": {
+     "design": {
+      "interval": [
+       0.5,
+       1.0
+      ],
+      "losses": 1,
+      "pairs": 4,
+      "tasks": 3,
+      "ties": 0,
+      "win_rate": 0.75,
+      "wins": 3
+     }
+    },
+    "reference": "bare",
+    "treatment": "harness"
+   }
+  ],
+  "rubric_sha256": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+  "seed": 795
+ },
+ "scorecard": {
+  "exploratory": false,
+  "exploratory_reasons": [],
+  "headline": {
+   "m1": {
+    "all_rules": {
+     "arms": {
+      "bare": {
+       "clean": 9,
+       "hit": 6,
+       "interval": [
+        0.357468,
+        0.801755
+       ],
+       "rate": 0.6,
+       "runs": 15,
+       "unknown": 0
+      },
+      "harness": {
+       "clean": 15,
+       "hit": 0,
+       "interval": [
+        0.796117,
+        1.0
+       ],
+       "rate": 1.0,
+       "runs": 15,
+       "unknown": 0
+      }
+     },
+     "difference": 0.4,
+     "equivalence": {
+      "exploratory": false,
+      "interval": [
+       0.4,
+       0.4
+      ],
+      "limitation": null,
+      "margin": [
+       -0.125,
+       0.125
+      ],
+      "reason": "the interval lies wholly outside [-0.125, 0.125]",
+      "verdict": "not equivalent"
+     },
+     "interval": [
+      0.4,
+      0.4
+     ],
+     "tasks": 3
+    },
+    "cost_of_pass": {
+     "arms": {
+      "bare": {
+       "attempts": 15,
+       "cost_of_pass": 1.0,
+       "pass_rate": 1.0
+      },
+      "harness": {
+       "attempts": 15,
+       "cost_of_pass": 2.0,
+       "pass_rate": 1.0
+      }
+     },
+     "equivalence": {
+      "exploratory": false,
+      "interval": [
+       2.0,
+       2.0
+      ],
+      "limitation": null,
+      "margin": [
+       0.85,
+       1.1765
+      ],
+      "reason": "the interval lies wholly outside [0.85, 1.1765]",
+      "verdict": "not equivalent"
+     },
+     "interval": [
+      2.0,
+      2.0
+     ],
+     "ratio": 2.0
+    },
+    "judge": {
+     "results": [
+      {
+       "admitted": [
+        "design"
+       ],
+       "dimensions": [
+        {
+         "dimension": "design",
+         "equivalence": {
+          "exploratory": false,
+          "interval": [
+           0.0,
+           0.5
+          ],
+          "limitation": null,
+          "margin": [
+           -0.125,
+           0.125
+          ],
+          "reason": "the interval crosses a bound of [-0.125, 0.125]",
+          "verdict": "inconclusive"
+         },
+         "interval": [
+          0.5,
+          1.0
+         ],
+         "pairs": 4,
+         "reference": "bare",
+         "treatment": "harness",
+         "win_rate": 0.75
+        }
+       ],
+       "not_admitted": [],
+       "source": "judge/1"
+      }
+     ],
+     "status": "measured"
+    },
+    "long_session": {
+     "arms": [
+      "bare",
+      "harness"
+     ],
+     "interval": [
+      2.0,
+      2.0
+     ],
+     "metric": "Session cost ratio",
+     "ratio": 2.0,
+     "scenarios": 2,
+     "status": "measured"
+    },
+    "pass_k": {
+     "arms": {
+      "bare": {
+       "all_passed_rate": 1.0,
+       "pass_1": 1.0,
+       "pass_hat_k": 1.0
+      },
+      "harness": {
+       "all_passed_rate": 1.0,
+       "pass_1": 1.0,
+       "pass_hat_k": 1.0
+      }
+     },
+     "difference": 0.0,
+     "equivalence": {
+      "exploratory": false,
+      "interval": [
+       0.0,
+       0.0
+      ],
+      "limitation": null,
+      "margin": [
+       -0.125,
+       0.125
+      ],
+      "reason": "the interval lies inside [-0.125, 0.125]",
+      "verdict": "equivalent"
+     },
+     "interval": [
+      0.0,
+      0.0
+     ],
+     "k": 5,
+     "tasks": 3
+    },
+    "pass_rate": {
+     "difference": 0.0,
+     "equivalence": {
+      "exploratory": false,
+      "interval": [
+       0.0,
+       0.0
+      ],
+      "limitation": null,
+      "margin": [
+       -0.125,
+       0.125
+      ],
+      "reason": "the interval lies inside [-0.125, 0.125]",
+      "verdict": "equivalent"
+     },
+     "interval": [
+      0.0,
+      0.0
+     ]
+    },
+    "rows": {
+     "arms": [
+      "bare",
+      "harness"
+     ],
+     "count": 30,
+     "sources": [
+      "production/1/tag/results.jsonl"
+     ],
+     "tasks": [
+      "o1",
+      "o2",
+      "o3"
+     ]
+    }
+   }
+  },
+  "kind": "layer-scorecard",
+  "layers": [
+   {
+    "arm": "no-cache",
+    "cost_control": true,
+    "entry": "rules/cache-hygiene",
+    "layer": "rule",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "rows' context_attribution, median of 20",
+      "tokens": 80.0,
+      "usd_later_turn": 1.6e-05,
+      "usd_per_run": 0.000232,
+      "usd_session_start": 0.0002
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "read_as": "bare minus harness",
+       "scores": [
+        {
+         "assessment": "not equivalent",
+         "better": true,
+         "bounds": [
+          0.9,
+          1.1
+         ],
+         "direction": "lower",
+         "harmful": false,
+         "interval": [
+          0.5,
+          0.5
+         ],
+         "limitation": null,
+         "metric": "Cost-of-Pass ratio",
+         "reason": "the interval lies wholly outside [0.9, 1.1]",
+         "tasks": [
+          "o1",
+          "o2",
+          "o3"
+         ]
+        }
+       ],
+       "status": "measured"
+      },
+      "behaviour_vs_removal": {
+       "read_as": "removal minus harness",
+       "scores": [
+        {
+         "assessment": "equivalent",
+         "better": false,
+         "bounds": [
+          0.9,
+          1.1
+         ],
+         "direction": "lower",
+         "harmful": false,
+         "interval": [
+          1.0,
+          1.0
+         ],
+         "limitation": null,
+         "metric": "Cost-of-Pass ratio",
+         "reason": "the interval lies inside [0.9, 1.1]",
+         "tasks": [
+          "o1",
+          "o2",
+          "o3"
+         ]
+        }
+       ],
+       "status": "measured"
+      },
+      "cost": {
+       "long_session": {
+        "arms": [
+         "harness",
+         "no-cache"
+        ],
+        "interval": [
+         1.5,
+         1.5
+        ],
+        "metric": "Session cost ratio",
+        "ratio": 1.5,
+        "scenarios": 2,
+        "status": "measured"
+       },
+       "marginal": {
+        "ratio": 1.0,
+        "ratio_interval": [
+         1.0,
+         1.0
+        ],
+        "reason": null,
+        "usd_per_attempt": 0.0
+       }
+      },
+      "outcome": {
+       "assessment": "equivalent",
+       "better": false,
+       "bounds": [
+        -0.125,
+        0.125
+       ],
+       "direction": "higher",
+       "harmful": false,
+       "interval": [
+        0.0,
+        0.0
+       ],
+       "limitation": null,
+       "metric": "Pass-rate difference",
+       "reason": "the interval lies inside [-0.125, 0.125]",
+       "tasks": [
+        "o1",
+        "o2",
+        "o3"
+       ]
+      },
+      "verdict": {
+       "basis": [
+        {
+         "assessment": "equivalent",
+         "bounds": [
+          0.9,
+          1.1
+         ],
+         "interval": [
+          1.0,
+          1.0
+         ],
+         "metric": "Cost-of-Pass ratio"
+        },
+        {
+         "assessment": "equivalent",
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "interval": [
+          0.0,
+          0.0
+         ],
+         "metric": "Pass-rate difference"
+        }
+       ],
+       "deciding": null,
+       "exploratory": false,
+       "limitations": [],
+       "rows": {
+        "arms": [
+         "harness",
+         "no-cache"
+        ],
+        "count": 30,
+        "sources": [
+         "sweep/1/results.jsonl"
+        ],
+        "tasks": [
+         "o1",
+         "o2",
+         "o3"
+        ]
+       },
+       "verdict": "trim"
+      }
+     }
+    },
+    "what": "the cache rule"
+   },
+   {
+    "arm": "no-secrets",
+    "cost_control": false,
+    "entry": "rules/secrets",
+    "layer": "rule",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "rows' context_attribution, median of 20",
+      "tokens": 200.0,
+      "usd_later_turn": 4e-05,
+      "usd_per_run": 0.00058,
+      "usd_session_start": 0.0005
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "read_as": "bare minus harness",
+       "scores": [
+        {
+         "assessment": "not equivalent",
+         "better": false,
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "direction": "lower",
+         "harmful": true,
+         "interval": [
+          1.0,
+          1.0
+         ],
+         "limitation": null,
+         "metric": "secret_in_tree",
+         "reason": "the interval lies wholly outside [-0.125, 0.125]",
+         "tasks": [
+          "own1"
+         ]
+        }
+       ],
+       "status": "measured"
+      },
+      "behaviour_vs_removal": {
+       "read_as": "removal minus harness",
+       "scores": [
+        {
+         "assessment": "not equivalent",
+         "better": false,
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "direction": "lower",
+         "harmful": true,
+         "interval": [
+          1.0,
+          1.0
+         ],
+         "limitation": null,
+         "metric": "secret_in_tree",
+         "reason": "the interval lies wholly outside [-0.125, 0.125]",
+         "tasks": [
+          "own1"
+         ]
+        }
+       ],
+       "status": "measured"
+      },
+      "outcome": {
+       "assessment": "equivalent",
+       "better": false,
+       "bounds": [
+        -0.125,
+        0.125
+       ],
+       "direction": "higher",
+       "harmful": false,
+       "interval": [
+        0.0,
+        0.0
+       ],
+       "limitation": null,
+       "metric": "Pass-rate difference",
+       "reason": "the interval lies inside [-0.125, 0.125]",
+       "tasks": [
+        "o1",
+        "o2",
+        "o3"
+       ]
+      },
+      "verdict": {
+       "basis": [
+        {
+         "assessment": "not equivalent",
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "interval": [
+          1.0,
+          1.0
+         ],
+         "metric": "secret_in_tree"
+        },
+        {
+         "assessment": "equivalent",
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "interval": [
+          0.0,
+          0.0
+         ],
+         "metric": "Pass-rate difference"
+        }
+       ],
+       "deciding": {
+        "assessment": "not equivalent",
+        "bounds": [
+         -0.125,
+         0.125
+        ],
+        "interval": [
+         1.0,
+         1.0
+        ],
+        "metric": "secret_in_tree",
+        "reason": "the interval lies wholly outside [-0.125, 0.125]"
+       },
+       "exploratory": false,
+       "limitations": [],
+       "rows": {
+        "arms": [
+         "harness",
+         "no-secrets"
+        ],
+        "count": 40,
+        "sources": [
+         "sweep/1/results.jsonl"
+        ],
+        "tasks": [
+         "o1",
+         "o2",
+         "o3",
+         "own1"
+        ]
+       },
+       "verdict": "keep"
+      }
+     }
+    },
+    "what": "the secrets rule"
+   },
+   {
+    "arm": "no-skills",
+    "cost_control": false,
+    "entry": "skills/*",
+    "layer": "listing",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "rows' context_attribution, median of 20",
+      "tokens": 70.0,
+      "usd_later_turn": 1.4e-05,
+      "usd_per_run": 0.000203,
+      "usd_session_start": 0.000175
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "reason": "the layer has no pre-registered score",
+       "status": "not measured"
+      },
+      "behaviour_vs_removal": {
+       "read_as": "removal minus harness",
+       "scores": [],
+       "status": "measured"
+      },
+      "outcome": {
+       "assessment": "inconclusive",
+       "better": false,
+       "bounds": [
+        -0.125,
+        0.125
+       ],
+       "harmful": false,
+       "interval": null,
+       "limitation": null,
+       "metric": "Pass-rate difference",
+       "reason": "no task holds rows of both control and the arm",
+       "tasks": []
+      },
+      "verdict": {
+       "basis": [
+        {
+         "assessment": "inconclusive",
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "interval": null,
+         "metric": "Pass-rate difference"
+        }
+       ],
+       "deciding": {
+        "assessment": "inconclusive",
+        "bounds": [
+         -0.125,
+         0.125
+        ],
+        "interval": null,
+        "metric": "Pass-rate difference",
+        "reason": "no task holds rows of both control and the arm"
+       },
+       "exploratory": false,
+       "limitations": [],
+       "rows": {
+        "arms": [
+         "harness"
+        ],
+        "count": 15,
+        "sources": [
+         "sweep/1/results.jsonl"
+        ],
+        "tasks": [
+         "o1",
+         "o2",
+         "o3"
+        ]
+       },
+       "verdict": "no evidence"
+      }
+     }
+    },
+    "what": "every skill"
+   },
+   {
+    "arm": "no-stop-gate",
+    "cost_control": false,
+    "entry": "hooks/stop-gate",
+    "layer": "hook",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "a hook adds no resident text",
+      "tokens": 0,
+      "usd_later_turn": 0.0,
+      "usd_per_run": 0.0,
+      "usd_session_start": 0.0
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "reason": "the layer has no pre-registered score",
+       "status": "not measured"
+      },
+      "behaviour_vs_removal": {
+       "read_as": "removal minus harness",
+       "scores": [],
+       "status": "measured"
+      },
+      "outcome": {
+       "assessment": "inconclusive",
+       "better": false,
+       "bounds": [
+        -0.125,
+        0.125
+       ],
+       "harmful": false,
+       "interval": null,
+       "limitation": null,
+       "metric": "Pass-rate difference",
+       "reason": "no task holds rows of both control and the arm",
+       "tasks": []
+      },
+      "verdict": {
+       "basis": [
+        {
+         "assessment": "inconclusive",
+         "bounds": [
+          -0.125,
+          0.125
+         ],
+         "interval": null,
+         "metric": "Pass-rate difference"
+        }
+       ],
+       "deciding": {
+        "assessment": "inconclusive",
+        "bounds": [
+         -0.125,
+         0.125
+        ],
+        "interval": null,
+        "metric": "Pass-rate difference",
+        "reason": "no task holds rows of both control and the arm"
+       },
+       "exploratory": false,
+       "limitations": [],
+       "rows": {
+        "arms": [
+         "harness"
+        ],
+        "count": 15,
+        "sources": [
+         "sweep/1/results.jsonl"
+        ],
+        "tasks": [
+         "o1",
+         "o2",
+         "o3"
+        ]
+       },
+       "verdict": "no evidence"
+      }
+     }
+    },
+    "what": "the stop gate"
+   },
+   {
+    "arm": null,
+    "cost_control": false,
+    "entry": "hooks/usage-log",
+    "layer": "hook",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "a hook adds no resident text",
+      "tokens": 0,
+      "usd_later_turn": 0.0,
+      "usd_per_run": 0.0,
+      "usd_session_start": 0.0
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "reason": "the layer has no pre-registered score",
+       "status": "not measured"
+      },
+      "behaviour_vs_removal": {
+       "reason": "excluded from the sweep: puts nothing into the session",
+       "status": "not measured"
+      },
+      "outcome": {
+       "reason": "excluded from the sweep: puts nothing into the session",
+       "status": "not measured"
+      },
+      "verdict": {
+       "reason": "excluded from the sweep: puts nothing into the session",
+       "verdict": "no evidence"
+      }
+     }
+    },
+    "what": "usage-log"
+   },
+   {
+    "arm": null,
+    "cost_control": false,
+    "entry": "output-styles/plain",
+    "layer": "output style",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "benchmarks/static.json",
+      "tokens": 500,
+      "usd_later_turn": 0.0001,
+      "usd_per_run": 0.00145,
+      "usd_session_start": 0.00125
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "reason": "the layer has no pre-registered score",
+       "status": "not measured"
+      },
+      "behaviour_vs_removal": {
+       "reason": "the sweep manifest holds no removal arm for it",
+       "status": "not measured"
+      },
+      "outcome": {
+       "reason": "the sweep manifest holds no removal arm for it",
+       "status": "not measured"
+      },
+      "verdict": {
+       "reason": "the sweep manifest holds no removal arm for it",
+       "verdict": "no evidence"
+      }
+     }
+    },
+    "what": "the plain output style"
+   },
+   {
+    "arm": null,
+    "cost_control": false,
+    "entry": "instructions/CLAUDE.md",
+    "layer": "instructions",
+    "prefix": {
+     "m1": {
+      "mean_turns": 3.0,
+      "source": "benchmarks/static.json",
+      "tokens": 100,
+      "usd_later_turn": 2e-05,
+      "usd_per_run": 0.00029,
+      "usd_session_start": 0.00025
+     }
+    },
+    "strata": {
+     "m1": {
+      "behaviour_vs_bare": {
+       "reason": "the layer has no pre-registered score",
+       "status": "not measured"
+      },
+      "behaviour_vs_removal": {
+       "reason": "no removal arm can be built: no switch withholds it",
+       "status": "not measured"
+      },
+      "outcome": {
+       "reason": "no removal arm can be built: no switch withholds it",
+       "status": "not measured"
+      },
+      "verdict": {
+       "reason": "no removal arm can be built: no switch withholds it",
+       "verdict": "no evidence"
+      }
+     }
+    },
+    "what": "CLAUDE.md"
+   }
+  ],
+  "manifest": {
+   "justification": "the rule",
+   "name": "sweep",
+   "sha256": "635dbf0ba690facb0b32a82b2714977565bc14bf68c357b05ea6a4d84a1dab14"
+  },
+  "margins": {
+   "source": "defaults",
+   "values": {
+    "All-rules rate difference": [
+     -0.125,
+     0.125
+    ],
+    "Cost-of-Pass ratio": [
+     0.85,
+     1.1765
+    ],
+    "Judge win rate over one half": [
+     -0.125,
+     0.125
+    ],
+    "Pass-rate difference": [
+     -0.125,
+     0.125
+    ],
+    "pass^k difference": [
+     -0.125,
+     0.125
+    ]
+   }
+  },
+  "schema": 1,
+  "sources": [
+   {
+    "id": "judge/1",
+    "registered": 4,
+    "role": "judge",
+    "rows": 4,
+    "sha256": "57395ae71844f91f844a84305aab3c86dd528e6a3af7130b2ac76c9a32ee0839"
+   },
+   {
+    "id": "long_session/1/results.jsonl",
+    "registered": 18,
+    "role": "long_session",
+    "rows": 18,
+    "sha256": "86348051866ce84171506aaca574412cbc9d56658443ba36e07911a0415cea3b"
+   },
+   {
+    "detections": 30,
+    "id": "production/1/tag/results.jsonl",
+    "registered": 30,
+    "role": "production",
+    "rows": 30,
+    "sha256": "aa0d32fd76fa635294f44dbcf6cab406ce7fecea88a76590bd915d357e132122"
+   },
+   {
+    "id": "rules/1/results.jsonl",
+    "registered": 10,
+    "role": "rules",
+    "rows": 10,
+    "sha256": "a892b1aa29ead94e340397f311f0e1292b16ce2ff4914dcace8e1bef416b2350"
+   },
+   {
+    "id": "sweep/1/results.jsonl",
+    "registered": 55,
+    "role": "sweep",
+    "rows": 55,
+    "sha256": "10c53027ad1d7a639b961bced4404ea56cb6c7111a0be464b0973855cb641471"
+   }
+  ],
+  "static": {
+   "harness_version": "9.9.9",
+   "sha256": "7a560eb09e41410366af894d414cbb6d0ca2f78870e2c7442d8c39dbc0d617cc"
+  },
+  "statistics": {
+   "confidence": 0.95,
+   "method": "task-clustered paired percentile bootstrap",
+   "resamples": 200,
+   "seed": 795
+  },
+  "strata_recorded": false
+ }
+}

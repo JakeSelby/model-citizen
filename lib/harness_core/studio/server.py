@@ -2102,7 +2102,8 @@ RUN_DETAIL = ResponseSchema("json-object", (
     ("duration_ms", "integer-or-null"), ("rerun_of", "string-or-null"),
     ("case_count", "integer"), ("flaky_count", "integer"), ("cases", "array"),
     ("reruns", "object"), ("exact_command", "string-or-null"), ("rerun", "object"),
-    ("artifacts", "array"), ("evaluation", "object-or-null")))
+    ("artifacts", "array"), ("evaluation", "object-or-null"),
+    ("engine_row", "object-or-null"), ("engine_reports", "object-or-null")))
 CASE_HISTORY = ResponseSchema("json-object", (("case_id", "string"),
                                                  ("items", "array"),
                                                  ("next_cursor", "string-or-null")))

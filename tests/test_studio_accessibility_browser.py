@@ -100,7 +100,8 @@ STUBS = r"""
       case '/api/experiments/native-acceptance/preview': return reply(states.nativePreview);
       case '/api/experiments/native-acceptance/start': return reply(states.nativeRun);
       case '/api/experiments/native-acceptance/progress': return reply(states.nativeSnapshot);
-      case '/api/runs/detail': if (body.run_id === states.runDetail.run_id) return reply(states.runDetail); break;
+      case '/api/runs/detail': if (body.run_id === states.runDetail.run_id) return reply({ ...states.runDetail,
+        engine_reports: { ...states.runDetail.engine_reports, scorecard: fixtures.definitive.scorecard, judge: fixtures.definitive.judge } }); break;
       case '/api/runs/evidence': return reply(states.runEvidence);
       case '/api/configure/test/verdicts': return reply(fixtures.draftTest);
       case '/api/configure/apply/review': return reply({ ...states.applyReview,
@@ -356,7 +357,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # than one DevTools frame carries, so the fixtures go over in pieces.
         self.devtools.evaluate(e2e_support.PAGE_HELPERS)
         files = (("compare", "compare.json"), ("hook", "eval-hook-matrix.json"), ("replay", "replay-analysis.json"),
-                 ("unit", "eval-unit-analysis.json"), ("draftTest", "draft-test.json"), ("states", "a11y-states.json"))
+                 ("unit", "eval-unit-analysis.json"), ("draftTest", "draft-test.json"), ("states", "a11y-states.json"),
+                 ("definitive", "definitive-evaluation.json"))
         self.devtools.evaluate("globalThis.__a11yFixtures = %s; globalThis.__a11yRevision = %s" % (
             json.dumps({name: "" for name, _ in files}), json.dumps(revision)))
         for name, file in files:
@@ -716,7 +718,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         self._wait(SETTLED, "the populated experiments did not settle", seconds=30.0)
 
     def test_a_populated_run_page_meets_the_aa_rules_at_phone_and_desktop_width_in_both_themes(self):
-        # The run page with its exact command, cases and case evidence, all three scroll regions.
+        # The run page with its exact command, cases and case evidence, and the definitive
+        # evaluation's engine row, layer scorecard and judge: every scroll region it has.
         states = json.loads((FIXTURES / "a11y-states.json").read_text(encoding="utf-8"))
         route = "/experiments/runs/" + states["runDetail"]["run_id"]
         failures: List[str] = []
@@ -726,7 +729,8 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                 self._install_stubs()
                 self._visit(route, scheme)
                 self._click("Standard output")
-                self._wait("['Exact command', 'Cases', 'Case evidence'].every(name =>"
+                self._wait("['Exact command', 'Cases', 'Case evidence', 'Engine row fields', 'Layer scorecard',"
+                           " 'Diff-quality judge'].every(name =>"
                            " document.querySelector('[role=region][aria-label=\"' + name + '\"]') !== null)",
                            "the run page's scroll regions did not render")
                 self._audit_into(failures, "%s @%dpx %s" % (route, width, scheme))

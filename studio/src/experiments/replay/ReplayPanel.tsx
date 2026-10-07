@@ -6,7 +6,7 @@ import { useRef, useState } from "react";
 
 import { previewReplay, startReplay } from "./api";
 import {
-  analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packOptions, samplingLines, progressResult, readinessSummary,
+  analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packKey, packOptions, packSelection, samplingLines, progressResult, readinessSummary,
   replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
   SOURCE_ONLY_NOTE,
   ReplayRequestGate, type DraftComparison, type ReplayAnalysis, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
@@ -47,9 +47,9 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
     model: defaultModel, repetitions: 2, tasks: [], max_budget_usd: "2", spend_cap_usd: "20",
     pre_registration: "",
-    pack: startingPack ? { name: startingPack.name, digest: startingPack.digest } : null,
+    pack: startingPack ? packSelection(startingPack) : null,
   });
-  const choices = tasksFor(packs, draft.pack?.digest ?? null, tasks);
+  const choices = tasksFor(packs, draft.pack ? packKey(draft.pack) : null, tasks);
   const [preview, setPreview] = useState<ReplayPreview | null>(null);
   const [message, setMessage] = useState("Choose two targets, tasks and one model.");
   const [busy, setBusy] = useState(false);
@@ -135,10 +135,10 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
               onChange={(value) => updateDraft({ ...draft, repetitions: Number(value) })} />
           </Group>
           {packs.length > 0 && <Select label="Evaluator pack" data={packOptions(packs)}
-            value={draft.pack?.digest ?? null} allowDeselect={false} disabled={busy}
-            onChange={(digest) => {
-              const pack = packs.find((item) => item.digest === digest);
-              if (pack) updateDraft({ ...draft, pack: { name: pack.name, digest: pack.digest }, tasks: [] });
+            value={draft.pack ? packKey(draft.pack) : null} allowDeselect={false} disabled={busy}
+            onChange={(key) => {
+              const pack = packs.find((item) => packKey(item) === key);
+              if (pack) updateDraft({ ...draft, pack: packSelection(pack), tasks: [] });
             }} />}
           <MultiSelect label="Tasks" data={choices} value={draft.tasks}
             disabled={busy}

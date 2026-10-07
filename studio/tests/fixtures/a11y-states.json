@@ -533,7 +533,7 @@
     "error": null
   },
   "runDetail": {
-    "_from": "the RunDetail type in studio/src/experiments/history/model.ts",
+    "_from": "the RunDetail type in studio/src/experiments/history/model.ts; the browser test fills engine_reports from definitive-evaluation.json",
     "run_id": "00000000-0000-4000-8000-000000000021",
     "suite_id": "lint",
     "status": "succeeded",
@@ -579,7 +579,37 @@
         "available": true
       }
     ],
-    "evaluation": null
+    "evaluation": null,
+    "engine_row": {
+      "stratum": "claude-test-one",
+      "strata": [
+        "claude-test-one",
+        "claude-test-two"
+      ],
+      "arm_config": {
+        "name": "maintainer",
+        "schema": 1,
+        "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "stances": {
+          "voice": "concise"
+        }
+      },
+      "metrics": {
+        "accuracy": 0.75
+      },
+      "metric_directions": {
+        "accuracy": "higher"
+      },
+      "metric_errors": [],
+      "cache_basis": "cold",
+      "cache_nonce": "nonce-1",
+      "diff_path": "streams/t1-maintainer-1.diff"
+    },
+    "engine_reports": {
+      "scorecard": null,
+      "judge": null,
+      "errors": []
+    }
   },
   "runEvidence": {
     "_from": "the loadEvidence response in studio/src/experiments/history/api.ts",
