@@ -8,11 +8,11 @@ import { CompareReport } from "../experiments/compare/ComparePanel";
 import { compareRuns } from "../experiments/compare/api";
 import type { CompareResult } from "../experiments/compare/model";
 import { loadReplayCatalog } from "../experiments/replay/api";
-import { initialPack, packOptions, tasksFor, type ReplayCatalog } from "../experiments/replay/model";
+import { initialPack, packKey, packOptions, packSelection, type ReplayCatalog } from "../experiments/replay/model";
 import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
-  currentRegistration, draftTestErrorMessage, evidenceBadge, initialForm, planBody, readingLines, registerBody,
-  spendLine, startBlocked, startedMessage, validateDraftTest, verdictBadge, withNeededTrials,
+  currentRegistration, draftTestErrorMessage, draftTestTasks, evidenceBadge, initialForm, planBody, readingLines, registerBody,
+  spendLine, startBlocked, startedMessage, validateDraftTest, verdictBadge, withNeededTrials, withPack,
   type DraftTestForm, type DraftTestPlan, type DraftTestRegistration, type DraftTestVerdict, type DraftTestVerdicts,
 } from "./draftTestModel";
 
@@ -137,7 +137,7 @@ export function DraftTest({ draft, revision }: Props) {
       setCatalog(value);
       const pack = initialPack(value.packs, value.default_pack);
       setForm((prior) => ({ ...prior, model: prior.model || value.default_model,
-        pack: prior.pack ?? (pack ? { name: pack.name, digest: pack.digest } : null) }));
+        pack: prior.pack ?? (pack ? packSelection(pack) : null) }));
     }).catch(() => {});
     return () => { active = false; };
   }, []);
@@ -211,7 +211,7 @@ export function DraftTest({ draft, revision }: Props) {
     }
   }
 
-  const tasks = catalog ? tasksFor(catalog.packs, form.pack?.digest ?? null, catalog.tasks.map((task) => task.id)) : [];
+  const tasks = draftTestTasks(catalog, form.pack);
   return (
     <Paper className="settings-section">
       <Stack gap="md">
@@ -227,11 +227,8 @@ export function DraftTest({ draft, revision }: Props) {
             onChange={(value) => update({ ...form, repetitions: Number(value) })} />
         </Group>
         {catalog && catalog.packs.length > 0 && <Select label="Evaluator pack" data={packOptions(catalog.packs)}
-          value={form.pack?.digest ?? null} allowDeselect={false} disabled={busy}
-          onChange={(digest) => {
-            const pack = catalog.packs.find((item) => item.digest === digest);
-            if (pack) update({ ...form, pack: { name: pack.name, digest: pack.digest }, tasks: [] });
-          }} />}
+          value={form.pack ? packKey(form.pack) : null} allowDeselect={false} disabled={busy}
+          onChange={(key) => update(withPack(form, catalog, key))} />}
         <MultiSelect label="Tasks" data={tasks} value={form.tasks} disabled={busy}
           onChange={(value) => update({ ...form, tasks: value })} />
         <Group align="flex-end" grow>

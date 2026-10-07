@@ -74,6 +74,9 @@ class OperationalLookBrowserTests(unittest.TestCase):
             self.assertFalse(shell["toolsOverflow"], width)
         self._open(1440, "dark")
         self._go("/")
+        # The scheme attribute flips on the media query's change event, a frame after emulation.
+        self._wait("document.documentElement.dataset.mantineColorScheme === 'dark'",
+                   "the shell did not switch to the dark scheme")
         self.assertEqual(json.loads(self.devtools.evaluate(SHELL))["borderColor"], "rgb(44, 47, 52)")
 
     def test_hub_rows_are_compact_and_monospace_only_for_ids_and_commands(self):

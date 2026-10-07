@@ -1,5 +1,8 @@
-import { engineValue, type ReplayPreview } from "../experiments/replay/model";
+import { engineValue, packKey, packSelection, tasksFor, type ReplayCatalog, type ReplayPreview } from "../experiments/replay/model";
 import type { EngineMeasure } from "../experiments/compare/model";
+
+/** The pack set a draft test runs: name and digest, and the set unless it is the production set. */
+export type DraftTestPack = { name: string; digest: string; set?: string };
 
 /** The form for testing a draft against its base. The targets are the server's to set. */
 export type DraftTestForm = {
@@ -8,7 +11,7 @@ export type DraftTestForm = {
   tasks: string[];
   max_budget_usd: string;
   spend_cap_usd: string;
-  pack: { name: string; digest: string } | null;
+  pack: DraftTestPack | null;
   /** The change worth detecting, in percent (15 means 15%). */
   effect_percent: number;
   /** A planning coefficient of variation; empty uses the repository's declared assumption. */
@@ -75,11 +78,22 @@ export type DraftTestVerdicts = {
   unreadable_records: number;
 };
 
-export function initialForm(defaultModel: string, pack: { name: string; digest: string } | null): DraftTestForm {
+export function initialForm(defaultModel: string, pack: DraftTestPack | null): DraftTestForm {
   return {
     model: defaultModel, repetitions: 5, tasks: [], max_budget_usd: "2", spend_cap_usd: "20",
     pack, effect_percent: 15, cv: "",
   };
+}
+
+/** The task ids a draft test may choose: the chosen pack set's, keyed as the replay picker keys it. */
+export function draftTestTasks(catalog: ReplayCatalog | null, pack: DraftTestPack | null): string[] {
+  return catalog ? tasksFor(catalog.packs, pack ? packKey(pack) : null, catalog.tasks.map((task) => task.id)) : [];
+}
+
+/** The form with the pack set under `key` chosen and its tasks cleared; unchanged for an unknown key. */
+export function withPack(form: DraftTestForm, catalog: ReplayCatalog, key: string | null): DraftTestForm {
+  const pack = catalog.packs.find((item) => packKey(item) === key);
+  return pack ? { ...form, pack: packSelection(pack), tasks: [] } : form;
 }
 
 /** What stops the form from asking for a plan, one line each. */
