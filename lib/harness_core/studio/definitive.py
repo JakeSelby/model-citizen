@@ -17,10 +17,12 @@ judge's report refuses is named in `errors`, never shown as if it were the engin
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import threading
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 SCORECARD_NAME = "scorecard.json"
 SCORECARD_KIND = "layer-scorecard"  # `layer_scorecard.KIND`
@@ -29,6 +31,11 @@ JUDGE_FOLDER = "judge"
 JUDGE_FILES = ("verdicts.jsonl", "pairs.key.json", "calibration.json")  # `layer_scorecard.load_judge`
 MAX_REPORT_BYTES = 4 * 1024 * 1024
 JUDGE_TIMEOUT_SECONDS = 120
+JUDGE_CACHE_LIMIT = 64
+# One judge child at a time, server-wide; a request that cannot get the turn within one report's
+# timeout is told the report is busy rather than starting another (as `spend.SpendBusy` does).
+_JUDGE_TURN = threading.Lock()
+_JUDGE_CACHE: Dict[Tuple[Any, ...], Tuple[Optional[Dict[str, Any]], Optional[str]]] = {}
 BENCHMARKS = "benchmarks"
 # This checkout's judge, as `citizen evidence verify` loads its verifier; never the indexed tree's.
 _SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
@@ -89,6 +96,59 @@ def _judge(folder: Path) -> Dict[str, Any]:
     return value
 
 
+class JudgeBusy(RuntimeError):
+    """Another judge report is being read."""
+
+
+def _judge_state(folder: Path) -> Tuple[Any, ...]:
+    """The judge folder and each file's identity and size: a changed file is a new report."""
+    judge = folder / JUDGE_FOLDER
+    state: List[Any] = [str(judge.resolve())]
+    for name in JUDGE_FILES:
+        info = os.stat(judge / name, follow_symlinks=False)
+        state.append((name, info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(state)
+
+
+def judge_report(folder: Path) -> Dict[str, Any]:
+    """The judge section for `folder`, read once per folder state and one child at a time."""
+    key = _judge_state(folder)
+    cached = _JUDGE_CACHE.get(key)
+    if cached is None:
+        if not _JUDGE_TURN.acquire(timeout=JUDGE_TIMEOUT_SECONDS):
+            raise JudgeBusy("the judge report is being read; reload in a moment")
+        try:
+            cached = _JUDGE_CACHE.get(key)
+            if cached is None:
+                try:
+                    cached = (_judge(folder), None)
+                except ValueError as exc:
+                    cached = (None, str(exc))
+                if len(_JUDGE_CACHE) >= JUDGE_CACHE_LIMIT:
+                    _JUDGE_CACHE.clear()
+                _JUDGE_CACHE[key] = cached
+        finally:
+            _JUDGE_TURN.release()
+    value, error = cached
+    if error is not None:
+        raise ValueError(error)
+    return dict(value or {})
+
+
+def _judge_folder_problem(folder: Path) -> Optional[str]:
+    """Why `folder`'s `judge/` cannot be read as this run's: a link, or a path outside it."""
+    judge = folder / JUDGE_FOLDER
+    if judge.is_symlink():
+        return "the judge folder is a link; nothing is read through a link"
+    try:
+        # `folder` is lexical under the resolved repository, so any link on the way moves this.
+        if judge.resolve().parent != Path(os.path.normpath(str(folder))):
+            return "the judge folder resolves outside the run folder"
+    except OSError:
+        return "the judge folder cannot be resolved"
+    return None
+
+
 def engine_reports(repository: Optional[Path], relative: Any) -> Dict[str, Any]:
     """`{scorecard, judge, errors}` for the run whose rows came from `relative`."""
     reports: Dict[str, Any] = {"scorecard": None, "judge": None, "errors": []}
@@ -104,11 +164,17 @@ def engine_reports(repository: Optional[Path], relative: Any) -> Dict[str, Any]:
                 reports["scorecard"] = _scorecard(folder)
             except (OSError, UnicodeError, ValueError, RecursionError) as exc:
                 reports["errors"].append("layer scorecard: " + str(exc))
-        if (not judge_seen and (folder / JUDGE_FOLDER).is_dir()
-                and all(_regular(folder / JUDGE_FOLDER / name) for name in JUDGE_FILES)):
-            judge_seen = True
+        if judge_seen or not ((folder / JUDGE_FOLDER).is_dir() or (folder / JUDGE_FOLDER).is_symlink()):
+            continue
+        judge_seen = True
+        problem = _judge_folder_problem(folder)
+        if problem is not None:
+            reports["errors"].append("diff-quality judge: " + problem)
+        elif all(_regular(folder / JUDGE_FOLDER / name) for name in JUDGE_FILES):
             try:
-                reports["judge"] = _judge(folder)
-            except ValueError as exc:
+                reports["judge"] = judge_report(folder)
+            except (OSError, ValueError, JudgeBusy) as exc:
                 reports["errors"].append("diff-quality judge: " + str(exc))
+        else:
+            judge_seen = False  # an incomplete folder holds no report; a farther one may
     return reports

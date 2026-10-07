@@ -733,6 +733,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                            " 'Diff-quality judge'].every(name =>"
                            " document.querySelector('[role=region][aria-label=\"' + name + '\"]') !== null)",
                            "the run page's scroll regions did not render")
+                self._wait("__has('Engine report unavailable')", "the engine report error state did not render")
                 self._audit_into(failures, "%s @%dpx %s" % (route, width, scheme))
                 if width == PHONE and scheme == "light":
                     failures.extend(self._tab_walk(route))

@@ -1,6 +1,6 @@
 """The definitive evaluation in the Studio (AH-S345): strata, config arms and long-session rows in
-the run store, the layer scorecard and judge on run detail, pack sets in the replay form, and the
-registered budget behind the spend guard. Synthetic rows and fakes only; nothing spends.
+the run store, the layer scorecard and judge on run detail, and pack sets in the replay form. The
+definitive launch behind its registered budget is in `test_studio_definitive_launch.py`.
 
 `studio/tests/fixtures/definitive-evaluation.json` is the engine's own scorecard and judge section
 for the `test_layer_scorecard` fixture, which `studio/tests/definitive-evaluation.test.ts` feeds
@@ -8,17 +8,20 @@ through the run detail display. Regenerate it with:
 
     python3 tests/test_studio_definitive_evaluation.py --write
 """
+import concurrent.futures
 import json
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_harness import REPO  # noqa: E402
-from harness_core.studio import definitive, evaluation, packs, replay, run_store, runs  # noqa: E402
+from harness_core.studio import definitive, evaluation, packs, replay, runs  # noqa: E402
 import test_layer_scorecard as scorecard_fixture  # noqa: E402
 from test_replay_pack import make_pack, task_spec  # noqa: E402
 from test_studio_replay_packs import harness, target  # noqa: E402
@@ -248,98 +251,124 @@ class PackSetTests(unittest.TestCase):
                          "held-out")
 
 
-PLAN = """# Plan
+class JudgeReadTests(unittest.TestCase):
+    """The judge report runs once per folder state, one child at a time, and never through a link."""
 
-## Guardrails
-
-- **Spend:** {spend}
-
-## Sample size
-
-- **Tasks:** 2, of which 1 are long multi-turn tasks.
-- **Trials per task and arm:** 5
-"""
-
-
-class RegisteredBudgetTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
-        (self.root / "benchmarks").mkdir()
-        (self.root / "benchmarks" / "tasks.json").write_text(json.dumps(
-            {"schema_version": 1, "tasks": [{"id": "one", "long": True}, {"id": "two"}]}), encoding="utf-8")
-        self.plan("2 USD per run (soft), 0.25 USD per arm preflight, and a whole-run\n  stop of 40 USD.")
+        self.fixture = scorecard_fixture.Fixture(self.root / "engine")
+        self.repository = self.root / "repository"
+        self.tag = self.repository / "benchmarks" / "1.0.0" / "v1.0.0"
+        write_rows(self.tag / "m-one" / "results.jsonl", [row("t1", "harness", 1, "m-one")])
+        self.relative = "benchmarks/1.0.0/v1.0.0/m-one/results.jsonl"
+        definitive._JUDGE_CACHE.clear()
+        self.addCleanup(definitive._JUDGE_CACHE.clear)
 
-    def plan(self, spend):
-        (self.root / "plan.md").write_text(PLAN.format(spend=spend), encoding="utf-8")
+    def copy_judge(self, destination):
+        destination.mkdir(parents=True)
+        for name in definitive.JUDGE_FILES:
+            (destination / name).write_bytes((self.fixture.judge / name).read_bytes())
 
-    def request(self, maximum="2", cap="40"):
-        return replay.ReplayRequest.parse({
-            "targets": [{"kind": "release", "ref": "v1.0.0", "revision": "a" * 40, "version": "1.0.0",
-                         "draft": None, "config_digest": None},
-                        {"kind": "release", "ref": "v1.1.0", "revision": "b" * 40, "version": "1.1.0",
-                         "draft": None, "config_digest": None}],
-            "model": "m", "repetitions": 5, "tasks": ["one", "two"], "max_budget_usd": maximum,
-            "spend_cap_usd": cap, "pre_registration": "plan.md", "evidence": "exploratory"})
+    def test_concurrent_reads_start_one_judge_process_and_a_reload_starts_none(self):
+        self.copy_judge(self.tag / definitive.JUDGE_FOLDER)
+        real, started, gate = subprocess.run, [], threading.Event()
 
-    def admission(self, estimate):
-        supervisor = SimpleNamespace(spend_preview=lambda *args, **kwargs: {
-            "estimate": {"amount_usd": estimate, "basis": "history", "sample_count": 3},
-            "caps": {}, "confirmation_token": "token"},
-            start=lambda *args, **kwargs: self.fail("a paid run was started"))
-        admission = replay.ReplayAdmission(self.root, self.root / "state", supervisor, None)
-        admission._confirm_resolved = lambda request: None  # the targets are fixed here
-        return admission
+        def counted(*args, **kwargs):
+            started.append(args[0])
+            gate.wait(10)
+            return real(*args, **kwargs)
 
-    def test_the_registered_budget_is_read_from_the_plans_spend_field(self):
-        budget = replay.registered_budget(self.root, "plan.md")
-        self.assertEqual((budget["per_run_usd"], budget["whole_run_cap_usd"]), ("2", "40"))
-        shipped = replay.registered_budget(REPO, "benchmarks/preregistrations/2026-10-01-power-pilot.md")
-        self.assertEqual((shipped["per_run_usd"], shipped["whole_run_cap_usd"]), ("2", "140.50"))
+        with mock.patch.object(definitive.subprocess, "run", counted):
+            with concurrent.futures.ThreadPoolExecutor(4) as pool:
+                futures = [pool.submit(definitive.engine_reports, self.repository, self.relative)
+                           for _ in range(4)]
+                time.sleep(0.5)
+                gate.set()
+                results = [future.result(60) for future in futures]
+            self.assertEqual(len(started), 1)
+            self.assertTrue(all(item["judge"] == results[0]["judge"] for item in results))
+            self.assertEqual(results[0]["errors"], [])
+            definitive.engine_reports(self.repository, self.relative)
+            self.assertEqual(len(started), 1)
+            # A changed judge file is a new folder state, so it is read again.
+            verdicts = self.tag / definitive.JUDGE_FOLDER / "verdicts.jsonl"
+            verdicts.write_bytes(verdicts.read_bytes() + b"\n")
+            definitive.engine_reports(self.repository, self.relative)
+            self.assertEqual(len(started), 2)
 
-    def test_a_registered_launch_without_a_readable_budget_is_refused_with_no_default(self):
-        for spend in ("<the per-trial budget and the whole-run cap>", "2 USD per run, no cap", "none"):
-            self.plan(spend)
-            self.assertIsNone(replay.registered_budget(self.root, "plan.md"))
-            with self.assertRaises(replay.ReplayRefusal) as caught:
-                replay.label_evidence(self.root, self.request())
-            self.assertEqual(caught.exception.code, "replay_budget_unregistered")
+    def test_a_judge_folder_that_is_a_link_or_resolves_outside_the_run_is_refused(self):
+        outside = self.root / "elsewhere" / "judge"
+        self.copy_judge(outside)
+        (self.tag / definitive.JUDGE_FOLDER).symlink_to(outside, target_is_directory=True)
+        with mock.patch.object(definitive.subprocess, "run") as launch:
+            reports = definitive.engine_reports(self.repository, self.relative)
+        launch.assert_not_called()
+        self.assertIsNone(reports["judge"])
+        self.assertEqual(reports["errors"],
+                         ["diff-quality judge: the judge folder is a link; nothing is read through a link"])
 
-    def test_a_launch_over_the_registered_budget_is_refused(self):
-        for maximum, cap, named in (("2.5", "40", "per-run budget 2.5"), ("2", "41", "spend cap 41")):
-            with self.assertRaises(replay.ReplayRefusal) as caught:
-                replay.label_evidence(self.root, self.request(maximum, cap))
-            self.assertEqual(caught.exception.code, "replay_budget_exceeded")
-            self.assertIn(named, str(caught.exception))
-            # The launch re-labels before it starts, so the same request is refused there too.
-            with self.assertRaises(replay.ReplayRefusal):
-                self.admission(1.0).confirm(dict(self.request(maximum, cap).as_dict(),
-                                                 evidence="pre-registered"))
+    def test_a_folder_inside_a_linked_parent_resolves_outside_and_is_refused(self):
+        real_tag = self.root / "real-tag"
+        self.copy_judge(real_tag / definitive.JUDGE_FOLDER)
+        linked = self.repository / "benchmarks" / "1.0.0" / "linked"
+        linked.symlink_to(real_tag, target_is_directory=True)
+        write_rows(real_tag / "m-one" / "results.jsonl", [row("t1", "harness", 1, "m-one")])
+        self.assertEqual(definitive._judge_folder_problem(linked),
+                         "the judge folder resolves outside the run folder")
 
-    def test_the_spend_guards_estimate_over_the_registered_cap_is_refused_at_preview(self):
-        labelled = replay.label_evidence(self.root, self.request())
-        self.assertEqual(labelled.evidence, replay.PREREGISTERED)
-        with self.assertRaises(replay.ReplayRefusal) as caught:
-            self.admission(40.01).preview_resolved(labelled)
-        self.assertEqual(caught.exception.code, "replay_budget_exceeded")
-        self.assertIn("estimated spend 40.01", str(caught.exception))
-        preview = self.admission(39.0).preview_resolved(labelled)
-        self.assertEqual(preview["sampling"]["registered"]["budget"]["whole_run_cap_usd"], "40")
 
-    def test_an_exploratory_replay_needs_no_registered_budget(self):
-        self.plan("none")
-        subset = replay.ReplayRequest.parse(dict(self.request().as_dict(), tasks=["one"]))
-        self.assertEqual(replay.label_evidence(self.root, subset).evidence, replay.EXPLORATORY)
+class EngineOutputTests(unittest.TestCase):
+    """The engine documents run detail and the replay analysis show generically: every arm with its
+    comparisons and named primaries, a partial set with its cells used, and not-applicable
+    detections. The committed display fixture is their output."""
+
+    def test_the_committed_engine_outputs_are_what_the_engine_prints(self):
+        committed = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        generated = engine_outputs()
+        for name in ("every_arm", "partial", "joint_compliance"):
+            self.assertEqual(committed[name], generated[name],
+                             "regenerate: python3 tests/test_studio_definitive_evaluation.py --write")
+        self.assertEqual(committed["every_arm"]["arm_names"], ["bare", "harness", "frugal"])
+        self.assertIn("comparisons", committed["every_arm"])
+        self.assertEqual(committed["every_arm"]["primary_named"], [])
+        self.assertEqual(committed["partial"]["verdict"], "partial")
+        self.assertEqual(committed["partial"]["partial"]["cells_used"], 5)
+        rules = committed["joint_compliance"]["arms"]["harness"]["per_rule"]
+        self.assertTrue(any(item.get("not_applicable") for item in rules.values()))
+
+
+def engine_outputs():
+    """`summarise --json` over every declared arm and over a partial set, and the joint
+    compliance over a not-applicable detection, each from the engine's own test fixtures."""
+    import test_detector_applicability as applicability
+    import test_replay_every_arm as every_arm
+    import test_replay_stats_partial as partial
+    with tempfile.TemporaryDirectory() as root:
+        arms = Path(root) / "arms" / "results.jsonl"
+        every_arm.write_rows(arms, every_arm.arm_rows())
+        _code, arms_out = every_arm.summarise(arms, True)
+        cut = Path(root) / "partial" / "results.jsonl"
+        every_arm.write_rows(cut, partial.stopped_run())
+        _code, partial_out = partial.summarise(str(cut), "--json")
+    runs_ = [{"task": "t", "arm": "harness", "rep": 1},
+             {"task": "t", "arm": "terse", "rep": 1, "arm_config": {"stances": {"voice": "concise"}}}]
+    detections = [item for run in runs_ for item in applicability.rows_of(run).values()]
+    return {"every_arm": json.loads(arms_out), "partial": json.loads(partial_out),
+            "joint_compliance": applicability.REL.joint_compliance(runs_, detections)}
 
 
 def write_fixture():
     with tempfile.TemporaryDirectory() as root:
         scorecard, judge, _fixture = engine_documents(Path(root))
-    FIXTURE.write_text(json.dumps({
+    FIXTURE.write_text(json.dumps(dict({
         "_source": "python3 tests/test_studio_definitive_evaluation.py --write: scripts/layer_scorecard.py "
-                   "--json and scripts/replay_judge.py report --json over the test_layer_scorecard fixture",
-        "scorecard": scorecard, "judge": judge}, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+                   "--json and scripts/replay_judge.py report --json over the test_layer_scorecard fixture; "
+                   "cost_bench.py summarise --json over the every-arm and partial-set test rows; "
+                   "replay_reliability.joint_compliance over a not-applicable detection",
+        "scorecard": scorecard, "judge": judge}, **engine_outputs()), indent=1, sort_keys=True) + "\n",
+        encoding="utf-8")
 
 
 if __name__ == "__main__":

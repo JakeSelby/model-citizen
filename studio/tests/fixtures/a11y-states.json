@@ -608,7 +608,9 @@
     "engine_reports": {
       "scorecard": null,
       "judge": null,
-      "errors": []
+      "errors": [
+        "diff-quality judge: the judge report is being read; reload in a moment"
+      ]
     }
   },
   "runEvidence": {

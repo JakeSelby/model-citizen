@@ -92,6 +92,17 @@ def plan(records: Iterable[Mapping[str, Any]], suite_id: str,
     }
 
 
+def check_ceiling(plan_value: Mapping[str, Any], ceiling_usd: Any) -> None:
+    """Refuse a plan whose estimate is above `ceiling_usd`; no ceiling, or no estimate, passes."""
+    if ceiling_usd is None:
+        return
+    ceiling = Decimal(_money_text(ceiling_usd, "estimate ceiling"))
+    amount = (plan_value.get("estimate") or {}).get("amount_usd")
+    if amount is not None and Decimal(str(amount)) > ceiling:
+        raise SpendGuardError("the spend estimate %s USD is above the ceiling %s USD"
+                              % (amount, ceiling))
+
+
 def confirmation_request(suite_id: str, suite_version: int, parameters: Mapping[str, str],
                          target_kind: str, target_ref: str, case_identities: Sequence[str],
                          plan_value: Mapping[str, Any]) -> Dict[str, Any]:

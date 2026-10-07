@@ -1210,6 +1210,7 @@ class RunSupervisor:
               case_identities: Optional[Sequence[str]] = None,
               rerun_of: Optional[str] = None,
               expected_target: Optional[Mapping[str, Any]] = None,
+              estimate_ceiling_usd: Any = None,
               expected_argv: Optional[Sequence[str]] = None,
               expected_cases: Optional[Sequence[str]] = None) -> Dict[str, Any]:
         catalog = SuiteCatalog.load(self.catalog_path)
@@ -1258,6 +1259,9 @@ class RunSupervisor:
                             cases, spend_plan)
                         request_digest = spend_guard.confirmation_digest(request)
                         self._check_confirmation_locked(confirmed, request_digest)
+                        # The estimate made now, under the lock, against a caller's ceiling (a
+                        # registered whole-run budget): checked at start, not only at preview.
+                        spend_guard.check_ceiling(spend_plan, estimate_ceiling_usd)
                         argv = spend_guard.guarded_argv(argv, spend_plan)
                     except spend_guard.SpendGuardError as exc:
                         raise RunError(str(exc)) from exc

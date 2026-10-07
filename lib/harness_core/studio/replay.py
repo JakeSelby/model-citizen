@@ -452,9 +452,6 @@ class ReplayAdmission:
                 "api_credit", case_identities=launch["case_identities"])
         except runs.RunError as exc:
             raise ReplayError(str(exc)) from exc
-        if request.evidence == PREREGISTERED:
-            within_registered_budget(self.repository, request,
-                                     (value.get("estimate") or {}).get("amount_usd"))
         return dict(value, valid=True, errors=[], request=request.as_dict(),
                     command=native_commands(request),
                     sampling=sampling_payload(self.repository, request))
@@ -1105,9 +1102,6 @@ _LEADING_INT = re.compile(r"^\s*(\d+)\b")
 # `replay_power.py --have K N M`, as the pre-registration template asks the field to quote it.
 _HAVE = re.compile(r"--have\s+(\d+)\s+(\d+)\s+(\d+)")
 _LONG_COUNT = re.compile(r"of which\s+(\d+)\s+(?:are|is)\s+long", re.IGNORECASE)
-# The Spend guardrail as the template words it: "<n> USD per run" and "a whole-run cap of <n> USD".
-_PER_RUN = re.compile(r"(\d+(?:\.\d+)?)\s*USD\s+per\s+run\b", re.IGNORECASE)
-_WHOLE_RUN = re.compile(r"whole-run\s+(?:cap|stop)\s+of\s+(\d+(?:\.\d+)?)\s*USD", re.IGNORECASE)
 
 
 def registered_sample(repository: Path, registration: str) -> Dict[str, Any]:
@@ -1187,53 +1181,7 @@ def label_evidence(repository: Path, request: ReplayRequest) -> ReplayRequest:
                "" if registered["have"] is None else
                ", and its power calculation sized k, n, m = %d, %d, %d" % registered["have"],
                len(request.tasks), long_tasks, request.repetitions))
-    within_registered_budget(repository, request)
     return _replace(request, evidence=PREREGISTERED)
-
-
-def registered_budget(repository: Path, registration: str) -> Optional[Dict[str, str]]:
-    """The budget a pre-registration registers, read through `experiment_protocol`'s section and
-    field readers from its Guardrails **Spend** field, as the template asks it to be written: the
-    per-run budget (`<n> USD per run`) and the whole-run cap (`a whole-run cap of <n> USD`, or
-    `stop`). None when the field states either in no form this reads: there is no default."""
-    path = _safe_file(repository, registration)
-    protocol = _engine_module("experiment_protocol")
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise ReplayError("pre-registration is unreadable") from exc
-    spend = protocol.fields(protocol.sections(text).get("Guardrails", "")).get("Spend") or ""
-    per_run, whole_run = _PER_RUN.search(spend), _WHOLE_RUN.search(spend)
-    if per_run is None or whole_run is None:
-        return None
-    return {"per_run_usd": per_run.group(1), "whole_run_cap_usd": whole_run.group(1),
-            "spend": spend, "pre_registration": registration}
-
-
-def within_registered_budget(repository: Path, request: ReplayRequest,
-                             estimate_usd: Any = None) -> Dict[str, str]:
-    """Refuse a registered launch with no readable registered budget, or one whose per-run
-    budget, spend cap or estimated spend exceeds it; the registered budget otherwise."""
-    budget = registered_budget(repository, str(request.pre_registration))
-    if budget is None:
-        raise ReplayRefusal(
-            "replay_budget_unregistered",
-            "the pre-registration's Spend field registers no per-run budget and whole-run cap "
-            "in USD; a registered launch needs both, and the Studio assumes none")
-    exceeded = []
-    if Decimal(request.max_budget_usd) > Decimal(budget["per_run_usd"]):
-        exceeded.append("the per-run budget %s USD is above the registered %s USD"
-                        % (request.max_budget_usd, budget["per_run_usd"]))
-    if Decimal(request.spend_cap_usd) > Decimal(budget["whole_run_cap_usd"]):
-        exceeded.append("the spend cap %s USD is above the registered whole-run cap %s USD"
-                        % (request.spend_cap_usd, budget["whole_run_cap_usd"]))
-    if (isinstance(estimate_usd, (int, float)) and not isinstance(estimate_usd, bool)
-            and Decimal(str(estimate_usd)) > Decimal(budget["whole_run_cap_usd"])):
-        exceeded.append("the estimated spend %s USD is above the registered whole-run cap %s USD"
-                        % (estimate_usd, budget["whole_run_cap_usd"]))
-    if exceeded:
-        raise ReplayRefusal("replay_budget_exceeded", "; ".join(exceeded))
-    return budget
 
 
 def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]:
@@ -1243,7 +1191,6 @@ def sampling_payload(repository: Path, request: ReplayRequest) -> Dict[str, Any]
     if request.evidence == PREREGISTERED and request.pre_registration:
         registered = dict(registered_sample(repository, request.pre_registration))
         registered["have"] = list(registered["have"]) if registered["have"] else None
-        registered["budget"] = registered_budget(repository, request.pre_registration)
     labels = [{"target": target.as_dict(), "evidence": target_evidence(request, target)}
               for target in request.targets]
     evidence = replay_evidence(request)

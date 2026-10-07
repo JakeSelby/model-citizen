@@ -13,10 +13,6 @@ from test_replay_stats import rows_for
 
 PLAN = """# Plan
 
-## Guardrails
-
-- **Spend:** 1 USD per run (soft, `--max-budget-usd`), and a whole-run cap of 200 USD.
-
 ## Sample size
 
 - **Tasks:** 2, of which 1 are long multi-turn tasks.

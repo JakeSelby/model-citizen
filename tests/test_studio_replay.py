@@ -32,10 +32,7 @@ def fixture_tasks(*identities):
                     "packs": [], "default_digest": None, "skipped": []}), \
                 mock.patch.object(replay, "registered_sample", lambda _repository, _plan: {
                     "tasks": len(identities), "long": None, "trials": 1,
-                    "power_calculation": None, "have": None, "min_trials": 1}), \
-                mock.patch.object(replay, "registered_budget", lambda _repository, plan: {
-                    "per_run_usd": "2", "whole_run_cap_usd": "20", "spend": "fixture",
-                    "pre_registration": plan}):
+                    "power_calculation": None, "have": None, "min_trials": 1}):
             yield Path(root)
 
 

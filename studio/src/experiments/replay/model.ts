@@ -38,14 +38,10 @@ export type ReplayRequest = Omit<ReplayLaunchInput, "targets" | "pre_registratio
 export type ReplaySampling = {
   evidence: "pre-registered" | "exploratory";
   targets?: Array<{ target: ReplayTarget; evidence: "pre-registered" | "exploratory" }>;
-  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null;
-    /** The registered per-run budget and whole-run cap, as the plan's Spend field states them; null when it states neither readably. */
-    budget?: RegisteredBudget | null };
+  registered: null | { tasks: number; long: number | null; trials: number; min_trials: number; power_calculation: string | null; have?: number[] | null };
   requested: { tasks: number; trials: number };
   note: string;
 };
-
-export type RegisteredBudget = { per_run_usd: string; whole_run_cap_usd: string; spend: string; pre_registration: string };
 
 /** One target's `cost_bench.py summarise --json` output, or the engine's refusal. */
 export type ReplayAnalysis = { target: number; result?: Record<string, unknown>; error?: string };
@@ -202,10 +198,10 @@ const refusals: Record<string, string> = {
   replay_worktree_dirty:
     "A worktree target has uncommitted changes. Commit them or checkpoint them as a draft first.",
   replay_refused: "The replay was refused. Check both targets, the tasks and the caps.",
-  replay_budget_unregistered:
-    "The pre-registration registers no per-run budget and whole-run cap in USD. A registered launch needs both in its Spend field; the Studio assumes no budget.",
-  replay_budget_exceeded:
-    "The launch exceeds the registered budget: its per-run budget, spend cap or estimated spend is above what the pre-registration registers.",
+  definitive_budget_unregistered:
+    "The engine has no registered budget for this run, so the definitive launch is refused. It waits on an engine budget reader; the Studio assumes no budget.",
+  definitive_budget_exceeded:
+    "The definitive launch exceeds the engine's registered budget: its per-run budget, spend cap or estimated spend is above it.",
 };
 
 export function replayErrorMessage(code: string): string {
@@ -295,9 +291,6 @@ export function samplingLines(sampling: ReplaySampling | undefined): string[] {
   if (sampling.registered) {
     lines.push(`Registered: ${sampling.registered.tasks} task(s), ${sampling.registered.trials} trial(s) per task and arm (floor ${sampling.registered.min_trials}).`);
     if (sampling.registered.power_calculation) lines.push(`Power calculation: ${sampling.registered.power_calculation}`);
-    if (sampling.registered.budget) {
-      lines.push(`Registered budget: ${sampling.registered.budget.per_run_usd} USD per run, whole-run cap ${sampling.registered.budget.whole_run_cap_usd} USD.`);
-    }
   }
   return lines;
 }
