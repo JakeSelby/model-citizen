@@ -87,6 +87,26 @@ class BlockedStopFanOutTests(TranscriptFixture):
         self.assertNotIn("path", self.last_stop("a0"))
         self.assertNotEqual(decision(self.spawn()), "deny")
 
+    def test_a_final_response_past_the_read_chunk_still_shows_the_blocked_turn(self):
+        self.started_with_transcripts(6)
+        before = time.time() - 0.5
+        self.stop("a0")
+        self.write("a0", record("assistant", before, message={"content": [
+            {"type": "text", "text": "x" * (CAPS.CONTINUED_READ + 1024)}]}))
+        self.write("a0", record("user", time.time() + 1, isMeta=True,
+                                message={"content": "Your report has not been delivered."}))
+        self.assertEqual(decision(self.spawn()), "deny")
+
+    def test_a_stop_whose_escaped_path_is_too_long_is_journalled_without_it(self):
+        self.started_with_transcripts(6)
+        path = "/tmp/" + "\u6587" * 700 + ".jsonl"
+        self.assertLessEqual(len(path), CAPS.MAX_LINE // 2)
+        lifecycle.dispatch("claude-code", {"hook_event_name": "SubagentStop", "session_id": SESSION,
+                                           "agent_id": "a0", "agent_type": "worker-a",
+                                           "agent_transcript_path": path})
+        self.assertNotIn("path", self.last_stop("a0"))
+        self.assertNotEqual(decision(self.spawn()), "deny")
+
 
 class ContinuedTests(TranscriptFixture):
     def stopped(self):

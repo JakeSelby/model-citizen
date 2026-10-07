@@ -73,8 +73,8 @@ HEADLESS_ENTRY = "sdk-cli"
 HEADLESS_VARIABLE = "HARNESS_SESSION_CAPS_HEADLESS"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
 MAX_LINE = 4096
-# How much of a transcript past a stop is read for a later turn; the block's reason comes first,
-# after at most the final response that was still being flushed when the stop fired.
+# The chunk a transcript past a stop is read in, so memory stays bounded however large the final
+# response flushed after the stop; a longer line is skipped, and the block's reason comes after it.
 CONTINUED_READ = 256 * 1024
 TRANSCRIPT_TURNS = ("user", "assistant")
 LOCK_WAIT = 2.0
@@ -225,20 +225,25 @@ def continued(stop):
             if end <= start:
                 return False
             handle.seek(start)
-            data = handle.read(CONTINUED_READ)
+            oversized = False
+            while True:
+                raw = handle.readline(CONTINUED_READ)
+                if not raw:
+                    return False
+                if oversized or (len(raw) == CONTINUED_READ and not raw.endswith(b"\n")):
+                    oversized = not raw.endswith(b"\n")
+                    continue
+                try:
+                    record = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") not in TRANSCRIPT_TURNS:
+                    continue
+                when = stamp(record.get("timestamp"))
+                if when is not None and when > at:
+                    return True
     except OSError:
         return False
-    for raw in data.split(b"\n"):
-        try:
-            record = json.loads(raw.decode("utf-8", "replace"))
-        except ValueError:
-            continue
-        if not isinstance(record, dict) or record.get("type") not in TRANSCRIPT_TURNS:
-            continue
-        when = stamp(record.get("timestamp"))
-        if when is not None and when > at:
-            return True
-    return False
 
 
 def tally(entries, now=None, probe=None):
@@ -440,6 +445,10 @@ def on_subagent(payload, env, path, kind):
             except OSError:
                 pass
             record["path"] = transcript
+    if len(json.dumps(record, ensure_ascii=True)) >= MAX_LINE:
+        # `append` drops a record past MAX_LINE once escaped; the stop matters more than its path.
+        record.pop("path", None)
+        record.pop("size", None)
     append(path, record)
     if kind == "start":
         prune(env)
