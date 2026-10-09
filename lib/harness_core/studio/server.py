@@ -22,9 +22,9 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
-from typing import Callable, Dict, Iterable, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
-from harness_core import overview, workers
+from harness_core import overview, presence, workers
 
 from . import (activity, auth, compare, draft_registration, draft_tests, drafts, free_suites,
                live_updates, module_authoring, module_editing, module_library,
@@ -712,6 +712,8 @@ def _native_start(handler: Handler, route: Route) -> None:
             or not isinstance(request.get("confirmation_token"), str)):
         handler._error(400, "invalid_request")
         return
+    if not _person_present(handler, "a paid native acceptance run"):
+        return
     try:
         payload = handler.server.mutations.call(lambda: _native_adapter(handler).start(
             request["selection"], request["spend"], request["confirmation_token"]))
@@ -806,6 +808,8 @@ def _replay_start(handler: Handler, route: Route) -> None:
     try:
         admission = _replay_launch(handler, request["request"])
         confirmed = admission.confirm(request["request"])
+        if not _person_present(handler, "a paid live replay"):
+            return
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
     except replay.ReplayError as exc:
@@ -992,6 +996,8 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
+    if not _person_present(handler, "a paid draft test"):
+        return
     root = handler.server.run_supervisor.state_root
     try:
         # Single use: claimed before the run exists; a claim that exists or fails refuses the start.
@@ -1115,6 +1121,8 @@ def _evals_start(handler: Handler, route: Route) -> None:
     try:
         admission = _eval_admission(handler)
         confirmed = admission.confirm(request["request"])
+        if not _person_present(handler, "a paid eval tier"):
+            return
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
     except eval_tiers.EvalTierError as exc:
@@ -1683,28 +1691,30 @@ def _draft_apply_review(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
-def _studio_grant(repo_root: Path, command) -> None:
-    """File the one-use grant the CLI takes for `command`, which the Studio's own confirmation
-    dialog and its authenticated route stand behind. The CLI refuses without it, so a failure
-    here fails the action closed rather than open."""
-    import importlib.util
+def _cli_entry(repo_root: Path) -> List[str]:
+    """The interpreter and script the Studio runs `citizen draft` through."""
+    return [sys.executable, str(repo_root / "bin" / "harness")]
 
-    try:
-        path = repo_root / "policy" / "hooks" / "approvals.py"
-        spec = importlib.util.spec_from_file_location("studio_cli_approvals", str(path))
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        module.grant(list(command[2:]), "studio")
-    except Exception:
-        pass
+
+def _person_present(handler: Handler, what: str) -> bool:
+    """Whether the person at this Mac confirmed `what` (`presence.confirm`); a 403 when not.
+
+    Asked at the moment a run would spend, after the request was checked, on both faces: the
+    Studio's HTTP route and `citizen runs GROUP start`, which runs this handler. A session, its
+    CSRF token or the bootstrap token proves a browser, not a person, so none of them is enough."""
+    if presence.confirm(what):
+        face = getattr(handler, "face", "Studio")
+        presence.record(face, [], what)
+        return True
+    handler._error(403, presence.REFUSED)
+    return False
 
 
 def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, object]:
     """Run `citizen draft apply` itself, so a Studio apply takes the CLI's locks in the CLI."""
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
-    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "apply", draft,
+    command = _cli_entry(repo_root) + ["draft", "apply", draft,
                "--revision", revision, "--via-studio", "--json"]
-    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
@@ -1721,9 +1731,8 @@ def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, ob
 def _run_draft_recover(repo_root: Path, action: str, draft: str) -> Dict[str, object]:
     """Run `citizen draft recover` itself, under the CLI's own locks."""
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
-    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "recover",
+    command = _cli_entry(repo_root) + ["draft", "recover",
                "--draft", draft, "--via-studio", "--json"] + (["--abandon"] if action == "abandon" else [])
-    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
@@ -1756,9 +1765,8 @@ def _draft_recover(handler: Handler, route: Route) -> None:
 def _run_draft_rollback(repo_root: Path, apply_id: str, draft: str) -> Dict[str, object]:
     """Run `citizen draft rollback` itself, under the CLI's own locks."""
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
-    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "rollback", apply_id,
+    command = _cli_entry(repo_root) + ["draft", "rollback", apply_id,
                "--draft", draft, "--via-studio", "--json"]
-    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
@@ -1860,7 +1868,7 @@ def _run_draft_create(repo_root: Path, draft: str) -> str:
     cleanup that follows never races a checkout still in progress.
     """
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
-    command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "create", draft, "--json"]
+    command = _cli_entry(repo_root) + ["draft", "create", draft, "--json"]
     try:
         child = subprocess.Popen(command, cwd=str(repo_root), env=environment, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, text=True, start_new_session=True)

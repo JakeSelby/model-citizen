@@ -67,7 +67,7 @@ Behaviour:
     decision is one `governance` row in the decision log. Under `none` nothing is imported and
     the output is exactly the stance's.
   - A Studio CLI spend or apply is asked about whatever the stance and grade, and the marker does
-    not confirm it (`cli_confirmation`); the CLI refuses one without the grant filed here.
+    not confirm it (`cli_confirmation`). It files nothing: the CLI asks the person at the Mac.
   - Never raises: a missing sibling grammar and any unexpected error are a silent exit 0, so a
     fault here can only cost a prompt that native would not have shown either. The one thing it
     will not guess at is the stance, above.
@@ -157,18 +157,22 @@ CLI_WRAPPERS = {"env": ("-u", "--unset"), "command": (), "exec": (), "nohup": ()
                 "nice": ("-n",)}
 CLI_SHELLS = ("bash", "sh", "zsh", "dash", "ksh")
 SUBSTITUTION_RE = re.compile(r"\$\(|[()`]")
+CLI_INTERPRETERS = ("node", "perl", "ruby", "osascript", "deno", "bun", "php", "lua")
+SPEND_WORD_RE = re.compile(r"\b(?:start|apply|rollback|recover)\b|--confirm-spend")
 CLI_MENTION_RE = re.compile(r"(?:citizen|harness)\b[\s\S]*\b(?:runs|draft)\b")
 CONFIRM_REASON = ("This Studio CLI command spends money or changes the live configuration, so a person"
                   " confirms it each time: no token, revision, flag, environment variable or"
-                  " marker stands in for that yes, and the CLI refuses it without one.")
+                  " marker stands in for that yes, and the CLI then asks for Touch ID or the login"
+                  " password at this Mac as well.")
 CONFIRM_APPROVAL_TAIL = (" Nothing can prompt in this permission mode, so it was refused. Stop, say in"
                          " chat what it would spend or change, and ask the user, if they agree, to"
                          " reply with exactly `approve %s` as the whole message. Then run exactly the"
-                         " same command again, with no marker: the approval covers it once.")
+                         " same command again, with no marker: the approval covers it once, and the"
+                         " CLI then asks the user at the Mac.")
 CONFIRM_DENY_TAIL = (" Nothing here can carry a person's yes to it, so it was refused. Ask the user to"
                      " run it from their own terminal, or to start it from the Studio.")
 CONFIRM_UNCLEAR = ("A Studio CLI spend or apply runs inside text this hook cannot name exactly (a"
-                   " substitution, a shell's -c text, or a program word it cannot read), so no"
+                   " substitution, a shell's or an interpreter's inline text, or a program word it cannot read), so no"
                    " confirmation can cover it. Run the citizen command as a plain command of its"
                    " own.")
 
@@ -218,7 +222,7 @@ def needs_person(words):
     """Whether the CLI words spend money or apply to the live configuration.
 
     Read loosely, so a doubtful reading asks: the CLI makes the exact call from its parsed
-    arguments and refuses a spend or apply that arrives without a grant."""
+    arguments and asks the person at the Mac for every spend or apply."""
     plain = [w for w in words if not w.startswith("-")]
     if plain[:1] == ["runs"] and len(plain) > 1:
         if plain[1] in SPEND_GROUPS:
@@ -235,7 +239,7 @@ def cli_spends(command, depth=0):
     """(the argv of each spend or apply the line runs, whether one hides where none can name it).
 
     A shell's `-c` text is read as the commands it holds; a spend inside a substitution, or in a
-    body this cannot decompose, is unclear: it cannot be named exactly, so it cannot be granted."""
+    body this cannot decompose, is unclear: it cannot be named exactly, so no approval can cover it."""
     found, unclear = [], False
     parts = segments(command) if depth <= MAX_DEPTH else None
     if parts is None:
@@ -247,9 +251,15 @@ def cli_spends(command, depth=0):
             continue
         head = tokens[0].rpartition("/")[2] if tokens else ""
         # The program as an argument of something this does not look through (a privilege or
-        # timeout wrapper, `xargs`, `script`): the spend runs, but not as words a grant can name.
+        # timeout wrapper, `xargs`, `script`): the spend runs, but not as words an approval can name.
         if any(t.rpartition("/")[2] in CLI_PROGRAMS and needs_person(tokens[i + 1:])
                for i, t in enumerate(tokens)):
+            unclear = True
+            continue
+        # Program text another interpreter runs inline names the spend in its own syntax, which
+        # is not read here: a mention of the CLI beside a spending word is enough to refuse it.
+        if (PYTHON_RE.match(head) or head in CLI_INTERPRETERS) and any(
+                CLI_MENTION_RE.search(t) and SPEND_WORD_RE.search(t) for t in tokens[1:]):
             unclear = True
             continue
         inners = [tokens[tokens.index("-c") + 1]] if head in CLI_SHELLS and "-c" in tokens[1:-1] else []
@@ -266,12 +276,12 @@ def cli_spends(command, depth=0):
 def cli_confirmation(raw, mode, session_id, runtime="claude-code"):
     """None when `raw` runs no Studio CLI spend or apply, else (answer, reason, note).
 
-    The answer is `pass` when the user's `approve <code>` for this exact line was consumed here,
-    `ask` in a prompting mode, and `deny` elsewhere. A grant for each spend's exact argv is written
-    for `pass`, and beside an `ask` on Claude Code, whose native prompt is the person's yes; the
-    CLI takes the grant. The confirm marker confirms none of these: in `bypassPermissions` and
-    `auto` alike the approval code is the channel, and Codex, which carries no typed approval,
-    refuses."""
+    The first of two layers, and it files nothing: the answer is `pass` when the user's
+    `approve <code>` for this exact line was consumed here, `ask` in a prompting mode, and `deny`
+    elsewhere. Whatever it answers, the CLI and the Studio then ask the person at the Mac
+    themselves (`harness_core.presence`), so nothing here can stand in for that. The confirm
+    marker confirms none of these: in `bypassPermissions` and `auto` alike the approval code is the
+    channel, and Codex, which carries no typed approval, refuses."""
     if approvals is None:
         return None
     command, _marker = strip_marker(raw)
@@ -280,18 +290,12 @@ def cli_confirmation(raw, mode, session_id, runtime="claude-code"):
         return None
     if unclear:
         return "deny", CONFIRM_REASON + " " + CONFIRM_UNCLEAR, "unclear"
-    prompting = runtime != "codex" and mode not in DENY_MODES
-    if prompting:
-        if runtime == "claude-code":
-            for words in found:
-                approvals.grant(words, "prompt")
+    if runtime != "codex" and mode not in DENY_MODES:
         return "ask", CONFIRM_REASON, "asked"
     store = approvals.store_path(session_id) if runtime == "claude-code" else None
     code = approvals.code_for(session_id, raw) if store is not None else None
     if code and approvals.consume(session_id, code):
-        if all(approvals.grant(words, "approval") for words in found):
-            return "pass", CONFIRM_REASON, "approved"
-        return "deny", CONFIRM_REASON + " The approval was used, but the grant could not be written.", "unwritten"
+        return "pass", CONFIRM_REASON, "approved"
     return "deny", CONFIRM_REASON + (CONFIRM_APPROVAL_TAIL % code if code else CONFIRM_DENY_TAIL), \
         "offered" if code else "refused"
 

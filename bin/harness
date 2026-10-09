@@ -75,7 +75,7 @@ from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
-from harness_core import intents, observation
+from harness_core import intents, observation, presence
 from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -3993,9 +3993,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
             _draft_review_report(result)
         return 0 if result["can_apply"] else 1
     if args.action in ("apply", "recover") or (args.action == "rollback" and not args.preview):
-        what = "citizen draft " + args.action
-        if not person_confirmed(args, what + " changes the live configuration"):
-            return confirmation_refused(args, what)
+        refused = person_present(args, "citizen draft " + args.action, shaped=True)
+        if refused is not None:
+            return refused
     if args.action == "apply":
         log: List[str] = []
         result = studio_apply.apply(repo, args.name, args.revision, _draft_apply_operations(log),
@@ -7053,69 +7053,23 @@ _RUNS_ERROR_CODES = {"start": "invalid_run", "show": "run_not_found", "detail": 
                      "catalog": "run_catalog_unavailable"}
 
 
-# A person's yes for a Studio CLI spend or apply. Agent runtimes export these, so a terminal
-# prompt inside one is not a person at a keyboard.
-AGENT_RUNTIME_VARIABLES = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CODEX_SANDBOX",
-                           "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_THREAD_ID", "CODEX_CI")
-CONFIRMATION_REFUSED = "person_confirmation_required"
-
-
-def _terminal_confirms(what: str) -> bool:
-    """Whether a person at this terminal typed `yes` to `what`; never inside an agent runtime."""
-    if any(os.environ.get(name) for name in AGENT_RUNTIME_VARIABLES):
-        return False
-    try:
-        if not (sys.stdin.isatty() and sys.stderr.isatty()):
-            return False
-        sys.stderr.write("%s. Type yes to go ahead: " % what)
-        sys.stderr.flush()
-        return sys.stdin.readline().strip().lower() == "yes"
-    except (OSError, ValueError, AttributeError):
-        return False
-
-
-def person_confirmed(args: argparse.Namespace, what: str) -> Optional[str]:
-    """How a person confirmed this exact spend or apply, or None: a one-use grant the approval
-    path or the Studio's dialog wrote for these words (`approvals.take_grant`), else a `yes`
-    typed at a terminal outside any agent runtime. A token, revision, flag, environment variable
-    or marker is never consulted. A CLI confirmation is recorded for the Activity log."""
-    argv = getattr(args, "argv", None)
-    module = load_hook_module("approvals")
-    via = module.take_grant(argv) if module is not None and argv else None
-    if via is None and _terminal_confirms(what):
-        via = "terminal"
-    if via is not None and via != "studio":
-        _record_cli_confirmation(argv or [], via)
-    return via
-
-
-def _record_cli_confirmation(argv: Sequence[str], via: str) -> None:
-    """One `studio.cli-confirmed` event in the decision log, which Activity shows."""
-    module = load_hook_module("decisions")
-    channel = {"approval": "the user's approve reply", "prompt": "the permission prompt",
-               "terminal": "a yes typed at the terminal"}.get(via, via)
-    try:
-        if module is not None and module.enabled():
-            module._append({
-                "kind": "event", "event": "studio.cli-confirmed",
-                "id": hashlib.sha256(os.urandom(16)).hexdigest()[:24],
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "detail": {"actor": "citizen", "outcome": "completed", "confirmed_via": via,
-                           "command": "citizen " + shlex.join(str(w) for w in argv),
-                           "reason": "A person confirmed this CLI command through %s." % channel},
-            })
-    except (OSError, ValueError, AttributeError):
-        pass
-
-
-def confirmation_refused(args: argparse.Namespace, what: str) -> int:
-    """Refuse an unconfirmed spend or apply; exit 2, with the route-style error under --json."""
+def person_present(args: argparse.Namespace, what: str, shaped: bool = False) -> Optional[int]:
+    """None when the person at this Mac confirmed `what` (`presence.confirm`), which is then
+    recorded for Activity; otherwise the refusal printed and its exit code, 2. Nothing the
+    caller passes or sets is consulted: see `harness_core.presence`."""
+    if presence.confirm(what):
+        actor = "Studio" if getattr(args, "via_studio", False) else "citizen"  # a label only
+        presence.record(actor, ["citizen"] + list(getattr(args, "argv", None) or []), what)
+        return None
+    message = presence.refusal(what)
+    if getattr(args, "json", False) and shaped:
+        # A draft action answers in its own result shape, which the Studio's route returns.
+        print(json.dumps(studio_apply._result("refused", "person-confirmation-required", message),
+                         sort_keys=True))
+        return 1
     if getattr(args, "json", False):
-        print(json.dumps({"error": CONFIRMATION_REFUSED}, sort_keys=True))
-    print("%s needs a person's confirmation, and none was given. In an agent session the harness "
-          "asks for it; from a terminal, run it yourself and type yes. A confirmation token, a "
-          "revision, a flag, an environment variable or a marker does not confirm it." % what,
-          file=sys.stderr)
+        print(json.dumps({"error": presence.REFUSED}, sort_keys=True))
+    print(message, file=sys.stderr)
     return 2
 
 
@@ -7146,9 +7100,9 @@ def cmd_runs(args: argparse.Namespace) -> int:
             if preview["confirmation_required"] and args.confirm_spend is None:
                 result = preview
                 confirmation_pending = True
-            elif preview["confirmation_required"] and not person_confirmed(
-                    args, "citizen runs start %s spends money" % args.suite):
-                return confirmation_refused(args, "citizen runs start %s" % args.suite)
+            elif preview["confirmation_required"] and person_present(
+                    args, "citizen runs start %s" % args.suite) is not None:
+                return 2
             else:
                 result = supervisor.start(
                     args.suite, parameters,
@@ -7298,9 +7252,6 @@ def cmd_runs_studio(args: argparse.Namespace) -> int:
         status, result = 400, {"error": "invalid_request"}
         detail = ("--request is required" if request == "missing"
                   else "--request is not a readable JSON object")
-    elif (group, action) in studio_headless.SPEND_ACTIONS and not person_confirmed(
-            args, "citizen runs %s %s spends money" % (group, action)):
-        return confirmation_refused(args, "citizen runs %s %s" % (group, action))
     else:
         detail = ""
         try:
@@ -7970,7 +7921,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
-    # The exact words, for matching a person's one-use confirmation (`person_confirmed`).
+    # The exact words, for the Activity record of a person's confirmation (`person_present`).
     args.argv = list(sys.argv[1:] if argv is None else argv)
     return args.func(args)
 

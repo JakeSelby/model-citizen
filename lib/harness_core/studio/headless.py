@@ -56,8 +56,8 @@ ADMITTED_SUITES = {"live-replay": ("replay", "draft-test"), "native-acceptance":
                    "micro-tier": ("eval",), "unit-eval": ("eval",)}
 START_ACTIONS = {"replay": "preview|start", "draft-test": "plan|start", "native": "preview|start",
                  "eval": "preview|start"}
-# The admissions that spend. From the CLI each needs a person's confirmation, which the command
-# grader carries (`grade-bash.cli_confirmation`); a preview, plan, catalog or retry plan is free.
+# The admissions that spend. Each asks the person at the Mac in its route's handler, on both faces
+# (`presence.confirm`); a preview, plan, catalog or retry plan is free.
 SPEND_ACTIONS = frozenset((group, "start") for group in START_ACTIONS)
 
 
@@ -98,6 +98,7 @@ class _Handler:
         self.server = server
         self.request_json = dict(request)
         self.answer = None  # type: Optional[Tuple[int, Dict[str, Any]]]
+        self.face = "citizen"  # who the Activity record names; never a reason to pass
         # Long reads poll whether their client left; the CLI's caller stays for the answer.
         self.connection, self._peer = socket.socketpair()
         self.close_connection = False

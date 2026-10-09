@@ -22,13 +22,6 @@ approves a refused command by replying `approve <code>`, and nothing else can cr
 - The store is the user's alone: `grade-bash` grades a Bash write to it 3, and the dispatcher
   denies a file-tool write to it (`file_write_deny`).
 
-The same store keeps one-use grants for the Studio's paid and applying CLI commands (`grant`,
-`take_grant`). A grant is written only where a person's yes is on its way: `grade-bash` when the
-user's `approve <code>` was consumed, or when it raises the native prompt for that exact command,
-and the Studio server when its own confirmation dialog sent an apply. The CLI takes one before it
-spends or applies and refuses without one, so a confirmation token, a revision, a flag, an
-environment variable or the confirm marker an agent writes is never a person's yes.
-
 Each `record` and `consume` holds an exclusive `flock` on `<session_id>.lock` beside the file
 for its whole read-modify-write, so two consumers cannot both use one approval and a consume
 cannot drop an approval a record just added. A lock that cannot be taken fails closed.
@@ -62,11 +55,6 @@ TOKEN = r"approve\s+([A-Za-z2-7]{%d})" % CODE_LENGTH
 APPROVE_RE = re.compile(TOKEN, re.I)
 # The whole prompt, stripped: one or more tokens and nothing else.
 ONLY_TOKENS_RE = re.compile(r"(?:%s)(?:[\s,]+%s)*" % (TOKEN, TOKEN), re.I)
-# A grant lives long enough for a person to answer the prompt it was written beside, and no longer:
-# one whose prompt was declined is left unused, so its life is the window it could be misused in.
-GRANT_TTL = 10 * 60
-# Who confirmed: the user's `approve <code>`, their yes to the native prompt, the Studio's dialog.
-GRANT_VIAS = ("approval", "prompt", "studio")
 # A Bash command naming the store in any of these spellings is treated as a write to it once it
 # is anything but read-only; see `mentions_store`.
 STORE_RE = re.compile(r"agent-harness[/\\]+approvals(?=$|[/\\\s\"'`;|&)<>])|\.local[/\\]+state[/\\]+agent-harness"
@@ -112,23 +100,23 @@ def codes_in(prompt):
     return seen
 
 
-def _read(path, key="approvals"):
+def _read(path):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    entries = data.get(key) if isinstance(data, dict) else None
+    entries = data.get("approvals") if isinstance(data, dict) else None
     return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
 
 
-def _write(path, entries, key="approvals"):
+def _write(path, entries):
     temp = path.with_name(path.name + "." + str(os.getpid()) + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         os.chmod(str(path.parent), 0o700)
         with os.fdopen(os.open(str(temp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600),
                        "w", encoding="utf-8") as handle:
-            json.dump({key: entries[-KEEP:]}, handle)
+            json.dump({"approvals": entries[-KEEP:]}, handle)
         os.replace(str(temp), str(path))
         return True
     except OSError:
@@ -200,56 +188,6 @@ def consume(session_id, code, now=None):
                 entry["used_at"] = now
                 return _write(path, entries)
         return False
-
-
-def grants_path():
-    """The grant file: a directory inside the store, so no session's file can be named like it."""
-    return store_dir() / "cli-grants" / "grants.json"
-
-
-def grant_key(argv):
-    """The digest a grant is filed under: the exact words after the program, in order."""
-    words = json.dumps([str(word) for word in argv], separators=(",", ":"))
-    return hashlib.sha256(words.encode("utf-8")).hexdigest()
-
-
-def grant(argv, via, now=None):
-    """File one grant for the CLI command `argv`, confirmed `via` a person; True when written."""
-    if via not in GRANT_VIAS or not isinstance(argv, (list, tuple)) or not argv:
-        return False
-    path = grants_path()
-    now = time.time() if now is None else now
-    with _locked(path) as held:
-        if not held:
-            return False
-        entries = [e for e in _read(path, "grants") if _granted(e, now)]
-        entries.append({"key": grant_key(argv), "via": via, "created": now, "used": False})
-        return _write(path, entries, "grants")
-
-
-def take_grant(argv, now=None):
-    """Use one live grant for exactly `argv`; how it was confirmed, or None when none is live."""
-    path = grants_path()
-    if not path.exists():
-        return None
-    key = grant_key(argv)
-    now = time.time() if now is None else now
-    with _locked(path) as held:
-        if not held:
-            return None
-        entries = _read(path, "grants")
-        for entry in entries:
-            if entry.get("key") == key and entry.get("via") in GRANT_VIAS and _granted(entry, now):
-                entry["used"] = True
-                entry["used_at"] = now
-                return entry["via"] if _write(path, entries, "grants") else None
-        return None
-
-
-def _granted(entry, now):
-    created = entry.get("created")
-    return (isinstance(created, (int, float)) and not entry.get("used")
-            and now - created <= GRANT_TTL)
 
 
 def mentions_store(text):

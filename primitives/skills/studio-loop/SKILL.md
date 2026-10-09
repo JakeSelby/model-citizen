@@ -48,11 +48,11 @@ read what a run spent, what changed and what a run left behind.
 - **Apply only a reviewed revision, on the user's go.** `draft apply` takes the revision
   `draft review` showed and refuses a draft changed since. Applying changes the live harness every
   later session runs under: show the review's files, keys and checks and wait for an explicit go.
-- **A person confirms each paid start and each apply.** The command grader asks about every
-  `start`, `draft apply`, `rollback` and `recover`; in `auto` or `bypassPermissions` it refuses
-  with an approval code the user replies with, and the confirm marker does not count. Run the
-  `citizen` command as a plain command of its own, so the confirmation can name it, and rerun
-  exactly that line after the user's reply. The CLI refuses one that arrives unconfirmed.
+- **A person confirms each paid start and each apply, at the Mac.** The command grader asks
+  about every `start`, `draft apply`, `rollback` and `recover`; in `auto` or `bypassPermissions`
+  it refuses with an approval code the user replies with. Then the CLI asks for Touch ID or the
+  login password, which only the user can give. Run the `citizen` command as a plain command of
+  its own, and treat `person_confirmation_required` as the user's answer.
 - **A refusal is an answer.** A refused check, a stale revision, a busy target or an underpowered
   test is the result to report. Never work around it with another command, a hand edit of a draft
   or of the configuration, or `--via-studio`, which only the Studio passes.

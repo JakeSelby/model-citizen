@@ -198,7 +198,7 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         basis = json.dumps(row, sort_keys=True, separators=(",", ":"))
         identity = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
     titles = {"apply": "Draft applied", "rollback": "Apply rolled back",
-              "cli-confirmed": "CLI spend or apply confirmed"}
+              "person-confirmed": "Spend or apply confirmed in person"}
     if action == "rollback" and outcome != "completed":
         # An interrupted rollback that recovery undid, or one that failed.
         titles["rollback"] = {"recovered": "Rollback undone",
@@ -304,6 +304,31 @@ def _command(limit: int, cursor: str, filters: Dict[str, str], json_output: bool
     return " ".join(shlex.quote(word) for word in words)
 
 
+def _confirmations(state_root: Path, limit: int, filters: Dict[str, str]) -> List[Dict[str, object]]:
+    """The newest confirmations kept beside the decision ledger while it is switched off
+    (`presence.CONSENT_LEDGER`), shown on the first page; unreadable rows are skipped."""
+    path = state_root / "confirmations.jsonl"
+    found = []  # type: List[Dict[str, object]]
+    try:
+        if not path.is_file():
+            return found
+        for offset, line in _reverse_lines(path, path.stat().st_size):
+            if len(found) >= limit or len(line) > MAX_LINE_BYTES:
+                break
+            try:
+                row = json.loads(line.decode("utf-8"))
+            except (UnicodeError, ValueError):
+                continue
+            item = _event_entry(row) if isinstance(row, dict) else None
+            if item is not None and item["kind"] == "person-confirmed":
+                item["id"] = "%s@c%d" % (item["id"], offset)
+                if _matches(item, filters):
+                    found.append(item)
+    except OSError:
+        return found
+    return found
+
+
 def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
     """Return one newest-first page while keeping ledger reads bounded by a cursor."""
     limit, cursor_text, filters = _request(request)
@@ -377,6 +402,8 @@ def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
     else:
         decision_source = {"id": "decision-log", "status": "empty",
                            "message": "No decisions have been recorded."}
+    if not cursor_text:
+        entries.extend(_confirmations(state_root, limit, filters))
     entries = [item for item in entries if item is not None]
     entries.sort(key=lambda item: (str(item["timestamp"]), str(item["id"])), reverse=True)
     next_cursor = "" if exhausted or next_offset <= 0 else "v1:%d" % next_offset

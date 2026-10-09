@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT / "lib"))
 from harness_core.studio import rollback as draft_rollback  # noqa: E402
 from harness_core.studio import server  # noqa: E402
 
+import presence_support  # noqa: E402
+
 PREVIEW, ROLLBACK = "/api/configure/apply/rollback/preview", "/api/configure/apply/rollback"
 APPLY_ID = "a" * 32
 VALID = {PREVIEW: {"apply_id": APPLY_ID}, ROLLBACK: {"apply_id": APPLY_ID, "confirm": "tuning"}}
@@ -45,6 +47,7 @@ class DraftRollbackRouteTests(StudioSecurityFixture):
         return status, response
 
     def test_each_route_needs_a_session_origin_csrf_and_well_typed_fields(self):
+        presence_support.serve_as_present(self)  # so a well-typed rollback reaches its lookup
         cookie, csrf = self._session()
         origin = self.record["url"].rstrip("/")
         trusted = {"Cookie": cookie, "Origin": origin, "X-Studio-CSRF": csrf}
