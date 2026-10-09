@@ -589,7 +589,11 @@ def _snapshot_external_roots(candidate: Path, config: Mapping[str, Any]) -> Tupl
 def _diagnostics(harness: Any, candidate: Path, relative: str,
                  config: Dict[str, Any]) -> List[Dict[str, Any]]:
     findings = harness.lint_tree(candidate)
-    findings += harness.check_context_cap(candidate)
+    try:
+        # The draft's configuration, so a switched-off rule is discounted as `citizen lint` does.
+        findings += harness.check_context_cap(candidate, config)
+    except TypeError:
+        findings += harness.check_context_cap(candidate)
     findings += harness.check_cost_sidecars(candidate)
     findings += harness.check_stance_constraints(candidate)
     try:
