@@ -19,6 +19,7 @@ import { useLiveUpdates } from "../live/LiveUpdates";
 import { loadSelection } from "./api";
 import {
   budgetPercent,
+  lintBudgetText,
   SelectionRequestGate,
   selectedCount,
   sourceLabel,
@@ -166,7 +167,7 @@ export function SelectionPanel() {
 
           <Paper>
             <Title order={2}>Always-loaded budget</Title>
-            <Text c="dimmed" mt="xs" size="sm">The lint-enforced worst case is shown against both caps. The selected line total reflects this selection.</Text>
+            <Text c="dimmed" mt="xs" size="sm">The worst case is shown against both caps, with the figure citizen lint enforces once switched-off rules are left out. The selected line total reflects this selection.</Text>
             <SimpleGrid cols={{ base: 1, sm: 2 }} mt="lg" spacing="lg">
               {report.budgets.map((budget) => (
                 <div className="budget-meter" key={budget.runtime}>
@@ -174,6 +175,7 @@ export function SelectionPanel() {
                   <Progress aria-label={`${budget.label} always-loaded token budget`} mt="sm" value={budgetPercent(budget)} />
                   <Text mt="xs" size="sm">~{budget.used_tokens.toLocaleString()} / {budget.token_cap.toLocaleString()} tokens</Text>
                   <Text c="dimmed" size="xs">{budget.used_lines} / {budget.line_cap} worst-case lines · {budget.selected_lines} selected lines</Text>
+                  <Text size="xs">{lintBudgetText(budget)}</Text>
                 </div>
               ))}
             </SimpleGrid>
