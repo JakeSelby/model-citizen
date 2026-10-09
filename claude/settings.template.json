@@ -2,6 +2,20 @@
   "plansDirectory": ".agent-harness/plans",
   "useAutoModeDuringPlan": true,
   "showThinkingSummaries": true,
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": false,
+    "credentials": {
+      "envVars": [
+        { "name": "GITHUB_TOKEN", "mode": "deny" },
+        { "name": "GH_TOKEN", "mode": "deny" }
+      ]
+    },
+    "filesystem": {
+      "denyRead": ["~/.ssh", "~/.aws", "~/.config/gh"],
+      "allowWrite": []
+    }
+  },
   "permissions": {
     "allow": [
       "Read(~/**)",

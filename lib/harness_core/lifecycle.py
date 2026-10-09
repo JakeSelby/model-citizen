@@ -1408,6 +1408,9 @@ def _dispatch(runtime, payload):
                     command, event.get("cwd", ""), grade=classifier.grade_text)
                 if timed:
                     note["timed_out"] = True
+                if grading:
+                    # A recoverable copy of the tree before a grade-2+ command: grade-bash.py.
+                    grader.snapshot_before(grade, event.get("cwd", ""), verb)
                 if grade == 3:
                     # Every irreversible grade is a row, the one the marker lets through
                     # included, in every permission mode: the marker is the agent's claim of

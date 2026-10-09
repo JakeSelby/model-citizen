@@ -63,7 +63,7 @@ from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
-from harness_core import intents, observation
+from harness_core import intents, observation, snapshots
 from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -764,12 +764,57 @@ def claude_workspace_values(cfg: Dict[str, Any]) -> Dict[Tuple[str, ...], str]:
     return {("env", WORKSPACE_ENV): "1"} if isinstance(value, str) and value.strip() else {}
 
 
+def sandbox_write_paths(cfg: Dict[str, Any]) -> List[str]:
+    """The paths a sandboxed command may write beyond Claude Code's defaults (the working
+    directory, its per-user temp directory and every added directory), resolved at sync time:
+    the harness's state directory, the task-worktree root, Claude Code's scratch root and every
+    folder of every workspace in `workspaces_dir`."""
+    uid = getattr(os, "getuid", None)
+    scratch = Path(os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp").resolve()
+    found = [state_dir(), worktree_root()] + ([scratch / f"claude-{uid()}"] if uid else [])
+    directory = cfg.get("workspaces_dir")
+    if isinstance(directory, str) and directory.strip():
+        try:
+            for ws in workspaces.workspace_map(str(Path(directory).expanduser()))["workspaces"]:
+                found.extend(Path(member) for member in ws["members"])
+        except (OSError, ValueError, KeyError):
+            pass  # an unreadable workspace folder adds no path; `workspace list` reports it
+    paths: List[str] = []
+    for path in found:
+        text = str(path)
+        if text not in paths:
+            paths.append(text)
+    return paths
+
+
+def claude_sandbox_values(cfg: Dict[str, Any], template: Dict[str, Any]) -> Dict[Tuple[str, ...], Any]:
+    """The `sandbox` block sync writes, while `sandbox.enabled` is true in the user config.
+
+    The template's block, with `filesystem.allowWrite` derived from the workspace
+    (`sandbox_write_paths`). `sandbox.strict` adds `allowUnsandboxedCommands: false` and
+    `failIfUnavailable: true`, so a blocked command cannot be retried outside the boundary and a
+    missing sandbox stops Claude Code at startup instead of running commands unsandboxed."""
+    block = cfg.get("sandbox")
+    if not isinstance(block, dict) or block.get("enabled") is not True:
+        return {}
+    rendered = deepcopy(template.get("sandbox") or {"enabled": True})
+    filesystem = rendered.setdefault("filesystem", {})
+    allow = list(filesystem.get("allowWrite") or [])
+    filesystem["allowWrite"] = allow + [p for p in sandbox_write_paths(cfg) if p not in allow]
+    if block.get("strict") is True:
+        rendered["allowUnsandboxedCommands"] = False
+        rendered["failIfUnavailable"] = True
+    return {("sandbox",): rendered}
+
+
 def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
                         telemetry: Dict[str, Any], cfg: Dict[str, Any],
-                        ownership: Dict[str, Any]) -> Tuple[List[List[str]], List[str]]:
-    """Fold the runtime's telemetry and workspace settings into `merged`; returns its owned
-    paths and notices. The workspace block (`claude.workspaces` in OWNERSHIP.json) is owned by
-    exactly the same rules as the telemetry block, while `workspaces_dir` is set.
+                        ownership: Dict[str, Any],
+                        template: Optional[Dict[str, Any]] = None) -> Tuple[List[List[str]], List[str]]:
+    """Fold the runtime's telemetry, workspace and sandbox settings into `merged`; returns its
+    owned paths and notices. The workspace block (`claude.workspaces` in OWNERSHIP.json) is owned
+    by exactly the same rules as the telemetry block, while `workspaces_dir` is set, and so is
+    the sandbox block (`claude.sandbox`), while `sandbox.enabled` is true.
 
     Ownership is per variable, never the whole `env` map, because the map is the user's: a
     variable they set is not read, changed or removed, and `held` — the keys `reconcile.Store`
@@ -787,7 +832,8 @@ def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict
                "travels with the ledger export".format(name) for name in omitted]
     claude = ownership.get("claude", {})
     groups = [("native telemetry", claude.get("native_telemetry", {}), telemetry_values),
-              ("workspace support", claude.get("workspaces", {}), claude_workspace_values(cfg))]
+              ("workspace support", claude.get("workspaces", {}), claude_workspace_values(cfg)),
+              ("the sandbox", claude.get("sandbox", {}), claude_sandbox_values(cfg, template or {}))]
     kept: List[List[str]] = []
     for label, block, values in groups:
         paths = ([["env", key] for key in block.get("env_keys", [])]
@@ -1625,16 +1671,23 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
         owned_paths += [["permissions", "allow"], ["permissions", "defaultMode"]]
         hook_paths = [["hooks", event] for event in template.get("hooks", {})]
         owned_paths += hook_paths
-        native_paths, native_notices = apply_native_claude(merged, live, held, telemetry, cfg, ownership)
+        native_paths, native_notices = apply_native_claude(merged, live, held, telemetry, cfg, ownership,
+                                                           template)
         owned_paths += native_paths
         report.extend(native_notices)
+        if ["sandbox"] in native_paths:
+            sandbox = merged.get("sandbox")
+            say("  sandbox " + ("claude-code Bash runs in the OS sandbox, writing to the working tree and "
+                                + ", ".join(sandbox.get("filesystem", {}).get("allowWrite", []))
+                                if isinstance(sandbox, dict) and sandbox.get("enabled") is True
+                                else "sandbox.enabled is off; restoring the sandbox setting sync replaced"))
         if "claude-code" in native_runtimes(telemetry):
             attributes, _ = resource_attributes(cfg, telemetry)
             helper = "headers helper" if ("otelHeadersHelper" in merged) else "no headers"
             say(f"  native  claude-code exports its own telemetry to "
                 f"{telemetry.get('endpoint', '')} ({CLAUDE_OTEL_PROTOCOL}, {helper})")
             say(f"          labels {attributes}")
-        elif [p for p in native_paths if p != ["env", WORKSPACE_ENV]]:
+        elif [p for p in native_paths if p not in (["env", WORKSPACE_ENV], ["sandbox"])]:
             say("  native  telemetry.native no longer names claude-code; removing the Claude "
                 "telemetry settings sync added")
         store.json(settings_file, merged, owned_paths, hook_lists=hook_paths)
@@ -3589,7 +3642,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 BOOL_KEYS = ["vscode.manage", "claude.manage", "codex.manage", "permissions_bypass_acknowledged",
-             "core_switches_acknowledged", "observation.enabled"]
+             "core_switches_acknowledged", "observation.enabled", "sandbox.enabled", "sandbox.strict"]
 
 
 def coerce_config_value(key: str, value: str) -> Any:
@@ -6194,6 +6247,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="the observed result (default: probe with git merge-tree)")
     q.add_argument("--base", default="origin/main")
     p.set_defaults(func=lambda a: intents.command(a, say))
+
+    p = sub.add_parser("snapshot", help="list, restore or prune the working-tree snapshots taken before grade-2+ commands")
+    snapshot_sub = p.add_subparsers(dest="snapshot_action", required=True)
+    q = snapshot_sub.add_parser("list", help="snapshots in this repository, newest first")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    q = snapshot_sub.add_parser("restore", help="apply a snapshot to this working tree; the snapshot is kept")
+    q.add_argument("name", nargs="?", default="latest", help="latest (default), a time from `list`, or a full ref")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    q = snapshot_sub.add_parser("prune", help="delete snapshots older than --days")
+    q.add_argument("--days", type=int, default=snapshots.KEEP_DAYS,
+                   help=f"age in days past which a snapshot is deleted (default {snapshots.KEEP_DAYS})")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    p.set_defaults(func=lambda a: snapshots.command(a, say))
 
     p = sub.add_parser("keychain", help="give a disposable HOME its own default keychain before a client is launched under it (macOS)")
     p.add_argument("home")

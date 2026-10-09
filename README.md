@@ -46,7 +46,7 @@ site and the GitHub description cannot drift apart.
 
 Hooks handle the few things that should be deterministic, and each has an id you can switch off; the four that enforce need your acknowledgement first. Everything else stays the agent's call.
 
-- [Graded shell commands](claude/hooks/grade-bash.py): Every command is graded from read-only to irreversible, and your autonomy stance, plus any per-repository levels in a local policy, decides which grades stop and ask.
+- [Graded shell commands](claude/hooks/grade-bash.py): Every command is graded read-only to irreversible, your autonomy stance decides which grades ask, a risky one is snapshotted first, and an opt-in OS sandbox fences it.
 - [Stop gate](claude/hooks/stop-gate.py): The turn doesn't end while your repo's own gate is red.
 - [Fresh-context review](claude/agents/reviewer.md): Scope is checked against the ask, then quality, by agents that never saw the code, and a framework's own review spawns are held to that whatever they call themselves.
 - [Secrets and personal data](primitives/rules/secrets.md): Lint catches tokens, keys and personal strings before they're committed.

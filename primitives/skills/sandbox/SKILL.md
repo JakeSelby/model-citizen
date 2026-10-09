@@ -37,6 +37,11 @@ too. `failIfUnavailable` makes a missing dependency a hard stop rather than a si
 fallback, and `allowUnsandboxedCommands: false` removes the retry-outside escape hatch. Subagents inherit the session's sandbox; commands
 you type at the `!` prompt do not.
 
+The harness writes a version of this block for a user who opts in with `citizen config set
+sandbox.enabled true` and a `sync`: write access derived from the workspace, Bash prompts kept,
+and `sandbox.strict` for the two hard-stop keys above. A block you wrote yourself is left alone.
+See `docs/sandboxing.md`.
+
 For one session, writing no file: `claude --settings '{"sandbox":{"enabled":true}}'`. Confirm with
 `/sandbox`: the **Config** tab shows the resolved settings, and a **Dependencies** tab appearing
 means a package is missing. A prompt titled "Bash command (unsandboxed)" is the signal a command

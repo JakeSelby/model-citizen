@@ -737,6 +737,7 @@ development_status:
   ah-s350-summarise-every-declared-arm-not-only-bare-and: ready-for-dev
   ah-s351-removal-arms-for-claude-md-and-the-stances: ready-for-dev
   ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
+  ah-s354-a-real-boundary-for-destructive-commands-sandbox: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog
