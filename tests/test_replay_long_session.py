@@ -505,7 +505,7 @@ class DryRunTests(unittest.TestCase):
         self.assertIn("long-session tier: 6 session(s): 1 scenario(s) x 2 arm(s) x 3 rep(s)", out)
         self.assertIn("scenario demo-session: 5 user turn(s) (cap 5), 2 checkpoint(s), 7 agent turns per user "
                       "turn, 4 USD per session", out)
-        self.assertIn("ceiling, before any spend: 24.00 USD", out)
+        self.assertIn("ceiling, before any spend: 24.06 USD", out)
         self.assertIn("contamination demo-session: clean", out)
         for rep in (1, 2, 3):
             for arm in ("bare", "harness"):
@@ -517,7 +517,7 @@ class DryRunTests(unittest.TestCase):
             code, out, _, _ = self.replay_cli(tmp, self.args(tmp, dry_run=True, exploratory=True, run_cap=1.5, reps=1))
         self.assertEqual(code, 0)
         self.assertIn("1.5 USD per session", out)
-        self.assertIn("ceiling, before any spend: 3.00 USD", out)
+        self.assertIn("ceiling, before any spend: 3.02 USD", out)
 
     def test_another_model_a_pair_and_a_tier_without_a_pack_are_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -530,11 +530,11 @@ class DryRunTests(unittest.TestCase):
                     with self.assertRaisesRegex(SystemExit, reason):
                         self.replay_cli(tmp, args)
 
-    def test_the_ceiling_counts_every_session_at_its_cap(self):
+    def test_the_ceiling_counts_every_session_at_its_cap_plus_the_minimum_turn_budget(self):
         items = [scenario(caps={"max_user_turns": 5, "max_agent_turns_per_user_turn": 7, "max_cost_usd_hint": h})
                  for h in (15.0, 12.0, 15.0)]
-        self.assertEqual(SESSION.ceiling_usd(items, 3, 3, None, 0.25), 378.75)
-        self.assertEqual(SESSION.ceiling_usd(items, 1, 1, 10.0), 30.0)
+        self.assertEqual(SESSION.ceiling_usd(items, 3, 3, None, 0.25), 379.02)
+        self.assertEqual(SESSION.ceiling_usd(items, 1, 1, 10.0), 30.03)
 
 
 if __name__ == "__main__":
