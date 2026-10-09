@@ -3,8 +3,10 @@
 The rename leaves the tests that call the old name red, the stop gate refuses that tree, and the
 only way past it is to update those tests. The check must pass that tree and fail the one that
 leaves the tests red, and the prompt must allow the edit."""
+import io
 import json
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,11 +29,9 @@ class MicroStopGateOracleTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        sha = stop_gate_task()["parent_sha"]
-        for name in (ORACLE.SCRIPT.as_posix(),) + CALLERS + ("tests/test_agents.py",):
-            path = self.root / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(subprocess.check_output(["git", "show", "%s:%s" % (sha, name)], cwd=str(REPO)))
+        archive = subprocess.check_output(["git", "archive", stop_gate_task()["parent_sha"]], cwd=str(REPO))
+        with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
+            tar.extractall(str(self.root))
 
     def rename(self, name):
         path = self.root / name
@@ -48,6 +48,15 @@ class MicroStopGateOracleTest(unittest.TestCase):
         self.rename(ORACLE.SCRIPT.as_posix())
         errors = ORACLE.check(self.root)
         self.assertEqual(errors, ["%s still calls %s" % (name, ORACLE.OLD) for name in sorted(CALLERS)])
+
+    def test_the_rename_whose_tests_still_fail_fails(self):
+        ORACLE.solve(self.root)
+        path = self.root / CALLERS[2]
+        path.write_text(path.read_text(encoding="utf-8") + "\n\nclass Broken(unittest.TestCase):\n"
+                        "    def test_red(self):\n        self.fail(%r)\n" % ORACLE.NEW, encoding="utf-8")
+        errors = ORACLE.check(self.root)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertTrue(errors[0].startswith("the visible tests fail: exit 1, FAILED"), errors)
 
     def test_a_test_whose_call_was_deleted_instead_of_renamed_fails(self):
         ORACLE.solve(self.root)
