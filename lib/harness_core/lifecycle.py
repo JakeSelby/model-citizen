@@ -1375,6 +1375,23 @@ def _dispatch(runtime, payload):
                     note["grade"] = 3
                     if confirmed:
                         note["confirmed"] = "marker"
+            # A Studio CLI spend or apply asks a person whatever the stance and grade, and the
+            # marker does not confirm it: `grade-bash.py` owns that channel and its grant.
+            confirming = (grader.cli_confirmation(raw, event.get("permission_mode"),
+                                                  event.get("session_id"), runtime)
+                          if grading else None)
+            if confirming is not None:
+                answer, why, outcome = confirming
+                note["cli_confirmation"] = outcome
+                if answer == "pass":
+                    confirmed = True
+                    note["approval"] = "consumed"
+                else:
+                    results.append({"hookSpecificOutput": {
+                        "permissionDecision": "deny" if runtime == "codex" else answer,
+                        "permissionDecisionReason": why}})
+                    if outcome == "offered":
+                        note["approval"] = "offered"
             asked = grading and bool(grade) and not confirmed and grade >= grader.THRESHOLDS.get(variant, 1)
             # The decision provider, when one is configured, is asked only about what the stance
             # lets through, so it can add a prompt and never remove one.
@@ -1409,12 +1426,13 @@ def _dispatch(runtime, payload):
             # scratch redirect, a test run. Under an open posture the first is investigation and
             # the second is not, and the autonomy stance still outranks both when it already asked.
             plan = readonly and investigating(runtime, event)
-            if readonly and grade == 0:
+            held = confirming is not None and confirming[0] != "pass"
+            if readonly and grade == 0 and not held:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow"}})
-            elif plan and not asked and grade == 1:
+            elif plan and not asked and not held and grade == 1:
                 results.append({"hookSpecificOutput": {"permissionDecision": "allow",
                     "permissionDecisionReason": "Plan-mode investigation, run at the permission posture you selected."}})
-            elif plan and not asked and not confirmed and grade == 2:
+            elif plan and not asked and not held and not confirmed and grade == 2:
                 results.append({"hookSpecificOutput": {"permissionDecision": "ask",
                     "permissionDecisionReason": "This reaches past the workspace, so it is execution rather than "
                     "planning. Plan mode widens investigation, not the build. "

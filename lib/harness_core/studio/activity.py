@@ -197,13 +197,15 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
     if not identity:
         basis = json.dumps(row, sort_keys=True, separators=(",", ":"))
         identity = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
-    titles = {"apply": "Draft applied", "rollback": "Apply rolled back"}
+    titles = {"apply": "Draft applied", "rollback": "Apply rolled back",
+              "cli-confirmed": "CLI spend or apply confirmed"}
     if action == "rollback" and outcome != "completed":
         # An interrupted rollback that recovery undid, or one that failed.
         titles["rollback"] = {"recovered": "Rollback undone",
                               "abandoned": "Rollback abandoned"}.get(outcome, "Rollback failed")
     # The journal id of an apply or rollback; a completed one is what `citizen draft rollback` takes.
-    apply_id = identity if action in titles and APPLY_ID.fullmatch(identity) else ""
+    apply_id = (identity if action in ("apply", "rollback") and APPLY_ID.fullmatch(identity)
+                else "")
     # A rollback links to the apply (or rollback) it reversed, by that entry's Activity id.
     reverses = detail.get("reverses") if action == "rollback" else None
     linked = isinstance(reverses, str) and APPLY_ID.fullmatch(reverses) is not None

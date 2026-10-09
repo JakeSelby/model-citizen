@@ -21,6 +21,22 @@ check a file run without hooks, the fsmonitor hook, filter drivers, or inherited
 variables and global configuration, so a configuration planted in the repository cannot run code
 while a command is graded.
 
+A Studio CLI command that spends or applies — `citizen runs replay|eval|native|draft-test start`,
+`citizen runs start` with `--confirm-spend`, and `citizen draft apply`, `rollback` (without
+`--preview`) and `recover` — needs a person's yes whatever the stance and grade. `grade-bash`
+asks about it in a prompting mode; in `auto` and `bypassPermissions` it refuses it with an
+approval code covering that exact line once, and the confirm marker does not count; Codex, which
+carries no typed approval, refuses it. A spend inside a substitution, a shell's `-c` text or a
+wrapper the grader does not look through is refused, since no confirmation can name it. Behind
+the prompt or the consumed approval the hook files a one-use grant for the command's exact words,
+alive for ten minutes, in the approvals store; the Studio files one for the CLI apply its own
+dialog confirmed. The CLI takes a grant, or a `yes` typed at a terminal when no agent runtime's
+variables are set, before it spends or applies, refuses with `person_confirmation_required`
+otherwise, and records each confirmation as a `studio.cli-confirmed` Activity event. A
+confirmation token, a revision, `--via-studio`, an environment variable or the marker is never a
+person's yes. Like the rest of the grader this is an accident guard: a declined prompt leaves its
+grant unused until it expires.
+
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.
@@ -97,7 +113,7 @@ and each id is a unit of the `hooks` switch kind in the [selection document](pre
 | --- | --- |
 | `allow-plan-webfetch` | PreToolUse on WebFetch in plan mode |
 | `allow-readonly-bash` | the read-only Bash allow, plan-mode allows and `plan_allow_tools` |
-| `approvals` | UserPromptSubmit: records a prompt that is only `approve <code>` tokens, for `grade-bash` in auto mode, Claude Code only |
+| `approvals` | UserPromptSubmit: records a prompt that is only `approve <code>` tokens, for `grade-bash` in auto mode and for a Studio CLI spend or apply, Claude Code only |
 | `brief-guard` (core) | PreToolUse on a spawn |
 | `filter-output` | PreToolUse on Bash |
 | `grade-bash` (core) | Bash grading, its ask or deny, consuming an approval in auto mode, guarding the approvals store, and the decision log's Bash rows |

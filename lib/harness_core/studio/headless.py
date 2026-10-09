@@ -56,6 +56,9 @@ ADMITTED_SUITES = {"live-replay": ("replay", "draft-test"), "native-acceptance":
                    "micro-tier": ("eval",), "unit-eval": ("eval",)}
 START_ACTIONS = {"replay": "preview|start", "draft-test": "plan|start", "native": "preview|start",
                  "eval": "preview|start"}
+# The admissions that spend. From the CLI each needs a person's confirmation, which the command
+# grader carries (`grade-bash.cli_confirmation`); a preview, plan, catalog or retry plan is free.
+SPEND_ACTIONS = frozenset((group, "start") for group in START_ACTIONS)
 
 
 def cli_command(group: str, action: str) -> Tuple[str, ...]:

@@ -27,6 +27,7 @@ from harness_core.studio import apply as draft_apply
 from harness_core.studio import auth, draft_tests, eval_tiers, headless, native_acceptance, server
 from harness_core.studio.state import Store
 
+import cli_confirmation_support
 import draft_support
 from studio_target_support import FixtureTargetService
 from test_studio_replay import fixture_tasks
@@ -142,6 +143,7 @@ class CommandShapeTests(unittest.TestCase):
         self.state = self.home / "state"
 
     def cli(self, *argv, stdin=""):
+        cli_confirmation_support.confirm_if_needed(argv)  # the person who said yes
         output = io.StringIO()
         with mock.patch.object(harness, "state_dir", return_value=self.state), \
                 mock.patch.object(sys, "stdin", io.StringIO(stdin)), \
@@ -316,6 +318,7 @@ class SpendGuardHttpTests(unittest.TestCase):
             connection.close()
 
     def cli(self, *argv, stdin=""):
+        cli_confirmation_support.confirm_if_needed(argv)  # the person who said yes
         output = io.StringIO()
         with mock.patch.object(harness, "state_dir", return_value=self.state), \
                 mock.patch.object(sys, "stdin", io.StringIO(stdin)), \
@@ -415,6 +418,7 @@ class Home:
 
     def cli(self, *args):
         import subprocess
+        cli_confirmation_support.confirm_if_needed(args, self.path)  # the person who said yes
         done = subprocess.run([sys.executable, str(REPO / "bin" / "harness"), *args], cwd=REPO,
                               env=self.env, capture_output=True, text=True, timeout=600)
         return done.returncode, json.loads(done.stdout.strip().splitlines()[-1])

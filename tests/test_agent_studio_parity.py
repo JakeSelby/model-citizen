@@ -18,6 +18,7 @@ from unittest import mock
 from test_harness import REPO
 from harness_core.studio import headless, server
 
+import cli_confirmation_support
 import draft_support
 
 CLI = REPO / "bin" / "harness"
@@ -184,6 +185,8 @@ class ShapeParityTests(unittest.TestCase):
 
     @classmethod
     def cli(cls, argv):
+        # The person who said yes to a spend or apply, under the home the CLI reads.
+        cli_confirmation_support.confirm_if_needed([*argv, "--json"], cls.env["HARNESS_HOME"])
         done = subprocess.run([sys.executable, str(CLI), *argv, "--json"], cwd=REPO, env=cls.env,
                               capture_output=True, text=True, timeout=600)
         printed = None

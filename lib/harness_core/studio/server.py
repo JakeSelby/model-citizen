@@ -1683,11 +1683,28 @@ def _draft_apply_review(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
+def _studio_grant(repo_root: Path, command) -> None:
+    """File the one-use grant the CLI takes for `command`, which the Studio's own confirmation
+    dialog and its authenticated route stand behind. The CLI refuses without it, so a failure
+    here fails the action closed rather than open."""
+    import importlib.util
+
+    try:
+        path = repo_root / "policy" / "hooks" / "approvals.py"
+        spec = importlib.util.spec_from_file_location("studio_cli_approvals", str(path))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.grant(list(command[2:]), "studio")
+    except Exception:
+        pass
+
+
 def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, object]:
     """Run `citizen draft apply` itself, so a Studio apply takes the CLI's locks in the CLI."""
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
     command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "apply", draft,
                "--revision", revision, "--via-studio", "--json"]
+    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
@@ -1706,6 +1723,7 @@ def _run_draft_recover(repo_root: Path, action: str, draft: str) -> Dict[str, ob
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
     command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "recover",
                "--draft", draft, "--via-studio", "--json"] + (["--abandon"] if action == "abandon" else [])
+    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
@@ -1740,6 +1758,7 @@ def _run_draft_rollback(repo_root: Path, apply_id: str, draft: str) -> Dict[str,
     environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
     command = [sys.executable, str(repo_root / "bin" / "harness"), "draft", "rollback", apply_id,
                "--draft", draft, "--via-studio", "--json"]
+    _studio_grant(repo_root, command)
     try:
         done = subprocess.run(command, cwd=str(repo_root), env=environment, capture_output=True,
                               text=True, timeout=1800)
