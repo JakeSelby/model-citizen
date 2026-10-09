@@ -1,11 +1,11 @@
 import { Alert, Button, Code, Group, Stack, Text, TextInput } from "@mantine/core";
-import { useRef, useState } from "react";
+import { type Ref, useRef, useState } from "react";
 
-import { CommandChip } from "../components/StudioKit";
+import { CommandChip, StatusBadge } from "../components/StudioKit";
 import { previewRollback, rollBack } from "./api";
 import {
-  rollbackBlocker, rollbackHeadline, shownValue,
-  type RollbackPreview, type RollbackResult,
+  noticeHeadline, noticeTone, restoredChanges, rollbackBlocker, rollbackHeadline, rollbackNotice, shownValue,
+  type RollbackNotice, type RollbackPreview, type RollbackResult,
 } from "./rollbackModel";
 
 /** The reverse diff: each key and file the apply wrote, and the value it returns to. */
@@ -80,12 +80,55 @@ export function RollbackControls({ preview, confirmation, busy, describedBy, onC
   );
 }
 
-type Props = { applyId: string; onChanged?: () => void };
+type ResultProps = { notice: RollbackNotice | null; onDismiss: () => void; dismissRef?: Ref<HTMLButtonElement> };
 
-/** One-step rollback of the apply an Activity entry records: preview, confirm, roll back. */
-export function RollbackPanel({ applyId, onChanged }: Props) {
+/**
+ * The finished rollback, kept above the Activity list until it is dismissed. The status region is
+ * always mounted, so the result is announced once when it arrives and not again when the list
+ * behind it refreshes; the dismiss control sits outside it, so it is not read as part of the news.
+ */
+export function RollbackResultRegion({ notice, onDismiss, dismissRef }: ResultProps) {
+  const { keys, files } = notice ? restoredChanges(notice) : { keys: [], files: [] };
+  return (
+    <div className={notice ? "activity-rollback-result" : undefined} data-tone={notice ? noticeTone(notice) : undefined}>
+      <div aria-atomic="true" aria-live="polite" role="status">
+        {notice ? <Stack gap="xs">
+          <Group gap="sm" wrap="wrap">
+            <Text component="h2" fw={650} size="md">Rollback of {notice.draft || notice.applyId.slice(0, 12)}</Text>
+            <StatusBadge tone={noticeTone(notice)}>{notice.result?.status ?? "no result"}</StatusBadge>
+          </Group>
+          <Text size="sm">{noticeHeadline(notice)}</Text>
+          {notice.result?.message ? <Text c="dimmed" size="sm">{notice.result.message}</Text> : null}
+          {keys.length > 0 && <div>
+            <Text fw={650} size="sm">Configuration keys restored</Text>
+            <ul className="message-list">{keys.map((row) => <li key={row.key}>
+              <Code>{row.key}</Code> {shownValue(row.restored_present, row.restored)}
+            </li>)}</ul>
+          </div>}
+          {files.length > 0 && <div>
+            <Text fw={650} size="sm">Files in your personal root</Text>
+            <ul className="message-list">{files.map((row) => <li key={row.path}>
+              <Code>{row.path}</Code> {row.action === "delete" ? "removed" : "restored to its earlier content"}
+            </li>)}</ul>
+          </div>}
+        </Stack> : null}
+      </div>
+      {notice ? <Group mt="sm">
+        <Button onClick={onDismiss} ref={dismissRef} size="xs" variant="default">Dismiss rollback result</Button>
+      </Group> : null}
+    </div>
+  );
+}
+
+type Props = { applyId: string; onChanged?: () => void; onResult?: (notice: RollbackNotice) => void };
+
+/**
+ * One-step rollback of the apply an Activity entry records: preview, confirm, roll back. With
+ * `onResult` the finished rollback is handed to the page, which keeps it on screen; the panel's own
+ * live region then carries only progress, so the result is not announced twice.
+ */
+export function RollbackPanel({ applyId, onChanged, onResult }: Props) {
   const [preview, setPreview] = useState<RollbackPreview | null>(null);
-  const [result, setResult] = useState<RollbackResult | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState<"" | "previewing" | "rolling-back">("");
   const [message, setMessage] = useState("");
@@ -93,7 +136,6 @@ export function RollbackPanel({ applyId, onChanged }: Props) {
 
   async function runPreview() {
     setBusy("previewing");
-    setResult(null);
     setMessage("Reading the apply journal and the live values…");
     try {
       const loaded = await previewRollback(applyId);
@@ -106,22 +148,29 @@ export function RollbackPanel({ applyId, onChanged }: Props) {
     }
   }
 
+  function finish(notice: RollbackNotice) {
+    if (onResult) {
+      setMessage("");
+      onResult(notice);
+    } else {
+      setMessage(noticeHeadline(notice));
+    }
+  }
+
   async function runRollback() {
-    if (pending.current || !preview?.apply.draft) return;
+    const draft = preview?.apply.draft;
+    if (pending.current || !draft) return;
     pending.current = true;
     setBusy("rolling-back");
     setMessage("Rolling back under the sync lock…");
     try {
       const outcome = await rollBack(applyId, confirmation);
-      setResult(outcome);
-      setMessage(rollbackHeadline(outcome));
       setConfirmation("");
-      if (outcome.status === "rolled-back") {
-        setPreview(null);
-        onChanged?.();
-      }
+      if (outcome.status === "rolled-back") setPreview(null);
+      finish(rollbackNotice(applyId, draft, outcome));
+      if (outcome.status === "rolled-back") onChanged?.();
     } catch (reason) {
-      setMessage(reason instanceof Error ? reason.message : "The rollback did not report a result. Check Activity before retrying.");
+      finish(rollbackNotice(applyId, draft, null, reason instanceof Error ? reason.message : ""));
     } finally {
       pending.current = false;
       setBusy("");
@@ -138,7 +187,6 @@ export function RollbackPanel({ applyId, onChanged }: Props) {
       </Group>
       <div aria-live="polite" role="status">
         {message ? <Text size="sm">{message}</Text> : null}
-        {result ? <RollbackOutcome result={result} /> : null}
       </div>
       {preview && <RollbackDetails preview={preview} />}
       {preview?.can_rollback && (

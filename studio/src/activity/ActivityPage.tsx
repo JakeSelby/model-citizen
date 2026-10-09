@@ -27,13 +27,15 @@ import {
   type ActivityFilters,
   type ActivityPage as ActivityPayload,
 } from "./model";
-import { RollbackPanel } from "./Rollback";
-import { focusedEntry, isFocused, missingFocus, rollbackTarget } from "./rollbackModel";
+import { RollbackPanel, RollbackResultRegion } from "./Rollback";
+import { focusedEntry, isFocused, missingFocus, rollbackTarget, type RollbackNotice } from "./rollbackModel";
 import "./activity.css";
 
-type RowProps = { entry: ActivityEntry; focused?: boolean; onChanged?: () => void };
+type RowProps = {
+  entry: ActivityEntry; focused?: boolean; onChanged?: () => void; onRollback?: (notice: RollbackNotice) => void;
+};
 
-function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
+function ActivityRow({ entry, focused = false, onChanged, onRollback }: RowProps) {
   const row = useRef<HTMLElement>(null);
   const target = rollbackTarget(entry);
   useEffect(() => {
@@ -72,14 +74,16 @@ function ActivityRow({ entry, focused = false, onChanged }: RowProps) {
       {entry.evidence_href ? <Anchor component={Link} mt="md" to={entry.evidence_href}>
         {entry.evidence_label || "Open source evidence"}
       </Anchor> : null}
-      {target ? <RollbackPanel applyId={target} onChanged={onChanged} /> : null}
+      {target ? <RollbackPanel applyId={target} onChanged={onChanged} onResult={onRollback} /> : null}
     </Paper>
   );
 }
 
-type TimelineProps = { payload: ActivityPayload; focus?: string; onChanged?: () => void };
+type TimelineProps = {
+  payload: ActivityPayload; focus?: string; onChanged?: () => void; onRollback?: (notice: RollbackNotice) => void;
+};
 
-export function ActivityTimeline({ payload, focus = "", onChanged }: TimelineProps) {
+export function ActivityTimeline({ payload, focus = "", onChanged, onRollback }: TimelineProps) {
   const missing = missingFocus(payload.entries, focus, payload.next_cursor !== "");
   return <Stack gap="md">
     {missing ? <Text c="dimmed" role="status" size="sm">{missing}</Text> : null}
@@ -92,7 +96,7 @@ export function ActivityTimeline({ payload, focus = "", onChanged }: TimelinePro
         </Group>)}
       </Stack>
     </Paper>
-    {payload.entries.length ? payload.entries.map((entry) => <ActivityRow entry={entry} focused={isFocused(entry, focus)} key={entry.id} onChanged={onChanged} />)
+    {payload.entries.length ? payload.entries.map((entry) => <ActivityRow entry={entry} focused={isFocused(entry, focus)} key={entry.id} onChanged={onChanged} onRollback={onRollback} />)
       : payload.next_cursor
         ? <EvidenceState kind="empty" title="No matches in this page">More rows remain. Search older activity to continue.</EvidenceState>
         : <EvidenceState kind="empty" title="No activity matches">Change a filter or create the first local decision.</EvidenceState>}
@@ -106,8 +110,19 @@ export function ActivityPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [notice, setNotice] = useState<RollbackNotice | null>(null);
   const requestGate = useRef(new ActivityRequestGate());
+  const list = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const dismiss = useRef<HTMLButtonElement>(null);
   const focus = focusedEntry(useLocation().search);
+
+  useEffect(() => {
+    // A completed rollback removes the button that started it; keep keyboard focus in the page.
+    if (!notice) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) dismiss.current?.focus();
+  }, [notice]);
 
   useEffect(() => {
     const request = requestGate.current.next();
@@ -142,6 +157,29 @@ export function ActivityPage() {
     setFilters({ ...draftFilters });
   }
 
+  /** Reload the first page in place: the list stays on screen until the fresh one replaces it. */
+  async function refresh() {
+    const request = requestGate.current.next();
+    setLoadingMore(false);
+    try {
+      const next = await loadActivity(filters, "", 25, request.signal);
+      if (requestGate.current.accepts(request.generation)) {
+        setError("");
+        setPayload(next);
+      }
+    } catch (reason) {
+      if (requestGate.current.accepts(request.generation)
+          && (!(reason instanceof Error) || reason.name !== "AbortError")) {
+        setError(reason instanceof Error ? reason.message : "Activity unavailable.");
+      }
+    }
+  }
+
+  function dismissNotice() {
+    setNotice(null);
+    (list.current ?? heading.current)?.focus();
+  }
+
   async function loadOlder() {
     if (!payload?.next_cursor) return;
     const current = payload;
@@ -172,7 +210,7 @@ export function ActivityPage() {
       <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / Activity</Text>
-          <Title order={1}>What the harness decided and changed.</Title>
+          <Title order={1} ref={heading} tabIndex={-1}>What the harness decided and changed.</Title>
           <Text c="dimmed" mt="xs">Trace guardrails, governed Studio actions, and ownership evidence without rewriting history.</Text>
         </div>
         {payload ? <Text c="dimmed" size="sm">{payload.entries.length} loaded</Text> : null}
@@ -204,10 +242,13 @@ export function ActivityPage() {
         </Group>
       </Paper>
 
+      <RollbackResultRegion dismissRef={dismiss} notice={notice} onDismiss={dismissNotice} />
       {error ? <EvidenceState kind="error" title="Activity unavailable">{error}</EvidenceState> : null}
       {loading && !payload ? <EvidenceState kind="loading" title="Loading local activity">Reading bounded pages from local evidence.</EvidenceState> : null}
       {payload ? <>
-        <ActivityTimeline focus={focus} onChanged={() => setFilters((current) => ({ ...current }))} payload={payload} />
+        <section aria-label="Activity list" className="activity-list" ref={list} tabIndex={-1}>
+          <ActivityTimeline focus={focus} onChanged={() => void refresh()} onRollback={setNotice} payload={payload} />
+        </section>
         {payload.next_cursor ? <Button loading={loadingMore} onClick={() => void loadOlder()} variant="default">
           {continuationLabel(payload.entries)}
         </Button> : null}

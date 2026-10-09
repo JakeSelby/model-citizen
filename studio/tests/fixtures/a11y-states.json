@@ -207,7 +207,7 @@
     "nothing_changed": true
   },
   "rollbackResult": {
-    "_from": "studio/tests/rollback.test.ts result({}); its review is rollbackPreview at run time",
+    "_from": "studio/tests/rollback.test.ts result({}); the accessibility stub serves it with rollbackPreview as its review, for the completed-rollback audit",
     "schema_version": 1,
     "status": "rolled-back",
     "applied": false,

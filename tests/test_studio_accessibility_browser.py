@@ -109,11 +109,14 @@ STUBS = r"""
         apply_command: 'citizen draft apply ' + body.draft + ' --revision ' + globalThis.__a11yRevision + ' --json' });
       case '/api/configure/apply': return reply({ ...states.applyResult, message: 'Applied draft ' + body.draft + '.' });
       case '/api/configure/apply/rollback/preview': return reply(states.rollbackPreview);
-      // A completed rollback reloads the timeline at once, so its result view never stays on screen;
-      // the engine's busy refusal stays, and is the result view the audit can read.
-      case '/api/configure/apply/rollback': return reply(states.rollbackRefused);
+      // The engine's busy refusal by default; a completed rollback once a test asks for one.
+      case '/api/configure/apply/rollback': return reply(globalThis.__a11yRollback === 'completed'
+        ? { ...states.rollbackResult, review: states.rollbackPreview } : states.rollbackRefused);
     }
-    if (url === '/api/activity') return reply(states.activity);
+    if (url === '/api/activity') {
+      globalThis.__a11yActivityReads = (globalThis.__a11yActivityReads || 0) + 1;
+      return reply(states.activity);
+    }
     if (method !== 'GET' && !READS.has(url)) {
       globalThis.__a11yRefused.push(method + ' ' + url);
       return Promise.resolve(new Response('{"error":"fixture_only"}', { status: 409 }));
@@ -461,6 +464,21 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             failures.append("%s [keyboard] Tab never reached %s (walked: %s)" % (route, node, " > ".join(seen)))
         return failures
 
+    def _press_enter(self) -> None:
+        self.devtools.call("Input.dispatchKeyEvent", {
+            "type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"})
+        self.devtools.call("Input.dispatchKeyEvent", {
+            "type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+
+    def _dismiss_rollback_by_keyboard(self, label: str) -> None:
+        """Press Enter on the result's dismiss control; the result goes and focus lands on the list."""
+        self.devtools.evaluate("[...document.querySelectorAll('button')]"
+                               ".find(node => node.innerText.trim() === 'Dismiss rollback result').focus()")
+        self._press_enter()
+        self._wait("!document.querySelector('.activity-rollback-result')"
+                   " && document.activeElement && document.activeElement.classList.contains('activity-list')",
+                   "%s: Enter on Dismiss did not clear the result and return focus to the Activity list" % label)
+
     def _report(self, failures: List[str]) -> None:
         self.assertEqual(failures, [], "\n" + "\n".join(failures))
 
@@ -796,6 +814,24 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                 self._wait("__has('citizen sync (pid 1) holds the sync lock') && __has('nothing was changed')",
                            "the rollback result fixture did not render")
                 self._audit_into(failures, label + " rollback refused")
+                self._dismiss_rollback_by_keyboard(label + " rollback refused")
+                # A completed rollback refreshes the list behind its result, which stays until dismissed.
+                self.devtools.evaluate("globalThis.__a11yRollback = 'completed'")
+                reads = self.devtools.evaluate("globalThis.__a11yActivityReads || 0")
+                self._set_label("Confirm the applied draft to roll back", "tuning")
+                self._click("Roll back tuning")
+                self._wait("__has('Rolled back. The doctor checks ran.') && globalThis.__a11yActivityReads > %d"
+                           " && document.querySelector('.activity-list article') !== null" % reads,
+                           "the completed rollback result did not stay on screen through the refresh")
+                time.sleep(0.5)
+                self.assertEqual(self.devtools.evaluate(
+                    "[...document.querySelectorAll('[role=status], [aria-live]')]"
+                    ".filter(node => node.textContent.includes('Rolled back. The doctor checks ran.')).length"), 1, label)
+                self._audit_into(failures, label + " rollback completed")
+                if width == PHONE and scheme == "light":
+                    failures.extend(self._tab_walk("/activity rollback completed"))
+                self._dismiss_rollback_by_keyboard(label + " rollback completed")
+                self.devtools.evaluate("globalThis.__a11yRollback = ''")
                 self._assert_nothing_refused()
         self._report(failures)
 
