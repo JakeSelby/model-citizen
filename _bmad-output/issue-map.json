@@ -9346,6 +9346,19 @@
       "parent_github_number": 958,
       "lifecycle": "active",
       "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B184",
+      "github_number": 1278,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1278",
+      "title": "fix(confinement): refuse a framework brief that points back at the prompt file after a summary or edit",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B184.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
     }
   ]
 }

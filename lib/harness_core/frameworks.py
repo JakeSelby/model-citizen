@@ -19,21 +19,23 @@ way to hear that it was wrong.
 * **agents** — a spawn whose `subagent_type` is one of the framework's own layer names. Nothing but
   the framework puts that name there, so this alone is enough.
 * **identifiers** — a literal only the framework's routed text carries, such as the path of one of
-  its prompt files. Never enough alone: a brief that edits the override templates, or that asks a
-  worker to read one of those files, quotes the same path. An identifier needs a phrase beside
-  it, or a directive.
+  its prompt files. Enough alone unless every mention of it is work on the file: a brief that
+  edits it, or only summarises, counts, copies, explains or compares it, runs (`_adopted`).
+  A subagent has one other reason to be handed a layer prompt file, and recognising that reason
+  by its verbs leaked: most plain rewordings carried none of them (#739).
 * **directed identifiers** — an identifier in a sentence that tells the subagent to follow or
   apply it: "read the instructions at <path> and follow them exactly". A client that writes the
   brief itself keeps the prompt file, because the subagent has to read it, and drops every
-  sentence of the framework's own text (#739). The directive is what separates this from a brief
-  that edits the file or reads it for some other reason, so it is enough alone. It must govern
+  sentence of the framework's own text (#739). A directive refuses even beside a summary or an
+  edit of something else, which the default above would let run. It must govern
   the file: ahead of it and unbroken by a clause, or after it with a pronoun pointing back ("and
   follow them", "follow it" in a later sentence while the ones between still talk about the
   file). A negated directive, a directive aimed at
   something else, and a sentence that edits, updates or rewrites the file itself are not
   directives; "update your findings" edits something else and leaves the directive standing.
   The path has to end where the declared one does, so `<path>.bak` is another file, and a
-  trailing "follow the instructions in <other>" names its own file.
+  trailing "follow the instructions in <other>" names its own file. A qualified "the <words>
+  instructions" points back only when its words are the path's own or generic ones.
 * **phrases** — whole sentences of the framework's own prompt text, distinctive enough that
   quoting one is a coincidence and quoting `corroboration` of them is not. Single generic nouns
   are not phrases: "unified diff" and "list of findings" are what an ordinary fix-up brief says
@@ -284,7 +286,10 @@ DIRECTIVE_BACK = re.compile(
     r"\b(?:(?:follow(?:ing)?|apply(?:ing)?|obey(?:ing)?) (?:it|them|that file|this file"
     r"|(?:those|these|its|the) (?:[\w-]+ ){0,3}instructions)"
     r"|use (?:those|these|its|the) (?:[\w-]+ ){0,3}instructions"
-    r"|as (?:your |the )?(?:\w+ ){0,2}instructions)\b")
+    r"|use (?:it|them|that file|this file) (?:to|when|while|for|on|against)"
+    r"|as (?:your |the )?(?:\w+ ){0,2}instructions"
+    r"|do (?:exactly |just )?(?:what|whatever|as) (?:it|they|that file|this file)"
+    r" (?:says|say|asks|instructs|tells you))\b")
 # Work on the file rather than work under it, when the verb governs the file the way a directive
 # does: "update <path>", or "update it" after it. "Update your findings" edits something else.
 # Negated ("do not edit it") is still a directive.
@@ -331,11 +336,64 @@ GUIDANCE_NEGATION = re.compile(r"\b(?:no|not|never|without)\b")
 OWN_TARGET = re.compile(r"\s+(?:in|at|from|of|under|inside)\b")
 # The declared path ends where a longer file name would go on: `<path>.bak` is another file.
 PATH_END = r"(?![\w/-]|\.\w)"
+# And starts at a path boundary: `my<path>` is another file, `x/<path>` is the same one deeper.
+PATH_START = r"(?<![\w.-])"
+# A file anaphor bound to a file it names: "the file docs/other.md", "the instructions in x.md".
+NAMED_FILE = re.compile(r"\s+(?:(?:in|at|from|of|under|inside|named|called)\s+)?[`'\"]?"
+                        r"([\w.~/-]*[\w-](?:/[\w.-]+|\.[a-z]\w*))")
+# A bare read of the file, and a look at it that ends the brief: "read <path>. summarise it in
+# three bullets." The look may not go on into another clause or point back at the file again.
+READ_ONLY = re.compile(r"(?:(?:first|now|please),? )?(?:read|open) [\w.~/-]*")
+POINTER = re.compile(r"\b(?:it|its|them|they|their|that|those|these|accordingly)\b")
 
 
-def _points_back(after):
-    """Whether `after` holds an unnegated directive aimed back at the file before it."""
-    return any(not _names_its_own(found, after) for found in _unnegated(DIRECTIVE_BACK, after))
+DETERMINERS = ("those", "these", "its", "the", "your", "as")
+# Words a qualified "the <words> instructions" may carry and still mean the declared file, beside
+# the words of its own path: "those edge-case-hunter review instructions" does, "the house-style
+# instructions" and "the commit instructions" do not.
+GENERIC_QUALIFIERS = frozenset(("review", "layer", "layer's", "prompt", "prompt's", "file", "file's",
+                                "own", "exact", "full", "detailed", "same", "above"))
+
+
+def _path_words(value):
+    """The words of a declared path a qualifier may repeat: its segments and their parts."""
+    value = normalise(value)
+    return set(re.split(r"[/.]+", value)) | set(re.split(r"[/._-]+", value))
+
+
+def _bound(said, value):
+    """Whether a matched "<determiner> <words> instructions" is about the file `value`. A phrase
+    that is not a qualified "instructions" ("follow it", "that file") always is."""
+    words = said.split()
+    if not words or words[-1] != "instructions":
+        return True
+    allowed = _path_words(value) | GENERIC_QUALIFIERS
+    for word in reversed(words[:-1]):
+        if word in DETERMINERS:
+            break
+        if word not in allowed:
+            return False
+    return True
+
+
+def _points_back(after, value):
+    """Whether `after` holds an unnegated directive aimed back at the file `value` before it."""
+    return any(_bound(found.group(0), value) and not _names_its_own(found, after)
+               for found in _unnegated(DIRECTIVE_BACK, after))
+
+
+def _refers_back(sentence, value):
+    """Whether a sentence between the file and a later directive still talks about the file. An
+    anaphor that names its own file ("the file docs/other.md") talks about that one instead."""
+    return (any(_bound(found.group(0), value) and not _names_other(found, sentence, value)
+                for found in ANAPHOR.finditer(sentence))
+            or _pronoun_guidance(sentence))
+
+
+def _names_other(found, sentence, value):
+    """Whether the anaphor `found` is followed by a file name other than `value`."""
+    named = NAMED_FILE.match(sentence, found.end())
+    return bool(named) and not _path(value).search(named.group(1))
 
 
 def _pronoun_guidance(text):
@@ -355,9 +413,13 @@ def _names_its_own(found, after):
         OWN_TARGET.match(after, found.end()))
 
 
+def _path(value):
+    return re.compile(PATH_START + re.escape(normalise(value)) + PATH_END)
+
+
 def _directed(value, text):
     """Whether `text` tells the subagent to follow or apply the file named `value`."""
-    path = re.compile(re.escape(normalise(value)) + PATH_END)
+    path = _path(value)
     sentences = SENTENCE.split(text)
     for index, sentence in enumerate(sentences):
         if not path.search(sentence):
@@ -365,30 +427,84 @@ def _directed(value, text):
         parts = path.split(sentence)
         pairs = [(parts[at - 1], parts[at]) for at in range(1, len(parts))]
         if any(_governs(EDIT, before) or _unnegated(EDIT_BACK, after) for before, after in pairs):
+            # An edit covers its own clause, not a later one that takes the file on: "edit <path>,
+            # then follow it" adopts, "update <path> so reviewers follow it" does not.
+            if any(_points_back(_after_clause(after), value) for _, after in pairs):
+                return True
             continue
-        if any(_governs(DIRECTIVE, before) or _points_back(after) for before, after in pairs):
+        if any(_governs(DIRECTIVE, before) or _points_back(after, value) for before, after in pairs):
             return True
         for following in sentences[index + 1:index + 1 + FOLLOW_REACH]:
-            if _points_back(following) and not _unnegated(EDIT_BACK, following):
+            if _points_back(following, value) and not _unnegated(EDIT_BACK, following):
                 return True
-            if not (ANAPHOR.search(following) or _pronoun_guidance(following)):
+            if not _refers_back(following, value):
                 break
     return False
 
 
+def _after_clause(text):
+    """What follows the first clause break in `text`, or nothing when there is none."""
+    found = CLAUSE_BREAK.search(text)
+    return text[found.end():] if found else ""
+
+
+# Work that only looks at the file rather than working under it: summarise, count, copy, explain or
+# compare it, or ask about it. Like an edit, the verb must govern the file, ahead of it or pointing
+# back at it, so "summarise your findings" beside the file does not count.
+META_VERB = (r"(?:summari[sz](?:e|ing)|count(?:ing)?|cop(?:y|ying)|explain(?:ing)?"
+             r"|compar(?:e|ing)|tell me|check (?:whether|if))")
+META = re.compile(r"\b" + META_VERB + r"\b")
+META_BACK = re.compile(r"\b" + META_VERB + r" (?:\w+ ){0,2}(?:it|them|its|that file|this file)\b")
+
+
+def _works_on(before, after):
+    """Whether one mention of the file is work on it, an edit or a look, rather than under it."""
+    return bool(_governs(EDIT, before) or _unnegated(EDIT_BACK, after)
+                or _governs(META, before) or _unnegated(META_BACK, after))
+
+
+def _adopted(value, text):
+    """Whether any mention of the file `value` is something other than work on the file itself.
+
+    A declared prompt file has one use besides being edited or looked at: a subagent reads it to
+    take on the layer. So the file refuses by default, and only a brief whose every mention edits,
+    summarises, counts, copies, explains or compares it runs. A verb list for adoption leaked:
+    "use the instructions in <path>", "do what it says" and "review it accordingly" all ran (#739).
+    """
+    path = _path(value)
+    sentences = SENTENCE.split(text)
+    for index, sentence in enumerate(sentences):
+        parts = path.split(sentence)
+        for at in range(1, len(parts)):
+            if not _works_on(parts[at - 1], parts[at]) and not _read_then_looked_at(
+                    parts[at - 1], parts[at], sentences[index + 1:]):
+                return True
+    return False
+
+
+def _read_then_looked_at(before, after, rest):
+    """Whether a bare "read <path>." is followed by one last sentence that only looks at it."""
+    if not READ_ONLY.fullmatch(before) or after.strip(" .!") or len(rest) != 1:
+        return False
+    look = re.match(r"(?:then,? )?" + META_VERB + r" (?:it|them|that file|this file)\b", rest[0])
+    tail = rest[0][look.end():] if look else ""
+    return bool(look) and not CLAUSE_BREAK.search(tail) and not POINTER.search(tail)
+
+
 def _score(spawn, text, agent):
-    """`(agents, directed, identifiers, phrases)` this spawn entry matched."""
+    """`(agents, directed, identifiers, phrases, adopted)` this spawn entry matched."""
     agents = 1 if agent and agent in [a.casefold() for a in spawn.get("agents", [])] else 0
-    named = [value for value in spawn.get("identifiers", []) if normalise(value) in text]
+    named = [value for value in spawn.get("identifiers", []) if _path(value).search(text)]
     directed = sum(1 for value in named if _directed(value, text))
     phrases = sum(1 for value in spawn.get("phrases", []) if normalise(value) in text)
-    return agents, directed, len(named), phrases
+    adopted = sum(1 for value in named if _adopted(value, text))
+    return agents, directed, len(named), phrases, adopted
 
 
 def _recognised(score, corroboration):
     """Whether this much evidence refuses a spawn. The rule, in one place, for the one caller."""
-    agents, directed, identifiers, phrases = score
-    if agents or directed:
+    agents, directed, identifiers, phrases, adopted = score
+    if agents or directed or adopted:
         return True
     if identifiers and phrases:
         return True
