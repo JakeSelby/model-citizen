@@ -57,3 +57,28 @@
   outline: var(--studio-focus-width) solid var(--studio-primary);
   outline-offset: var(--studio-focus-offset);
 }
+
+/* A finished rollback stays above the list until dismissed: a hairline section, its edge in the
+   outcome's tone, never a boxed card. */
+.activity-rollback-result {
+  min-width: 0;
+  padding: var(--studio-space-3) var(--studio-space-4);
+  border-block: var(--studio-border-width) solid var(--studio-border-default);
+  border-left: calc(2 * var(--studio-border-width)) solid var(--studio-neutral-mark);
+  overflow-wrap: anywhere;
+}
+
+.activity-rollback-result[data-tone="success"] { border-left-color: var(--studio-success-mark); }
+.activity-rollback-result[data-tone="warning"] { border-left-color: var(--studio-warning-mark); }
+.activity-rollback-result[data-tone="danger"] { border-left-color: var(--studio-danger-mark); }
+
+.activity-rollback-result h2 {
+  margin: 0;
+  font-size: var(--studio-text-md);
+}
+
+.activity-list:focus { outline: none; }
+.activity-list:focus-visible {
+  outline: var(--studio-focus-width) solid var(--studio-primary);
+  outline-offset: var(--studio-focus-offset);
+}

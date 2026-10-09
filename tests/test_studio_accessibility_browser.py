@@ -109,11 +109,22 @@ STUBS = r"""
         apply_command: 'citizen draft apply ' + body.draft + ' --revision ' + globalThis.__a11yRevision + ' --json' });
       case '/api/configure/apply': return reply({ ...states.applyResult, message: 'Applied draft ' + body.draft + '.' });
       case '/api/configure/apply/rollback/preview': return reply(states.rollbackPreview);
-      // A completed rollback reloads the timeline at once, so its result view never stays on screen;
-      // the engine's busy refusal stays, and is the result view the audit can read.
-      case '/api/configure/apply/rollback': return reply(states.rollbackRefused);
+      // The engine's busy refusal by default; a completed rollback once a test asks for one.
+      case '/api/configure/apply/rollback': {
+        const answer = () => reply(globalThis.__a11yRollback === 'completed'
+          ? { ...states.rollbackResult, review: { ...states.rollbackPreview, nothing_changed: false } } : states.rollbackRefused);
+        // A test may hold the answer, to act on the page while the rollback is in flight.
+        return globalThis.__a11yHoldRollback
+          ? new Promise((resolve) => { globalThis.__a11yReleaseRollback = () => resolve(answer()); }) : answer();
+      }
     }
-    if (url === '/api/activity') return reply(states.activity);
+    if (url === '/api/activity') {
+      globalThis.__a11yActivityReads = (globalThis.__a11yActivityReads || 0) + 1;
+      (globalThis.__a11yActivityBodies = globalThis.__a11yActivityBodies || []).push(body);
+      return globalThis.__a11yHoldActivity
+        ? new Promise((resolve) => { globalThis.__a11yReleaseActivity = () => resolve(reply(states.activity)); })
+        : reply(states.activity);
+    }
     if (method !== 'GET' && !READS.has(url)) {
       globalThis.__a11yRefused.push(method + ' ' + url);
       return Promise.resolve(new Response('{"error":"fixture_only"}', { status: 409 }));
@@ -461,6 +472,31 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             failures.append("%s [keyboard] Tab never reached %s (walked: %s)" % (route, node, " > ".join(seen)))
         return failures
 
+    def _press_enter(self) -> None:
+        self.devtools.call("Input.dispatchKeyEvent", {
+            "type": "keyDown", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13, "text": "\r"})
+        self.devtools.call("Input.dispatchKeyEvent", {
+            "type": "keyUp", "key": "Enter", "code": "Enter", "windowsVirtualKeyCode": 13})
+
+    def _tab_to(self, text: str, label: str) -> None:
+        """From the skip link, press Tab until the button reading ``text`` has focus."""
+        self.devtools.evaluate("document.activeElement && document.activeElement.blur();"
+                               " document.querySelector('.skip-link').focus()")
+        focused = "document.activeElement && document.activeElement.innerText.trim() === %s" % json.dumps(text)
+        for _ in range(int(self.devtools.evaluate(MARK_EXPECTED)) + 5):
+            if self.devtools.evaluate(focused):
+                return
+            self._press_tab()
+        self.fail("%s: Tab never reached %s" % (label, text))
+
+    def _dismiss_rollback_by_keyboard(self, label: str) -> None:
+        """Tab to the result's dismiss control and press Enter; the result goes and focus lands on the list."""
+        self._tab_to("Dismiss rollback result", label)
+        self._press_enter()
+        self._wait("!document.querySelector('.activity-rollback-result')"
+                   " && document.activeElement && document.activeElement.classList.contains('activity-list')",
+                   "%s: Enter on Dismiss did not clear the result and return focus to the Activity list" % label)
+
     def _report(self, failures: List[str]) -> None:
         self.assertEqual(failures, [], "\n" + "\n".join(failures))
 
@@ -796,8 +832,65 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                 self._wait("__has('citizen sync (pid 1) holds the sync lock') && __has('nothing was changed')",
                            "the rollback result fixture did not render")
                 self._audit_into(failures, label + " rollback refused")
+                self._dismiss_rollback_by_keyboard(label + " rollback refused")
+                # A completed rollback refreshes the list behind its result, which stays until dismissed.
+                self.devtools.evaluate("globalThis.__a11yRollback = 'completed'")
+                reads = self.devtools.evaluate("globalThis.__a11yActivityReads || 0")
+                self._set_label("Confirm the applied draft to roll back", "tuning")
+                # By keyboard: the Roll back button holds focus when the rollback starts.
+                self._wait("__buttonReady('Roll back tuning')", "Roll back tuning never became ready")
+                self.devtools.evaluate("[...document.querySelectorAll('button')]"
+                                       ".find(node => node.innerText.trim() === 'Roll back tuning').focus()")
+                self._press_enter()
+                self._wait("__has('Rolled back. The doctor checks ran.') && globalThis.__a11yActivityReads > %d"
+                           " && document.querySelector('.activity-list article') !== null" % reads,
+                           "the completed rollback result did not stay on screen through the refresh")
+                time.sleep(0.5)
+                # The button that started it is gone; focus waits on the dismiss control.
+                self.assertEqual(self.devtools.evaluate("document.activeElement.innerText.trim()"),
+                                 "Dismiss rollback result", label)
+                # The panel's own live region does not repeat the result.
+                self.assertEqual(self.devtools.evaluate(
+                    "document.querySelector('.activity-rollback [role=status]').textContent"), "", label)
+                self.assertEqual(self.devtools.evaluate(
+                    "[...document.querySelectorAll('[role=status], [aria-live]')]"
+                    ".filter(node => node.textContent.includes('Rolled back. The doctor checks ran.')).length"), 1, label)
+                self._audit_into(failures, label + " rollback completed")
+                if width == PHONE and scheme == "light":
+                    failures.extend(self._tab_walk("/activity rollback completed"))
+                self._dismiss_rollback_by_keyboard(label + " rollback completed")
+                self.devtools.evaluate("globalThis.__a11yRollback = ''")
                 self._assert_nothing_refused()
         self._report(failures)
+
+    def test_a_rollback_refresh_loads_the_filters_applied_while_it_ran(self):
+        # Filters applied during a rollback win: its refresh must not put the old filters' page back.
+        self._open(DESKTOP, "light")
+        self._install_stubs()
+        self._visit("/activity", "light")
+        self._click("Preview rollback")
+        self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
+        self.devtools.evaluate("globalThis.__a11yRollback = 'completed'; globalThis.__a11yHoldRollback = true")
+        self._set_label("Confirm the applied draft to roll back", "tuning")
+        self._click("Roll back tuning")
+        self._wait("typeof globalThis.__a11yReleaseRollback === 'function'", "the rollback request was not sent")
+        # A filter load starts and is held while the rollback finishes.
+        self.devtools.evaluate(
+            "(input => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 's-new');"
+            " input.dispatchEvent(new Event('input', { bubbles: true })); })"
+            "(document.querySelector('input[aria-label=\"Filter by session\"]'))")
+        self.devtools.evaluate("globalThis.__a11yActivityBodies = []; globalThis.__a11yHoldActivity = true")
+        self._click("Apply filters")
+        self._wait("globalThis.__a11yActivityBodies.length === 1", "the filter load was not sent")
+        self.devtools.evaluate("globalThis.__a11yHoldActivity = false; globalThis.__a11yReleaseRollback()")
+        self._wait("globalThis.__a11yActivityBodies.length === 2", "the rollback did not refresh the list")
+        self.devtools.evaluate("globalThis.__a11yReleaseActivity()")
+        self._wait("document.querySelector('.activity-list article') !== null", "the refreshed list did not render")
+        bodies = json.loads(self.devtools.evaluate("JSON.stringify(globalThis.__a11yActivityBodies)"))
+        self.assertEqual([body["session"] for body in bodies], ["s-new", "s-new"])
+        time.sleep(0.3)
+        self.assertFalse(self.devtools.evaluate("__has('Loading local activity')"))
+        self._assert_nothing_refused()
 
     def test_clicks_pass_through_the_toast_region_but_not_a_toast(self):
         # The region spans the bottom of the page; only a toast in it takes the pointer.

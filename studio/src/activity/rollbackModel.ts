@@ -78,3 +78,33 @@ export function rollbackHeadline(result: RollbackResult): string {
     : "Rollback failed and was not fully undone. Run citizen draft recover.";
   return "Not rolled back. Nothing changed.";
 }
+
+/**
+ * A finished rollback as Activity keeps it on screen: outside the list a refresh replaces, until
+ * it is dismissed. `result` is the engine's answer; `error` is set instead when none arrived.
+ */
+export type RollbackNotice = { applyId: string; draft: string; result: RollbackResult | null; error: string };
+
+export function rollbackNotice(applyId: string, draft: string, result: RollbackResult | null, error = ""): RollbackNotice {
+  return { applyId, draft, result, error: result ? "" : error || "The rollback did not report a result. Check Activity before retrying." };
+}
+
+/** The one line the status region announces for a notice. */
+export function noticeHeadline(notice: RollbackNotice): string {
+  return notice.result ? rollbackHeadline(notice.result) : `Rollback did not complete. ${notice.error}`;
+}
+
+export function noticeTone(notice: RollbackNotice): "success" | "warning" | "danger" {
+  if (notice.result?.status !== "rolled-back") return "danger";
+  return notice.result.doctor.status === "attention" ? "warning" : "success";
+}
+
+/** What a completed rollback restored, read from the review the engine returns with it. */
+export function restoredChanges(notice: RollbackNotice): { keys: RollbackPreview["config"]; files: RollbackPreview["files"] } {
+  if (notice.result?.status !== "rolled-back") return { keys: [], files: [] };
+  const review = notice.result.review;
+  return {
+    keys: (review.config ?? []).filter((row) => row.action !== "none"),
+    files: (review.files ?? []).filter((row) => row.action !== "none"),
+  };
+}

@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 import { ActivityTimeline } from "../src/activity/ActivityPage.tsx";
 import { previewRollback, rollBack } from "../src/activity/api.ts";
 import type { ActivityEntry, ActivityPage } from "../src/activity/model.ts";
-import { RollbackControls, RollbackDetails, RollbackOutcome, RollbackPanel } from "../src/activity/Rollback.tsx";
+import { RollbackControls, RollbackDetails, RollbackPanel } from "../src/activity/Rollback.tsx";
 import {
   focusedEntry, isFocused, missingFocus, rollbackBlocker, rollbackHeadline, rollbackTarget, shownValue,
   type RollbackPreview, type RollbackResult,
@@ -128,28 +128,23 @@ test("the button stays blocked and says why until the draft is typed back", () =
   assert.match(ready, /Roll back tuning/);
 });
 
-test("an outcome names the result", () => {
-  assert.match(render(h(RollbackOutcome, { result: result({ status: "failed", restored: true, message: "sync refused" }) })),
-    /failed safely[\s\S]*sync refused/);
-});
-
 test("the timeline offers rollback on an apply and links a rollback to the apply it reversed", () => {
   const page: ActivityPage = {
     schema_version: 1, entries: [ROLLBACK, APPLY], next_cursor: "", next_command: "", sources: [],
     filters: { session: "", repository: "", hook: "", outcome: "" }, command: "citizen activity --json",
   };
-  const html = render(h(ActivityTimeline, { payload: page, focus: APPLY_ID }));
+  const html = render(h(ActivityTimeline, { payload: page, focus: APPLY_ID, onRollback: () => undefined }));
   assert.match(html, /Apply rolled back/);
   assert.match(html, /href="\/activity\?apply=0123456789abcdef0123456789abcdef"/);
   assert.match(html, /tabindex="-1"/);
   assert.doesNotMatch(html, /not in the activity/);
-  const elsewhere = render(h(ActivityTimeline, { payload: { ...page, entries: [ROLLBACK], next_cursor: "v1:9" }, focus: APPLY_ID }));
+  const elsewhere = render(h(ActivityTimeline, { payload: { ...page, entries: [ROLLBACK], next_cursor: "v1:9" }, focus: APPLY_ID, onRollback: () => undefined }));
   assert.match(elsewhere, /role="status"[^>]*>The linked change 0123456789ab is not in the activity loaded so far/);
   assert.match(html, /Open the change this rolled back/);
   assert.equal((html.match(/Preview rollback/g) ?? []).length, 2);
   assert.equal((html.match(/aria-current="true"/g) ?? []).length, 1);
   assert.match(html, /activity-row-focused/);
-  const panel = render(h(RollbackPanel, { applyId: APPLY_ID }));
+  const panel = render(h(RollbackPanel, { applyId: APPLY_ID, onResult: () => undefined }));
   assert.match(panel, /citizen draft rollback 0123456789abcdef0123456789abcdef --preview --json/);
   assert.doesNotMatch(panel, /Roll back tuning/);
 });
