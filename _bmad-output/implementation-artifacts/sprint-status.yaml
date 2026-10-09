@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-10-08"
+generated: "2026-10-09"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -521,7 +521,7 @@ development_status:
   ah-b137-studio-run-catalog-discovery-blocks-run-history: backlog
   ah-b138-concurrent-first-studio-lock-opens-fail-with: backlog
   ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
-  ah-b140-studio-live-update-cpu-budget-test-fails-under: backlog
+  ah-b140-studio-live-update-cpu-budget-test-fails-under: ready-for-dev
   ah-b141-studio-draft-discard-intermittently-exits-1-with: backlog
   ah-b142-grade-bash-timing-tests-fail-on-wall-clock-under: ready-for-dev
   ah-b143-test-usage-json-s-multiday-test-fails-when-a-run: ready-for-dev

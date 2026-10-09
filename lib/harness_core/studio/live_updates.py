@@ -54,14 +54,15 @@ def _within(path: Path, root: Path) -> bool:
     return target == approved or approved in target.parents
 
 
-def _fingerprint(path: Path, allowed_root: Optional[Path] = None,
+def _fingerprint(path: str, allowed_root: Optional[Path] = None,
                  info: Optional[os.stat_result] = None) -> Fingerprint:
     if info is None:
         try:
-            info = path.lstat()
+            info = os.lstat(path)
         except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
             return None
     if stat.S_ISLNK(info.st_mode):
+        path = Path(path)
         if allowed_root is None or not _within(path, allowed_root):
             return None
         try:
@@ -86,17 +87,38 @@ def _fingerprint(path: Path, allowed_root: Optional[Path] = None,
     return (stat.S_IFMT(info.st_mode), info.st_ino, info.st_size, info.st_mtime_ns)
 
 
-def _add(snapshot: Snapshot, path: Path, topics: Iterable[str], overflow: OverflowAggregate,
-         allowed_root: Optional[Path] = None, info: Optional[os.stat_result] = None) -> None:
-    expanded = path.expanduser()
-    resolved = str(expanded if expanded.is_absolute() else Path(os.path.abspath(str(expanded))))
+def _add(snapshot: Snapshot, path: Path | str, topics: Tuple[str, ...],
+         overflow: OverflowAggregate, allowed_root: Optional[Path] = None,
+         info: Optional[os.stat_result] = None) -> None:
+    # Directory entries arrive as absolute strings and skip the pathlib round trip: on a
+    # four-thousand-module tree that round trip was most of each poll's CPU time.
+    if isinstance(path, str) and os.path.isabs(path):
+        resolved = path
+    else:
+        expanded = Path(path).expanduser()
+        resolved = str(expanded if expanded.is_absolute()
+                       else Path(os.path.abspath(str(expanded))))
+    if not isinstance(topics, tuple):
+        topics = tuple(topics)
     previous = snapshot.get(resolved)
     if previous is None and len(snapshot) >= MAX_WATCHED_PATHS:
-        overflow.add(resolved, _fingerprint(Path(resolved), allowed_root, info), topics)
+        overflow.add(resolved, _fingerprint(resolved, allowed_root, info), topics)
         return
-    merged = set(previous[1] if previous else ())
-    merged.update(topics)
-    snapshot[resolved] = (_fingerprint(Path(resolved), allowed_root, info), tuple(sorted(merged)))
+    if previous is None or previous[1] == topics:
+        merged = _sorted_topics(topics)
+    else:
+        merged = tuple(sorted(set(previous[1]).union(topics)))
+    snapshot[resolved] = (_fingerprint(resolved, allowed_root, info), merged)
+
+
+_TOPIC_CACHE: Dict[Tuple[str, ...], Tuple[str, ...]] = {}
+
+
+def _sorted_topics(topics: Tuple[str, ...]) -> Tuple[str, ...]:
+    cached = _TOPIC_CACHE.get(topics)
+    if cached is None:
+        cached = _TOPIC_CACHE.setdefault(topics, tuple(sorted(set(topics))))
+    return cached
 
 
 class WatchScanner:
@@ -110,22 +132,22 @@ class WatchScanner:
         self._overflow = OverflowAggregate()
         self._scan_lock = threading.Lock()
 
-    def _record(self, snapshot: Snapshot, path: Path, topics: Iterable[str],
+    def _record(self, snapshot: Snapshot, path: Path | str, topics: Tuple[str, ...],
                 allowed_root: Optional[Path] = None,
                 info: Optional[os.stat_result] = None) -> None:
         _add(snapshot, path, topics, self._overflow, allowed_root, info)
 
     @staticmethod
-    def _matches(base: Path, pattern: str, root: Path) -> List[Tuple[Path, os.stat_result]]:
+    def _matches(base: Path, pattern: str, root: Path) -> List[Tuple[str, os.stat_result]]:
         first, separator, second = pattern.partition("/")
-        matches: List[Tuple[Path, os.stat_result]] = []
+        matches: List[Tuple[str, os.stat_result]] = []
         with os.scandir(str(base)) as entries:
             parents = sorted((entry for entry in entries
                               if fnmatch.fnmatchcase(entry.name, first)), key=lambda item: item.name)
         if not separator:
             for entry in parents:
                 try:
-                    matches.append((Path(entry.path), entry.stat(follow_symlinks=False)))
+                    matches.append((entry.path, entry.stat(follow_symlinks=False)))
                 except OSError:
                     continue
             return matches
@@ -139,7 +161,7 @@ class WatchScanner:
                                        if fnmatch.fnmatchcase(entry.name, second)),
                                       key=lambda item: item.name)
                 for entry in selected:
-                    matches.append((Path(entry.path), entry.stat(follow_symlinks=False)))
+                    matches.append((entry.path, entry.stat(follow_symlinks=False)))
             except OSError:
                 continue
         return matches
@@ -194,14 +216,15 @@ class WatchScanner:
                 # directory otherwise costs a thousand redundant lstat calls every poll. A
                 # single-level pattern's parent is always `base`, recorded just above.
                 nested = "/" in pattern
-                parents = {base}
+                parents = {str(base)}
+                path_topics = ("library", "overview", "selection") if kind == "modes" else (
+                    "library", "overview")
                 for path, info in matches:
-                    path_topics = ("library", "overview", "selection") if kind == "modes" else (
-                        "library", "overview")
                     self._record(snapshot, path, path_topics, root, info)
-                    if nested and path.parent not in parents:
-                        parents.add(path.parent)
-                        self._record(snapshot, path.parent,
+                    parent = os.path.dirname(path)
+                    if nested and parent not in parents:
+                        parents.add(parent)
+                        self._record(snapshot, parent,
                                      ("library-index", "overview", "selection"), root)
         hook_root = self.repo_root / catalog.HOOKS_DIRECTORY
         self._record(snapshot, hook_root, ("library-index", "overview"), self.repo_root)
