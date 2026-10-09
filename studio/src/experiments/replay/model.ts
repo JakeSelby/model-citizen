@@ -197,8 +197,10 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
 const refusals: Record<string, string> = {
   replay_target_config_invalid:
     "The engine refused the draft's configuration: it is not a JSON object of finite values.",
-  replay_target_config_outside_checkout:
-    "The engine refused the draft's configuration: a primitive root lies outside the checkout, so the arm, which holds only the commit, has no copy of it.",
+  replay_target_config_root_unreadable:
+    "The engine refused the draft's configuration: a primitive root outside the checkout is not a readable directory of regular files, so the arm has nothing to copy.",
+  replay_target_config_root_unsupported:
+    "The engine refused the draft's configuration: a primitive root adds a role or workflow, which the arm accepts only from the commit's own primitives.",
   replay_target_config_host_path:
     "The engine refused the draft's configuration: it names a path on this machine, which no arm may see.",
   replay_target_config_unresolved:
@@ -223,7 +225,7 @@ export function replayErrorMessage(code: string): string {
 }
 
 export const MEASURES_NOTE =
-  "A replay measures source, and a draft's configuration when the draft changed it: the engine applies that configuration to the draft's harness arm, and every other harness arm runs its commit's defaults.";
+  "A replay measures source and configuration: a draft's harness arm runs the draft's configuration and the other target's runs the configuration the draft was created with, so the pair differs by the draft's edit alone. Without a draft, each harness arm runs its commit's defaults.";
 
 /** The result table's caption: which target's configuration the engine measured, by the digest it
  * stamped on its rows, or that none was applied. */

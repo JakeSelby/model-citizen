@@ -202,7 +202,7 @@ test("the not-ready list is announced politely through a stable count, never as 
 test("the panel and a result with no configuration applied say so", () => {
   const html = render({ rows: [{ target: resolvedRelease, task: "one", arm: "harness", runs: 1,
     passed: 1, pass_rate: 1, cost_per_passed: 0.5 }] });
-  assert.match(html, /A replay measures source, and a draft&#x27;s configuration when the draft changed it/);
+  assert.match(html, /so the pair differs by the draft&#x27;s edit alone/);
   assert.match(html, /Source only: target configuration was not applied\./);
   assert.match(replayErrorMessage("replay_target_busy"), /Preview again/);
 });

@@ -1,7 +1,9 @@
-"""Testing a draft whose configuration was edited (#1270): the replay starts instead of refusing and
-hands the draft's configuration to the engine, whose refusal is relayed unchanged; the run shows the
-configuration digest the engine measured; and a configuration edit after registering or testing
-marks the draft stale. The engine's check and launch are fakes; nothing is built or spent."""
+"""Testing a draft whose configuration was edited (#1270): the replay starts instead of refusing; the
+draft's arm runs its configuration and the base's the one the draft was created with, so the pair
+differs by the edit alone; the engine's refusal is relayed unchanged; the run shows both digests the
+engine measured; and a configuration edit after registering or testing marks the draft stale. The
+launch is a fake and the engine check a fake except where a test says otherwise; nothing is built
+or spent."""
 import importlib.machinery
 import importlib.util
 import json
@@ -102,45 +104,50 @@ class DraftConfigurationTests(unittest.TestCase):
                                         check_command=OK_CHECK)
 
     def resolve(self, draft, check):
+        """`ReplayAdmission.resolve`'s target resolution and engine check, without its task catalog."""
         with mock.patch.object(replay, "engine_config_check", check):
-            return replay.resolve_request({
+            request = replay.resolve_request({
                 "targets": [{"kind": "branch", "ref": "main"}, {"kind": "draft", "ref": draft}],
                 "model": "claude-test", "repetitions": 1, "tasks": ["one"],
                 "max_budget_usd": "2", "spend_cap_usd": "20", "pre_registration": None,
             }, self.admission._resolve)
+            self.admission._check_configs(request)
+        return request
 
-    # AC1: the refusal is lifted and the engine is handed the configuration.
-    def test_an_edited_configuration_resolves_and_the_engine_is_asked_about_it(self):
+    def checked(self, check):
+        return {call.args[1]: call.args[2] for call in check.call_args_list}
+
+    # AC1, and the pairing: the draft runs its configuration, the base the one it was created with.
+    def test_an_edited_draft_runs_its_configuration_and_the_base_the_inherited_one(self):
         self.create("edited")
         check = mock.Mock(return_value=answer())
         resolved = self.resolve("edited", check)
-        target = resolved.targets[1]
+        base, target = resolved.targets
         self.assertEqual(target.config_digest, targets._config_digest(EDITED))
-        (repository, revision, config, base, _work), _ = check.call_args
-        self.assertEqual((repository, revision, config, base), (self.repo.resolve(), target.revision,
-                                                                EDITED, INHERITED))
+        self.assertEqual(self.checked(check), {base.revision: INHERITED, target.revision: EDITED})
+        self.assertEqual(replay.target_configs(self.repo, resolved), [INHERITED, EDITED])
 
-    def test_an_inherited_configuration_is_the_engines_to_leave_unapplied(self):
+    def test_an_unedited_draft_measures_two_identical_configurations(self):
         self.create("inherits", config=None)
-        check = mock.Mock(return_value=dict(answer(), applied=False, config_sha256=None))
-        self.assertEqual(self.resolve("inherits", check).targets[1].config_digest,
-                         targets._config_digest(INHERITED))
-        (_repository, _revision, config, base, _work), _ = check.call_args
-        self.assertEqual(config, base)
+        resolved = self.resolve("inherits", mock.Mock(return_value=answer()))
+        self.assertEqual(replay.target_configs(self.repo, resolved), [INHERITED, INHERITED])
 
     def test_an_empty_configuration_never_asks_the_engine(self):
         self.create("empty", config={})
         check = mock.Mock(side_effect=AssertionError("asked"))
-        self.assertEqual(self.resolve("empty", check).targets[1].config_digest, replay.DEFAULT_CONFIG_DIGEST)
+        resolved = self.resolve("empty", check)
+        self.assertEqual(resolved.targets[1].config_digest, replay.DEFAULT_CONFIG_DIGEST)
+        self.assertEqual(replay.target_configs(self.repo, resolved), [None, None])
 
-    # AC2: the engine's refusal, relayed unchanged.
+    # AC2: the engine's refusal, relayed unchanged, whatever its code.
     def test_the_engines_refusal_is_relayed_with_its_code_and_reason(self):
         self.create("refused")
-        reason = "the commit's resolver refuses it: unknown mode 'x'"
-        with self.assertRaises(replay.ReplayRefusal) as caught:
-            self.resolve("refused", mock.Mock(return_value=answer("config_unresolved", reason)))
-        self.assertEqual(caught.exception.code, "replay_target_config_unresolved")
-        self.assertEqual(str(caught.exception), reason)
+        for code in ("config_unresolved", "config_some_future_code"):
+            reason = "the engine's own words for %s" % code
+            with self.subTest(code=code), self.assertRaises(replay.ReplayRefusal) as caught:
+                self.resolve("refused", mock.Mock(return_value=answer(code, reason)))
+            self.assertEqual(caught.exception.code, "replay_target_" + code)
+            self.assertEqual(str(caught.exception), reason)
 
     def test_an_evaluation_tier_whose_engine_cannot_apply_it_still_refuses(self):
         self.create("tier")
@@ -153,25 +160,42 @@ class DraftConfigurationTests(unittest.TestCase):
 
         def run(command, **kwargs):
             seen["command"] = command
-            config = json.loads(Path(command[command.index("--harness-config") + 1]).read_text())
-            seen["config"] = config
-            return SimpleNamespace(returncode=2, stdout=json.dumps(answer("config_host_path", "names /x")) + "\n",
+            seen["config"] = json.loads(Path(command[command.index("--harness-config") + 1]).read_text())
+            return SimpleNamespace(returncode=2, stdout=json.dumps(answer("config_new_reason", "why")) + "\n",
                                    stderr="")
 
         with mock.patch.object(replay.subprocess, "run", run):
-            got = replay.engine_config_check(self.repo, "c" * 40, EDITED, INHERITED, self.root)
-        self.assertEqual(got["code"], "config_host_path")
+            got = replay.engine_config_check(self.repo, "c" * 40, EDITED, self.root)
+        self.assertEqual((got["code"], got["reason"]), ("config_new_reason", "why"))
         self.assertEqual(seen["command"][1:4], [str(self.repo / "scripts" / "cost_bench.py"), "check-config", "--tag"])
+        self.assertNotIn("--inherited-config", seen["command"])
         self.assertEqual(seen["config"], EDITED)
         for done in (SimpleNamespace(returncode=1, stdout="", stderr="boom\n"),
                      SimpleNamespace(returncode=2, stdout=json.dumps(answer()) + "\n", stderr=""),
-                     SimpleNamespace(returncode=2, stdout=json.dumps(answer("made_up", "x")), stderr="")):
+                     SimpleNamespace(returncode=2, stdout=json.dumps(answer("Not A Code", "x")), stderr="")):
             with self.subTest(done=done), mock.patch.object(replay.subprocess, "run", return_value=done), \
                     self.assertRaises(replay.ReplayError):
-                replay.engine_config_check(self.repo, "c" * 40, EDITED, INHERITED, self.root)
+                replay.engine_config_check(self.repo, "c" * 40, EDITED, self.root)
 
-    # AC1: the run hands the engine the configuration and shows the digest it measured.
-    def launch_with(self, resolved, stamp):
+    def test_the_real_engine_admits_a_realistic_configuration_with_an_applied_personal_root(self):
+        """Un-mocked: the example configuration every install starts from, plus the personal root an
+        apply writes beside the user's configuration, through this checkout's `check-config`."""
+        personal = self.root / "home" / ".config" / "agent-harness" / "personal-primitives"
+        (personal / "stances" / "voice").mkdir(parents=True)
+        (personal / "stances" / "voice" / "mine.md").write_text("# Voice: mine\n\nShort answers.\n")
+        config = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        config.update(primitive_roots=[str(personal)], stances=dict(config["stances"], voice="mine"))
+        head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=True, capture_output=True,
+                              text=True).stdout.strip()
+        got = replay.engine_config_check(ROOT, head, config, self.root)
+        self.assertEqual((got["code"], got["applied"]), (None, True))
+        self.assertEqual(got["config_sha256"], targets._config_digest(config))
+        broken = dict(config, rules={"secrets": "maybe"})
+        refused = replay.engine_config_check(ROOT, head, broken, self.root)
+        self.assertEqual(refused["code"], "config_unresolved")
+
+    # AC1: the run hands the engine each configuration and shows both digests it measured.
+    def launch_with(self, stamps):
         calls = []
 
         def launch(command, **kwargs):
@@ -179,10 +203,10 @@ class DraftConfigurationTests(unittest.TestCase):
             ref = command[command.index("--tag") + 1]
             out = Path(command[command.index("--out") + 1]) / ref
             out.mkdir(parents=True)
+            stamp = stamps[len(calls) - 1]
             rows = [dict({"schema_version": 1, "tag": ref, "task": "one", "arm": arm, "rep": 1, "passed": True,
                           "error": False, "cost_usd": 0.25, "harness_sha": ref, "model": "claude-test"},
-                         **({"arm_configuration_sha256": stamp} if arm == "harness" and "--harness-config"
-                            in command else {}))
+                         **({"arm_configuration_sha256": stamp} if arm == "harness" and stamp else {}))
                     for arm in replay.ARM_NAMES]
             (out / replay.RESULTS_NAME).write_text("".join(json.dumps(item) + "\n" for item in rows))
             spend = out / replay.SPEND_NAME
@@ -196,42 +220,68 @@ class DraftConfigurationTests(unittest.TestCase):
 
         return calls, launch
 
-    def test_the_run_passes_the_configuration_and_shows_the_digest_the_engine_measured(self):
-        self.create("measured")
-        resolved = self.resolve("measured", mock.Mock(return_value=answer()))
-        digest = resolved.targets[1].config_digest
-        calls, launch = self.launch_with(resolved, digest)
+    @staticmethod
+    def given(command):
+        return json.loads(Path(command[command.index("--harness-config") + 1]).read_text())
+
+    def test_a_one_stance_edit_runs_configurations_that_differ_only_in_that_stance(self):
+        inherited = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        self.config.write_text(json.dumps(inherited) + "\n", encoding="utf-8")
+        edited = dict(inherited, stances=dict(inherited["stances"], voice="concise"))
+        self.create("one-stance", config=edited)
+        resolved = self.resolve("one-stance", mock.Mock(return_value=answer()))
+        digests = [targets._config_digest(inherited), targets._config_digest(edited)]
+        calls, launch = self.launch_with(digests)
         with tempfile.TemporaryDirectory() as temporary:
             summary = replay.execute(resolved, self.repo, Path(temporary) / "out", launch)
-            draft = calls[1]
-            written = json.loads(Path(draft[draft.index("--harness-config") + 1]).read_text())
-            inherited = json.loads(Path(draft[draft.index("--inherited-config") + 1]).read_text())
+            base, draft = (self.given(command) for command in calls)
             stored = replay.read_summary(Path(temporary) / "out" / replay.SUMMARY_NAME)
-        self.assertNotIn("--harness-config", calls[0])
-        self.assertEqual((written, inherited), (EDITED, INHERITED))
-        self.assertEqual(summary["measured_config_digests"], [None, digest])
+        self.assertEqual((base, draft), (inherited, edited))
+        self.assertEqual({key for key in base if base[key] != draft[key]}, {"stances"})
+        self.assertEqual({key for key in base["stances"] if base["stances"][key] != draft["stances"][key]},
+                         {"voice"})
+        self.assertEqual(summary["measured_config_digests"], digests)
+        self.assertEqual(stored["measured_config_digests"], digests)
         self.assertEqual(summary["measures"], replay.MEASURES_CONFIGURED)
-        self.assertEqual(stored["measured_config_digests"], [None, digest])
-        self.assertIn("--harness-config target-2/harness-config.json", replay.native_commands(resolved))
+        self.assertNotIn("--inherited-config", calls[1])
+        commands = replay.native_commands(resolved, [True, True])
+        self.assertIn("--harness-config target-1/harness-config.json", commands)
+        self.assertIn("--harness-config target-2/harness-config.json", commands)
 
     def test_a_result_measuring_another_configuration_is_refused(self):
         self.create("mismatch")
         resolved = self.resolve("mismatch", mock.Mock(return_value=answer()))
-        _calls, launch = self.launch_with(resolved, "e" * 64)
+        _calls, launch = self.launch_with([targets._config_digest(INHERITED), "e" * 64])
         with tempfile.TemporaryDirectory() as temporary, self.assertRaises(replay.ReplayError) as caught:
             replay.execute(resolved, self.repo, Path(temporary) / "out", launch)
         self.assertIn("configuration other than its target's", str(caught.exception))
 
-    def test_a_configuration_edited_after_confirmation_launches_nothing_for_it(self):
+    def test_a_configuration_edited_after_confirmation_launches_nothing_more(self):
         created = self.create("moved")
         resolved = self.resolve("moved", mock.Mock(return_value=answer()))
         drafts.checkpoint_config(self.repo, "moved", created["revision"], "save-2", INHERITED,
                                  check_command=OK_CHECK)
-        calls, launch = self.launch_with(resolved, resolved.targets[1].config_digest)
+        calls, launch = self.launch_with([None, None])
         with tempfile.TemporaryDirectory() as temporary, self.assertRaises(replay.ReplayError) as caught:
             replay.execute(resolved, self.repo, Path(temporary) / "out", launch)
         self.assertIn("changed after the replay was confirmed", str(caught.exception))
-        self.assertEqual(len(calls), 1)  # the base ran; the draft did not
+        self.assertEqual(calls, [])
+
+    def test_a_summary_whose_measures_contradict_its_digests_is_refused(self):
+        self.create("summary")
+        resolved = self.resolve("summary", mock.Mock(return_value=answer()))
+        digests = [targets._config_digest(INHERITED), targets._config_digest(EDITED)]
+        _calls, launch = self.launch_with(digests)
+        with tempfile.TemporaryDirectory() as temporary:
+            replay.execute(resolved, self.repo, Path(temporary) / "out", launch)
+            path = Path(temporary) / "out" / replay.SUMMARY_NAME
+            value = json.loads(path.read_text())
+            for measures, measured in (("source", digests), ("source and configuration", [None, None])):
+                with self.subTest(measures=measures):
+                    path.chmod(0o600)
+                    path.write_text(json.dumps(dict(value, measures=measures, measured_config_digests=measured)))
+                    with self.assertRaisesRegex(replay.ReplayError, "invalid schema"):
+                        replay.read_summary(path)
 
     # AC3: staleness keeps reading the configuration digest.
     def test_a_configuration_edit_after_testing_or_registering_marks_the_draft_stale(self):

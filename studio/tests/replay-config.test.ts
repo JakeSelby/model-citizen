@@ -8,12 +8,24 @@ import { draftTestErrorMessage } from "../src/configure/draftTestModel.ts";
 import { ReplayPanel } from "../src/experiments/replay/ReplayPanel.tsx";
 import { measuredConfigCaption, replayErrorMessage } from "../src/experiments/replay/model.ts";
 
-const ENGINE_CODES = ["config_invalid", "config_outside_checkout", "config_host_path", "config_unresolved"];
+const ENGINE_CODES = ["config_invalid", "config_root_unreadable", "config_root_unsupported", "config_host_path",
+  "config_unresolved"];
 const target = { kind: "draft" as const, ref: "cost-pass", revision: "b".repeat(40), version: null, draft: "cost-pass" };
 
 function render(props: Record<string, unknown>): string {
   return renderToStaticMarkup(h(MantineProvider, {}, h(ReplayPanel, { tasks: ["one"], ...props })));
 }
+
+test("an engine refusal the Studio has no sentence for still shows the engine's code", () => {
+  assert.equal(replayErrorMessage("replay_target_config_some_future_code"), "replay_target_config_some_future_code");
+  assert.match(draftTestErrorMessage("replay_target_config_some_future_code"), /replay_target_config_some_future_code/);
+});
+
+test("the result shows both configuration digests the engine measured", () => {
+  const [base, draft] = ["a".repeat(64), "d".repeat(64)];
+  assert.equal(measuredConfigCaption([base, draft]),
+    `Configuration measured by the engine: target 1 configuration ${base}; target 2 configuration ${draft}.`);
+});
 
 test("the result shows the configuration digest the engine measured, per target", () => {
   const digest = "d".repeat(64);

@@ -247,7 +247,8 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_registration_subset: "Only the whole task set can be registered; choose every task.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
     replay_target_config_invalid: "The engine refused this draft's configuration: it is not a JSON object of finite values.",
-    replay_target_config_outside_checkout: "The engine refused this draft's configuration: a primitive root lies outside the checkout.",
+    replay_target_config_root_unreadable: "The engine refused this draft's configuration: a primitive root outside the checkout is not a readable directory of regular files.",
+    replay_target_config_root_unsupported: "The engine refused this draft's configuration: a primitive root adds a role or workflow, which the arm accepts only from the commit.",
     replay_target_config_host_path: "The engine refused this draft's configuration: it names a path on this machine.",
     replay_target_config_unresolved: "The engine refused this draft's configuration: the commit's resolver does not accept its switches, manifests or modes.",
   };
