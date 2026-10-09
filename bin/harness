@@ -3027,14 +3027,41 @@ def est_tokens(chars: int) -> int:
     return int(round(chars / CHARS_PER_TOKEN))
 
 
+def rules_projected_off(config: Optional[Dict[str, Any]]) -> Set[str]:
+    """The rules `config`'s effective selection switches off, which a sync never projects.
+
+    Resolved as `render_runtime_contexts` resolves them, so a mode's switches count too; read
+    from `config["rules"]` alone when this checkout has no resolver. No configuration, none off.
+    """
+    if not isinstance(config, dict):
+        return set()
+    posture_module = load_posture()
+    if posture_module is not None:
+        try:
+            return switched_off(posture_module.selection({}, strict=False, config=config,
+                                                         root=REPO))["rules"]
+        except (OSError, ValueError):
+            pass
+    return switched_off({"rules": config.get("rules") if isinstance(config.get("rules"), dict)
+                         else {}})["rules"]
+
+
 def always_loaded_groups(root: Path,
                          config: Optional[Dict[str, Any]] = None) -> List[Tuple[str, int, int]]:
     """Everything loaded on every turn, as [(group, lines, chars)].
 
-    The stance total is the worst case — the longest variant of each dimension — so the caps hold
-    for every selection a user could make, not only the default one.
+    The rules are those a sync would project for `config`: a rule its selection switches off is
+    left out, so a core rule replaced by a fork is not counted twice (#1272). Without `config`
+    every rule counts. The stance total is the worst case — the longest variant of each
+    dimension — so the caps hold for every stance a user could choose, not only the default one.
     """
     groups: List[Tuple[str, int, int]] = []
+    off = rules_projected_off(config)
+
+    def rules_label(prefix: str, counted: int, withheld: int, plural: str = "") -> str:
+        plural = plural or ("file" if counted == 1 else "files")
+        tail = f", {withheld} switched off" if withheld else ""
+        return f"{prefix} ({counted} {plural}{tail})"
 
     def size(path: Path) -> Tuple[int, int]:
         body = path.read_text(encoding="utf-8")
@@ -3044,11 +3071,11 @@ def always_loaded_groups(root: Path,
     if claude_md.is_file():
         lines, chars = size(claude_md)
         groups.append(("claude/CLAUDE.md", lines, chars))
-    rules = sorted((root / "claude" / "rules").glob("*.md"))
+    present = sorted((root / "claude" / "rules").glob("*.md"))
+    rules = [p for p in present if p.stem not in off]
     if rules:
-        plural = "file" if len(rules) == 1 else "files"
         sizes = [size(p) for p in rules]
-        groups.append((f"claude/rules/ ({len(rules)} {plural})",
+        groups.append((rules_label("claude/rules/", len(rules), len(present) - len(rules)),
                        sum(s[0] for s in sizes), sum(s[1] for s in sizes)))
     stances = root / "claude" / "stances"
     if stances.is_dir():
@@ -3069,10 +3096,13 @@ def always_loaded_groups(root: Path,
             if source in seen or not source.is_dir():
                 continue
             seen.add(source)
-            rules = sorted((source / "rules").glob("*.md")) if (source / "rules").is_dir() else []
+            present = (sorted(path for path in (source / "rules").glob("*.md") if path.is_file())
+                       if (source / "rules").is_dir() else [])
+            rules = [path for path in present if path.stem not in off]
             if rules:
-                sizes = [size(path) for path in rules if path.is_file()]
-                groups.append((f"primitive root {index + 1}/rules/ ({len(sizes)} files)",
+                sizes = [size(path) for path in rules]
+                groups.append((rules_label(f"primitive root {index + 1}/rules/", len(sizes),
+                                           len(present) - len(rules), "files"),
                                sum(item[0] for item in sizes), sum(item[1] for item in sizes)))
             stance_root = source / "stances"
             if stance_root.is_dir():
@@ -3091,7 +3121,8 @@ def effective_always_loaded_lines(root: Path, selection: Dict[str, Any]) -> int:
     """Lines always loaded under one selection: the set `always_loaded_groups` counts, with the
     rules the selection switches off left out and each stance at its selected variant.
 
-    Information only. The caps stay on the worst case, so no selection moves the lint's figure.
+    Information only. The caps count the worst case of every stance, so a selected variant never
+    moves the lint's figure; a switched-off rule does, through `always_loaded_groups`.
     """
     total = 0
     claude_md = root / "claude" / "CLAUDE.md"
