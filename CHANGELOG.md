@@ -6,6 +6,340 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-10-09
+
+### Added
+
+- `cost_bench.py summarise` now prints, under SM-2's report, whether the delegation stance fired on
+  each task: fired, declined below the break-even, missed above it, spawn tool not offered, or
+  unknown. Replay rows record `spawn_offered`, `gather_calls`, `absorbed_calls` and
+  `workflow_launches`, and a run whose output shows no assistant message now reads `spawns` as
+  unknown rather than 0. The break-even is FR-34's 7.6 absorbed calls, hypothetical and overridable
+  with `--break-even`; history rows carry the same block under `delegation`. (#429)
+
+- Every replay row now records counts and canonical content hashes for the loaded surface the CLI's
+  `init` event reports, plus the first call's whole input as `first_call_context`; `backfill` derives
+  them without erasing existing evidence when raw output is missing. A set stops when a run's
+  surface differs from its arm's first run unless `--allow-surface-drift`. Before launch, replay
+  recomputes known-schema arm records, reports all admission defects, and refuses pair differences
+  outside exact harness-generated files and links. The new `--effort` option pins reasoning effort
+  on every launch; baked overrides, pre-flight mismatches and scored-run mismatches are refused. (#482)
+
+- The cost benchmark's new `detect` command runs every rule detector over the replay's saved `-p`
+  streams without calling a model, and writes one row per run per detector with the count and the
+  turn of each firing. A replay run with `--raw` now does this after each tag's set, and its
+  history row says which rules fired in the harness arm per task and how often across trials.
+  `detect --backfill` writes the same rows beside every results file already on disk and never
+  rewrites the results. A run is read only from its own stream: a timed-out run, or a stream
+  directory two sets share, gets error rows, and an existing detections file is replaced only with
+  `--overwrite`. Backfilling the evidence sets already on disk is left to the owner and has not
+  been run. Mechanism summaries retain total and measured-run denominators and report
+  detector errors rather than silently dropping unknown runs. (#510)
+
+- The test suite now runs every hook against a synthetic corpus of recorded tool calls under every
+  stance variant and checks each decision against a committed matrix in
+  `tests/fixtures/hook-calls/`. A change that flips a hook's answer for one variant fails naming the
+  hook, the call and the variant, and `python3 tests/fixtures/hook-calls/hook_matrix.py --write`
+  rewrites the matrix after an intended change. It calls no model and runs in seconds. (#511)
+
+- `cost_bench.py replay --tier micro` runs three small oracle-scored tasks on a pinned small model,
+  five reps in both arms under a 7.80 USD stop, and reports beside each run's pass or fail and cost
+  whether delegation, the stop gate or the output style fired. Its rows carry `tier: micro`, form
+  their own series and go only to `benchmarks/micro/micro-history.jsonl`; a history file refuses rows
+  of the other tier. The contamination control still refuses its same-repository tasks, so it runs
+  once they have independent provenance. (#512)
+
+- - Add one stance-owned delegation nudge after a tiered session reads three distinct files. (#513)
+
+- `citizen usage --surface` lists every instruction source a session loads, grouped by owner (harness
+  modules, your own files, the project, plugins, MCP servers, hooks and the CLI itself), each with a
+  soft token estimate or `unmeasured`; MCP servers, hooks and plugins are never counted as 0.
+  `citizen scorecard` gives one row per module with its instruments, tokens and measured effect, or
+  `unmeasured`. `cost_bench.py replay --ablations benchmarks/ablations.json` runs bare, control and
+  one arm per removed or set entry, each built as an image with its selection declared and admitted
+  only when the installed file matches; it states the minimum detectable effect before any spend,
+  orders runs from a recorded seed, and refuses an unknown id or an arm that differs from control
+  beyond its entry. `summarise` reports each arm against control on cost, output tokens, the
+  first-call prefix, turns, tool calls and pass rate separately, with n, spread and task-clustered
+  intervals, `inconclusive` when an interval spans no effect. A schema-1 pair manifest runs as before,
+  and `first_call_context` is now None, not a smaller sum, when the first call leaves a field out. (#514)
+
+- `citizen usage --rules` now lists every rule in your loaded instruction surface, rules imported
+  from a registered primitive root included, as measured, dark or unmeasured with its reason, and
+  states the share measured. It also loads declarative detectors from your repository's
+  `.ruleprobe/detectors.yaml`, in the format standalone `ruleprobe` reads, runs them in the
+  session hook, and prints a malformed entry with its file and line. (#647)
+
+- `citizen usage --by rebuild` attributes Claude Code prompt-cache rebuilds to observed causes and reports unpriced or malformed evidence explicitly. (#748)
+
+- `cost_bench.py replay --pair <manifest>` judges one policy change on what the whole task costs. An
+  ablation manifest in `benchmarks/ablations/` names a tag and one session-scoped factor
+  (`HARNESS_STANCE_<DIMENSION>` or `HARNESS_MODE`); the tag's one image runs as a reference and a
+  treatment arm beside the bare arm, and a pair that differs in anything else is refused before any
+  spend. Each harness arm's decision-provider calls are copied out of its container and priced into
+  its arm, an unpriced call named rather than counted as zero. `summarise` reports per-arm passes,
+  Cost-of-Pass with and without decision calls, wall time and re-spawns on a stronger model class,
+  with paired intervals and a post-run loaded-surface parity check. Replay rows now carry
+  `session_ids`, `respawns_up` and `spawns_unranked`. (#754)
+
+- The live replay now reports SM-2's result from its saved rows alone: each arm's Cost-of-Pass and
+  pass rate, with a descriptive Wilson interval on the pass rate, and the harness-over-bare
+  Cost-of-Pass ratio and pass-rate difference with paired, task-clustered 95% intervals from a
+  seeded bootstrap. The ratio is undefined, never zero or infinity, when an arm passes nothing. The
+  verdict reads supported, not supported or inconclusive with its reason, claims "at least 15%
+  cheaper" only when the ratio's upper bound is at or below 0.85, and weighs a long-task subset when
+  tasks are marked `long`. `cost_bench.py summarise` prints it with a Pareto table of cost against
+  pass rate, every row now records its `outcome` and `task_long`, and the replay defaults to five
+  trials per task and arm with a 140.50 USD spend cap that fits one full set. (#795)
+
+- `cost_bench.py replay --pack` runs tasks from an evaluator pack kept in its own git repository, read
+  from a pinned ref and digest, so the harness arm's installed checkout never holds a task's check or
+  answer. The contamination control checks each pack task at the exact harness commit, and
+  `--dry-run` now prints its result per task and exits 2 when one is refused. `scripts/replay_power.py`
+  states the tasks, long tasks and trials a set needs for SM-2's joint power from pilot rows. (#796)
+
+- `cost_bench.py replay --design unit-economy --unit <kind>.<id>` runs the unit-by-economy two-by-two:
+  bare and four declared-selection cells (nothing added, the unit alone, the economy concern alone,
+  both) from one base profile derived from the tag's catalog. Before any spend it refuses a grid whose
+  cells differ in anything but the two factors, once the tag's resolver has read them. `summarise`
+  reports the unit's effect, the economy concern's and their interaction on Cost-of-Pass, pass rate
+  and rule adherence, which is read by the unit's own detectors from each saved stream. Every figure
+  comes from one task-clustered paired bootstrap, and the report is result schema 1. The `cost`
+  stance gains an `off` variant, the economy concern's off level. (#797)
+
+- `citizen usage --by adherence` reports how often each recommendation is followed, as a measured rate with a 95% Wilson interval, and what following it might have saved, as a soft estimate from the named carried-context reprice estimator over the session's own transcript. Every figure carries its label, and the two are never added together. (#798)
+
+- `citizen evidence verify` now re-derives a local proof bundle's figures and evidence cards offline.
+  Effort or a loaded surface the rows did not observe is reported as unknown, never as verified, and a
+  card claiming it fails. Landing copy refuses recognized measured claims unless their exact text binds
+  to a freshly verified card; cheaper claims additionally require support from the registered SM-2
+  result. (#799)
+
+- Register observation hooks explicitly with `observation.enabled`; ordinary installs keep observation off, while cost replays collect both arms into run-owned ledgers. (#867)
+
+- Add `citizen usage --json` for the existing token, role, rule, decision, provider, prefix and
+  conflict reports, using the same aggregation and unknown-data semantics as their text output. (#909)
+
+- A `Workflow` launch now reads the `model` and `effort` a script's `agent()` calls name. Under
+  `delegation: tiered` a literal model of the `frontier` class is refused, with the model to use
+  instead. A literal effort above the cost variant's highest, such as `xhigh` or `max`, or a class
+  above a custom variant's strongest is let through and logged: the launch's `workflow-launch` row
+  reads `over-ceiling`. A value the guard cannot judge, such as a computed option, a model the
+  adapter's table does not hold or an unknown effort, is let through with the answer `unresolved`. (#915)
+
+- A `.codex-plugin/plugin.json` manifest packages the skills as a Codex plugin, with no hooks,
+  alongside the Claude Code plugin. Its shared metadata matches `.claude-plugin/plugin.json`, and a
+  test fails when the two drift apart, when either version leaves `VERSION`, or when the Codex
+  manifest declares hooks. (#1111)
+
+- An oracle check can now return named metrics beside pass or fail. A task declares each metric and
+  whether higher or lower is better; its check returns `{"pass": ..., "metrics": {...}}` or the
+  original error list. Rows record each metric, a value that is not a finite number is kept as unknown
+  rather than 0, and `cost_bench.py summarise` reports each metric per arm and per task with SM-2's
+  task-clustered interval. A task without metrics writes the same rows as before. (#1143)
+
+- `cost_bench.py replay --ablations` now runs on an evaluator pack. Each pack task's contamination
+  check runs at the exact commit `--tag` names before any arm image is built or launched, a registered
+  run must pin `--pack-digest`, and every ablation row records the pack's name, version, commit and
+  digest. The ablation plan states its worst-case cost at the run's own `--run-cap` beside the minimum
+  detectable effect, so the #514 prefix sweep has a contamination-safe task source. (#1152)
+
+- A benchmark task's check can now read the session it scores. A check written `check(root,
+  stream=None)` is given the run's whole saved stream-json, subagent messages included, mounted
+  read-only in its container, so metrics such as how much of a log was read or what a subagent cost
+  can be scored; a one-argument `check(root)` is called as before. Rows of a task declaring metrics
+  record `metric_stream`, and a stream metric left null always carries its reason. (#1177)
+
+- A new `scripts/replay_reliability.py` computes pass^k per task and arm (whether every trial passed,
+  and the unbiased estimate from n trials) and the all-rules-at-once rate, the share of runs in which
+  no rule-violation detector fired, beside each detector's own compliance rate, from a set's saved
+  rows and `detections.jsonl` alone; an unread run is counted as unknown, never clean. (#1180)
+
+- `scripts/replay_power.py` sizes a design from a pilot that passes everything or nothing when the
+  pre-registration states `--assumed-pass-rate`, printed as an assumption, and takes `--mde`; the new
+  `scripts/equivalence.py` reads each metric's task-clustered interval against the plan's
+  pre-registered margins and reports equivalent, not equivalent or inconclusive. (#1181)
+
+- `cost_bench.py replay --model` takes several models, each run as its own stratum with its own schedule, caps and preflight; the dry run prices each, `summarise` reports every section per stratum and pools only when the pre-registration's new **Pooled analysis** field names it, and an evidence bundle records the run's strata. (#1182)
+
+- `cost_bench.py replay --arm-config NAME=PATH` adds a harness arm built from a named stance selection
+  beside bare and harness, such as the shipped `benchmarks/arms/maintainer.json` (concise voice) and
+  `benchmarks/arms/frugal.json` (frugal cost tiering); an unknown dimension or variant is refused
+  before any spend, the dry run lists each config arm, and every row records its `arm_config` digest. (#1183)
+
+- The ablation sweep now holds a removal arm for every layer that costs tokens or turns, each run on its own evaluator-pack tasks and a ten-task outcome subset, and `scripts/ablations.py plan` lists and prices it while `scripts/ablations.py justify` reads a sweep's rows into one keep, trim or no-evidence verdict per layer under its pre-registered equivalence margins. (#1184)
+
+- A new `scripts/replay_judge.py` judges two runs of one task blind and pairwise on scope discipline,
+  design quality and reply quality, asking a pinned model with a pinned rubric twice with the order
+  swapped and counting a changed answer as a tie, and admits a dimension only when its Cohen's kappa
+  against the maintainer's hand labels, exported to a local labelling form, reaches 0.6, beside its
+  position and length bias audits. (#1185)
+
+- `scripts/layer_scorecard.py` builds one deterministic per-layer scorecard from registered production, rule-task, long-session, sweep and judge rows: prefix tokens and USD per run by model, behaviour against bare and against the layer's own removal, the outcome and cost effects and the keep, trim or no-evidence verdict, under a harness-against-bare headline per stratum with equivalence verdicts, refusing exploratory rows unless `--allow-exploratory` marks the whole report exploratory, and an evidence bundle may carry it. (#1186)
+
+- `cost_bench.py replay --tier long-session` drives an evaluator pack's scripted multi-turn scenarios as one resumed session per scenario, arm and rep, writing a row per checkpoint and per session that `summarise` reports with scenario-clustered intervals. (#1193)
+
+- The settings template carries the Claude Code OS sandbox, which `sync` writes for a user who sets `sandbox.enabled` with write access derived from the workspace, and every command `grade-bash` rates 2 or more in a git working tree is preceded by a snapshot under `refs/harness/snapshots/` that `citizen snapshot list|restore|prune` manages. (#1215)
+
+- `cost_bench.py summarise` reports every arm of a run with config arms, per stratum: each arm's pass
+  rate and Cost-of-Pass, and each arm against bare and against harness with task-clustered intervals,
+  labelled secondary unless the pre-registration's new **Primary arm comparisons** field names them;
+  under `--raw` the runner also saves each run's final diff as `<task>-<arm>-<rep>.diff` for the judge. (#1228)
+
+- The layer sweep gains removal arms for the user-level CLAUDE.md, withheld from the arm's image and admitted by a manifest parity check against control, and for the autonomy and plan-ceremony stances through new `off` variants, the autonomy one keeping the default's command-gate threshold. (#1250)
+
+### Changed
+
+- The hook replay matrix's Stop call is now a native Stop input recorded from a Claude Code 2.1.280 run and sanitized, in place of an envelope derived from a result record. (#1100)
+
+### Fixed
+
+- Two rule detectors no longer count false positives. `secrets/git-add-secret-file` now reads only a
+  basename that is exactly `id_rsa` or `id_ed25519` as a private key, so staging a runbook such as
+  `docs/id_rsa-rotation.md` or a public `.pub` half is not a hit. `autonomy/denied-by-grade` now reads
+  a Bash result as a denial only when it is the grade hook's whole deny, reason first and nothing
+  after it but the text the hook itself appends, so a grep that prints the
+  hook's signature out of a file is not a hit. Both now clear the 0.9 precision floor on the labelled
+  corpus, and neither is listed as known below it. (#602)
+
+- An unnamed spawn whose brief names a framework's declared layer prompt file is refused by default, so a brief the orchestrator rewords in its own words ("use the instructions in <file>", "do what it says") no longer runs unconfined; a brief that edits the file, or only summarises, counts, copies, explains or compares it, still runs, and a qualified "the <words> instructions" no longer points back at the file when its words name something else. (#739)
+
+- Unknown autonomy variants now use the strictest command threshold, so a typo in a mode, config,
+  session file or environment override cannot silently skip write prompts. (#868)
+
+- Governance now records provider errors against every affected Bash segment and continues judging
+  later segments, while preserving fail-closed outcomes and any stronger denial. (#897)
+
+- The usage feed no longer prices a Workflow-tool agent against the soft budget of the role it is
+  named for: its finished line is unbudgeted, matching the `unconfined` ledger row. (#908)
+
+- Timing-sensitive integration and handoff tests use controlled deadlines so parallel test runs do not change the behavior under test. (#910)
+
+- Compaction detection honors custom cost variants that inherit or explicitly select the compaction switch. (#911)
+
+- Qualification provisioning now removes inherited repository-local Git variables before launching
+  children, so clone validation cannot act on an operator's unrelated repository. (#917)
+
+- A named native spawn now refuses a harness role switched off by the effective user, project or
+  session selection, even when a definition from an earlier sync remains installed. The refusal
+  names the layer that supplied the effective switch. (#918)
+
+- `citizen config set` can now apply a switch that repairs an already-invalid module selection while still rejecting a result with any remaining fault. (#919)
+
+- Switching `grade-bash` off now takes it out of the Bash path. The command grader moved into a
+  library that `grade-bash` re-exports, and the read-only allow and the delegation read count load
+  that library alone, so a fault in the switched-off hook no longer denies every Bash command. (#920)
+
+- Installation qualification asks Codex for its synced agent types and rejects missing harness roles. (#923)
+
+- A builder subagent may edit the paths its own session claimed in its own worktree: the write-intent check now takes a subagent's worktree from the edited path, since its hook `cwd` is its parent's. (#993)
+
+- Allow literal documentation text to mention the user configuration path without treating it as a configuration edit; actual write destinations remain protected. (#1007)
+
+- Resolve `git -C` paths from the current user's home or a safe earlier shell assignment, and name
+  the unresolved operand when governance still needs a literal repository path. (#1008)
+
+- Replay now excludes every current task whose reference answer remains readable from the installed
+  harness checkout, refuses an empty eligible set before probes or model calls, and fails closed on
+  snapshot Git errors. Observed transcript paths are normalized before installed-checkout reads fail
+  the attempt and are recorded. (#1019)
+
+- Release validation now includes staged files when it checks the pending commit against `HEAD`,
+  while immutable commit and tag comparisons continue to exclude later staged work. (#1050)
+
+- Correct plugin delivery, review and migration guidance; derive workflow agent status from journal results and require explicit run-completion evidence. (#1058)
+
+- Read ANSI-C `$'…'` strings, here-document markers and quoted tilde-prefixes as bash does, so a
+  command after an escaped quote, a quoted or commented `<<`, or a mismatched delimiter no longer
+  passes the read-only check or grades below the push it runs, and a quoted `cd "~/x"` no longer
+  resolves to the home directory. (#1088)
+
+- `harness usage` counts a deduplication ratio recorded as NaN or infinity as unknown, so a malformed
+  ledger line no longer adds a measured run or turns the footer and `--json` ratio into `nan`. (#1091)
+
+- Grade a here-document body as the commands it holds wherever the shell runs them: the `$(…)` and
+  backtick substitutions of an unquoted body, and the whole of a body fed to a shell (`bash <<EOF`,
+  `cat <<EOF | sh`, `eval "$(cat <<EOF …)"`, `source /dev/stdin`), so a push or a forced push
+  inside one no longer grades as inert text. A body passed only to `cat` with a quoted delimiter is
+  still data, and a substitution in a body that cannot be read grades unknown or higher. (#1109)
+
+- `cost_bench.py detect --raw` reads a one-policy pair's reference and treatment streams too; it matched only the bare and harness arm names, so a pair's rule firings were skipped. (#1112)
+
+- A `cd` behind `builtin`, `time`, `command`, `noglob` or `eval`, a brace-expanded or variable `cd`, and a `cd` under CDPATH, a `HOME=x` prefix or a physical-path option, and a `cd` after `&&`, `||` or `|`, on the same line or the next, or inside a conditional or loop no longer place a later push or policy write in a directory bash is not in: the walk follows it or leaves the directory unknown. A command that runs only where such a `cd` succeeded, as in `if cd d; then git push; fi` or `[ -d d ] && cd d && git push`, is placed there. (#1113)
+
+- The pinned plugin scanner reports no high findings: test stand-in credentials no longer read as secrets, and the sandbox skill's settings example moved to its own file, its deny list unchanged. (#1120)
+
+- The grade-bash hook-speed tests measure CPU time over batches, and the neutralize speed check measures one run's CPU time, instead of wall-clock time, so parallel test suites no longer fail them while a quadratic grader still does. (#1122)
+
+- Grade text a shell or another interpreter reads from its standard input as what it holds: a
+  here-string (`sh <<<'…'`), text an `echo` or `printf` pipes to a shell or to `xargs sh -c`, a
+  program fed to Python, Perl, Ruby, Node, awk, make or osascript, and a script written to a file
+  and then run. A push in any of them now grades 2 and a forced push 3, where each graded 1. A
+  program the hook cannot parse grades unknown, or as the commands its lines and strings name.
+  Plain data passed to a command that runs nothing keeps its grade. (#1129)
+
+- The grade-bash hook-speed tests take the median of paired large-and-small CPU-time batches instead of the best of each, so a move between fast and slow cores under load no longer fails the growth check while a quadratic grader still does. (#1135)
+
+- A sourced script, a trap other than on EXIT, `shopt -s cdable_vars`, `enable -n cd`, an alias, or a function defined on the line, `cd` itself included, no longer let a later push or policy write be placed in a directory bash is not in: the directory is left unknown, so the push or write asks. A command behind a long chain of prefixes such as `time` or `nice`, which crashed the grader and let it through, now grades 3, and a command either Bash hook cannot read is graded or left to the prompt, never passed. (#1136)
+
+- The Bash grader no longer loses a redirect or a command behind a wrapper's options: a write into a governance policy file or the approvals store through `nice -n 5`, `env -i`, `timeout -s KILL 5`, `stdbuf -o0`, `command -p` or `uv run` is decided as the unwrapped write is, `env` reads every word holding a `=` as an assignment and splits `env -S` into the command line it holds, and an option a wrapper does not take, or an `env -S` string env would interpret itself, grades the wrapped command 3 rather than passing it with no decision. (#1139)
+
+- Replay arm pairs pass the pair check again: the files a harness install writes beyond its links (the global git ignore file, the sync's ownership record, its empty lock file and the empty plans directory) count as the harness component, and the bare arm holding one is refused. (#1155)
+
+- A freeze record still naming a tagged release's branch now fails the test suite, and the stale v0.14.2 record is reopened. (#1161)
+
+- Keep git's automatic maintenance out of the repositories the evaluator pack materializes and every repository the test suite creates, so a background maintenance run no longer breaks a tree scan or a temporary directory's cleanup. (#1164)
+
+- The micro tier's caps now fit the harness arm's first turn: 0.25 USD per run and 0.15 USD per preflight, with a 7.80 USD stop. A preflight that runs out of budget is now reported as a budget stop, with its cost and cap, not as "no reply". (#1165)
+
+- The power-pilot pre-registration no longer writes a literal the runner reads as an unfilled placeholder, and the test suite now runs the runner's plan check over every pre-registration so one it would refuse cannot merge. (#1166)
+
+- The stop gate now honours the exit its block message offers: after a block, a final message with a line that starts `Gate cannot pass:` and gives a reason ends the turn as unverified, logged as a `declined` decision. An ordinary finish is still blocked while the gate is red. (#1169)
+
+- The micro tier's `micro-stop-gate` task no longer fails the edit its stop gate exists to cause: the prompt allows updating the tests that call the renamed function, and the check requires them updated rather than unchanged. The evaluator pack carries the same fix from version 1.2.0. (#1170)
+
+- Replay trials start with a cold prompt cache: each mounts its own nonce as the managed memory file, ahead of the session segment, so a later rep of a task no longer reads an earlier rep's segment from cache and understates the arm with the larger one. Rows record `cache_nonce` and `cache_basis`, and `summarise` states the basis. (#1174)
+
+- The delegation verdict can now count read-only Bash commands (`git log`, `gh … view`, `rg`, `sed -n`, `cat`, `find` and pipelines or `cd … &&` sequences of them) as gather calls, using the `allow-readonly-bash` hook's classifier; re-scoring the 2026-10-02 pilot with it changes no verdict. (#1192)
+
+- Price Claude Opus 5.5 and Claude Sonnet 5.5 from Anthropic's pricing page, so `harness usage` no longer leaves the current Opus unpriced; a session whose per-model breakdown names an unpriced model is now reported as unpriced rather than charged at another model's rate, and a test fails when a model in a recorded fixture stream has no price. (#1195)
+
+- Run the `designer` and `design-judge` roles on the `strong` class at high effort instead of the frontier class the tiered delegation stance forbids, and fail generation for any role that resolves to the frontier class without a documented `frontier_exception`. (#1196)
+
+- The fresh-session hand-off now holds on 1M-token windows: each cost variant names a soft threshold (160,000), a hard one (400,000 under `balanced`, 200,000 under `frugal`) and a per-call cost curve, the feed's line names the cost multiple, and past the hard threshold the turn's end is blocked once with the hand-off instruction, released on the next stop, logged as an adherence event and skipped in headless runs. (#1197)
+
+- A new `steer-polling` Bash hook notes a foreground `sleep` over 30 seconds, a loop that sleeps, or an untimed `gh pr checks --watch`, `gh run watch` or `docker wait` with the background-notification and Monitor alternatives, denies a foreground sleep past five minutes, and logs each decision; the cache-hygiene rule gains the matching line. (#1198)
+
+- A new `session-caps` hook counts each session's live subagents and web searches, its subagents' searches included, warns past 80% of the cost variant's fan-out cap and the research rule's 200-search cap, denies a spawn, a `Workflow` launch or a search at the cap (logging `would-deny` instead in a headless `claude -p` run), and logs each decision. (#1199)
+
+- The stop gate now verifies instead of timing out or skipping: it runs a repository's `## Stop gate` block when one is declared (this repository's covers the lint, the BMad checks and the hook suites in about 75 seconds on an idle machine and about two minutes under heavy load, inside the hook's 240-second limit), trusts a worktree of a trusted checkout, kills the whole gate on a timeout, and logs every timeout and forced release with its reason and elapsed time. (#1200)
+
+- A session's own write-intent claim in another worktree now only warns, never refuses, and a claim whose branch has landed is swept with the claims whose worktree is gone. (#1201)
+
+- The test suite no longer writes rows into the real hook decision log or any other harness state under the user's home: it runs on a disposable home, a guard test fails if a hook row reaches the real one, and `docs/usage.md` shows how to find and drop the rows earlier runs left. (#1202)
+
+- grade-bash grades every route that discards uncommitted work alike (`git restore` of the working tree, `git reset --hard`/`--merge`, `git read-tree`, `git checkout <rev> <path>`, and `rm`, `truncate` or an empty write of a modified tracked file, among others), no longer grades a verb that appears only in quoted text or in a program that cannot run it, allows reading the approvals store, refuses a destructive command whose grading runs past its deadline, and writes a decision-log row for every Bash decision. (#1203)
+
+- The usage feed no longer reports Claude Code's own end-of-turn agent, a `SubagentStop` with no start, no type and no transcript, as `unknown finished, spend unknown`; such stops were most of the feed's unknown lines, and a spawned agent whose transcript is missing still says `spend unknown`. (#1204)
+
+- Make every hook's decisions measurable from the decision log: the output filter logs bytes in and out, every spawn reroute and each advisory hook writes a row, read-only allows are one count summary per session, fresh-session follow-through no longer needs the observation entry point, the log rotates at a configurable size, the exporter backs off an absent collector, and the tool-output scanner no longer flags the harness's own files. (#1205)
+
+- The daily `bmad traceability` workflow no longer fails on accepted issues still waiting for a BMad ID: its live audit now prints them as `warning:` lines under the new `--warn-unreserved` flag, while missing issues, title drift, parent gaps and projection drift still fail it. (#1206)
+
+- A reply claiming the tests pass is blocked once at Stop, and a `git push` asks, when no green gate run is recorded for the current tree or the pushed commit; `citizen gate` runs and records the `## Gate` block. (#1207)
+
+- The bash grader no longer asks for the user's yes when an inline program only reads the harness configuration or a governance policy file, or when gh issue or pull request text in quotes names one; every write to them still asks. (#1229)
+
+- A stance-gated rule detector now scores a replay run only when the stance selection its arm ran with enables it, so the concise voice's `voice/scaffold-leak` no longer counts the default scannable arm or the bare arm as violations of the all-rules-at-once rate. (#1237)
+
+- Summarise a run stopped at its spend cap by balancing each task to the smaller arm's trial count and marking the verdict partial, instead of refusing the whole set. (#1238)
+
+- The long-session tier reads a resumed turn's cost, tokens and cost by tier as the change in the session's running totals, so session cost, the cap stop, per-turn curves and segment figures are no longer inflated, and each checkpoint's check gets the session's totals from before its segment at `/session-baseline.json`. A turn whose resume lost the session, its result naming another session or its totals falling, errors the session as `resume-lost` and counts at the rest of the cap. (#1243)
+
+- A long-session turn's budget is now never below 0.01 USD, a session stops before a turn whose budget could cross the whole run's spend cap, and the dry-run ceiling counts each session at its cap plus that minimum. (#1252)
+
+- The fan-out cap no longer counts a subagent as finished when another hook blocked its stop: every `SubagentStop` is journalled, the one after a block included, and a stopped subagent whose transcript gains a turn after the stop counts as live again until its next stop. (#1254)
+
 ## [0.14.2] — 2026-09-28
 
 ### Added
