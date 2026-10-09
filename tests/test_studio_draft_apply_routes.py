@@ -19,6 +19,7 @@ from harness_core.studio import apply as draft_apply  # noqa: E402
 from harness_core.studio import module_authoring  # noqa: E402
 
 import draft_support  # noqa: E402
+import presence_support  # noqa: E402
 
 ROUTES = ("/api/configure/apply/review", "/api/configure/apply", "/api/configure/apply/recover")
 VALID = {
@@ -49,6 +50,7 @@ class DraftApplyRouteTests(StudioSecurityFixture):
         return status, response
 
     def test_each_route_needs_a_session_origin_csrf_and_well_typed_fields(self):
+        presence_support.serve_as_present(self)  # so a well-typed request reaches its lookup
         cookie, csrf = self._session()
         origin = self.record["url"].rstrip("/")
         trusted = {"Cookie": cookie, "Origin": origin, "X-Studio-CSRF": csrf}
@@ -82,6 +84,7 @@ class DraftApplyRouteTests(StudioSecurityFixture):
         self.assertEqual(json.loads(body)["error"], "confirmation_required")
 
     def test_a_confirmed_studio_apply_runs_the_cli_and_activity_names_the_studio(self):
+        presence_support.serve_as_present(self)  # the person who confirmed at the Mac
         cookie, csrf = self._session()
         trusted = {"Cookie": cookie, "Origin": self.record["url"].rstrip("/"), "X-Studio-CSRF": csrf}
         config_path = draft_apply.config_file(self.home)

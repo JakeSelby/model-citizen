@@ -28,6 +28,7 @@ from harness_core.studio import auth, draft_tests, eval_tiers, headless, native_
 from harness_core.studio.state import Store
 
 import draft_support
+import presence_support
 from studio_target_support import FixtureTargetService
 from test_studio_replay import fixture_tasks
 from test_studio_security import StudioSecurityFixture
@@ -415,7 +416,8 @@ class Home:
 
     def cli(self, *args):
         import subprocess
-        done = subprocess.run([sys.executable, str(REPO / "bin" / "harness"), *args], cwd=REPO,
+        # As a person who confirmed at the Mac (`presence_support.present_cli`).
+        done = subprocess.run([*presence_support.present_cli(directory=self.path), *args], cwd=REPO,
                               env=self.env, capture_output=True, text=True, timeout=600)
         return done.returncode, json.loads(done.stdout.strip().splitlines()[-1])
 
@@ -427,6 +429,10 @@ class Home:
 
 class HeadlessLoopTests(StudioSecurityFixture):
     """AC3: the same choices through `citizen` and through a running Studio over HTTP."""
+
+    def setUp(self):
+        super().setUp()
+        presence_support.serve_as_present(self)
 
     def _post(self, path, payload):
         body = json.dumps(payload).encode("utf-8")

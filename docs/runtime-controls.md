@@ -21,6 +21,38 @@ check a file run without hooks, the fsmonitor hook, filter drivers, or inherited
 variables and global configuration, so a configuration planted in the repository cannot run code
 while a command is graded.
 
+A Studio spend or apply needs a person at the Mac, in two layers. First, `grade-bash` asks about
+every `citizen runs replay|eval|native|draft-test start`, `citizen runs start --confirm-spend`
+and `citizen draft apply`, `rollback` (without `--preview`) and `recover`, whatever the stance
+and grade: an ask in a prompting mode, and in `auto` and `bypassPermissions` a refusal with an
+approval code for that exact line; the confirm marker does not count, Codex refuses, and a spend
+inside a substitution, a shell's or an interpreter's inline text, or a wrapper the grader does
+not look through is refused. The grader files nothing. Second, the CLI, and each Studio spend
+route on both its faces, first checks the request (the confirmation token against the exact
+spend, the draft and its reviewed revision, the apply id, the interrupted apply), then asks macOS
+LocalAuthentication for Touch ID or the login password (`lib/harness_core/presence.py`) in a
+dialog that names the action: the suite, its targets, the estimate and the caps for a paid run,
+or the draft, revision or apply id for an apply, rollback or recover. It refuses with
+`person_confirmation_required` when that is declined, fails or cannot be shown: off macOS,
+without a desktop session, or in a Codex sandbox. A Studio apply runs the CLI, which asks the
+same way, outside the Studio's shared executor so a pending dialog holds no other request; a
+Studio session or its bootstrap token alone applies nothing. No token, revision, `--via-studio`,
+file, environment variable, typed answer or marker is a person's yes.
+`scripts/presence_check.py` raises the dialog once and prints what it answered.
+
+The CLI, and the Studio and its CLI children (started with `python3 -I` and no `PYTHON*`
+variables), refuse a spend or apply while `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` or
+`PYTHONINSPECT` is set, and `citizen studio` will not start with one set: each can load other code
+into the process that asks. Each confirmation is a `studio.person-confirmed` row in the decision
+ledger, or, with `telemetry.decisions` off, in `confirmations.jsonl` beside it; Activity pages
+both as one stream under one limit and cursor.
+
+**Limits.** This check guards the governed paths, the `citizen` CLI and the Studio, and it is not
+a sandbox. Code running as the same user can still reach the files and APIs underneath them
+directly: the run library, the draft and apply modules, the configuration and the state
+directory. The ledgers are that user's files too, so an Activity row is a record, not proof that
+a person confirmed. Containing same-user code is the runtime's sandbox.
+
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.

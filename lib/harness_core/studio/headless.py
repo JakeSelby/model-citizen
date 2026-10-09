@@ -95,6 +95,7 @@ class _Handler:
         self.server = server
         self.request_json = dict(request)
         self.answer = None  # type: Optional[Tuple[int, Dict[str, Any]]]
+        self.face = "citizen"  # who the Activity record names; never a reason to pass
         # Long reads poll whether their client left; the CLI's caller stays for the answer.
         self.connection, self._peer = socket.socketpair()
         self.close_connection = False

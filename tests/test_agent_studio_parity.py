@@ -19,6 +19,7 @@ from test_harness import REPO
 from harness_core.studio import headless, server
 
 import draft_support
+import presence_support
 
 CLI = REPO / "bin" / "harness"
 APPLY_ID = "0" * 32
@@ -184,7 +185,8 @@ class ShapeParityTests(unittest.TestCase):
 
     @classmethod
     def cli(cls, argv):
-        done = subprocess.run([sys.executable, str(CLI), *argv, "--json"], cwd=REPO, env=cls.env,
+        # As a person who confirmed at the Mac (`presence_support.present_cli`).
+        done = subprocess.run([*presence_support.present_cli(directory=cls.env["HARNESS_HOME"]), *argv, "--json"], cwd=REPO, env=cls.env,
                               capture_output=True, text=True, timeout=600)
         printed = None
         for text in (done.stdout, (done.stdout.strip().splitlines() or [""])[-1]):

@@ -23,6 +23,7 @@ from harness_core.studio import apply as draft_apply  # noqa: E402
 from harness_core.studio import drafts, module_authoring, selection_editing, server  # noqa: E402
 
 import draft_support  # noqa: E402
+import presence_support  # noqa: E402
 
 CLI = ROOT / "bin" / "harness"
 PASS = [sys.executable, "-c", "raise SystemExit(0)"]
@@ -88,7 +89,8 @@ class Home:
         self.env = env
 
     def cli(self, *args, timeout=300):
-        return subprocess.run([sys.executable, str(CLI), *args], cwd=ROOT, env=self.env,
+        # As a person who confirmed at the Mac (`presence_support.present_cli`).
+        return subprocess.run([*presence_support.present_cli(directory=self.path), *args], cwd=ROOT, env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
     def normalized(self, relative):
@@ -782,7 +784,7 @@ class RouteTests(unittest.TestCase):
             payload = server._run_draft_apply(ROOT, "tuning", "a" * 40)
         self.assertEqual(payload, {"status": "applied"})
         argv = run.call_args[0][0]
-        self.assertEqual(argv[1:], [str(ROOT / "bin" / "harness"), "draft", "apply", "tuning",
+        self.assertEqual(argv[1:], ["-I", str(ROOT / "bin" / "harness"), "draft", "apply", "tuning",
                                     "--revision", "a" * 40, "--via-studio", "--json"])
         self.assertNotIn("HARNESS_QUIET", run.call_args[1]["env"])
         with mock.patch.object(server.subprocess, "run",

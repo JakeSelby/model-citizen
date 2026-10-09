@@ -120,6 +120,27 @@ def isolate_suite():
 
 REAL_HOME = real_home()
 SUITE_HOME = isolate_suite()
+
+
+def stub_presence():
+    """No test raises the real Touch ID or password dialog (`harness_core.presence`).
+
+    `MODEL_CITIZEN_PRESENCE_OFF` makes every child process refuse the check, and in this process
+    `presence.confirm` answers as a person who said yes, so a test of a spend or apply runs as it
+    did; a test of a refusal patches `confirm` to False. A child that must pass runs through
+    `presence_support.present_cli`."""
+    os.environ["MODEL_CITIZEN_PRESENCE_OFF"] = "1"
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+    from harness_core import presence
+    from unittest import mock
+
+    patch = mock.patch.object(presence, "confirm", return_value=True)
+    patch.start()
+    return patch
+
+
+# `PRESENCE.temp_original` is the real `confirm`, for the tests of the check itself.
+PRESENCE = stub_presence()
 quiet_git_maintenance()
 
 # Studio tests read only their own fixtures (#1211). Once this module is imported (every

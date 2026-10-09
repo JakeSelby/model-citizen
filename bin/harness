@@ -75,7 +75,7 @@ from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
-from harness_core import intents, observation
+from harness_core import intents, observation, presence
 from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -3974,6 +3974,66 @@ def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> in
     return 0
 
 
+def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+    """(a refusal in the action's own result shape, or None; the words the presence dialog shows).
+
+    Lock-free reads only, so the person at the Mac is asked only for an apply, rollback or recover
+    that names something real, and is shown exactly what. The action checks everything again under
+    its locks; the draft's checks and the sync dry run stay after the dialog, since they run there."""
+    if args.action == "apply":
+        if not isinstance(args.revision, str) or not args.revision:
+            return studio_apply._result("refused", "invalid-request",
+                                        "the reviewed draft revision is required"), ""
+        try:
+            current = studio.drafts.read_snapshot(repo, args.name,
+                                                  lambda _worktree, state, _config: state["revision"])
+        except studio.drafts.DraftError as exc:
+            return studio_apply._result("refused", exc.code, str(exc) + "; nothing was applied"), ""
+        if current != args.revision:
+            return studio_apply._result("refused", "stale-revision",
+                                        "the draft changed since it was reviewed; review it again"), ""
+        # An open interrupted apply or rollback is what `apply` restores instead (`apply.apply`).
+        open_intents = studio_apply.unfinished_applies(home())
+        if open_intents:
+            intent = open_intents[-1]
+            if intent.get("kind") == "rollback" and intent.get("draft") != args.name:
+                return studio_apply._result("refused", "interrupted-rollback", (
+                    "an earlier %s was interrupted; restore it (`citizen draft recover`) or abandon "
+                    "it (`citizen draft recover --abandon`) first. Nothing was applied"
+                    % studio_apply.interrupted_what(intent)),
+                    apply_id=str(intent.get("apply_id", ""))), ""
+            return None, "restore the interrupted %s (%s), not apply draft %s" % (
+                studio_apply.interrupted_what(intent), intent.get("apply_id"), args.name)
+        return None, "apply draft %s at revision %s to the live configuration" % (
+            args.name, args.revision)
+    if args.action == "rollback":
+        preview = studio_rollback.preview(args.apply_id, home())
+        target = preview.get("apply") or {}
+        refusals = [row for row in preview["refusals"] if row["code"] != "apply-running"]
+        if not refusals and args.draft and args.draft != target.get("draft"):
+            refusals = [{"code": "confirmation-mismatch", "message": (
+                "apply %s is of draft %s, not %s; nothing was changed"
+                % (args.apply_id, target.get("draft"), args.draft))}]
+        if refusals:
+            return studio_rollback._outcome("refused", refusals[0]["code"],
+                                            refusals[0]["message"], preview), ""
+        return None, "roll back apply %s of draft %s at revision %s (%d key(s), %d file(s))" % (
+            args.apply_id, target.get("draft"), target.get("revision"), len(preview["config"]),
+            len(preview["files"]))
+    open_intents = studio_apply.unfinished_applies(home())
+    if not open_intents:
+        return studio_apply._result("refused", "nothing-to-recover",
+                                    "no interrupted apply is open"), ""
+    intent = open_intents[-1]
+    if args.draft and args.draft != intent.get("draft"):
+        return studio_apply._result("refused", "confirmation-mismatch", (
+            "the open interrupted apply is of draft %s, not %s; nothing was changed"
+            % (intent.get("draft"), args.draft)), apply_id=str(intent.get("apply_id", ""))), ""
+    return None, "%s the interrupted %s (%s, revision %s)" % (
+        "abandon" if args.abandon else "restore", studio_apply.interrupted_what(intent),
+        intent.get("apply_id"), intent.get("revision"))
+
+
 def cmd_draft(args: argparse.Namespace) -> int:
     """Expose the same draft domain operations used by Studio."""
     # Draft configuration and managed roots are relative to the installed checkout that owns
@@ -4024,6 +4084,17 @@ def cmd_draft(args: argparse.Namespace) -> int:
         else:
             _draft_review_report(result)
         return 0 if result["can_apply"] else 1
+    if args.action in ("apply", "recover") or (args.action == "rollback" and not args.preview):
+        early, reason = _draft_preflight(args, repo)
+        if early is not None:
+            if args.json:
+                say(json.dumps(early, sort_keys=True))
+            else:
+                say("draft %s: %s" % (args.action, early["message"]))
+            return 1
+        refused = person_present(args, reason, shaped=True)
+        if refused is not None:
+            return refused
     if args.action == "apply":
         log: List[str] = []
         result = studio_apply.apply(repo, args.name, args.revision, _draft_apply_operations(log),
@@ -5285,6 +5356,17 @@ def cmd_studio(args: argparse.Namespace) -> int:
         raise SystemExit("studio status and stop accept only --json")
     root = studio.state_root(home())
     static_root = REPO / "studio" / "dist"
+    loaded = presence.loader_variables()
+    if not args.action and loaded:
+        # The Studio spends and applies; one started with these could run replaced code.
+        if args.json:
+            print(json.dumps({"error": "python_loader_variables_set", "variables": loaded},
+                             sort_keys=True))
+        print("The Studio will not start while %s %s set: %s loads other code into Python. Unset "
+              "%s and start it again." % (" and ".join(loaded), "is" if len(loaded) == 1 else "are",
+                                          "it" if len(loaded) == 1 else "each",
+                                          "it" if len(loaded) == 1 else "them"), file=sys.stderr)
+        return 2
     overview_core.install(_studio_overview)
     try:
         if args._serve:
@@ -5319,7 +5401,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
                 webbrowser.open(studio.prepare_browser(root).as_uri())
             return 0
         if args.detach:
-            command = [sys.executable, str(REPO / "bin" / "harness")]
+            command = [sys.executable, "-I", str(REPO / "bin" / "harness")]
             result = studio.launch_detached(command, root, args.port)
             _studio_report(result, args.json)
             if not args.no_open:
@@ -7081,6 +7163,26 @@ _RUNS_ERROR_CODES = {"start": "invalid_run", "show": "run_not_found", "detail": 
                      "catalog": "run_catalog_unavailable"}
 
 
+def person_present(args: argparse.Namespace, what: str, shaped: bool = False) -> Optional[int]:
+    """None when the person at this Mac confirmed `what` (`presence.confirm`), which is then
+    recorded for Activity; otherwise the refusal printed and its exit code, 2. Nothing the
+    caller passes or sets is consulted: see `harness_core.presence`."""
+    if presence.confirm(what):
+        actor = "Studio" if getattr(args, "via_studio", False) else "citizen"  # a label only
+        presence.record(actor, ["citizen"] + list(getattr(args, "argv", None) or []), what)
+        return None
+    message = presence.refusal(what)
+    if getattr(args, "json", False) and shaped:
+        # A draft action answers in its own result shape, which the Studio's route returns.
+        print(json.dumps(studio_apply._result("refused", "person-confirmation-required", message),
+                         sort_keys=True))
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"error": presence.REFUSED}, sort_keys=True))
+    print(message, file=sys.stderr)
+    return 2
+
+
 def cmd_runs(args: argparse.Namespace) -> int:
     """Launch and inspect allowlisted suites through the shared Studio run core."""
     try:
@@ -7108,6 +7210,13 @@ def cmd_runs(args: argparse.Namespace) -> int:
             if preview["confirmation_required"] and args.confirm_spend is None:
                 result = preview
                 confirmation_pending = True
+            elif preview["confirmation_required"] and person_present(args, presence.spend_reason(
+                    supervisor.check_start(
+                        args.suite, parameters, args.target_kind, args.target_ref,
+                        confirmed=args.confirm_spend, max_budget_usd=args.max_budget_usd,
+                        spend_cap_usd=args.spend_cap, pricing_source=args.pricing_source))) is not None:
+                # The token is checked against the exact request before the person is asked.
+                return 2
             else:
                 result = supervisor.start(
                     args.suite, parameters,
@@ -7926,6 +8035,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    # The exact words, for the Activity record of a person's confirmation (`person_present`).
+    args.argv = list(sys.argv[1:] if argv is None else argv)
     return args.func(args)
 
 

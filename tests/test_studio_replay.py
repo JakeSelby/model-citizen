@@ -924,6 +924,14 @@ class ReplayReviewFixTests(unittest.TestCase):
                         "confirmation_required": True, "confirmation_token": "f" * 64,
                         "cost_class": "spends_usage", "case_identities": cases}
 
+            def check_start(self, suite_id, _parameters, kind, ref, **kwargs):
+                # The request check a start route makes before it asks the person at the Mac.
+                return {"suite_id": suite_id, "target_kind": kind, "target_ref": ref,
+                        "case_count": len(kwargs.get("case_identities") or ()), "estimate_usd": None,
+                        "max_budget_usd": kwargs["max_budget_usd"],
+                        "spend_cap_usd": kwargs["spend_cap_usd"],
+                        "pricing_source": kwargs["pricing_source"]}
+
             def start(self, *_args, **_kwargs):
                 assert mutations.active
                 return {"run_id": "replay-run", "status": "queued"}
