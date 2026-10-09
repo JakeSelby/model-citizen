@@ -21,6 +21,8 @@ export type Budget = {
   used_lines: number;
   line_cap: number;
   selected_lines: number;
+  lint_lines: number;
+  lint_tokens: number;
 };
 
 export type SelectionReport = {
@@ -37,6 +39,11 @@ export type SelectionReport = {
 export function budgetPercent(budget: Budget): number {
   if (budget.token_cap <= 0) return 0;
   return Math.min(100, Math.max(0, budget.used_tokens / budget.token_cap * 100));
+}
+
+/** What `citizen lint` enforces: the worst case less every rule the configuration switches off. */
+export function lintBudgetText(budget: Budget): string {
+  return `citizen lint counts ~${budget.lint_tokens.toLocaleString()} / ${budget.token_cap.toLocaleString()} tokens and ${budget.lint_lines} / ${budget.line_cap} lines`;
 }
 
 export function sourceLabel(provenance: Provenance): string {
