@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -30,12 +31,12 @@ class ContextCapSwitchTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.home = Path(self.tmp.name)
-        self._old_home = os.environ.get("HOME")
+        self._environ = dict(os.environ)
         isolate_home(self.home)
 
     def tearDown(self):
-        if self._old_home is not None:
-            os.environ["HOME"] = self._old_home
+        os.environ.clear()
+        os.environ.update(self._environ)
         self.tmp.cleanup()
 
     def _forked(self, original, fork):
@@ -78,6 +79,29 @@ class ContextCapSwitchTests(unittest.TestCase):
         self.assertEqual(harness.check_context_cap(root, config), [])
         _lines_total, groups = harness.always_loaded_lines(root, config)
         self.assertFalse(any(name.startswith("primitive root") for name, _ in groups))
+
+    def test_a_rule_a_mode_switches_off_is_not_counted(self):
+        cap = harness.ALWAYS_LOADED_CAP
+        root, config = self._forked(cap - 50, cap - 50)
+        personal = Path(config["primitive_roots"][0])
+        (personal / "modes").mkdir()
+        (personal / "modes" / "forked.json").write_text(json.dumps({
+            "schema_version": 1, "description": "The fork loads in place of the core rule.",
+            "rules": {"secrets": "off"}}))
+        self.assertTrue(harness.check_context_cap(root, config))
+        config["mode"] = "forked"
+        self.assertEqual(harness.rules_projected_off(config), {"secrets"})
+        self.assertEqual(harness.check_context_cap(root, config), [])
+
+    def test_without_a_resolver_the_configuration_rules_are_read(self):
+        cap = harness.ALWAYS_LOADED_CAP
+        root, config = self._forked(cap - 50, cap - 50)
+        config["rules"] = {"secrets": " off ", "short": "on", "other": 1}
+        with unittest.mock.patch.object(harness, "load_posture", return_value=None):
+            self.assertEqual(harness.rules_projected_off(config), {"secrets"})
+            self.assertEqual(harness.check_context_cap(root, config), [])
+            self.assertEqual(harness.rules_projected_off({"rules": ["secrets"]}), set())
+            self.assertEqual(harness.rules_projected_off(None), set())
 
     def test_the_lint_command_counts_the_user_configuration(self):
         root, config = self._forked(harness.ALWAYS_LOADED_CAP - 50, harness.ALWAYS_LOADED_CAP - 50)

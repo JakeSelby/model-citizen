@@ -203,6 +203,9 @@ def _budgets(root: Path, config: Mapping[str, object], document: Mapping[str, ob
     lines, _ = harness.always_loaded_lines(root)
     tokens, _ = harness.always_loaded_tokens(root)
     selected_lines = harness.effective_always_loaded_lines(root, document)
+    # What `citizen lint` enforces: the worst case with the configuration's switched-off rules out.
+    lint_lines, _ = harness.always_loaded_lines(root, dict(config))
+    lint_tokens, _ = harness.always_loaded_tokens(root, dict(config))
     budgets = []
     for runtime, label in RUNTIMES:
         section = "claude" if runtime == "claude-code" else runtime
@@ -211,7 +214,8 @@ def _budgets(root: Path, config: Mapping[str, object], document: Mapping[str, ob
         budgets.append({"runtime": runtime, "label": label, "managed": managed,
                         "used_tokens": tokens, "token_cap": harness.ALWAYS_LOADED_TOKEN_CAP,
                         "used_lines": lines, "line_cap": harness.ALWAYS_LOADED_CAP,
-                        "selected_lines": selected_lines})
+                        "selected_lines": selected_lines,
+                        "lint_lines": lint_lines, "lint_tokens": lint_tokens})
     return budgets
 
 

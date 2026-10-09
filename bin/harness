@@ -3042,8 +3042,9 @@ def rules_projected_off(config: Optional[Dict[str, Any]]) -> Set[str]:
                                                          root=REPO))["rules"]
         except (OSError, ValueError):
             pass
-    return switched_off({"rules": config.get("rules") if isinstance(config.get("rules"), dict)
-                         else {}})["rules"]
+    rules = config.get("rules")
+    return {str(unit) for unit, value in (rules.items() if isinstance(rules, dict) else ())
+            if isinstance(value, str) and value.strip() == "off"}
 
 
 def always_loaded_groups(root: Path,
