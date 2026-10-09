@@ -522,7 +522,7 @@ development_status:
   ah-b138-concurrent-first-studio-lock-opens-fail-with: backlog
   ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
   ah-b140-studio-live-update-cpu-budget-test-fails-under: ready-for-dev
-  ah-b141-studio-draft-discard-intermittently-exits-1-with: backlog
+  ah-b141-studio-draft-discard-intermittently-exits-1-with: ready-for-dev
   ah-b142-grade-bash-timing-tests-fail-on-wall-clock-under: ready-for-dev
   ah-b143-test-usage-json-s-multiday-test-fails-when-a-run: ready-for-dev
   ah-b144-a-non-finite-deduplication-ratio-counts-as: ready-for-dev

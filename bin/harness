@@ -4227,8 +4227,9 @@ def cmd_draft(args: argparse.Namespace) -> int:
             integrations.IntegrationError) as exc:
         if args.json or args.action in ("settings", "selection", "module"):
             say(json.dumps({"error": {"code": exc.code, "message": str(exc)}}, sort_keys=True))
-        else:
-            say("draft: " + str(exc))
+        # A refusal always says why on stderr: HARNESS_QUIET silences stdout, and a quiet
+        # caller that saw only the exit status could not tell a `busy` retry from a real fault.
+        print("draft %s: %s: %s" % (args.action, exc.code, exc), file=sys.stderr)
         return 1
     if args.json or args.action in ("settings", "selection", "module"):
         say(json.dumps(result, sort_keys=True))
