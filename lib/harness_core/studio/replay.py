@@ -46,9 +46,17 @@ HISTORY_STAGE_PREFIX = ".studio-replay-history-stage-"
 MAX_SPEND_BYTES = 64 * 1024
 MAX_SUMMARY_BYTES = 4 * 1024 * 1024
 # The digest AH-S301 records for a target with no configuration of its own. cost_bench builds the
-# harness arm from the commit's defaults, so a replay measures source only; see `_refuse_edited_config`.
+# harness arm from the commit's defaults unless a draft changed its configuration, which the engine
+# then applies (`cost_bench.py replay --harness-config`); see `_check_draft_config`.
 DEFAULT_CONFIG_DIGEST = targets._config_digest({})
 MEASURES = "source"
+MEASURES_CONFIGURED = "source and configuration"
+# The engine's named refusals of a draft's configuration (`replay_arms.CONFIG_*`); the Studio relays
+# each as `replay_target_<code>` and adds no check of its own.
+ENGINE_CONFIG_REFUSALS = ("config_invalid", "config_outside_checkout", "config_host_path",
+                          "config_unresolved")
+CONFIG_FILE, INHERITED_CONFIG_FILE = "harness-config.json", "inherited-config.json"
+CONFIG_CHECK_TIMEOUT = 600
 NATIVE_COMMAND = ("python3", "scripts/cost_bench.py", "replay")
 FALLBACK_MODEL = "claude-haiku-4-5-20251001"
 # Exit codes cost_bench gives a settled run: done, stopped at its cap, refused or failed.
@@ -371,7 +379,10 @@ class ReplayAdmission:
         self.supervisor = supervisor
         self.target_service = target_service
 
-    def _resolve(self, kind: str, ref: str) -> Mapping[str, Any]:
+    def _resolve(self, kind: str, ref: str, apply_config: bool = True) -> Mapping[str, Any]:
+        """One resolved target. A replay's engine applies a draft's changed configuration; a caller
+        whose command carries none, such as an evaluation tier, passes `apply_config=False` and
+        still refuses one (`_refuse_edited_config`)."""
         parent = self.state_directory / "replay-resolutions"
         parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         temporary = Path(tempfile.mkdtemp(prefix="target-", dir=str(parent)))
@@ -384,7 +395,10 @@ class ReplayAdmission:
                         "replay_target_busy",
                         "draft %s is being saved; preview again in a moment" % ref) from exc
                 raise ReplayError(str(exc)) from exc
-            if kind == "draft":
+            if kind == "draft" and apply_config:
+                self._check_draft_config(ref, built.get("revision"), built.get("config_digest"),
+                                         temporary)
+            elif kind == "draft":
                 self._refuse_edited_config(ref, built.get("config_digest"))
             if built.get("snapshot"):
                 # A dirty worktree resolves to a commit that exists only in this disposable
@@ -403,22 +417,32 @@ class ReplayAdmission:
         finally:
             shutil.rmtree(str(temporary), ignore_errors=True)
 
-    def _refuse_edited_config(self, name: str, digest: Any) -> None:
-        """Refuse a draft whose configuration was edited after it was created.
+    def _check_draft_config(self, name: str, revision: Any, digest: Any, work: Path) -> None:
+        """Ask the engine whether it can apply a draft's configuration to the arm built from
+        `revision`, and relay its named refusal unchanged. An empty or inherited configuration is
+        the engine's to leave unapplied; the Studio adds no check of its own."""
+        if digest in (None, DEFAULT_CONFIG_DIGEST):
+            return
+        config, base = draft_configs(self.repository, name)
+        if targets._config_digest(config) != digest:
+            raise ReplayRefusal("replay_target_busy",
+                                "draft %s changed while it was resolved; preview again" % name)
+        answer = engine_config_check(self.repository, str(revision), config, base, work)
+        code = answer.get("code")
+        if code:
+            raise ReplayRefusal("replay_target_" + code, str(answer.get("reason") or code))
 
-        Every draft inherits the creator's live configuration, and the benchmark runs the harness
-        arm from the commit's defaults, so an inherited configuration is simply not measured. An
-        edited one is the change the user wants measured, and the arm cannot apply it. A draft
-        whose configuration is empty runs exactly as the arm does."""
+    def _refuse_edited_config(self, name: str, digest: Any) -> None:
+        """Refuse a draft whose configuration was edited after it was created, for a caller whose
+        engine builds the harness arm from the commit's defaults (an evaluation tier). A replay
+        applies it instead (`_check_draft_config`). A draft whose configuration is empty or
+        inherited runs exactly as the arm does."""
         if digest in (None, DEFAULT_CONFIG_DIGEST):
             return
         try:
-            worktree, _state = drafts.find(self.repository, name)
-            base_path = drafts._paths(worktree)["base_config"]  # written once, at create
-            base = (json.loads(base_path.read_text(encoding="utf-8"))
-                    if base_path.is_file() else {})
-            inherited = targets._config_digest(base) if isinstance(base, dict) else None
-        except (drafts.DraftError, targets.TargetError, OSError, ValueError) as exc:
+            _config, base = draft_configs(self.repository, name)
+            inherited = targets._config_digest(base)
+        except (ReplayError, targets.TargetError) as exc:
             raise ReplayError("draft configuration base is unreadable") from exc
         if digest != inherited:
             raise ReplayRefusal(
@@ -505,6 +529,70 @@ class ReplayAdmission:
                 "targets": [target.as_dict() for target in request.targets]}
 
 
+def draft_configs(repository: Path, name: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """`(configuration, inherited)` of a draft: its private configuration, read under its writer
+    lock, and the one it inherited at create (`{}` when it recorded none)."""
+    try:
+        current = dict(drafts.read_config(Path(repository), name)["config"])
+        worktree, _state = drafts.find(Path(repository), name)
+        base_path = drafts._paths(worktree)["base_config"]  # written once, at create
+        base = (json.loads(base_path.read_text(encoding="utf-8"))
+                if base_path.is_file() else {})
+    except (drafts.DraftError, OSError, ValueError, KeyError, TypeError) as exc:
+        raise ReplayError("draft configuration is unreadable") from exc
+    if not isinstance(base, dict):
+        raise ReplayError("draft configuration base is unreadable")
+    return current, base
+
+
+def _write_private_json(path: Path, value: Mapping[str, Any]) -> None:
+    descriptor = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        json.dump(value, stream, allow_nan=False, sort_keys=True)
+        stream.write("\n")
+
+
+def write_draft_configs(directory: Path, config: Mapping[str, Any],
+                        base: Mapping[str, Any]) -> Tuple[Path, Path]:
+    """The two files `--harness-config` and `--inherited-config` read, written privately."""
+    paths = (Path(directory) / CONFIG_FILE, Path(directory) / INHERITED_CONFIG_FILE)
+    for path, value in zip(paths, (config, base)):
+        _write_private_json(path, value)
+    return paths
+
+
+def engine_config_check(repository: Path, revision: str, config: Mapping[str, Any],
+                        base: Mapping[str, Any], work: Path) -> Dict[str, Any]:
+    """`cost_bench.py check-config`'s answer for the harness arm of `revision`: `{applied,
+    config_sha256, code, reason}`. Builds no image and calls no model."""
+    directory = Path(tempfile.mkdtemp(prefix="config-", dir=str(work)))
+    try:
+        config_path, base_path = write_draft_configs(directory, config, base)
+        command = [sys.executable, str(Path(repository) / "scripts" / "cost_bench.py"),
+                   "check-config", "--tag", revision, "--harness-config", str(config_path),
+                   "--inherited-config", str(base_path), "--tmp", str(directory)]
+        try:
+            done = subprocess.run(command, cwd=str(repository), stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True,
+                                  timeout=CONFIG_CHECK_TIMEOUT, check=False)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ReplayError("the engine's configuration check did not run") from exc
+    finally:
+        shutil.rmtree(str(directory), ignore_errors=True)
+    lines = (done.stdout or "").strip().splitlines()
+    try:
+        answer = json.loads(lines[-1]) if lines else None
+    except ValueError:
+        answer = None
+    if (not isinstance(answer, dict) or done.returncode not in (0, 2)
+            or (done.returncode == 2) != bool(answer.get("code"))
+            or (answer.get("code") and answer["code"] not in ENGINE_CONFIG_REFUSALS)):
+        tail = (done.stderr or "").strip().splitlines()
+        raise ReplayError("the engine's configuration check gave no answer"
+                          + (": " + tail[-1] if tail else ""))
+    return answer
+
+
 def _safe_file(root: Path, supplied: str) -> Path:
     root = Path(root).resolve()
     path = Path(supplied)
@@ -516,6 +604,12 @@ def _safe_file(root: Path, supplied: str) -> Path:
     if path.is_symlink() or not path.is_file():
         raise ReplayError("pre-registration must be a regular repository file")
     return path
+
+
+def _configured(target: ReplayTarget) -> bool:
+    """A draft target whose configuration the engine is given: any but an empty one. The engine
+    leaves an inherited one unapplied."""
+    return target.kind == "draft" and target.config_digest not in (None, DEFAULT_CONFIG_DIGEST)
 
 
 def _native_arguments(request: ReplayRequest, target: ReplayTarget, cap: str) -> List[str]:
@@ -552,11 +646,16 @@ def replay_evidence(request: ReplayRequest) -> str:
 
 def command_for_target(request: ReplayRequest, target: ReplayTarget, repository: Path,
                        output: Path, remaining_cap: Optional[str] = None,
-                       history_dir: Optional[Path] = None) -> List[str]:
+                       history_dir: Optional[Path] = None,
+                       configs: Optional[Tuple[Path, Path]] = None) -> List[str]:
+    """One target's native command; `configs` the draft's configuration files, for a draft whose
+    configuration the engine is given (`_configured`)."""
     repository = Path(repository).resolve()
     cap = remaining_cap or request.spend_cap_usd
     command = ([sys.executable, str(repository / "scripts" / "cost_bench.py"), "replay"]
                + _native_arguments(request, target, cap) + ["--out", str(output)])
+    if configs is not None:
+        command.extend(("--harness-config", str(configs[0]), "--inherited-config", str(configs[1])))
     if _registered(request, target):
         registration = _safe_file(repository, request.pre_registration or "")
         command.extend(("--pre-registration", str(registration),
@@ -572,8 +671,12 @@ def native_commands(request: ReplayRequest) -> str:
     The Studio gives target two only what target one left of the whole-set cap; run by hand,
     each command carries the whole cap."""
     lines = []
-    for target in request.targets:
+    for index, target in enumerate(request.targets, 1):
         command = list(NATIVE_COMMAND) + _native_arguments(request, target, request.spend_cap_usd)
+        if _configured(target):
+            # The files the Studio writes from the draft at launch, inside the run's output.
+            command.extend(("--harness-config", "target-%d/%s" % (index, CONFIG_FILE),
+                            "--inherited-config", "target-%d/%s" % (index, INHERITED_CONFIG_FILE)))
         if _registered(request, target):
             command.extend(("--pre-registration", request.pre_registration or ""))
         else:
@@ -858,8 +961,23 @@ def preflight_case_id(target_index: int) -> str:
     return "target-%d-preflight" % target_index
 
 
+def measured_config_digest(rows: Sequence[Mapping[str, Any]]) -> Optional[str]:
+    """The configuration digest the engine stamped on a target's harness rows, or None when its
+    harness arm ran the commit's defaults."""
+    found = {row.get("arm_configuration_sha256") for row in rows if row.get("arm") == "harness"}
+    found.discard(None)
+    return found.pop() if len(found) == 1 else None
+
+
 def _verify_target_rows(target: ReplayTarget, rows: Sequence[Mapping[str, Any]],
                         pack: Optional[Mapping[str, str]] = None) -> None:
+    measured = {row.get("arm_configuration_sha256") for row in rows if row.get("arm") == "harness"}
+    if any(row.get("arm_configuration_sha256") is not None for row in rows
+           if row.get("arm") != "harness"):
+        raise ReplayError("a replay result outside the harness arm claims a configuration")
+    if len(measured) > 1 or (measured - {None} and (
+            not _configured(target) or measured != {target.config_digest})):
+        raise ReplayError("replay result measured a configuration other than its target's")
     for row in rows:
         if pack is not None and (row.get("pack_digest") != pack["digest"]
                                  or row.get("pack_commit") != pack["commit"]):
@@ -942,8 +1060,20 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
             break
         target_out = output / ("target-%d" % index)
         target_out.mkdir(mode=0o700)
+        configs = None
+        if _configured(target):
+            # The configuration the replay was confirmed with, or nothing is launched.
+            try:
+                config, base = draft_configs(repository, target.draft or "")
+                if targets._config_digest(config) != target.config_digest:
+                    raise ReplayError("the draft's configuration changed after the replay was "
+                                      "confirmed")
+                configs = write_draft_configs(target_out, config, base)
+            except (ReplayError, targets.TargetError, OSError, ValueError) as exc:
+                failure = (str(exc), None)
+                break
         command = command_for_target(request, target, repository, target_out,
-                                     format(remaining, "f"))
+                                     format(remaining, "f"), configs=configs)
         native_out = target_out / target.execution_ref
         result_path = native_out / RESULTS_NAME
         spend_path = native_out / SPEND_NAME
@@ -965,7 +1095,8 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
             if target.kind == "release":
                 def launch_release(history_dir: Path) -> Any:
                     release_command = command_for_target(
-                        request, target, repository, target_out, format(remaining, "f"), history_dir)
+                        request, target, repository, target_out, format(remaining, "f"), history_dir,
+                        configs)
                     return launch(release_command, cwd=str(repository), check=False)
 
                 done = release_history_transaction(repository, launch_release, settle)
@@ -1028,9 +1159,12 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
                                   "spend_usd": (round(float(charged_spend(
                                       mine, request.max_budget_usd)), 6)
                                                 if len(mine) == 1 else 0.0)})
+    measured = [measured_config_digest(next((rows for known, rows in collected if known == target), []))
+                for target in request.targets]
     summary = {
         "schema_version": 1, "targets": [target.as_dict() for target in request.targets],
-        "measures": MEASURES, "model": request.model, "repetitions": request.repetitions,
+        "measures": MEASURES_CONFIGURED if any(measured) else MEASURES,
+        "measured_config_digests": measured, "model": request.model, "repetitions": request.repetitions,
         "tasks": list(request.tasks), "spend_usd": round(float(spent), 6),
         "reported_spend_usd": round(float(reported_spent), 6),
         "spend_cap_usd": request.spend_cap_usd, "stopped_at_cap": stopped,
@@ -1079,8 +1213,13 @@ def read_summary(path: Path) -> Dict[str, Any]:
     required = {"schema_version", "targets", "model", "repetitions", "tasks",
                 "spend_usd", "reported_spend_usd", "spend_cap_usd", "stopped_at_cap",
                 "result_files", "spend_files", "cases", "table"}
-    if (not isinstance(value, dict) or set(value) - {"measures"} != required
-            or value.get("measures", MEASURES) != MEASURES
+    measured = value.get("measured_config_digests", [None, None]) if isinstance(value, dict) else None
+    if (not isinstance(value, dict)
+            or set(value) - {"measures", "measured_config_digests"} != required
+            or value.get("measures", MEASURES) not in (MEASURES, MEASURES_CONFIGURED)
+            or not isinstance(measured, list) or len(measured) != 2
+            or any(item is not None and (not isinstance(item, str) or not HEX64.fullmatch(item))
+                   for item in measured)
             or value.get("schema_version") != 1
             or not isinstance(value.get("targets"), list) or len(value["targets"]) != 2
             or not isinstance(value.get("table"), list)
@@ -1303,6 +1442,7 @@ def result_payload(repository: Path, run_root: Path, request: ReplayRequest,
     result = {name: summary[name] for name in (
         "targets", "table", "spend_usd", "reported_spend_usd", "spend_cap_usd", "stopped_at_cap")}
     result["measures"] = summary.get("measures", MEASURES)
+    result["measured_config_digests"] = summary.get("measured_config_digests", [None, None])
     result["evidence"] = replay_evidence(request)
     try:
         result["analysis"] = read_analysis(Path(run_root) / "replay")

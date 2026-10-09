@@ -107,7 +107,8 @@ export type ReplayRunResult = {
     reported_spend_usd: number;
     spend_cap_usd: string;
     stopped_at_cap: boolean;
-    measures?: "source";
+    measures?: "source" | "source and configuration";
+    measured_config_digests?: (string | null)[];
     analysis?: ReplayAnalysis[] | null;
     analysis_error?: string | null;
     evidence?: "pre-registered" | "exploratory";
@@ -194,6 +195,14 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
 }
 
 const refusals: Record<string, string> = {
+  replay_target_config_invalid:
+    "The engine refused the draft's configuration: it is not a JSON object of finite values.",
+  replay_target_config_outside_checkout:
+    "The engine refused the draft's configuration: a primitive root lies outside the checkout, so the arm, which holds only the commit, has no copy of it.",
+  replay_target_config_host_path:
+    "The engine refused the draft's configuration: it names a path on this machine, which no arm may see.",
+  replay_target_config_unresolved:
+    "The engine refused the draft's configuration: the commit's resolver does not accept its switches, manifests or modes.",
   replay_target_config_unsupported:
     "A draft changed its configuration, but the benchmark builds the harness arm from the commit's defaults and cannot apply it. Checkpoint the change as source or restore the inherited configuration.",
   replay_target_busy: "A draft is being saved. Preview again in a moment.",
@@ -213,8 +222,18 @@ export function replayErrorMessage(code: string): string {
   return refusals[code] ?? code;
 }
 
-export const SOURCE_ONLY_NOTE =
-  "A replay measures source only: each harness arm runs its commit's defaults, so a draft's inherited configuration is not applied.";
+export const MEASURES_NOTE =
+  "A replay measures source, and a draft's configuration when the draft changed it: the engine applies that configuration to the draft's harness arm, and every other harness arm runs its commit's defaults.";
+
+/** The result table's caption: which target's configuration the engine measured, by the digest it
+ * stamped on its rows, or that none was applied. */
+export function measuredConfigCaption(digests: (string | null)[] = []): string {
+  const measured = digests.map((digest, index) => digest ? `target ${index + 1} configuration ${digest}` : null)
+    .filter((line): line is string => line !== null);
+  return measured.length
+    ? `Configuration measured by the engine: ${measured.join("; ")}.`
+    : "Source only: target configuration was not applied.";
+}
 
 export function readinessSummary(errors: string[]): string {
   if (!errors.length) return "Ready to preview.";

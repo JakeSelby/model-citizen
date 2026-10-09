@@ -251,6 +251,7 @@ export function ExperimentsPage() {
         analysis={replayResult?.result?.analysis ?? null}
         analysisError={replayResult?.result?.analysis_error ?? null}
         comparisons={replayResult?.result?.comparisons ?? []}
+        measuredConfigs={replayResult?.result?.measured_config_digests ?? []}
         progress={replayResult?.progress ?? []}
         runStatus={replayResult?.run.status}
         onStarted={(runId) => { setReplayRunId(runId); setReplayResult(null); }}

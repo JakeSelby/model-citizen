@@ -254,9 +254,11 @@ class EvalAdmission:
         self.confirmed_target: Optional[Dict[str, Any]] = None
 
     def _resolve_target(self, request: PaidRequest) -> Dict[str, Any]:
-        # The replay's resolution: a full revision, a dirty worktree or edited draft refused.
+        # The replay's resolution: a full revision, a dirty worktree or edited draft refused, since
+        # a tier's command builds the harness arm from the commit's defaults.
         try:
-            return dict(self.replay._resolve(request.target_kind, request.target_ref))
+            return dict(self.replay._resolve(request.target_kind, request.target_ref,
+                                             apply_config=False))
         except replay.ReplayError as exc:
             raise EvalTierError(str(exc), getattr(exc, "code", "eval_refused")) from exc
 

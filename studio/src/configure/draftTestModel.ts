@@ -246,7 +246,10 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_cv_not_declared: "A registration plans from the repository's declared variance; clear the coefficient of variation.",
     draft_test_registration_subset: "Only the whole task set can be registered; choose every task.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
-    replay_target_config_unsupported: "This draft changed its configuration, which a replay cannot measure.",
+    replay_target_config_invalid: "The engine refused this draft's configuration: it is not a JSON object of finite values.",
+    replay_target_config_outside_checkout: "The engine refused this draft's configuration: a primitive root lies outside the checkout.",
+    replay_target_config_host_path: "The engine refused this draft's configuration: it names a path on this machine.",
+    replay_target_config_unresolved: "The engine refused this draft's configuration: the commit's resolver does not accept its switches, manifests or modes.",
   };
   return messages[code] ?? `The draft test was refused (${code}).`;
 }
