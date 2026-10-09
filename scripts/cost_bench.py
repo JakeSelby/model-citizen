@@ -2849,7 +2849,7 @@ def declarations(tags, repo=None, effort=arms.DEFAULT_EFFORT, configuration=None
     applied = {}
     if configuration is not None:
         applied = {"configuration": arms.arm_configuration(configuration["config"], repo, arms.HARNESS_ROOT),
-                   "configuration_sha": configuration["sha256"]}
+                   "configuration_sha": configuration["sha256"], "configuration_roots": configuration.get("roots")}
     harness = [(tag, arms.declaration("harness", inputs, {"ref": tag, "commit": resolve_tag(repo, tag)},
                                       effort=effort, **applied))
                for tag in tags]
@@ -2859,17 +2859,21 @@ def declarations(tags, repo=None, effort=arms.DEFAULT_EFFORT, configuration=None
 def read_configuration(path, flag):
     """The JSON configuration at `path`; SystemExit naming `flag` when it cannot be read."""
     try:
-        return json.loads(Path(path).expanduser().read_text(encoding="utf-8"),
-                          parse_constant=lambda name: float(name))
-    except (OSError, ValueError, RecursionError) as exc:
+        text = Path(path).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
         raise SystemExit("cost-bench: cannot read the %s file %s: %s" % (flag, path, exc))
+    try:
+        return json.loads(text, parse_constant=lambda name: float(name))
+    except (ValueError, RecursionError):
+        raise arms.ConfigurationRefused(arms.CONFIG_INVALID, "the %s file is not JSON" % flag)
 
 
 def harness_configuration(args):
-    """`{config, sha256, inherited}` for `--harness-config`, or None when the harness arm is built
+    """`{config, sha256, sources, roots}` for `--harness-config`, or None when the harness arm is built
     from its commit's defaults: no flag, an empty configuration, or the configuration the draft
     inherited (`--inherited-config`), so those runs are the plain harness arm's, digests and all.
-    Refused with the flags that declare arms or settings of their own."""
+    Refused with the flags that declare arms or settings of their own; a configuration that is
+    not an object of finite JSON, or names an unreadable root, raises `ConfigurationRefused`."""
     path = getattr(args, "harness_config", None)
     inherited_path = getattr(args, "inherited_config", None)
     if not path:
@@ -2886,11 +2890,11 @@ def harness_configuration(args):
                          "selection another way" % ", ".join(clashes))
     config = read_configuration(path, "--harness-config")
     inherited = read_configuration(inherited_path, "--inherited-config") if inherited_path else None
-    try:
-        applied = arms.applied_configuration(config, inherited)
-        return None if applied is None else {"config": applied, "sha256": arms.configuration_sha256(applied)}
-    except arms.ConfigurationRefused as exc:
-        raise SystemExit(str(exc))
+    applied = arms.applied_configuration(config, inherited)
+    if applied is None:
+        return None
+    sources, roots = arms.configuration_roots(applied, ROOT)
+    return {"config": applied, "sha256": arms.configuration_sha256(applied), "sources": sources, "roots": roots}
 
 
 def configuration_refusal(configuration, commit, tmp=None):
@@ -2912,7 +2916,12 @@ def cmd_check_config(args):
     """Whether the harness arm built from `--tag` applies `--harness-config`, as one JSON line:
     `{applied, config_sha256, code, reason}`. 0 when it is applied or not needed, 2 when refused.
     Calls no model and builds no image: the same check a replay makes before anything is built."""
-    configuration = harness_configuration(args)
+    try:
+        configuration = harness_configuration(args)
+    except arms.ConfigurationRefused as exc:
+        print(json.dumps({"applied": False, "config_sha256": None, "code": exc.code, "reason": exc.reason},
+                         sort_keys=True))
+        return 2
     out = {"applied": configuration is not None,
            "config_sha256": configuration["sha256"] if configuration else None, "code": None, "reason": None}
     if configuration is not None:
@@ -3285,7 +3294,9 @@ def _cmd_replay(args, pack):
     status = 0
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
-            harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+            # Only a configured arm has roots to copy; every other build is called as it always was.
+            sources = {"root_sources": configuration["sources"]} if configuration else {}
+            harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp, **sources)
             extra = {}
             if configs:
                 stamps = {name: arms.arm_config_stamp(name, config) for name, config in configs}

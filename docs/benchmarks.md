@@ -698,31 +698,39 @@ python3 scripts/cost_bench.py replay --tasks <tasks> --tag <full commit> --model
   a config arm its name, schema, `stances` and `sha256`, the digest of the config's canonical
   JSON, so reformatting the file never moves it. The dry run lists each config arm with that
   digest and its image, and schedules it with the leading arm rotating.
+- **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
+  `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
+  `results.jsonl` and no history row.
 
 ### A draft's configuration
 
 `replay --harness-config PATH` builds the harness arm with a whole user configuration, such as a
 Studio draft's, installed as the image user's configuration before the sync. `--inherited-config
-PATH` names the configuration the draft inherited when it was created.
+PATH` names the configuration the draft inherited when it was created. The Studio gives a draft's
+arm the draft's configuration and the other target's arm the configuration the draft was created
+with, so the pair differs by the edit alone.
 
-- **Applied only when it changed.** An empty configuration, or one equal to the inherited one,
-  is not applied: the arm is the plain harness arm, with the same declaration, image and digests.
+- **Applied unless empty or inherited.** An empty configuration, or one equal to
+  `--inherited-config`, is not applied: the arm is the plain harness arm, with the same
+  declaration, image and digests.
 - **Checked against the tag before anything is built.** A primitive root inside this checkout is
-  re-rooted at the same place under `/opt/model-citizen`, where the arm holds the tag's commit;
-  a root anywhere else is refused (`config_outside_checkout`), as is a configuration naming a host
-  path (`config_host_path`), one that is not an object of finite JSON (`config_invalid`), and one
-  the tag's resolver refuses strictly, its switches, manifests and modes (`config_unresolved`).
-  Nothing is dropped to make it resolve. `cost_bench.py check-config --tag <ref> --harness-config
-  PATH` gives the same answer as one JSON line, and exits 2 on a refusal.
+  re-rooted at the same place under `/opt/model-citizen`; a root outside it, such as the
+  `personal-primitives` an apply writes beside the user's configuration, is copied into the image
+  at `/opt/model-citizen/.primitive-roots/<n>` and pinned file by file in the declaration, so no
+  host path reaches the arm. Refused, each by name: an outside root that is not a readable
+  directory of regular files (`config_root_unreadable`), an extra root adding a role or workflow,
+  whose rendered files admission accepts only from the commit (`config_root_unsupported`), a
+  host path in any key or value (`config_host_path`), a configuration that is not an object of
+  finite JSON (`config_invalid`), and one the tag's resolver refuses strictly, its switches,
+  manifests and modes (`config_unresolved`). Nothing is dropped to make it resolve.
+  `cost_bench.py check-config --tag <ref> --harness-config PATH` gives the same answer as one
+  JSON line, and exits 2 on a refusal.
 - **Declared, digested and admitted like a selection.** The configuration is the arm's
   `configuration` component, so its image name moves with it, and admission accepts the image
-  only when its user configuration is exactly the declared bytes. Every harness row carries
-  `arm_configuration_sha256`, the digest of the configuration as given; a run applying one writes
-  no history row. It is refused beside `--pair`, `--ablations`, `--design`, `--arm-config` and
-  `--stance-cost`.
-- **Limits.** `--spend-cap` is required, since the default is sized for two arms; `--stance-cost`,
-  `--pair`, `--ablations` and `--design` are refused beside it. A run with config arms writes
-  `results.jsonl` and no history row.
+  only when its user configuration and copied roots are exactly the declared bytes. Every harness
+  row carries `arm_configuration_sha256`, the digest of the configuration as given; a run
+  applying one writes no history row. It is refused beside `--pair`, `--ablations`, `--design`,
+  `--arm-config` and `--stance-cost`.
 - **`summarise` reports every arm, per stratum.** SM-2's report comes first and is unchanged: its
   verdict is harness against bare. Then each arm's pass rate and Cost-of-Pass, and each arm's
   paired comparison against bare and, for a config arm, against harness: the Cost-of-Pass ratio

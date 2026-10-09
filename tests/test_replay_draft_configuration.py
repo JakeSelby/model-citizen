@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import tempfile
 import types
 import unittest
@@ -28,18 +29,30 @@ HARNESS = {"ref": "v9.9.9", "commit": "c" * 40}
 EDITED = {"identity": {"name": "A Name"}, "stances": {"voice": "concise"}}
 
 
-def configured_record(configuration, sha=None, installed=None):
+def personal_root(path):
+    """A personal root as an apply leaves it beside the user's configuration: one stance variant."""
+    (path / "stances" / "voice").mkdir(parents=True)
+    (path / "stances" / "voice" / "mine.md").write_text("# Voice: mine\n\nShort answers.\n")
+    return path
+
+
+def configured_record(configuration, sha=None, installed=None, roots=None, held=None):
     """A built configured harness arm, as `replay_arms.build_arm` would record it; `installed` is
-    the configuration file the image actually holds, the declared one by default."""
+    the configuration file the image actually holds, the declared one by default, and `held` the
+    files of its copied root 0."""
     record = copy.deepcopy(arm_record("harness"))
     decl = record["declaration"]
     decl[ARMS.CONFIGURATION] = configuration
     decl[ARMS.CONFIGURATION_SHA256] = sha or ARMS.configuration_sha256(configuration)
+    if roots:
+        decl[ARMS.CONFIGURATION_ROOTS] = roots
     declared = ARMS.selection_bytes(configuration)
     decl["components"].append({"name": ARMS.CONFIGURATION, "version": "sha256:" + hashlib.sha256(declared).hexdigest()})
     data = ARMS.selection_bytes(configuration if installed is None else installed)
     entries = record["manifest"]["entries"] + [{"path": ARMS.USER_CONFIG, "kind": "file", "mode": "0644",
                                                  "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}]
+    entries += [{"path": "harness:.primitive-roots/0/" + relative, "kind": "file", "mode": "0644", "size": 1,
+                 "sha256": sha256} for relative, sha256 in sorted((held or {}).items())]
     record["manifest"] = dict(record["manifest"], entries=entries, summary=ARMS.arm_manifest.summary(entries))
     record.update(declaration_sha256=ARMS.digest(decl), manifest_sha256=ARMS.digest(record["manifest"]))
     return record
@@ -125,14 +138,64 @@ class ImageTests(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in context.iterdir()), ["harness", "observer", ARMS.SELECTION_FILE])
             self.assertEqual((context / ARMS.SELECTION_FILE).read_bytes(), ARMS.selection_bytes(EDITED))
 
-    def test_a_configuration_naming_a_host_path_or_a_root_outside_the_checkout_is_refused(self):
-        with tempfile.TemporaryDirectory() as outside:
-            cases = ((dict(EDITED, remote_control={"folders": [str(Path.home() / "work")]}), ARMS.CONFIG_HOST_PATH),
-                     (dict(EDITED, primitive_roots=[outside]), ARMS.CONFIG_OUTSIDE_CHECKOUT),
-                     (dict(EDITED, primitive_roots=["~/primitives"]), ARMS.CONFIG_OUTSIDE_CHECKOUT))
-            for config, code in cases:
-                with self.subTest(code=code):
-                    self.assertEqual(ARMS.configuration_problem(config, POSTURE_MODULE, REPO)[0], code)
+    def test_a_configuration_naming_a_host_path_in_a_value_or_a_key_is_refused(self):
+        home = str(Path.home() / "work")
+        for config in (dict(EDITED, remote_control={"folders": [home]}), dict(EDITED, x={home: "on"})):
+            with self.subTest(config=sorted(config)):
+                self.assertEqual(ARMS.configuration_problem(config, POSTURE_MODULE, REPO)[0], ARMS.CONFIG_HOST_PATH)
+        hosted = configured_record(dict(EDITED, x={str(Path.home()): "on"}))
+        self.assertIn("host path", ARMS._no_host_path(hosted))
+
+    def test_a_root_outside_the_checkout_is_copied_into_the_image_with_no_host_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            personal = personal_root(Path(tmp) / ".config" / "agent-harness" / "personal-primitives")
+            config = dict(EDITED, stances={"voice": "mine"}, primitive_roots=[str(personal)])
+            self.assertIsNone(ARMS.configuration_problem(config, POSTURE_MODULE, REPO, paths=[tmp]))
+            installed = ARMS.arm_configuration(config, REPO, ARMS.HARNESS_ROOT)
+            self.assertEqual(installed["primitive_roots"], [ARMS.HARNESS_ROOT + "/.primitive-roots/0"])
+            self.assertIsNone(ARMS.host_path_reason(strings=ARMS._strings(installed), paths=[tmp]))
+            sources, roots = ARMS.configuration_roots(config, REPO)
+            self.assertEqual(sources, {"0": os.path.realpath(str(personal))})
+            self.assertEqual(sorted(roots["0"]), ["stances/voice/mine.md"])
+            decl = ARMS.declaration("harness", ARMS.qualification_inputs(), HARNESS, configuration=installed,
+                                    configuration_roots=roots)
+            self.assertNotIn(tmp, json.dumps(decl))
+            context = ARMS.build_context(decl, Path(tmp) / "ctx", lambda repo, sha, dest: Path(dest).mkdir(),
+                                         root_sources=sources)
+            self.assertEqual((context / "harness" / ".primitive-roots" / "0" / "stances" / "voice" / "mine.md")
+                             .read_text(), (personal / "stances" / "voice" / "mine.md").read_text())
+            (personal / "stances" / "voice" / "mine.md").write_text("changed\n")
+            with self.assertRaises(SystemExit) as caught:
+                ARMS.build_context(decl, Path(tmp) / "ctx2", lambda repo, sha, dest: Path(dest).mkdir(),
+                                   root_sources=sources)
+            self.assertIn("changed since it was declared", str(caught.exception))
+
+    def test_an_unreadable_root_outside_the_checkout_is_refused_by_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for root in (str(Path(tmp) / "missing"), "~/no-such-primitives-root"):
+                with self.subTest(root=root):
+                    self.assertEqual(ARMS.configuration_problem(dict(EDITED, primitive_roots=[root]),
+                                                                POSTURE_MODULE, REPO)[0], ARMS.CONFIG_ROOT_UNREADABLE)
+
+    def test_a_root_adding_a_role_or_workflow_is_refused_before_any_build(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for kind in ("roles", "workflows"):
+                root = Path(tmp) / kind
+                (root / kind).mkdir(parents=True)
+                (root / kind / "extra.md").write_text("# Extra\n")
+                with self.subTest(kind=kind):
+                    problem = ARMS.configuration_problem(dict(EDITED, primitive_roots=[str(root)]), POSTURE_MODULE, REPO)
+                    self.assertEqual(problem[0], ARMS.CONFIG_ROOT_UNSUPPORTED)
+                    self.assertIn("%s/extra.md" % kind, problem[1])
+
+    def test_admission_holds_the_copied_roots_to_their_declaration(self):
+        roots = {"0": {"stances/voice/mine.md": "a" * 64}}
+        record = configured_record(EDITED, roots=roots, held={"stances/voice/mine.md": "a" * 64})
+        self.assertIsNone(ARMS._configuration_is_declared(record))
+        changed = configured_record(EDITED, roots=roots, held={"stances/voice/mine.md": "b" * 64})
+        self.assertIn("configuration roots differ", ARMS._configuration_is_declared(changed))
+        undeclared = configured_record(EDITED, held={"stances/voice/mine.md": "a" * 64})
+        self.assertIn("configuration roots differ", ARMS._configuration_is_declared(undeclared))
 
     def test_admission_accepts_the_installed_configuration_and_refuses_any_other(self):
         record = configured_record(EDITED)
@@ -164,6 +227,15 @@ class ResolutionTests(unittest.TestCase):
                 self.assertIsNotNone(problem)
                 self.assertEqual(problem[0], ARMS.CONFIG_UNRESOLVED)
                 self.assertTrue(problem[1])
+
+    def test_a_realistic_inherited_configuration_with_an_applied_personal_root_is_admitted(self):
+        """The example configuration every install starts from, with a personal root an apply wrote
+        under the configuration directory and one stance edited to use it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            personal = personal_root(Path(tmp) / ".config" / "agent-harness" / "personal-primitives")
+            config = json.loads((REPO / "config.example.json").read_text(encoding="utf-8"))
+            config.update(primitive_roots=[str(personal)], stances=dict(config["stances"], voice="mine"))
+            self.assertIsNone(ARMS.configuration_problem(config, POSTURE_MODULE, REPO))
 
     def test_a_configuration_that_is_not_an_object_of_finite_json_is_invalid(self):
         for config in ([], {"x": float("nan")}, {"primitive_roots": "here"}):
@@ -208,6 +280,26 @@ class CommandTests(unittest.TestCase):
                 with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
                     self.replay("--harness-config", path, *extra)
                 self.assertIn("refused with", str(caught.exception))
+
+    def test_check_config_answers_an_invalid_configuration_in_json(self):
+        head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in (("array", "[]"), ("nan", '{"x": NaN}'), ("garbage", "{")):
+                path = Path(tmp) / (name + ".json")
+                path.write_text(text, encoding="utf-8")
+                with self.subTest(name=name):
+                    got, out = self.main(["check-config", "--tag", head, "--harness-config", str(path)])
+                    answer = json.loads(out)
+                    self.assertEqual((got, answer["code"], answer["applied"]), (2, ARMS.CONFIG_INVALID, False))
+
+    def test_check_config_refuses_a_role_from_an_extra_root(self):
+        head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "root" / "roles").mkdir(parents=True)
+            (Path(tmp) / "root" / "roles" / "extra.md").write_text("# Extra\n")
+            got, out = self.main(["check-config", "--tag", head, "--harness-config",
+                                  write(tmp, dict(EDITED, primitive_roots=[str(Path(tmp) / "root")]), "c.json")])
+        self.assertEqual((got, json.loads(out)["code"]), (2, ARMS.CONFIG_ROOT_UNSUPPORTED))
 
     def test_check_config_answers_in_one_json_line(self):
         head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
