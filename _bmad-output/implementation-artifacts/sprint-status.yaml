@@ -520,7 +520,7 @@ development_status:
   ah-b136-studio-draft-lookup-fails-when-another-session: ready-for-dev
   ah-b137-studio-run-catalog-discovery-blocks-run-history: ready-for-dev
   ah-b138-concurrent-first-studio-lock-opens-fail-with: ready-for-dev
-  ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
+  ah-b139-studio-target-clones-strip-refs-one-subprocess: ready-for-dev
   ah-b140-studio-live-update-cpu-budget-test-fails-under: backlog
   ah-b141-studio-draft-discard-intermittently-exits-1-with: backlog
   ah-b142-grade-bash-timing-tests-fail-on-wall-clock-under: ready-for-dev
