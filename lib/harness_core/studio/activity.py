@@ -39,18 +39,52 @@ def default_state_root(home: Optional[Path] = None) -> Path:
     return root / ".local" / "state" / "agent-harness"
 
 
-def _cursor(value: str, size: int) -> int:
+def _cursor(value: str, size: int, confirmations_size: int = 0) -> Tuple[int, int]:
+    """(decision ledger end, confirmation ledger end) a page reads back from. `v1:N` names the
+    decision ledger alone; `v2:N:M` both (`CONFIRMATIONS`)."""
     if not value:
-        return size
-    if not value.startswith("v1:"):
-        raise ActivityError("activity cursor is invalid")
+        return size, confirmations_size
+    parts = value.split(":")
     try:
-        offset = int(value[3:])
+        if parts[0] == "v1" and len(parts) == 2:
+            offsets = (int(parts[1]), 0)
+        elif parts[0] == "v2" and len(parts) == 3:
+            offsets = (int(parts[1]), int(parts[2]))
+        else:
+            raise ValueError(value)
     except ValueError as exc:
         raise ActivityError("activity cursor is invalid") from exc
-    if offset < 0 or offset > size:
+    if not 0 <= offsets[0] <= size or not 0 <= offsets[1] <= confirmations_size:
         raise ActivityError("activity cursor is outside the decision ledger")
-    return offset
+    return offsets
+
+
+# Confirmations a person gave with the decision log switched off (`presence.CONSENT_LEDGER`).
+CONFIRMATIONS = "confirmations.jsonl"
+
+
+def _confirmation_rows(path: Path, end: int, limit: int,
+                       filters: Dict[str, str]) -> Tuple[List[Tuple[int, Dict[str, object]]], int, bool]:
+    """Up to `limit` matching confirmations before `end`, newest first, with their offsets; the
+    offset the scan stopped at, and whether it reached the start of the file."""
+    found = []  # type: List[Tuple[int, Dict[str, object]]]
+    stopped, scanned = end, 0
+    for offset, line in _reverse_lines(path, end):
+        stopped = offset
+        scanned += 1
+        if len(line) <= MAX_LINE_BYTES:
+            try:
+                row = json.loads(line.decode("utf-8"))
+            except (UnicodeError, ValueError):
+                row = None
+            item = _event_entry(row) if isinstance(row, dict) else None
+            if item is not None and item["kind"] == "person-confirmed":
+                item["id"] = "%s@c%d" % (item["id"], offset)
+                if _matches(item, filters):
+                    found.append((offset, item))
+        if len(found) >= limit or scanned >= MAX_SCAN_ROWS:
+            return found, stopped, stopped == 0
+    return found, stopped, True
 
 
 def _reverse_lines(path: Path, end: int) -> Iterator[Tuple[int, bytes]]:
@@ -304,31 +338,6 @@ def _command(limit: int, cursor: str, filters: Dict[str, str], json_output: bool
     return " ".join(shlex.quote(word) for word in words)
 
 
-def _confirmations(state_root: Path, limit: int, filters: Dict[str, str]) -> List[Dict[str, object]]:
-    """The newest confirmations kept beside the decision ledger while it is switched off
-    (`presence.CONSENT_LEDGER`), shown on the first page; unreadable rows are skipped."""
-    path = state_root / "confirmations.jsonl"
-    found = []  # type: List[Dict[str, object]]
-    try:
-        if not path.is_file():
-            return found
-        for offset, line in _reverse_lines(path, path.stat().st_size):
-            if len(found) >= limit or len(line) > MAX_LINE_BYTES:
-                break
-            try:
-                row = json.loads(line.decode("utf-8"))
-            except (UnicodeError, ValueError):
-                continue
-            item = _event_entry(row) if isinstance(row, dict) else None
-            if item is not None and item["kind"] == "person-confirmed":
-                item["id"] = "%s@c%d" % (item["id"], offset)
-                if _matches(item, filters):
-                    found.append(item)
-    except OSError:
-        return found
-    return found
-
-
 def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
     """Return one newest-first page while keeping ledger reads bounded by a cursor."""
     limit, cursor_text, filters = _request(request)
@@ -342,10 +351,16 @@ def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
     next_offset = 0
     exhausted = True
     scan_limited = False
+    confirmations = state_root / CONFIRMATIONS
+    try:
+        confirmations_size = confirmations.stat().st_size if confirmations.is_file() else 0
+    except OSError:
+        confirmations_size = 0
+    decision_offsets = {}  # type: Dict[int, int]
     if decisions.exists():
         try:
             size = decisions.stat().st_size
-            end = _cursor(cursor_text, size)
+            end, confirmations_end = _cursor(cursor_text, size, confirmations_size)
             continuation = end
             scanned_rows = 0
             scanned_bytes = 0
@@ -381,6 +396,7 @@ def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
                                 item["id"] = "%s@%d" % (item["id"], offset)
                                 if _matches(item, filters):
                                     entries.append(item)
+                                    decision_offsets[id(item)] = offset
                                     decision_limit -= 1
                 if decision_limit == 0:
                     exhausted = offset == 0
@@ -400,13 +416,44 @@ def query(state_root: Path, request: Dict[str, object]) -> Dict[str, object]:
             decision_source = {"id": "decision-log", "status": "failed", "message": str(exc)}
             exhausted = True
     else:
+        _end, confirmations_end = _cursor(cursor_text, 0, confirmations_size)
         decision_source = {"id": "decision-log", "status": "empty",
                            "message": "No decisions have been recorded."}
-    if not cursor_text:
-        entries.extend(_confirmations(state_root, limit, filters))
     entries = [item for item in entries if item is not None]
-    entries.sort(key=lambda item: (str(item["timestamp"]), str(item["id"])), reverse=True)
     next_cursor = "" if exhausted or next_offset <= 0 else "v1:%d" % next_offset
+    if confirmations_size:
+        # One stream: the newest `limit` of both ledgers; each resumes after its oldest kept row.
+        try:
+            found, stopped, done = _confirmation_rows(confirmations, confirmations_end, limit,
+                                                      filters)
+        except OSError:
+            found, stopped, done = [], 0, True
+        # Each ledger is newest first already; a two-way merge keeps a prefix of each, so each
+        # resumes exactly after the last row it gave this page.
+        decided = [(decision_offsets[id(item)], item) for item in entries]
+        decided.sort(key=lambda pair: pair[0], reverse=True)
+        kept, i, j = [], 0, 0
+        while len(kept) < limit and (i < len(decided) or j < len(found)):
+            if j >= len(found) or (i < len(decided) and str(decided[i][1]["timestamp"])
+                                   >= str(found[j][1]["timestamp"])):
+                kept.append(decided[i][1])
+                i += 1
+            else:
+                kept.append(found[j][1])
+                j += 1
+        if i < len(decided):
+            decision_next = decided[i - 1][0] if i else end
+        else:
+            decision_next = 0 if exhausted else next_offset
+        if j < len(found):
+            confirmation_next = found[j - 1][0] if j else confirmations_end
+        else:
+            confirmation_next = 0 if done else stopped
+        entries = kept
+        next_cursor = ("v2:%d:%d" % (decision_next, confirmation_next)
+                       if decision_next > 0 or confirmation_next > 0 else "")
+    else:
+        entries.sort(key=lambda item: (str(item["timestamp"]), str(item["id"])), reverse=True)
     return {
         "schema_version": SCHEMA_VERSION,
         "entries": entries,

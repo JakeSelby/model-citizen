@@ -169,7 +169,9 @@ def _held(worktree: Path, blocking_timeout: Optional[float] = None):
                 break
             except BlockingIOError as exc:
                 if deadline is None or time.monotonic() >= deadline:
-                    raise DraftError("busy", "another writer is changing this draft") from exc
+                    raise DraftError("busy", "this draft is being changed by an apply or "
+                                     "another save right now; nothing was changed, try "
+                                     "again in a moment") from exc
                 time.sleep(0.05)
         try:
             if _generation(paths) % 2 == 0:

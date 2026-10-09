@@ -27,11 +27,16 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import isolation
 from isolation import isolate_home
 from test_harness import REPO, harness
 
 from harness_core import lifecycle, presence
-from harness_core.studio import activity, eval_tiers, headless, mutations, replay, runs, server
+from harness_core.studio import (activity, definitive_launch, eval_tiers, headless,
+                                 mutations, native_acceptance, replay, runs, server,
+                                 spend_guard)
+
+import draft_support
 
 HOOKS = REPO / "policy" / "hooks"
 
@@ -82,13 +87,14 @@ PREFLIGHT = "apply draft tuning at revision %s to the live configuration" % ("b"
 # can only be the person's. Written to a temporary directory by the test that runs it.
 DECLINING_CLI = """import importlib.machinery, importlib.util, sys
 sys.path.insert(0, %(lib)r)
+from unittest import mock
 from harness_core import presence
 def declined(reason):
     with open(%(asked)r, "a") as handle:
         handle.write(reason + "\\n")
     return False
-presence.confirm = declined
-presence.unavailable = lambda: None
+mock.patch.object(presence, "confirm", declined).start()
+mock.patch.object(presence, "unavailable", lambda: None).start()
 loader = importlib.machinery.SourceFileLoader("declining_harness", %(cli)r)
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(module)
@@ -498,6 +504,150 @@ class SpendRoutes(Home):
                 self.assertEqual((status, held), (200, [0]))
 
 
+class CheckedBeforeAsking(Home):
+    """What a start or apply refuses anyway is refused before the dialog, and the dialog shows
+    the figures the person saw."""
+
+    REASON, call, admission = SpendRoutes.REASON, SpendRoutes.call, SpendRoutes.admission
+
+    def draft_test(self, registration_id, **patches):
+        draft_tests = server.draft_tests
+        body = {"draft": "d", "request": {}, "confirmation_token": "t", "effect": 0.1, "cv": 0.2,
+                "registration": registration_id}
+        with mock.patch.object(draft_tests, "parse_plan"), \
+                mock.patch.object(draft_tests, "identity"), \
+                mock.patch.object(draft_tests, "check_request"), \
+                mock.patch.object(draft_tests, "power"), \
+                mock.patch.object(draft_tests, "start_registration",
+                                  return_value=(registration_id, [])), \
+                mock.patch.object(server.replay.ReplayRequest, "parse"), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON), \
+                mock.patch.object(server, "_replay_admission", return_value=self.admission()), \
+                mock.patch.multiple(server.draft_registration, **patches):
+            return self.call("draft-test", body)
+
+    def test_a_used_registration_is_refused_before_the_dialog(self):
+        asked = mock.Mock(return_value=True)
+        used = server.draft_tests.DraftTestError("already backs a run",
+                                                 "draft_test_registration_used")
+        with mock.patch.object(presence, "confirm", asked):
+            status, body = self.draft_test("r" * 32, claim=mock.Mock(side_effect=used),
+                                           release=mock.Mock())
+        self.assertEqual(status // 100, 4, body)
+        asked.assert_not_called()
+
+    def test_a_declined_person_releases_the_registration_claimed_before_asking(self):
+        order = []
+        with mock.patch.object(presence, "confirm",
+                               side_effect=lambda reason: order.append("asked") or False):
+            status, body = self.draft_test(
+                "r" * 32, claim=mock.Mock(side_effect=lambda *a: order.append("claimed")),
+                release=mock.Mock(side_effect=lambda *a: order.append("released")))
+        self.assertEqual((status, body), (403, {"error": "person_confirmation_required"}))
+        self.assertEqual(order, ["claimed", "asked", "released"])
+
+    def test_a_definitive_launch_over_its_registered_budget_asks_no_one(self):
+        launch = definitive_launch.DefinitiveLaunch(mock.Mock(), budget_provider=lambda *a: {
+            "per_run_usd": "1", "whole_run_cap_usd": "5"})
+        confirmed = mock.Mock(max_budget_usd="2", spend_cap_usd="5")
+        with mock.patch.object(definitive_launch.DefinitiveLaunch, "_definitive",
+                               side_effect=lambda request: request), \
+                self.assertRaises(replay.ReplayError):
+            server._replay_spend(mock.Mock(), launch, confirmed, "t")
+        launch.admission.supervisor.check_start.assert_not_called()
+
+    def test_a_definitive_launch_holds_the_check_to_its_whole_run_cap(self):
+        admission = mock.Mock()
+        launch = definitive_launch.DefinitiveLaunch(admission, budget_provider=lambda *a: {
+            "per_run_usd": "1", "whole_run_cap_usd": "5"})
+        confirmed = mock.Mock(max_budget_usd="1", spend_cap_usd="5")
+        handler = mock.Mock()
+        handler.server.mutations.call.side_effect = lambda operation: operation()
+        refusal = runs.RunError("above")
+        refusal.__cause__ = spend_guard.CeilingRefusal(
+            spend_guard.CeilingRefusal.ABOVE, "the spend estimate 9 USD is above the ceiling 5 USD")
+        admission.supervisor.check_start.side_effect = refusal
+        with mock.patch.object(definitive_launch.DefinitiveLaunch, "_definitive",
+                               side_effect=lambda request: request), \
+                mock.patch.object(server.replay, "launch_payload", return_value={
+                    "suite_id": "live-replay", "parameters": {}, "target_kind": "branch",
+                    "target_ref": "main", "confirmed": "t", "max_budget_usd": "1",
+                    "spend_cap_usd": "5", "pricing_source": "api_credit",
+                    "case_identities": ["a"], "targets": []}), \
+                self.assertRaises(replay.ReplayRefusal):
+            server._replay_spend(handler, launch, confirmed, "t")
+        self.assertEqual(admission.supervisor.check_start.call_args.kwargs["estimate_ceiling_usd"],
+                         "5")
+
+    def test_the_native_dialog_shows_the_previewed_cases_and_estimate(self):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(directory), True)
+        supervisor = mock.Mock()
+        supervisor.check_start.return_value = {
+            "suite_id": "native-acceptance", "target_kind": "branch", "target_ref": "main",
+            "case_count": 1, "estimate_usd": 99.0, "max_budget_usd": "0.20",
+            "spend_cap_usd": "1.00", "pricing_source": "api_credit"}
+        admission = native_acceptance.SupervisorAdmission(supervisor, mock.Mock(),
+                                                          directory / "native-evidence")
+        checked = admission.check(target={"kind": "branch", "ref": "main"},
+                                  spend={"max_budget_usd": "0.20", "spend_cap_usd": "1.00",
+                                         "pricing_source": "api_credit"},
+                                  parameters={}, confirmation_token="t",
+                                  case_identities=["one", "two", "three"])
+        expected = native_acceptance.native_estimate(directory / "native-evidence", 3)
+        self.assertEqual((checked["case_count"], checked["estimate_usd"]),
+                         (3, expected["amount_usd"]))
+        self.assertIn("3 case(s)", presence.spend_reason(checked))
+
+    def test_confirmations_page_with_decisions_in_one_bounded_stream(self):
+        """Two kept in the decision ledger, three beside it with the decision log off: every page
+        holds at most `limit`, and the pages hold each confirmation once."""
+        config = self.home / ".config" / "agent-harness" / "config.json"
+        config.parent.mkdir(parents=True)
+        state = self.home / ".local" / "state" / "agent-harness"
+        for index in range(5):
+            config.write_text(json.dumps({"telemetry": {"decisions": index < 2}}))
+            presence.record("citizen", ["citizen", "draft", "apply", str(index)], "apply %d" % index)
+        self.assertTrue((state / "decisions.jsonl").exists())
+        self.assertTrue((state / "confirmations.jsonl").exists())
+        seen, cursor, pages = [], "", 0
+        while True:
+            page = activity.query(state, dict({"limit": 2}, **({"cursor": cursor} if cursor else {})))
+            self.assertLessEqual(len(page["entries"]), 2)
+            seen.extend(entry["command"] for entry in page["entries"])
+            pages += 1
+            cursor = page["next_cursor"]
+            if not cursor or pages > 5:
+                break
+        self.assertEqual(sorted(seen), sorted("citizen draft apply %d" % i for i in range(5)))
+
+
+class SaveDuringApply(Home):
+    """A Studio apply runs outside the shared executor, so a save that meets it is told plainly."""
+
+    def test_a_save_while_an_apply_holds_the_draft_is_busy_in_plain_words(self):
+        name = draft_support.draft_name("busy-save-")
+        env = {k: v for k, v in os.environ.items() if k != "HARNESS_QUIET"}
+        created = subprocess.run([sys.executable, str(REPO / "bin" / "harness"), "draft",
+                                  "create", name, "--json"], cwd=REPO, env=env,
+                                 capture_output=True, text=True, timeout=120)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        draft_support.register_draft_cleanup(self, name, env)
+        revision = json.loads(created.stdout.strip().splitlines()[-1])["revision"]
+        changes = self.home / "changes.json"
+        changes.write_text(json.dumps({"rules.cache-hygiene": "off"}), encoding="utf-8")
+        # The draft's writer lock, as the apply a Studio's CLI child runs holds it.
+        with harness.studio.drafts.locked_context(REPO, name):
+            code, printed, _said = self.cli("draft", "selection", "save", name, "--base-revision",
+                                            revision, "--idempotency-key", "k" * 32,
+                                            "--changes", str(changes), "--json")
+        saved = json.loads(printed.strip().splitlines()[-1])
+        self.assertFalse(saved.get("saved"), saved)
+        self.assertIn("busy", json.dumps(saved))
+        self.assertIn("being changed by an apply or another save right now",
+                      json.dumps(saved))
+
+
 class Recorded(Home):
     """AC3: a confirmed CLI apply is in Activity, even with the decision log switched off."""
 
@@ -523,10 +673,19 @@ class Recorded(Home):
             seen.append(command)
             return subprocess.CompletedProcess(command, 0, stdout='{"status": "x"}\n', stderr="")
 
-        with mock.patch.object(server.subprocess, "run", side_effect=run):
+        os.environ.update(PYTHONPATH="/tmp/planted", PYTHONSTARTUP="/tmp/planted.py")
+        environments = []
+        with mock.patch.object(server.subprocess, "run",
+                               side_effect=lambda command, **kwargs: (
+                                   environments.append(kwargs["env"]), run(command))[1]):
             server._run_draft_apply(REPO, "tuning", "b" * 40)
-        self.assertEqual(seen[0][1:], [str(REPO / "bin" / "harness"), *APPLY[:-1],
-                                       "--via-studio", "--json"])
+            server._run_draft_rollback(REPO, "c" * 32, "tuning")
+            server._run_draft_recover(REPO, "restore", "tuning")
+        for command in seen:
+            self.assertEqual(command[1:3], ["-I", str(REPO / "bin" / "harness")])
+        self.assertEqual(seen[0][3:], [*APPLY[:-1], "--via-studio", "--json"])
+        for environment in environments:
+            self.assertEqual([k for k in environment if k.startswith("PYTHON")], [])
         self.assertEqual(self.store_files(), [])
 
 
@@ -570,8 +729,37 @@ class CliPreflight(Home):
                 mock.patch.object(harness.studio_apply, "recover") as recover:
             self.refused("draft", "recover", "--draft", "tuning", "--json")
             recover.assert_not_called()
-        self.assertEqual(self.asked, ["recover the interrupted apply %s of draft tuning at "
-                                      "revision %s" % ("e" * 32, "b" * 40)])
+        self.assertEqual(self.asked, ["restore the interrupted apply of draft tuning (%s, "
+                                      "revision %s)" % ("e" * 32, "b" * 40)])
+
+    def test_the_recover_dialog_names_an_interrupted_rollback_as_one(self):
+        intent = {"apply_id": "e" * 32, "draft": "tuning", "revision": "b" * 40,
+                  "kind": "rollback", "reverses": "f" * 32}
+        with mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]), \
+                mock.patch.object(harness.studio_apply, "recover"):
+            self.refused("draft", "recover", "--abandon", "--json")
+        self.assertEqual(self.asked, ["abandon the interrupted rollback of draft tuning's apply "
+                                      "%s (%s, revision %s)" % ("f" * 12, "e" * 32, "b" * 40)])
+
+    def test_an_apply_over_an_interrupted_apply_names_the_restore_that_runs(self):
+        """`apply` restores an open interrupted apply instead; the dialog says so."""
+        intent = {"apply_id": "e" * 32, "draft": "other", "revision": "c" * 40}
+        with mock.patch.object(harness.studio.drafts, "read_snapshot", return_value="b" * 40), \
+                mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]), \
+                mock.patch.object(harness.studio_apply, "apply") as apply:
+            self.refused(*APPLY)
+            apply.assert_not_called()
+        self.assertEqual(self.asked, ["restore the interrupted apply of draft other (%s), not "
+                                      "apply draft tuning" % ("e" * 32)])
+
+    def test_an_apply_over_another_drafts_interrupted_rollback_is_refused_without_asking(self):
+        intent = {"apply_id": "e" * 32, "draft": "other", "kind": "rollback",
+                  "reverses": "f" * 32}
+        with mock.patch.object(harness.studio.drafts, "read_snapshot", return_value="b" * 40), \
+                mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]):
+            code, printed, _said = self.cli(*APPLY)
+        self.assertEqual((code, json.loads(printed)["error_code"]), (1, "interrupted-rollback"))
+        self.assertEqual(self.asked, [])
 
     def test_a_paid_catalog_start_with_a_wrong_token_is_refused_without_asking(self):
         supervisor = mock.Mock()
@@ -611,7 +799,7 @@ class PresenceCheck(unittest.TestCase):
         with mock.patch.object(presence.subprocess, "run", side_effect=run), \
                 mock.patch.object(presence.platform, "system", return_value=system), \
                 mock.patch.object(presence.os, "access", return_value=True):
-            return presence.real_confirm("a paid live replay")
+            return isolation.PRESENCE.temp_original("a paid live replay")
 
     def test_only_a_present_answer_from_the_absolute_helper_passes(self):
         self.assertTrue(self.run_with((0, "present\n")))
@@ -634,18 +822,59 @@ class PresenceCheck(unittest.TestCase):
         fake.chmod(0o755)
         os.environ.update({"PATH": planted + os.pathsep + os.environ.get("PATH", ""),
                            "HARNESS_CONFIRMED": "1", "HARNESS_HOME": planted,
-                           "MODEL_CITIZEN_PRESENT": "1", "PYTHONPATH": planted})
+                           "MODEL_CITIZEN_PRESENT": "1"})
         self.assertFalse(self.run_with((0, "declined\n")))
         argv, kwargs = self.calls[-1]
         self.assertEqual(argv[0], "/usr/bin/osascript")
         self.assertNotIn(planted, json.dumps(kwargs["env"]))
 
-    def test_nothing_in_the_repository_replaces_the_check_outside_the_suite_harness(self):
-        """No tracked file, tests included, swaps `presence.confirm` except the suite's own
-        in-process stub, its temp-dir launcher source and this module's declining child; and no
-        runnable stub CLI is tracked at all."""
-        allowed = {"tests/isolation.py", "tests/presence_support.py",
-                   "tests/test_cli_confirmation.py"}
+    def test_a_python_loader_variable_refuses_before_any_dialog(self):
+        for name in presence.LOADER_VARIABLES:
+            with self.subTest(variable=name):
+                os.environ[name] = "/tmp/planted"
+                self.calls = []
+                self.assertFalse(self.run_with((0, "present\n")))
+                self.assertFalse(any(argv[0] == presence.OSASCRIPT for argv, _ in self.calls))
+                self.assertIn(name + " is set", presence.refusal("apply draft d"))
+                del os.environ[name]
+
+    def test_the_cli_refuses_an_apply_with_a_loader_variable_set(self):
+        """The CLI's own presence path, with the real check: refused in plain words, no dialog."""
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(home), True)
+        isolation.isolate_home(home)
+        os.environ["PYTHONSTARTUP"] = str(home / "startup.py")
+        output = io.StringIO()
+        with mock.patch.object(presence, "confirm", isolation.PRESENCE.temp_original), \
+                mock.patch.object(presence.subprocess, "run",
+                                  side_effect=AssertionError("asked the helper")), \
+                mock.patch.object(harness, "_draft_preflight", return_value=(None, "apply x")), \
+                mock.patch.object(harness.studio_apply, "apply") as apply, \
+                contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            code = harness.main(APPLY)
+        apply.assert_not_called()
+        answer = json.loads(output.getvalue().strip().splitlines()[-1])
+        self.assertEqual((code, answer["error_code"]), (1, "person-confirmation-required"))
+        self.assertIn("PYTHONSTARTUP is set", answer["message"])
+
+    def test_the_studio_will_not_start_with_a_loader_variable_set(self):
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, str(home), True)
+        env = {k: v for k, v in os.environ.items() if k != "HARNESS_QUIET"}
+        env.update(HOME=str(home), HARNESS_HOME=str(home), PYTHONPATH=str(home))
+        done = subprocess.run([sys.executable, "-I", str(REPO / "bin" / "harness"), "studio",
+                               "--detach", "--no-open", "--json"], env=env, capture_output=True,
+                              text=True, timeout=60)
+        self.assertEqual(done.returncode, 2, done.stdout)
+        self.assertEqual(json.loads(done.stdout)["error"], "python_loader_variables_set")
+        self.assertIn("will not start while PYTHONPATH is set", done.stderr)
+        self.assertFalse((home / ".local" / "state" / "agent-harness" / "studio"
+                          / "instance.json").exists())
+
+    def test_nothing_in_the_repository_replaces_the_check(self):
+        """No tracked file, tests included and none exempt, assigns over `presence.confirm`, and
+        no runnable stub CLI is tracked: the suite stubs it with `unittest.mock` in the test
+        process, or in a launcher a test writes to its own temporary directory."""
         # Built from parts, so this test's own text is not what it finds.
         patterns = ("presence" + ".confirm =", "presence" + ".confirm=",
                     "setattr(" + "presence", "real_" + "confirm", "presence" + "_stub")
@@ -653,11 +882,11 @@ class PresenceCheck(unittest.TestCase):
                                  check=True).stdout.decode("utf-8").split("\0")
         offenders = []
         for name in filter(None, tracked):
-            if "stub_cli" in name or "presence_stub" in name:
+            if any(part in name for part in ("stub_cli", "presence" + "_stub", "present_cli.py")):
                 offenders.append(name)
                 continue
             path = REPO / name
-            if name in allowed or not path.is_file() or path.suffix not in ("", ".py", ".sh"):
+            if not path.is_file() or path.suffix not in ("", ".py", ".sh"):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")

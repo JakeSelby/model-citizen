@@ -93,7 +93,7 @@ class RollbackRouteContractTests(unittest.TestCase):
             payload = server._run_draft_rollback(ROOT, APPLY_ID, "tuning")
         self.assertEqual(payload, {"status": "rolled-back"})
         argv = run.call_args[0][0]
-        self.assertEqual(argv[1:], [str(ROOT / "bin" / "harness"), "draft", "rollback", APPLY_ID,
+        self.assertEqual(argv[1:], ["-I", str(ROOT / "bin" / "harness"), "draft", "rollback", APPLY_ID,
                                     "--draft", "tuning", "--via-studio", "--json"])
         self.assertNotIn("HARNESS_QUIET", run.call_args[1]["env"])
         with mock.patch.object(server.subprocess, "run",

@@ -260,7 +260,8 @@ class NativeRunAdapter:
         if checker is None:
             raise NativeAcceptanceError("native acceptance cannot check this start")
         return checker(target=target, spend=spend.public(), parameters=parameters,
-                       confirmation_token=confirmation_token)
+                       confirmation_token=confirmation_token,
+                       case_identities=list(selection.cases))
 
     def start(self, selection_value: Any, spend_value: Any,
               confirmation_token: Any) -> Dict[str, Any]:
@@ -425,12 +426,16 @@ class SupervisorAdmission:
               **unused: Any) -> Dict[str, Any]:
         _service, kind, ref = self._execution_target(target)
         try:
-            return self.supervisor.check_start(
+            checked = self.supervisor.check_start(
                 self.SUITE_ID, parameters, kind, ref,
                 confirmed=confirmation_token, max_budget_usd=spend["max_budget_usd"],
                 spend_cap_usd=spend["spend_cap_usd"], pricing_source=spend["pricing_source"])
         except runs.RunError as exc:
             raise NativeAcceptanceError(str(exc)) from exc
+        # The case count and estimate the preview showed (`preview`), not the catalog's.
+        cases = list(unused.get("case_identities") or ())
+        return dict(checked, case_count=len(cases),
+                    estimate_usd=native_estimate(self.evidence_directory, len(cases))["amount_usd"])
 
     def start(self, *, target: Mapping[str, Any], spend: Mapping[str, str],
               parameters: Mapping[str, str], confirmation_token: str,

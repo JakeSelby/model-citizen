@@ -40,12 +40,18 @@ Studio session or its bootstrap token alone applies nothing. No token, revision,
 file, environment variable, typed answer or marker is a person's yes.
 `scripts/presence_check.py` raises the dialog once and prints what it answered.
 
-This guards the CLI and Studio paths, and it is not a sandbox. Code running as the user can still
-reach the files and APIs underneath them directly: the run library, the draft and apply modules,
-the configuration and the state directory. Containing that is the runtime's sandbox. In the same
-way, each confirmation is a `studio.person-confirmed` Activity event, written even with
-`telemetry.decisions` off, but the ledgers it goes to are files the user, and so any program
-running as the user, can write: an Activity row is a record, not proof that a person confirmed.
+The CLI, and the Studio and its CLI children (started with `python3 -I` and no `PYTHON*`
+variables), refuse a spend or apply while `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` or
+`PYTHONINSPECT` is set, and `citizen studio` will not start with one set: each can load other code
+into the process that asks. Each confirmation is a `studio.person-confirmed` row in the decision
+ledger, or, with `telemetry.decisions` off, in `confirmations.jsonl` beside it; Activity pages
+both as one stream under one limit and cursor.
+
+**Limits.** This check guards the governed paths, the `citizen` CLI and the Studio, and it is not
+a sandbox. Code running as the same user can still reach the files and APIs underneath them
+directly: the run library, the draft and apply modules, the configuration and the state
+directory. The ledgers are that user's files too, so an Activity row is a record, not proof that
+a person confirmed. Containing same-user code is the runtime's sandbox.
 
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.

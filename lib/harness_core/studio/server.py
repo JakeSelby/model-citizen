@@ -28,7 +28,8 @@ from harness_core import overview, presence, workers
 
 from . import (activity, auth, compare, draft_registration, draft_tests, drafts, free_suites,
                live_updates, module_authoring, module_editing, module_library,
-               native_acceptance, replay, runs, selection, selection_editing, settings, targets)
+               native_acceptance, replay, runs, selection, selection_editing, settings, spend_guard,
+               targets)
 from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import spend as spend_report
@@ -770,16 +771,24 @@ def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) 
     """The dialog's words for a replay start, once its token matches the exact request
     (`RunSupervisor.check_start`, through `mutations` as the start is, since both read the run
     index); a mismatch is the route's own refusal, before any dialog."""
-    base = (admission.admission if isinstance(admission, definitive_launch.DefinitiveLaunch)
-            else admission)  # a definitive launch wraps the replay
+    base, ceiling = admission, None
+    if isinstance(admission, definitive_launch.DefinitiveLaunch):
+        # The registered budget the start checks, checked first: a request over it asks no one.
+        budget = admission.budget(admission._definitive(confirmed))
+        admission._within(confirmed, budget)
+        base, ceiling = admission.admission, budget["whole_run_cap_usd"]
     launch = replay.launch_payload(confirmed, token, base.repository)
     try:
         checked = handler.server.mutations.call(lambda: base.supervisor.check_start(
             launch["suite_id"], launch["parameters"], launch["target_kind"], launch["target_ref"],
             confirmed=launch["confirmed"], max_budget_usd=launch["max_budget_usd"],
             spend_cap_usd=launch["spend_cap_usd"], pricing_source=launch["pricing_source"],
-            case_identities=launch["case_identities"]))
+            case_identities=launch["case_identities"], estimate_ceiling_usd=ceiling))
     except runs.RunError as exc:
+        cause = exc.__cause__
+        if isinstance(cause, spend_guard.CeilingRefusal):  # as `DefinitiveLaunch.start_confirmed`
+            raise replay.ReplayRefusal(definitive_launch.CEILING_CODES[cause.code],
+                                       str(cause)) from exc
         raise replay.ReplayError(str(exc)) from exc
     return presence.spend_reason(checked, launch["targets"])
 
@@ -1023,14 +1032,15 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
-    if not _person_present(handler, reason):
-        return
     root = handler.server.run_supervisor.state_root
     try:
-        # Single use: claimed before the run exists; a claim that exists or fails refuses the start.
+        # Single use: claimed before the person is asked and before the run exists; a claim that
+        # exists or fails refuses the start, and a declined person releases it.
         if registration is not None:
             draft_registration.claim(root, registration)
         try:
+            if not _person_present(handler, reason):
+                raise _Declined()
             started = handler.server.mutations.call(lambda: admission.start_confirmed(
                 confirmed, request["confirmation_token"]))
         except BaseException:
@@ -1040,6 +1050,8 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
                 except (OSError, draft_tests.DraftTestError):
                     pass  # stays claimed: never reusable, which is the safe side
             raise
+    except _Declined:
+        return  # `_person_present` answered 403
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
@@ -1735,8 +1747,20 @@ def _draft_apply_review(handler: Handler, route: Route) -> None:
 
 
 def _cli_entry(repo_root: Path) -> List[str]:
-    """The interpreter and script the Studio runs `citizen draft` through."""
-    return [sys.executable, str(repo_root / "bin" / "harness")]
+    """The interpreter and script the Studio runs `citizen draft` through, isolated (`-I`), so no
+    interpreter variable or user site directory loads other code into a child that applies."""
+    return [sys.executable, "-I", str(repo_root / "bin" / "harness")]
+
+
+def _child_environment() -> Dict[str, str]:
+    """The Studio's environment for a CLI child: `HARNESS_QUIET` (the child must print its JSON)
+    and every `PYTHON*` variable removed."""
+    return {key: value for key, value in os.environ.items()
+            if key != "HARNESS_QUIET" and not key.startswith("PYTHON")}
+
+
+class _Declined(Exception):
+    """The person at the Mac did not confirm; the route has already answered."""
 
 
 def _person_present(handler: Handler, what: str) -> bool:
@@ -1755,7 +1779,7 @@ def _person_present(handler: Handler, what: str) -> bool:
 
 def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, object]:
     """Run `citizen draft apply` itself, so a Studio apply takes the CLI's locks in the CLI."""
-    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    environment = _child_environment()
     command = _cli_entry(repo_root) + ["draft", "apply", draft,
                "--revision", revision, "--via-studio", "--json"]
     try:
@@ -1773,7 +1797,7 @@ def _run_draft_apply(repo_root: Path, draft: str, revision: str) -> Dict[str, ob
 
 def _run_draft_recover(repo_root: Path, action: str, draft: str) -> Dict[str, object]:
     """Run `citizen draft recover` itself, under the CLI's own locks."""
-    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    environment = _child_environment()
     command = _cli_entry(repo_root) + ["draft", "recover",
                "--draft", draft, "--via-studio", "--json"] + (["--abandon"] if action == "abandon" else [])
     try:
@@ -1808,7 +1832,7 @@ def _draft_recover(handler: Handler, route: Route) -> None:
 
 def _run_draft_rollback(repo_root: Path, apply_id: str, draft: str) -> Dict[str, object]:
     """Run `citizen draft rollback` itself, under the CLI's own locks."""
-    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    environment = _child_environment()
     command = _cli_entry(repo_root) + ["draft", "rollback", apply_id,
                "--draft", draft, "--via-studio", "--json"]
     try:
@@ -1915,7 +1939,7 @@ def _run_draft_create(repo_root: Path, draft: str) -> str:
     The CLI runs in its own session, so a timeout stops its git children with it and the
     cleanup that follows never races a checkout still in progress.
     """
-    environment = {key: value for key, value in os.environ.items() if key != "HARNESS_QUIET"}
+    environment = _child_environment()
     command = _cli_entry(repo_root) + ["draft", "create", draft, "--json"]
     try:
         child = subprocess.Popen(command, cwd=str(repo_root), env=environment, stdout=subprocess.PIPE,

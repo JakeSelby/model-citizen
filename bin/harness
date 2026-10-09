@@ -3960,6 +3960,18 @@ def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dic
         if current != args.revision:
             return studio_apply._result("refused", "stale-revision",
                                         "the draft changed since it was reviewed; review it again"), ""
+        # An open interrupted apply or rollback is what `apply` restores instead (`apply.apply`).
+        open_intents = studio_apply.unfinished_applies(home())
+        if open_intents:
+            intent = open_intents[-1]
+            if intent.get("kind") == "rollback" and intent.get("draft") != args.name:
+                return studio_apply._result("refused", "interrupted-rollback", (
+                    "an earlier %s was interrupted; restore it (`citizen draft recover`) or abandon "
+                    "it (`citizen draft recover --abandon`) first. Nothing was applied"
+                    % studio_apply.interrupted_what(intent)),
+                    apply_id=str(intent.get("apply_id", ""))), ""
+            return None, "restore the interrupted %s (%s), not apply draft %s" % (
+                studio_apply.interrupted_what(intent), intent.get("apply_id"), args.name)
         return None, "apply draft %s at revision %s to the live configuration" % (
             args.name, args.revision)
     if args.action == "rollback":
@@ -3985,9 +3997,9 @@ def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dic
         return studio_apply._result("refused", "confirmation-mismatch", (
             "the open interrupted apply is of draft %s, not %s; nothing was changed"
             % (intent.get("draft"), args.draft)), apply_id=str(intent.get("apply_id", ""))), ""
-    return None, "%s the interrupted apply %s of draft %s at revision %s" % (
-        "abandon" if args.abandon else "recover", intent.get("apply_id"), intent.get("draft"),
-        intent.get("revision"))
+    return None, "%s the interrupted %s (%s, revision %s)" % (
+        "abandon" if args.abandon else "restore", studio_apply.interrupted_what(intent),
+        intent.get("apply_id"), intent.get("revision"))
 
 
 def cmd_draft(args: argparse.Namespace) -> int:
@@ -5312,6 +5324,17 @@ def cmd_studio(args: argparse.Namespace) -> int:
         raise SystemExit("studio status and stop accept only --json")
     root = studio.state_root(home())
     static_root = REPO / "studio" / "dist"
+    loaded = presence.loader_variables()
+    if not args.action and loaded:
+        # The Studio spends and applies; one started with these could run replaced code.
+        if args.json:
+            print(json.dumps({"error": "python_loader_variables_set", "variables": loaded},
+                             sort_keys=True))
+        print("The Studio will not start while %s %s set: %s loads other code into Python. Unset "
+              "%s and start it again." % (" and ".join(loaded), "is" if len(loaded) == 1 else "are",
+                                          "it" if len(loaded) == 1 else "each",
+                                          "it" if len(loaded) == 1 else "them"), file=sys.stderr)
+        return 2
     overview_core.install(_studio_overview)
     try:
         if args._serve:
@@ -5346,7 +5369,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
                 webbrowser.open(studio.prepare_browser(root).as_uri())
             return 0
         if args.detach:
-            command = [sys.executable, str(REPO / "bin" / "harness")]
+            command = [sys.executable, "-I", str(REPO / "bin" / "harness")]
             result = studio.launch_detached(command, root, args.port)
             _studio_report(result, args.json)
             if not args.no_open:

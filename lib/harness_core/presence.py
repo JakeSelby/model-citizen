@@ -31,7 +31,10 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 REFUSED = "person_confirmation_required"
+# Interpreter variables that load code into a Python process before it runs: a CLI or Studio
+# started with one set could be running a replaced `confirm`, so it refuses instead.
 CONSENT_LEDGER = "confirmations.jsonl"
+LOADER_VARIABLES = ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONINSPECT")
 OFF = "MODEL_CITIZEN_PRESENCE_OFF"
 OSASCRIPT = "/usr/bin/osascript"
 LAUNCHCTL = "/bin/launchctl"
@@ -60,8 +63,18 @@ STUDIO_HINT = ("Start it from the Studio's own dialog on this Mac's desktop sess
                "the same way.")
 
 
+def loader_variables() -> list:
+    """The `LOADER_VARIABLES` set in this process's environment."""
+    return [name for name in LOADER_VARIABLES if os.environ.get(name)]
+
+
 def unavailable() -> Optional[str]:
     """Why presence cannot be checked here, or None. Never a reason to pass."""
+    loaded = loader_variables()
+    if loaded:
+        return "%s %s set, which can load other code into this process; unset %s and run it again" % (
+            " and ".join(loaded), "is" if len(loaded) == 1 else "are",
+            "it" if len(loaded) == 1 else "them")
     if os.environ.get(OFF):
         return "presence checks are switched off in this process"
     if platform.system() != "Darwin":
@@ -136,10 +149,10 @@ def _decisions_on() -> bool:
 def record(actor: str, words: Sequence[str], what: str) -> None:
     """Append one `studio.person-confirmed` event, which Activity shows.
 
-    It goes to the decision ledger, or, with `telemetry.decisions` off and so no ledger at all, to
-    `CONSENT_LEDGER` beside it, which Activity also reads: it is the record of a person's consent
-    to spend or change the configuration, kept whatever telemetry says. A failed write is not
-    raised."""
+    It goes to the decision ledger, or, with `telemetry.decisions` off and so no ledger written, to
+    `CONSENT_LEDGER` beside it: the record of a person's consent is kept whatever telemetry says.
+    Activity pages both as one stream. Anything running as the user can write either file, so a
+    row is a record, not proof. A failed write is not raised."""
     row = {"kind": "event", "event": "studio.person-confirmed", "id": uuid.uuid4().hex[:24],
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "detail": {"actor": actor, "outcome": "completed", "confirmed_via": "presence",

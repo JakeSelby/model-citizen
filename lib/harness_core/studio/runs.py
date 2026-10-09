@@ -1233,7 +1233,8 @@ class RunSupervisor:
     def check_start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
                     target_ref: str, *, confirmed: Optional[str], max_budget_usd: Any,
                     spend_cap_usd: Any, pricing_source: Any,
-                    case_identities: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+                    case_identities: Optional[Sequence[str]] = None,
+                    estimate_ceiling_usd: Any = None) -> Dict[str, Any]:
         """What a paid `start` with these arguments would spend, once its one-use confirmation
         token matches the exact request; the token is not used. A caller asks the person at the
         Mac (`harness_core.presence`) only after this passes, so no dialog is raised for a start
@@ -1250,6 +1251,7 @@ class RunSupervisor:
                     suite.suite_id, suite.version, parameters, target_kind, target_ref,
                     cases, spend_plan)
                 self._check_confirmation_locked(confirmed, spend_guard.confirmation_digest(request))
+                spend_guard.check_ceiling(spend_plan, estimate_ceiling_usd)
             except spend_guard.SpendGuardError as exc:
                 raise RunError(str(exc)) from exc
         return {"suite_id": suite.suite_id, "target_kind": target_kind, "target_ref": target_ref,
