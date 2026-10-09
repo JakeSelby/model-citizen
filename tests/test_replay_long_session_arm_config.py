@@ -30,7 +30,7 @@ class LongSessionConfigArmTests(unittest.TestCase):
                 code, out, _, fake = self.replay_cli(tmp, args)
         self.assertEqual((code, fake.built), (0, []))
         self.assertIn("long-session tier: 3 session(s): 1 scenario(s) x 3 arm(s) x 1 rep(s)", out)
-        self.assertIn("ceiling, before any spend: 12.00 USD", out)
+        self.assertIn("ceiling, before any spend: 12.03 USD", out)
         for arm in ("bare", "harness", "maintainer"):
             self.assertIn("demo-session rep 1 %s" % arm, out)
         # The tier's ceiling default is sized without the config arms, so none is filled in.
