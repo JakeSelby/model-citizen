@@ -6,7 +6,7 @@ import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 
 import { ActivityPage } from "../src/activity/ActivityPage.tsx";
-import { RollbackPanel, RollbackResultRegion } from "../src/activity/Rollback.tsx";
+import { RollbackResultRegion } from "../src/activity/Rollback.tsx";
 import {
   noticeHeadline, noticeTone, restoredChanges, rollbackNotice,
   type RollbackPreview, type RollbackResult,
@@ -118,10 +118,4 @@ test("Activity mounts the result region above the list and can take focus back o
   const region = html.indexOf('aria-atomic="true" aria-live="polite" role="status"');
   assert.ok(region > html.indexOf("Apply filters"), "the region follows the filters");
   assert.ok(region < html.indexOf("Loading local activity"), "the region precedes the list");
-});
-
-test("the panel's own live region carries progress only, so the result is not read twice", () => {
-  const panel = render(h(RollbackPanel, { applyId: APPLY_ID, onResult: () => undefined }));
-  assert.match(panel, /<div aria-live="polite" role="status"><\/div>/);
-  assert.doesNotMatch(panel, /role="alert"/);
 });

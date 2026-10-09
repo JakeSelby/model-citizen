@@ -4,8 +4,8 @@ import { type Ref, useRef, useState } from "react";
 import { CommandChip, StatusBadge } from "../components/StudioKit";
 import { previewRollback, rollBack } from "./api";
 import {
-  noticeHeadline, noticeTone, restoredChanges, rollbackBlocker, rollbackHeadline, rollbackNotice, shownValue,
-  type RollbackNotice, type RollbackPreview, type RollbackResult,
+  noticeHeadline, noticeTone, restoredChanges, rollbackBlocker, rollbackNotice, shownValue,
+  type RollbackNotice, type RollbackPreview,
 } from "./rollbackModel";
 
 /** The reverse diff: each key and file the apply wrote, and the value it returns to. */
@@ -36,15 +36,6 @@ export function RollbackDetails({ preview }: { preview: RollbackPreview }) {
         {preview.commands.map((item) => <CommandChip command={item.command} key={item.command} label={`Step: ${item.step}`} />)}
       </Stack>}
     </Stack>
-  );
-}
-
-export function RollbackOutcome({ result }: { result: RollbackResult }) {
-  const color = result.status === "rolled-back" ? (result.doctor.status === "attention" ? "yellow" : "green") : "red";
-  return (
-    <Alert color={color} title={rollbackHeadline(result)}>
-      <Text size="sm">{result.message}</Text>
-    </Alert>
   );
 }
 
@@ -120,12 +111,12 @@ export function RollbackResultRegion({ notice, onDismiss, dismissRef }: ResultPr
   );
 }
 
-type Props = { applyId: string; onChanged?: () => void; onResult?: (notice: RollbackNotice) => void };
+type Props = { applyId: string; onChanged?: () => void; onResult: (notice: RollbackNotice) => void };
 
 /**
- * One-step rollback of the apply an Activity entry records: preview, confirm, roll back. With
- * `onResult` the finished rollback is handed to the page, which keeps it on screen; the panel's own
- * live region then carries only progress, so the result is not announced twice.
+ * One-step rollback of the apply an Activity entry records: preview, confirm, roll back. The
+ * finished rollback goes to `onResult`, and the page keeps it on screen; the panel's own live region
+ * carries only progress, so the result is not announced twice.
  */
 export function RollbackPanel({ applyId, onChanged, onResult }: Props) {
   const [preview, setPreview] = useState<RollbackPreview | null>(null);
@@ -149,12 +140,8 @@ export function RollbackPanel({ applyId, onChanged, onResult }: Props) {
   }
 
   function finish(notice: RollbackNotice) {
-    if (onResult) {
-      setMessage("");
-      onResult(notice);
-    } else {
-      setMessage(noticeHeadline(notice));
-    }
+    setMessage("");
+    onResult(notice);
   }
 
   async function runRollback() {

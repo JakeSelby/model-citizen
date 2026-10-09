@@ -32,7 +32,7 @@ import { focusedEntry, isFocused, missingFocus, rollbackTarget, type RollbackNot
 import "./activity.css";
 
 type RowProps = {
-  entry: ActivityEntry; focused?: boolean; onChanged?: () => void; onRollback?: (notice: RollbackNotice) => void;
+  entry: ActivityEntry; focused?: boolean; onChanged?: () => void; onRollback: (notice: RollbackNotice) => void;
 };
 
 function ActivityRow({ entry, focused = false, onChanged, onRollback }: RowProps) {
@@ -80,7 +80,7 @@ function ActivityRow({ entry, focused = false, onChanged, onRollback }: RowProps
 }
 
 type TimelineProps = {
-  payload: ActivityPayload; focus?: string; onChanged?: () => void; onRollback?: (notice: RollbackNotice) => void;
+  payload: ActivityPayload; focus?: string; onChanged?: () => void; onRollback: (notice: RollbackNotice) => void;
 };
 
 export function ActivityTimeline({ payload, focus = "", onChanged, onRollback }: TimelineProps) {
@@ -112,6 +112,9 @@ export function ActivityPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [notice, setNotice] = useState<RollbackNotice | null>(null);
   const requestGate = useRef(new ActivityRequestGate());
+  // A rollback's refresh runs from the render it was clicked in; it reads the filters applied now.
+  const appliedFilters = useRef(filters);
+  useEffect(() => { appliedFilters.current = filters; }, [filters]);
   const list = useRef<HTMLElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const dismiss = useRef<HTMLButtonElement>(null);
@@ -162,7 +165,7 @@ export function ActivityPage() {
     const request = requestGate.current.next();
     setLoadingMore(false);
     try {
-      const next = await loadActivity(filters, "", 25, request.signal);
+      const next = await loadActivity(appliedFilters.current, "", 25, request.signal);
       if (requestGate.current.accepts(request.generation)) {
         setError("");
         setPayload(next);
@@ -172,6 +175,9 @@ export function ActivityPage() {
           && (!(reason instanceof Error) || reason.name !== "AbortError")) {
         setError(reason instanceof Error ? reason.message : "Activity unavailable.");
       }
+    } finally {
+      // This request may have cancelled a filter load, which then never clears its own flag.
+      if (requestGate.current.accepts(request.generation)) setLoading(false);
     }
   }
 

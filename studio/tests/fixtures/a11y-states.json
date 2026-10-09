@@ -207,7 +207,7 @@
     "nothing_changed": true
   },
   "rollbackResult": {
-    "_from": "studio/tests/rollback.test.ts result({}); the accessibility stub serves it with rollbackPreview as its review, for the completed-rollback audit",
+    "_from": "studio/tests/rollback.test.ts result({}); the accessibility stub serves it for the completed-rollback audit with rollbackPreview as its review, nothing_changed false as the engine sets it after a rollback (lib/harness_core/studio/rollback.py)",
     "schema_version": 1,
     "status": "rolled-back",
     "applied": false,

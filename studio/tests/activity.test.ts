@@ -70,7 +70,7 @@ const payload: ActivityPage = {
 
 test("activity renders command text as data with immutable provenance links", () => {
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(ActivityTimeline, { payload }))));
+    h(ActivityTimeline, { payload, onRollback: () => undefined }))));
   assert.match(html, /&lt;script&gt;globalThis\.activityInjected = true&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>globalThis\.activityInjected/);
   assert.match(html, /href="\/library\?path=policy\/hooks\/grade-bash\.py"/);
@@ -87,7 +87,7 @@ test("a bounded empty page offers to continue through remaining rows", () => {
     payload.sources[1],
   ] };
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(ActivityTimeline, { payload: partial }))));
+    h(ActivityTimeline, { payload: partial, onRollback: () => undefined }))));
   assert.match(html, />decision-log<\/code>/);
   assert.match(html, />partial<\/span>/);
   assert.match(html, /2 malformed rows skipped/);
@@ -121,7 +121,7 @@ test("older pages merge without duplicating immutable entries", () => {
 test("an exhausted empty query remains a true no-match state", () => {
   const exhausted = { ...payload, entries: [], next_cursor: "", next_command: "" };
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(ActivityTimeline, { payload: exhausted }))));
+    h(ActivityTimeline, { payload: exhausted, onRollback: () => undefined }))));
   assert.match(html, /No activity matches/);
   assert.doesNotMatch(html, /More rows remain/);
 });
