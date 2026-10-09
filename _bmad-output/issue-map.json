@@ -8672,6 +8672,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B183",
+      "github_number": 1170,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1170",
+      "title": "fix(benchmarks): micro-stop-gate fails the only fix the stop gate accepts",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B183.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-S333",
       "github_number": 1171,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1171",
