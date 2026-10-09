@@ -64,6 +64,14 @@ A linked git worktree is trusted when its main checkout is. Every timeout, force
 and mid-run tree change is logged with its reason and the seconds the gate ran: the decision
 row carries `release_reason` and `elapsed_seconds`, and every row whose gate ran names its `gate_block`.
 
+Every gate run is recorded with its commit, tree, exit code and time: the stop gate's own runs and
+`citizen gate`, which runs the `## Gate` block. Two checks read the record. At Stop, a final
+message claiming the tests or the gate pass is blocked once when the newest run is not green on
+the tree as it is now. Before a push, `grade-bash` asks, at any stance, unless a green `## Gate`
+run is recorded for the commit at HEAD with no tracked changes; a push adding only `docs/`,
+`changelog.d/` or top-level Markdown, a branch deletion and a repository with no gate are exempt.
+Each checked claim and push is a decision row (`check: pass_claim`, or `gate` on the Bash row).
+
 Constrained roles use [isolated CLI workers](role-workers.md), with shared role/stance resolution
 and fixed native tool controls. The harness validates and publishes planner content to a new
 approved artifact path. Direct native role defaults are not confinement: Codex can reapply parent

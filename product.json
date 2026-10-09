@@ -22,7 +22,7 @@
         },
         {
           "name": "Stop gate",
-          "line": "The turn doesn't end while your repo's own gate is red.",
+          "line": "The turn doesn't end while your repo's own gate is red, and a claim that tests pass or a push needs a fresh green run of it.",
           "doc": "claude/hooks/stop-gate.py"
         },
         {
