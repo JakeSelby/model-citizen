@@ -517,7 +517,7 @@ development_status:
   ah-b133-fix-coordination-let-a-subagent-write-paths-its: ready-for-dev
   ah-b134-studio-tests-leave-draft-branches-in-the-shared: ready-for-dev
   ah-b135-an-escaped-quote-inside-hides-a-later-git-push: ready-for-dev
-  ah-b136-studio-draft-lookup-fails-when-another-session: backlog
+  ah-b136-studio-draft-lookup-fails-when-another-session: ready-for-dev
   ah-b137-studio-run-catalog-discovery-blocks-run-history: backlog
   ah-b138-concurrent-first-studio-lock-opens-fail-with: backlog
   ah-b139-studio-target-clones-strip-refs-one-subprocess: backlog
