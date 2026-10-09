@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
-from typing import Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from harness_core import overview, presence, workers
 
@@ -712,7 +712,13 @@ def _native_start(handler: Handler, route: Route) -> None:
             or not isinstance(request.get("confirmation_token"), str)):
         handler._error(400, "invalid_request")
         return
-    if not _person_present(handler, "a paid native acceptance run"):
+    try:
+        checked = handler.server.mutations.call(lambda: _native_adapter(handler).check(
+            request["selection"], request["spend"], request["confirmation_token"]))
+    except (native_acceptance.NativeAcceptanceError, runs.RunError):
+        handler._error(400, "native_acceptance_refused")
+        return
+    if not _person_present(handler, presence.spend_reason(checked)):
         return
     try:
         payload = handler.server.mutations.call(lambda: _native_adapter(handler).start(
@@ -758,6 +764,24 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
     return replay.ReplayAdmission(
         handler.server.repo_root, handler.server.store.path,
         handler.server.run_supervisor, handler.server.target_service)
+
+
+def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+    """The dialog's words for a replay start, once its token matches the exact request
+    (`RunSupervisor.check_start`, through `mutations` as the start is, since both read the run
+    index); a mismatch is the route's own refusal, before any dialog."""
+    base = (admission.admission if isinstance(admission, definitive_launch.DefinitiveLaunch)
+            else admission)  # a definitive launch wraps the replay
+    launch = replay.launch_payload(confirmed, token, base.repository)
+    try:
+        checked = handler.server.mutations.call(lambda: base.supervisor.check_start(
+            launch["suite_id"], launch["parameters"], launch["target_kind"], launch["target_ref"],
+            confirmed=launch["confirmed"], max_budget_usd=launch["max_budget_usd"],
+            spend_cap_usd=launch["spend_cap_usd"], pricing_source=launch["pricing_source"],
+            case_identities=launch["case_identities"]))
+    except runs.RunError as exc:
+        raise replay.ReplayError(str(exc)) from exc
+    return presence.spend_reason(checked, launch["targets"])
 
 
 def _replay_launch(handler: Handler, value: Any) -> Any:
@@ -808,7 +832,8 @@ def _replay_start(handler: Handler, route: Route) -> None:
     try:
         admission = _replay_launch(handler, request["request"])
         confirmed = admission.confirm(request["request"])
-        if not _person_present(handler, "a paid live replay"):
+        reason = _replay_spend(handler, admission, confirmed, request["confirmation_token"])
+        if not _person_present(handler, reason):
             return
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
@@ -993,10 +1018,12 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
             request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
+        reason = "test draft %s: %s" % (request["draft"], _replay_spend(
+            handler, admission, confirmed, request["confirmation_token"]))
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
-    if not _person_present(handler, "a paid draft test"):
+    if not _person_present(handler, reason):
         return
     root = handler.server.run_supervisor.state_root
     try:
@@ -1054,6 +1081,21 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
+
+
+def _eval_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+    """The dialog's words for a paid eval tier, once its token matches the exact request."""
+    if not isinstance(token, str) or not token or len(token) > 512:
+        raise eval_tiers.EvalTierError("a paid tier needs its one-use confirmation token",
+                                       "invalid_request")
+    try:
+        checked = handler.server.mutations.call(lambda: admission.supervisor.check_start(
+            confirmed.suite_id, confirmed.parameters(admission.repository), confirmed.target_kind,
+            confirmed.target_ref, confirmed=token, max_budget_usd=confirmed.max_budget_usd,
+            spend_cap_usd=confirmed.spend_cap_usd, pricing_source=eval_tiers.PRICING_SOURCE))
+    except runs.RunError as exc:
+        raise eval_tiers.EvalTierError(str(exc)) from exc
+    return presence.spend_reason(checked)
 
 
 def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
@@ -1121,7 +1163,8 @@ def _evals_start(handler: Handler, route: Route) -> None:
     try:
         admission = _eval_admission(handler)
         confirmed = admission.confirm(request["request"])
-        if not _person_present(handler, "a paid eval tier"):
+        reason = _eval_spend(handler, admission, confirmed, request["confirmation_token"])
+        if not _person_present(handler, reason):
             return
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
@@ -1755,9 +1798,10 @@ def _draft_recover(handler: Handler, route: Route) -> None:
         handler._error(400, "invalid_request")
         return
     # `confirm` is the interrupted apply's draft, typed back; the CLI refuses any other draft.
-    payload = handler.server.mutations.call(lambda: _run_draft_recover(
+    # Outside `mutations`, as `_draft_apply` explains.
+    payload = _run_draft_recover(
         handler.server.repo_root, request["action"], request["confirm"],
-    ))
+    )
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -1801,9 +1845,10 @@ def _draft_rollback(handler: Handler, route: Route) -> None:
         handler._error(400, "invalid_request")
         return
     # `confirm` is the applied draft's name, typed back; the CLI refuses any other draft.
-    payload = handler.server.mutations.call(lambda: _run_draft_rollback(
+    # Outside `mutations`, as `_draft_apply` explains.
+    payload = _run_draft_rollback(
         handler.server.repo_root, request["apply_id"], request["confirm"],
-    ))
+    )
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -1820,9 +1865,12 @@ def _draft_apply(handler: Handler, route: Route) -> None:
         # Applying changes the live harness, so the request must name the draft it applies.
         handler._error(400, "confirmation_required")
         return
-    payload = handler.server.mutations.call(lambda: _run_draft_apply(
+    # Not through `mutations`: the CLI child asks the person at the Mac and may wait on that
+    # dialog, which must not hold other requests; it takes the CLI's own locks, as it does
+    # when run from a terminal beside the Studio.
+    payload = _run_draft_apply(
         handler.server.repo_root, request["draft"], request["revision"],
-    ))
+    )
     route.response_schema.validate(payload)
     handler._json(200, payload)
 

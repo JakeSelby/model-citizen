@@ -19,6 +19,7 @@ import io
 import json
 import os
 import pty
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,7 +31,7 @@ from isolation import isolate_home
 from test_harness import REPO, harness
 
 from harness_core import lifecycle, presence
-from harness_core.studio import activity, headless, replay, server
+from harness_core.studio import activity, eval_tiers, headless, mutations, replay, runs, server
 
 HOOKS = REPO / "policy" / "hooks"
 
@@ -75,6 +76,25 @@ FREE = (
     "python3 -c 'print(1)'",
 )
 APPLY = ["draft", "apply", "tuning", "--revision", "b" * 40, "--json"]
+PREFLIGHT = "apply draft tuning at revision %s to the live configuration" % ("b" * 40)
+# The CLI in a child with the presence check on, where the person at the Mac declines: `confirm`
+# records what it was asked and answers no, and the host counts as able to ask, so the refusal
+# can only be the person's. Written to a temporary directory by the test that runs it.
+DECLINING_CLI = """import importlib.machinery, importlib.util, sys
+sys.path.insert(0, %(lib)r)
+from harness_core import presence
+def declined(reason):
+    with open(%(asked)r, "a") as handle:
+        handle.write(reason + "\\n")
+    return False
+presence.confirm = declined
+presence.unavailable = lambda: None
+loader = importlib.machinery.SourceFileLoader("declining_harness", %(cli)r)
+module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+loader.exec_module(module)
+module._draft_preflight = lambda args, repo: (None, %(reason)r)
+sys.exit(module.main())
+"""
 APPLIED = {"applied": True, "status": "applied", "message": "applied", "log": [],
            "doctor": {"checks": []}, "apply_id": "d" * 32}
 
@@ -221,6 +241,10 @@ class AgentCannotConfirm(Home):
                                      side_effect=lambda reason: self.asked.append(reason) or False)
         declined.start()
         self.addCleanup(declined.stop)
+        # The draft, apply and interrupted apply each names exist, so only the person refuses.
+        found = mock.patch.object(harness, "_draft_preflight", return_value=(None, PREFLIGHT))
+        found.start()
+        self.addCleanup(found.stop)
 
     def test_a_forged_grant_under_a_relocated_home_does_not_spend(self):
         """Finding 1: a grant file the agent builds under its own HARNESS_HOME."""
@@ -249,11 +273,19 @@ class AgentCannotConfirm(Home):
             apply.assert_not_called()
 
     def test_a_real_pty_fed_yes_to_a_child_cli_does_not_spend(self):
-        """Finding 2 end to end: the CLI under a pseudo-terminal, `yes` written to it."""
+        """Finding 2 end to end: the CLI under a pseudo-terminal with `yes` written to it and the
+        presence check on, not switched off. The person declines, and that is why it refuses."""
+        directory = Path(tempfile.mkdtemp(prefix="pty-presence-"))
+        self.addCleanup(shutil.rmtree, str(directory), True)
+        asked = directory / "asked.txt"
+        launcher = directory / "declining_cli.py"
+        launcher.write_text(DECLINING_CLI % {
+            "lib": str(REPO / "lib"), "asked": str(asked), "cli": str(REPO / "bin" / "harness"),
+            "reason": PREFLIGHT}, encoding="utf-8")
         env = {k: v for k, v in os.environ.items()
-               if not k.startswith(("CLAUDE", "CODEX"))}
+               if not k.startswith(("CLAUDE", "CODEX")) and k != presence.OFF}
         leader, follower = pty.openpty()
-        child = subprocess.Popen([sys.executable, str(REPO / "bin" / "harness"), *APPLY],
+        child = subprocess.Popen([sys.executable, str(launcher), *APPLY],
                                  stdin=follower, stdout=subprocess.PIPE, stderr=follower,
                                  env=env, cwd=str(REPO))
         os.close(follower)
@@ -263,6 +295,9 @@ class AgentCannotConfirm(Home):
         answer = json.loads(out.decode().strip().splitlines()[-1])
         self.assertEqual((child.returncode, answer["error_code"], answer["applied"]),
                          (1, "person-confirmation-required", False))
+        self.assertIn("declined, cancelled or failed", answer["message"])
+        self.assertNotIn("switched off", answer["message"])
+        self.assertEqual(asked.read_text(encoding="utf-8").splitlines(), [PREFLIGHT])
 
     def test_a_declined_prompt_leaves_nothing_a_rerun_can_use(self):
         """Finding 3: the native prompt declined, then the same words run another way."""
@@ -312,7 +347,9 @@ class AgentCannotConfirm(Home):
 
 
 class SpendRoutes(Home):
-    """Finding 4: both faces of each paid start ask the person before the run starts."""
+    """Both faces of each paid start check the request, then ask the person, then start."""
+
+    REASON = "start the paid live-replay run of 2 case(s) on installed current vs draft d"
 
     def call(self, group, body):
         return headless.call(REPO, self.home / "state" / "studio", group, "start", body)
@@ -325,9 +362,12 @@ class SpendRoutes(Home):
     def test_a_declined_person_stops_each_start_before_it_runs(self):
         admission = self.admission()
         native = mock.Mock()
+        native.check.return_value = {"suite_id": "native-acceptance", "case_count": 1}
         with mock.patch.object(presence, "confirm", return_value=False), \
                 mock.patch.object(server, "_replay_launch", return_value=admission), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON), \
                 mock.patch.object(server, "_eval_admission", return_value=admission), \
+                mock.patch.object(server, "_eval_spend", return_value=self.REASON), \
                 mock.patch.object(server, "_native_adapter", return_value=native), \
                 mock.patch.object(server, "_native_request",
                                   return_value={"selection": {}, "spend": {},
@@ -341,9 +381,62 @@ class SpendRoutes(Home):
         admission.start_confirmed.assert_not_called()
         native.start.assert_not_called()
 
+    def test_a_request_that_fails_its_check_never_asks_the_person(self):
+        """A wrong token, spend or id is refused before any dialog is raised."""
+        admission = self.admission()
+        native = mock.Mock()
+        native.check.side_effect = runs.RunError("paid run confirmation does not match")
+        asked = mock.Mock(return_value=True)
+        with mock.patch.object(presence, "confirm", asked), \
+                mock.patch.object(server, "_replay_launch", return_value=admission), \
+                mock.patch.object(server, "_replay_spend",
+                                  side_effect=replay.ReplayError("token mismatch")), \
+                mock.patch.object(server, "_eval_admission", return_value=admission), \
+                mock.patch.object(server, "_eval_spend", side_effect=eval_tiers.EvalTierError(
+                    "token mismatch", "invalid_request")), \
+                mock.patch.object(server, "_native_adapter", return_value=native), \
+                mock.patch.object(server, "_native_request",
+                                  return_value={"selection": {}, "spend": {},
+                                                "confirmation_token": "t"}):
+            for group, body in (("replay", {"request": {}, "confirmation_token": "t"}),
+                                ("eval", {"request": {}, "confirmation_token": "t"}),
+                                ("native", {})):
+                with self.subTest(group=group):
+                    self.assertEqual(self.call(group, body)[0], 400)
+        asked.assert_not_called()
+        admission.start_confirmed.assert_not_called()
+        native.start.assert_not_called()
+
+    def test_the_dialog_names_the_suite_targets_estimate_and_caps(self):
+        admission = self.admission()
+        asked = []
+        launch = {"suite_id": "live-replay", "parameters": {}, "target_kind": "installed",
+                  "target_ref": "current", "confirmed": "t", "max_budget_usd": "0.50",
+                  "spend_cap_usd": "2.00", "pricing_source": "api_credit",
+                  "case_identities": ["a", "b"],
+                  "targets": [{"kind": "installed", "ref": "current"},
+                              {"kind": "draft", "ref": "tuning"}]}
+        admission.supervisor.check_start.return_value = {
+            "suite_id": "live-replay", "target_kind": "installed", "target_ref": "current",
+            "case_count": 2, "estimate_usd": 0.31, "max_budget_usd": "0.50",
+            "spend_cap_usd": "2.00", "pricing_source": "api_credit"}
+        with mock.patch.object(presence, "confirm",
+                               side_effect=lambda reason: asked.append(reason) or False), \
+                mock.patch.object(server, "_replay_launch", return_value=admission), \
+                mock.patch.object(server.replay, "launch_payload", return_value=launch):
+            self.assertEqual(self.call("replay", {"request": {}, "confirmation_token": "t"})[0],
+                             403)
+        self.assertEqual(asked, [
+            "start the paid live-replay run of 2 case(s) on installed current vs draft tuning: "
+            "estimated $0.31, at most $0.50 for the run and $2.00 against the spend cap "
+            "(api_credit)"])
+        _args, kwargs = admission.supervisor.check_start.call_args
+        self.assertEqual((kwargs["confirmed"], kwargs["case_identities"]), ("t", ["a", "b"]))
+
     def test_a_present_person_reaches_the_start_and_is_recorded_in_activity(self):
         admission = self.admission()
-        with mock.patch.object(server, "_replay_launch", return_value=admission):
+        with mock.patch.object(server, "_replay_launch", return_value=admission), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON):
             status, _body = self.call("replay", {"request": {}, "confirmation_token": "t"})
         self.assertEqual(status, 400)
         admission.start_confirmed.assert_called_once()
@@ -354,19 +447,55 @@ class SpendRoutes(Home):
     def test_the_draft_test_start_asks_before_it_claims_or_starts(self):
         admission = self.admission()
         draft_tests = server.draft_tests
-        with mock.patch.object(presence, "confirm", return_value=False), \
+        asked = []
+        with mock.patch.object(presence, "confirm",
+                               side_effect=lambda reason: asked.append(reason) or False), \
                 mock.patch.object(draft_tests, "parse_plan"), \
                 mock.patch.object(draft_tests, "identity"), \
                 mock.patch.object(draft_tests, "check_request"), \
                 mock.patch.object(draft_tests, "power"), \
                 mock.patch.object(draft_tests, "start_registration", return_value=(None, [])), \
                 mock.patch.object(server.replay.ReplayRequest, "parse"), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON), \
                 mock.patch.object(server, "_replay_admission", return_value=admission):
             status, body = self.call("draft-test", {"draft": "d", "request": {},
                                                     "confirmation_token": "t", "effect": 0.1,
                                                     "cv": 0.2})
         self.assertEqual((status, body), (403, {"error": "person_confirmation_required"}))
+        self.assertEqual(asked, ["test draft d: " + self.REASON])
         admission.start_confirmed.assert_not_called()
+
+    def test_a_studio_apply_rollback_or_recover_holds_no_shared_executor(self):
+        """A CLI child waiting on the dialog must not hold other Studio requests."""
+        refused = harness.studio_apply._result("refused", "person-confirmation-required", "no")
+        refused["applied"] = False
+        routes = (("/api/configure/apply", "_run_draft_apply",
+                   {"draft": "tuning", "revision": "b" * 40, "confirm": "tuning"}),
+                  ("/api/configure/apply/rollback", "_run_draft_rollback",
+                   {"apply_id": "c" * 32, "confirm": "tuning"}),
+                  ("/api/configure/apply/recover", "_run_draft_recover",
+                   {"action": "restore", "confirm": "tuning"}))
+        real = mutations.MutationExecutor.call
+        inside = []  # one entry per operation the executor is running now
+
+        def tracking(executor, operation):
+            def counted():
+                inside.append(operation)
+                try:
+                    return operation()
+                finally:
+                    inside.pop()
+            return real(executor, counted)
+
+        for path, runner, body in routes:
+            held = []
+            with self.subTest(path=path), \
+                    mock.patch.object(mutations.MutationExecutor, "call", tracking), \
+                    mock.patch.object(server, runner, side_effect=lambda *a, **k: (
+                        held.append(len(inside)), refused)[1]):
+                status, _answer = headless.call_route(
+                    REPO, self.home / "state" / "studio", "POST", path, body)
+                self.assertEqual((status, held), (200, [0]))
 
 
 class Recorded(Home):
@@ -376,7 +505,8 @@ class Recorded(Home):
         config = self.home / ".config" / "agent-harness" / "config.json"
         config.parent.mkdir(parents=True)
         config.write_text(json.dumps({"telemetry": {"decisions": False}}))
-        with mock.patch.object(harness.studio_apply, "apply", return_value=APPLIED) as apply:
+        with mock.patch.object(harness.studio_apply, "apply", return_value=APPLIED) as apply, \
+                mock.patch.object(harness, "_draft_preflight", return_value=(None, PREFLIGHT)):
             code, _printed, _said = self.cli(*APPLY)
         self.assertEqual(code, 0)
         apply.assert_called_once()
@@ -398,6 +528,64 @@ class Recorded(Home):
         self.assertEqual(seen[0][1:], [str(REPO / "bin" / "harness"), *APPLY[:-1],
                                        "--via-studio", "--json"])
         self.assertEqual(self.store_files(), [])
+
+
+class CliPreflight(Home):
+    """The CLI checks what it can without a lock before it asks, and names it in the dialog."""
+
+    def setUp(self):
+        super().setUp()
+        self.asked = []
+        declined = mock.patch.object(presence, "confirm",
+                                     side_effect=lambda reason: self.asked.append(reason) or False)
+        declined.start()
+        self.addCleanup(declined.stop)
+
+    def test_an_unknown_draft_or_stale_revision_is_refused_without_asking(self):
+        code, printed, _said = self.cli(*APPLY)
+        self.assertEqual((code, json.loads(printed)["error_code"]), (1, "not-found"))
+        with mock.patch.object(harness.studio.drafts, "read_snapshot", return_value="f" * 40):
+            code, printed, _said = self.cli(*APPLY)
+        self.assertEqual((code, json.loads(printed)["error_code"]), (1, "stale-revision"))
+        self.assertEqual(self.asked, [])
+
+    def test_the_apply_dialog_names_the_draft_and_revision(self):
+        with mock.patch.object(harness.studio.drafts, "read_snapshot", return_value="b" * 40), \
+                mock.patch.object(harness.studio_apply, "apply") as apply:
+            self.refused(*APPLY)
+            apply.assert_not_called()
+        self.assertEqual(self.asked, [PREFLIGHT])
+
+    def test_an_unknown_apply_or_nothing_to_recover_is_refused_without_asking(self):
+        code, printed, _said = self.cli("draft", "rollback", "c" * 32, "--draft", "tuning",
+                                        "--json")
+        self.assertEqual((code, json.loads(printed)["error_code"]), (1, "unknown-apply"))
+        code, printed, _said = self.cli("draft", "recover", "--draft", "tuning", "--json")
+        self.assertEqual((code, json.loads(printed)["error_code"]), (1, "nothing-to-recover"))
+        self.assertEqual(self.asked, [])
+
+    def test_the_recover_dialog_names_the_interrupted_apply(self):
+        intent = {"apply_id": "e" * 32, "draft": "tuning", "revision": "b" * 40}
+        with mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]), \
+                mock.patch.object(harness.studio_apply, "recover") as recover:
+            self.refused("draft", "recover", "--draft", "tuning", "--json")
+            recover.assert_not_called()
+        self.assertEqual(self.asked, ["recover the interrupted apply %s of draft tuning at "
+                                      "revision %s" % ("e" * 32, "b" * 40)])
+
+    def test_a_paid_catalog_start_with_a_wrong_token_is_refused_without_asking(self):
+        supervisor = mock.Mock()
+        supervisor.spend_preview.return_value = {"confirmation_required": True}
+        supervisor.check_start.side_effect = harness.studio.runs.RunError(
+            "paid run confirmation does not match the exact displayed request")
+        argv = ["runs", "start", "paid-suite", "--target-kind", "installed", "--target-ref",
+                "current", "--confirm-spend", "a" * 64, "--json"]
+        with mock.patch.object(harness.studio.runs, "RunSupervisor", return_value=supervisor), \
+                mock.patch.object(harness.studio_free_suites, "start_refusal", return_value=None):
+            code, _printed, _said = self.cli(*argv)
+        self.assertNotEqual(code, 0)
+        self.assertEqual(self.asked, [])
+        supervisor.start.assert_not_called()
 
 
 class PresenceCheck(unittest.TestCase):
@@ -452,21 +640,33 @@ class PresenceCheck(unittest.TestCase):
         self.assertEqual(argv[0], "/usr/bin/osascript")
         self.assertNotIn(planted, json.dumps(kwargs["env"]))
 
-    def test_no_shipped_code_replaces_or_bypasses_the_check(self):
-        """Only the test suite swaps `confirm`; shipped code calls it and nothing else says yes."""
+    def test_nothing_in_the_repository_replaces_the_check_outside_the_suite_harness(self):
+        """No tracked file, tests included, swaps `presence.confirm` except the suite's own
+        in-process stub, its temp-dir launcher source and this module's declining child; and no
+        runnable stub CLI is tracked at all."""
+        allowed = {"tests/isolation.py", "tests/presence_support.py",
+                   "tests/test_cli_confirmation.py"}
+        # Built from parts, so this test's own text is not what it finds.
+        patterns = ("presence" + ".confirm =", "presence" + ".confirm=",
+                    "setattr(" + "presence", "real_" + "confirm", "presence" + "_stub")
+        tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True,
+                                 check=True).stdout.decode("utf-8").split("\0")
         offenders = []
-        for top in ("bin", "lib", "policy", "adapters"):
-            for path in (REPO / top).rglob("*"):
-                if not path.is_file() or path.suffix not in ("", ".py"):
-                    continue
-                try:
-                    text = path.read_text(encoding="utf-8")
-                except (UnicodeError, OSError):
-                    continue
-                if ("presence.confirm =" in text or "presence_stub_cli" in text
-                        or "real_confirm" in text):
-                    offenders.append(str(path.relative_to(REPO)))
+        for name in filter(None, tracked):
+            if "stub_cli" in name or "presence_stub" in name:
+                offenders.append(name)
+                continue
+            path = REPO / name
+            if name in allowed or not path.is_file() or path.suffix not in ("", ".py", ".sh"):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeError, OSError):
+                continue
+            if any(pattern in text for pattern in patterns):
+                offenders.append(name)
         self.assertEqual(offenders, [])
+        self.assertGreater(len(tracked), 100)
 
     def test_where_presence_cannot_be_checked_it_refuses_without_asking(self):
         for setup, manager, system in ((lambda: None, "Aqua\n", "Linux"),

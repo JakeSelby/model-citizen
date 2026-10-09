@@ -416,8 +416,8 @@ class Home:
 
     def cli(self, *args):
         import subprocess
-        # As a person who confirmed at the Mac (`presence_stub_cli.py`).
-        done = subprocess.run([sys.executable, str(REPO / "tests" / "presence_stub_cli.py"), *args], cwd=REPO,
+        # As a person who confirmed at the Mac (`presence_support.present_cli`).
+        done = subprocess.run([*presence_support.present_cli(), *args], cwd=REPO,
                               env=self.env, capture_output=True, text=True, timeout=600)
         return done.returncode, json.loads(done.stdout.strip().splitlines()[-1])
 

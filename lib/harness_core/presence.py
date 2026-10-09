@@ -28,7 +28,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 REFUSED = "person_confirmation_required"
 CONSENT_LEDGER = "confirmations.jsonl"
@@ -36,6 +36,7 @@ OFF = "MODEL_CITIZEN_PRESENCE_OFF"
 OSASCRIPT = "/usr/bin/osascript"
 LAUNCHCTL = "/bin/launchctl"
 TIMEOUT = 180
+REASON_LIMIT = 480
 # Set only by Codex's sandboxed shell; tighten-only, since it can only make the check refuse.
 CODEX_VARIABLES = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")
 PRESENT = "present"
@@ -84,13 +85,27 @@ def confirm(reason: str) -> bool:
     if unavailable() is not None:
         return False
     try:
-        done = subprocess.run([OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT, str(reason)[:200]],
+        done = subprocess.run([OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT, str(reason)[:REASON_LIMIT]],
                               capture_output=True, text=True, timeout=TIMEOUT,
                               env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
                               stdin=subprocess.DEVNULL, cwd="/")
     except (OSError, subprocess.SubprocessError):
         return False
     return done.returncode == 0 and done.stdout.strip() == PRESENT
+
+
+def spend_reason(checked: Dict[str, Any], targets: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+    """The dialog's words for a paid start, from `RunSupervisor.check_start`: the suite, its
+    targets, the estimate and the caps, so a yes covers only the spend it names."""
+    named = targets or [{"kind": checked.get("target_kind"), "ref": checked.get("target_ref")}]
+    where = " vs ".join("%s %s" % (item.get("kind"), item.get("ref")) for item in named)
+    estimate = checked.get("estimate_usd")
+    return ("start the paid %s run of %s case(s) on %s: estimated %s, at most $%s for the run "
+            "and $%s against the spend cap (%s)" % (
+                checked.get("suite_id"), checked.get("case_count"), where,
+                "unknown (no history)" if estimate is None else "$%s" % estimate,
+                checked.get("max_budget_usd"), checked.get("spend_cap_usd"),
+                checked.get("pricing_source")))
 
 
 def refusal(what: str) -> str:

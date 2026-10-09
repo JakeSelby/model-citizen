@@ -1203,16 +1203,11 @@ class RunSupervisor:
             self._recover_locked()
             self._admit_locked()
 
-    def start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
-              target_ref: str, *, confirmed: Optional[str] = None,
-              max_budget_usd: Any = None, spend_cap_usd: Any = None,
-              pricing_source: Optional[str] = None,
-              case_identities: Optional[Sequence[str]] = None,
-              rerun_of: Optional[str] = None,
-              expected_target: Optional[Mapping[str, Any]] = None,
-              estimate_ceiling_usd: Any = None,
-              expected_argv: Optional[Sequence[str]] = None,
-              expected_cases: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    def _start_request(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
+                       target_ref: str, case_identities: Optional[Sequence[str]],
+                       expected_argv: Optional[Sequence[str]] = None,
+                       expected_cases: Optional[Sequence[str]] = None) -> tuple:
+        """(suite, argv, cases) a start would run, refusing what `start` refuses before its lock."""
         catalog = SuiteCatalog.load(self.catalog_path)
         suite = catalog.get(suite_id)
         argv = suite.render(parameters, target_kind, target_ref)
@@ -1233,6 +1228,48 @@ class RunSupervisor:
                            for value in case_identities)):
                 raise RunError("paid run case identities are invalid")
             cases = list(case_identities)
+        return suite, argv, cases
+
+    def check_start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
+                    target_ref: str, *, confirmed: Optional[str], max_budget_usd: Any,
+                    spend_cap_usd: Any, pricing_source: Any,
+                    case_identities: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        """What a paid `start` with these arguments would spend, once its one-use confirmation
+        token matches the exact request; the token is not used. A caller asks the person at the
+        Mac (`harness_core.presence`) only after this passes, so no dialog is raised for a start
+        that would be refused; `start` checks everything again."""
+        suite, _argv, cases = self._start_request(suite_id, parameters, target_kind, target_ref,
+                                                  case_identities)
+        if suite.cost_class != "spends_usage":
+            raise RunError("only a suite that spends usage needs a person's confirmation")
+        with self.lock():
+            try:
+                spend_plan = spend_guard.plan(self._records(), suite.suite_id, cases,
+                                              max_budget_usd, spend_cap_usd, pricing_source)
+                request = spend_guard.confirmation_request(
+                    suite.suite_id, suite.version, parameters, target_kind, target_ref,
+                    cases, spend_plan)
+                self._check_confirmation_locked(confirmed, spend_guard.confirmation_digest(request))
+            except spend_guard.SpendGuardError as exc:
+                raise RunError(str(exc)) from exc
+        return {"suite_id": suite.suite_id, "target_kind": target_kind, "target_ref": target_ref,
+                "case_count": len(cases), "estimate_usd": spend_plan["estimate"]["amount_usd"],
+                "max_budget_usd": spend_plan["caps"]["max_budget_usd"],
+                "spend_cap_usd": spend_plan["caps"]["spend_cap_usd"],
+                "pricing_source": pricing_source}
+
+    def start(self, suite_id: str, parameters: Mapping[str, str], target_kind: str,
+              target_ref: str, *, confirmed: Optional[str] = None,
+              max_budget_usd: Any = None, spend_cap_usd: Any = None,
+              pricing_source: Optional[str] = None,
+              case_identities: Optional[Sequence[str]] = None,
+              rerun_of: Optional[str] = None,
+              expected_target: Optional[Mapping[str, Any]] = None,
+              estimate_ceiling_usd: Any = None,
+              expected_argv: Optional[Sequence[str]] = None,
+              expected_cases: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+        suite, argv, cases = self._start_request(suite_id, parameters, target_kind, target_ref,
+                                                 case_identities, expected_argv, expected_cases)
         if (suite.cost_class != "spends_usage"
                 and (confirmed is not None or max_budget_usd is not None
                      or spend_cap_usd is not None or pricing_source is not None)):

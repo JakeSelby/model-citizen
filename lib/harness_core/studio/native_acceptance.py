@@ -18,7 +18,7 @@ from pathlib import Path
 from statistics import median
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
-from . import targets
+from . import runs, targets
 
 
 MAX_PROGRESS_BYTES = 4 * 1024 * 1024
@@ -247,6 +247,21 @@ class NativeRunAdapter:
             "selection": selection.public(), "target": target,
         }
 
+    def check(self, selection_value: Any, spend_value: Any,
+              confirmation_token: Any) -> Dict[str, Any]:
+        """What `start` would spend, its token checked against the exact request and not used
+        (`RunSupervisor.check_start`); asked before the person at the Mac is."""
+        selection, spend, target, argv, parameters = self._request(
+            selection_value, spend_value)
+        if not isinstance(confirmation_token, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", confirmation_token):
+            raise NativeAcceptanceError("native acceptance confirmation token is invalid")
+        checker = getattr(self.admission, "check", None)
+        if checker is None:
+            raise NativeAcceptanceError("native acceptance cannot check this start")
+        return checker(target=target, spend=spend.public(), parameters=parameters,
+                       confirmation_token=confirmation_token)
+
     def start(self, selection_value: Any, spend_value: Any,
               confirmation_token: Any) -> Dict[str, Any]:
         selection, spend, target, argv, parameters = self._request(
@@ -404,6 +419,18 @@ class SupervisorAdmission:
         value["estimate"] = native_estimate(self.evidence_directory, len(case_identities))
         value["case_identities"] = list(case_identities)
         return value
+
+    def check(self, *, target: Mapping[str, Any], spend: Mapping[str, str],
+              parameters: Mapping[str, str], confirmation_token: str,
+              **unused: Any) -> Dict[str, Any]:
+        _service, kind, ref = self._execution_target(target)
+        try:
+            return self.supervisor.check_start(
+                self.SUITE_ID, parameters, kind, ref,
+                confirmed=confirmation_token, max_budget_usd=spend["max_budget_usd"],
+                spend_cap_usd=spend["spend_cap_usd"], pricing_source=spend["pricing_source"])
+        except runs.RunError as exc:
+            raise NativeAcceptanceError(str(exc)) from exc
 
     def start(self, *, target: Mapping[str, Any], spend: Mapping[str, str],
               parameters: Mapping[str, str], confirmation_token: str,

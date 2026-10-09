@@ -113,6 +113,16 @@ class Admission:
     def __init__(self, revision=FIRST_REV, run_id=RUN_THREE):
         self.revision, self.run_id = revision, run_id
         self.forms, self.started = [], []
+        self.repository = REPO
+        self.supervisor = self  # `check_start`, the request check made before the dialog
+
+    def check_start(self, suite_id, _parameters, kind, ref, **kwargs):
+        # The request check a start route makes before it asks the person at the Mac.
+        return {"suite_id": suite_id, "target_kind": kind, "target_ref": ref,
+                "case_count": len(kwargs.get("case_identities") or ()), "estimate_usd": None,
+                "max_budget_usd": kwargs["max_budget_usd"],
+                "spend_cap_usd": kwargs["spend_cap_usd"],
+                "pricing_source": kwargs["pricing_source"]}
 
     def _resolve(self, kind, ref):
         return target(kind, ref, BASE_REV if kind == "branch" else self.revision)

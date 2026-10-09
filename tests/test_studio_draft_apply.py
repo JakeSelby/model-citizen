@@ -23,8 +23,7 @@ from harness_core.studio import apply as draft_apply  # noqa: E402
 from harness_core.studio import drafts, module_authoring, selection_editing, server  # noqa: E402
 
 import draft_support  # noqa: E402
-
-PRESENT_CLI = Path(__file__).resolve().with_name("presence_stub_cli.py")
+import presence_support  # noqa: E402
 
 CLI = ROOT / "bin" / "harness"
 PASS = [sys.executable, "-c", "raise SystemExit(0)"]
@@ -90,8 +89,8 @@ class Home:
         self.env = env
 
     def cli(self, *args, timeout=300):
-        # As a person who confirmed at the Mac (`presence_stub_cli.py`).
-        return subprocess.run([sys.executable, str(PRESENT_CLI), *args], cwd=ROOT, env=self.env,
+        # As a person who confirmed at the Mac (`presence_support.present_cli`).
+        return subprocess.run([*presence_support.present_cli(), *args], cwd=ROOT, env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 
     def normalized(self, relative):
