@@ -334,6 +334,10 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
+        # The scheme attribute flips on the media query's change event, a frame after emulation;
+        # an audit read before it sees one scheme's ink on the other's canvas.
+        self._wait("document.documentElement.dataset.mantineColorScheme === %s" % json.dumps(scheme),
+                   "the shell did not switch to the %s scheme" % scheme)
 
     def _viewport(self, width: int, scheme: str) -> None:
         self.devtools.call("Emulation.setEmulatedMedia", {"features": [
