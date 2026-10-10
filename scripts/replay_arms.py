@@ -264,6 +264,14 @@ def _root_files(path):
     return files
 
 
+def measured_sha256(config, checkout=ROOT):
+    """The digest a configured arm records as what it measured: the configuration as the image
+    installs it, re-rooted so no host path is in it, together with the files of every root copied
+    from outside the checkout. Where those files were read from never moves it; their bytes do."""
+    return digest({"configuration": arm_configuration(config, checkout, HARNESS_ROOT),
+                   "roots": configuration_roots(config, checkout)[1]})
+
+
 def configuration_roots(config, checkout=ROOT):
     """`(sources, declared)` for the roots outside `checkout`: `{n: host path}`, which only the
     build reads, and `{n: {relative path: sha256}}`, which the declaration pins. Empty for none."""
@@ -334,8 +342,8 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
     `configuration` is a draft's whole user configuration, already re-rooted into the image
     (`arm_configuration`), for the harness arm only and never beside a selection. It is installed
     the way a selection is and declared as a `configuration` component, the digest of the installed
-    bytes; `configuration_sha` is the digest of the configuration as the draft recorded it, which
-    every row of the arm carries. `configuration_roots` pins the files of each root outside the
+    bytes; `configuration_sha` is what the arm measured (`measured_sha256`), which every row of the
+    arm carries. `configuration_roots` pins the files of each root outside the
     checkout the image holds a copy of (`configuration_roots`). An arm with no configuration has
     none of these keys."""
     if effort is not None and effort not in EFFORT_LEVELS:

@@ -263,7 +263,7 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             status, text = self.replay("--harness-config", write(tmp, EDITED, "c.json"))
         self.assertEqual(status, 0)
-        self.assertIn("harness configuration sha256 %s applied" % ARMS.configuration_sha256(EDITED), text)
+        self.assertIn("harness configuration sha256 %s applied" % ARMS.measured_sha256(EDITED), text)
 
     def test_a_refused_configuration_stops_the_replay_before_anything_is_built(self):
         with tempfile.TemporaryDirectory() as tmp, \
@@ -280,6 +280,35 @@ class CommandTests(unittest.TestCase):
                 with self.subTest(extra=extra), self.assertRaises(SystemExit) as caught:
                     self.replay("--harness-config", path, *extra)
                 self.assertIn("refused with", str(caught.exception))
+
+    def test_snapshot_config_copies_each_outside_root_once_for_every_configuration(self):
+        head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            personal = personal_root(Path(tmp) / "home" / "personal-primitives")
+            base = {"stances": {"voice": "concise"}, "primitive_roots": [str(personal)]}
+            draft = dict(base, stances={"voice": "mine"})
+            out = Path(tmp) / "snapshot"
+            got, text = self.main(["snapshot-config", "--tag", head, "--harness-config", write(tmp, base, "b.json"),
+                                   "--tag", head, "--harness-config", write(tmp, draft, "d.json"), "--out", str(out)])
+            answers = json.loads(text)["configs"]
+            self.assertEqual((got, [a["code"] for a in answers]), (0, [None, None]))
+            self.assertEqual(sorted(p.name for p in (out / "roots").iterdir()), ["0"])
+            written = [json.loads(Path(a["path"]).read_text()) for a in answers]
+            self.assertEqual([w["primitive_roots"] for w in written], [[str(out / "roots" / "0")]] * 2)
+            # The digest covers the copied files and not where they were read from.
+            self.assertEqual(answers[1]["config_sha256"], ARMS.measured_sha256(draft))
+            (personal / "stances" / "voice" / "mine.md").write_text("# Voice: mine\n\nLonger answers.\n")
+            self.assertNotEqual(ARMS.measured_sha256(draft), answers[1]["config_sha256"])
+            self.assertEqual(ARMS.measured_sha256(written[1]), answers[1]["config_sha256"])
+
+    def test_snapshot_config_answers_a_refusal_for_the_configuration_refused(self):
+        head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
+        with tempfile.TemporaryDirectory() as tmp:
+            got, text = self.main(["snapshot-config", "--tag", head, "--harness-config", write(tmp, EDITED, "a.json"),
+                                   "--tag", head, "--harness-config",
+                                   write(tmp, {"rules": {"secrets": "maybe"}}, "b.json"),
+                                   "--out", str(Path(tmp) / "snapshot")])
+        self.assertEqual((got, [a["code"] for a in json.loads(text)["configs"]]), (2, [None, ARMS.CONFIG_UNRESOLVED]))
 
     def test_check_config_answers_an_invalid_configuration_in_json(self):
         head = BENCH._git_required(REPO, "rev-parse", "HEAD").stdout.strip()
@@ -312,8 +341,7 @@ class CommandTests(unittest.TestCase):
                     answer = json.loads(text)
                     self.assertEqual((got, answer["code"]), (status, code))
                     self.assertEqual(answer["applied"], code is None and bool(config))
-                    self.assertEqual(answer["config_sha256"],
-                                     ARMS.configuration_sha256(config) if config else None)
+                    self.assertEqual(answer["config_sha256"], ARMS.measured_sha256(config) if config else None)
                     self.assertEqual(bool(answer["reason"]), code is not None)
 
 

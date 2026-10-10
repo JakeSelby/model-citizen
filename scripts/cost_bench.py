@@ -2894,7 +2894,7 @@ def harness_configuration(args):
     if applied is None:
         return None
     sources, roots = arms.configuration_roots(applied, ROOT)
-    return {"config": applied, "sha256": arms.configuration_sha256(applied), "sources": sources, "roots": roots}
+    return {"config": applied, "sha256": arms.measured_sha256(applied, ROOT), "sources": sources, "roots": roots}
 
 
 def configuration_refusal(configuration, commit, tmp=None):
@@ -2930,6 +2930,72 @@ def cmd_check_config(args):
             out.update(applied=False, code=refused[0], reason=refused[1])
     print(json.dumps(out, sort_keys=True))
     return 2 if out["code"] else 0
+
+
+def snapshot_configurations(pairs, out, tmp=None):
+    """Check and snapshot several configurations at once: `pairs` is `[(tag, config)]`. Every root
+    outside the checkout any of them names is copied once into `out/roots/<n>`, and each
+    configuration is written to `out/config-<i>.json` pointing at those copies, so every run that
+    reads the snapshot measures the same bytes whatever happens to the originals. Each answer is
+    check-config's, plus the `path` to give `--harness-config`."""
+    out = Path(out)
+    if arms._inside(os.path.realpath(str(out)), os.path.realpath(str(ROOT))):
+        raise SystemExit("cost-bench: a configuration snapshot must lie outside the checkout")
+    (out / "roots").mkdir(parents=True, exist_ok=True)
+    copied, answers = {}, []
+    for index, (tag, config) in enumerate(pairs):
+        answer = {"applied": False, "config_sha256": None, "code": None, "reason": None, "path": None}
+        answers.append(answer)
+        try:
+            found = arms._roots(config, ROOT)
+            rewritten = json.loads(json.dumps(config))
+            mapped = []
+            for entry, kind, path in found:
+                if kind != "outside":
+                    mapped.append(entry)
+                    continue
+                if path not in copied:
+                    files = arms._root_files(path)
+                    target = out / "roots" / str(len(copied))
+                    for relative in sorted(files):
+                        (target / relative).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(os.path.join(path, relative), str(target / relative))
+                    if arms._root_files(str(target)) != files:
+                        raise arms.ConfigurationRefused(arms.CONFIG_ROOT_UNREADABLE, "a primitive root outside "
+                                                        "the checkout changed while it was copied")
+                    copied[path] = str(target)
+                mapped.append(copied[path])
+            if "primitive_roots" in rewritten:
+                rewritten["primitive_roots"] = mapped
+            path = out / ("config-%d.json" % index)
+            path.write_text(json.dumps(rewritten, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            applied = arms.applied_configuration(rewritten)
+            if applied is None:
+                continue
+            answer.update(applied=True, path=str(path), config_sha256=arms.measured_sha256(applied, ROOT))
+            refused = configuration_refusal({"config": applied}, resolve_tag(ROOT, tag), tmp)
+        except arms.ConfigurationRefused as exc:
+            refused = (exc.code, exc.reason)
+        if refused:
+            answer.update(applied=False, code=refused[0], reason=refused[1])
+    return answers
+
+
+def cmd_snapshot_config(args):
+    """`snapshot-config`: `snapshot_configurations` for each `--tag` and `--harness-config` in
+    order, as one JSON line `{configs: [...]}`; 0 when every one is applied or not needed, 2 when
+    any is refused. Calls no model and builds no image."""
+    if len(args.tag) != len(args.harness_config):
+        raise SystemExit("cost-bench: snapshot-config takes one --tag per --harness-config")
+    pairs = []
+    for tag, path in zip(args.tag, args.harness_config):
+        try:
+            pairs.append((tag, read_configuration(path, "--harness-config")))
+        except arms.ConfigurationRefused:
+            pairs.append((tag, float("nan")))  # answered as invalid below
+    answers = snapshot_configurations(pairs, args.out, args.tmp)
+    print(json.dumps({"configs": answers}, sort_keys=True))
+    return 2 if any(answer["code"] for answer in answers) else 0
 
 
 def refuse_candidate(tags):
@@ -4002,6 +4068,13 @@ def main(argv=None):
     conf.add_argument("--harness-config", required=True, metavar="PATH", help="the configuration to apply")
     conf.add_argument("--inherited-config", metavar="PATH", help="the configuration the draft inherited")
     conf.add_argument("--tmp", help="parent for the checkout the configuration is resolved in")
+    snap = sub.add_parser("snapshot-config", help="check several configurations and copy each root outside "
+                          "the checkout once into --out, as one JSON line; exit 2 when any is refused")
+    snap.add_argument("--tag", action="append", required=True, help="the harness ref each arm is built from")
+    snap.add_argument("--harness-config", action="append", required=True, metavar="PATH",
+                      help="a configuration, in the order of --tag")
+    snap.add_argument("--out", required=True, help="a new directory outside the checkout for the snapshot")
+    snap.add_argument("--tmp", help="parent for the checkouts the configurations are resolved in")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")
@@ -4025,6 +4098,8 @@ def main(argv=None):
         return cmd_backfill(args)
     if args.command == "check-config":
         return cmd_check_config(args)
+    if args.command == "snapshot-config":
+        return cmd_snapshot_config(args)
     if args.command == "summarise":
         return cmd_summarise(args)
     if args.command == "arms":
