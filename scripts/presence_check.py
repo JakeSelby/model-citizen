@@ -24,7 +24,9 @@ def main() -> int:
         print("unavailable: " + why)
         return 1
     print("A Touch ID or login-password dialog is open; answer or cancel it.", file=sys.stderr)
-    if presence.confirm("run the Model Citizen presence check (nothing is spent or changed)"):
+    if presence.confirm(presence.ask(presence.CLI_NAME, "check that you are at this Mac, spending "
+                                     "and changing nothing", "you can see the dialog a spend or "
+                                     "an apply raises")):
         print("present")
         return 0
     print("refused")

@@ -723,7 +723,9 @@ def _native_start(handler: Handler, route: Route) -> None:
     except (native_acceptance.NativeAcceptanceError, runs.RunError):
         handler._error(400, "native_acceptance_refused")
         return
-    if not _person_present(handler, presence.spend_reason(checked)):
+    if not _person_present(handler, presence.spend_reason(
+            checked, who=_requester(handler),
+            purpose="it can run the native acceptance cases you previewed")):
         return
     try:
         payload = handler.server.mutations.call(lambda: _native_adapter(handler).start(
@@ -771,7 +773,8 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
         handler.server.run_supervisor, handler.server.target_service)
 
 
-def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any,
+                  purpose: str = "") -> str:
     """The dialog's words for a replay start, once its token matches the exact request
     (`RunSupervisor.check_start`, through `mutations` as the start is, since both read the run
     index); a mismatch is the route's own refusal, before any dialog."""
@@ -794,7 +797,10 @@ def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) 
             raise replay.ReplayRefusal(definitive_launch.CEILING_CODES[cause.code],
                                        str(cause)) from exc
         raise replay.ReplayError(str(exc)) from exc
-    return presence.spend_reason(checked, launch["targets"])
+    drafts = [str(item.get("ref")) for item in launch["targets"] if item.get("kind") == "draft"]
+    return presence.spend_reason(checked, launch["targets"], who=_requester(handler), purpose=(
+        purpose or ("it can measure whether draft %s helped" % " and ".join(drafts) if drafts
+                    else "it can measure how these targets compare")))
 
 
 def _replay_launch(handler: Handler, value: Any) -> Any:
@@ -1040,8 +1046,8 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
             request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
-        reason = "test draft %s: %s" % (request["draft"], _replay_spend(
-            handler, admission, confirmed, request["confirmation_token"]))
+        reason = _replay_spend(handler, admission, confirmed, request["confirmation_token"],
+                               "it can test whether draft %s helped, as planned" % request["draft"])
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
@@ -1120,7 +1126,8 @@ def _eval_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) ->
             spend_cap_usd=confirmed.spend_cap_usd, pricing_source=eval_tiers.PRICING_SOURCE))
     except runs.RunError as exc:
         raise eval_tiers.EvalTierError(str(exc)) from exc
-    return presence.spend_reason(checked)
+    return presence.spend_reason(checked, who=_requester(handler),
+                                 purpose="it can score the target on the eval tier you previewed")
 
 
 def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
@@ -1770,6 +1777,11 @@ def _child_environment() -> Dict[str, str]:
     and every `PYTHON*` variable removed."""
     return {key: value for key, value in os.environ.items()
             if key != "HARNESS_QUIET" and not key.startswith("PYTHON")}
+
+
+def _requester(handler: Handler) -> str:
+    """Who the presence dialog names: the Studio for its HTTP route, the CLI for `citizen runs`."""
+    return presence.requester(getattr(handler, "face", "Studio") == "Studio")
 
 
 class _Declined(Exception):

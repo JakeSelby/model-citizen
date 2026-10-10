@@ -40,6 +40,9 @@ OSASCRIPT = "/usr/bin/osascript"
 LAUNCHCTL = "/bin/launchctl"
 TIMEOUT = 180
 REASON_LIMIT = 480
+# The requester the reason line names; macOS names the calling program in the dialog's title.
+CLI_NAME = "Model Citizen"
+STUDIO_NAME = "Model Citizen Studio"
 # Set only by Codex's sandboxed shell; tighten-only, since it can only make the check refuse.
 CODEX_VARIABLES = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")
 PRESENT = "present"
@@ -107,18 +110,36 @@ def confirm(reason: str) -> bool:
     return done.returncode == 0 and done.stdout.strip() == PRESENT
 
 
-def spend_reason(checked: Dict[str, Any], targets: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+def requester(via_studio: bool) -> str:
+    """Who the dialog says is asking: the Studio, or the CLI."""
+    return STUDIO_NAME if via_studio else CLI_NAME
+
+
+def ask(who: str, action: str, purpose: str) -> str:
+    """The dialog's reason line, "<who> wants to <action>, so <purpose>.", within `REASON_LIMIT`.
+
+    Only the action is shortened when it must be, so the requester and the purpose always show."""
+    head, tail = who + " wants to ", ", so " + purpose + "."
+    room = REASON_LIMIT - len(head) - len(tail)
+    if len(action) > room:
+        action = action[:max(room - 3, 0)].rstrip() + "..."
+    return (head + action + tail)[:REASON_LIMIT]
+
+
+def spend_reason(checked: Dict[str, Any], targets: Optional[Sequence[Dict[str, Any]]] = None,
+                 who: str = CLI_NAME, purpose: str = "") -> str:
     """The dialog's words for a paid start, from `RunSupervisor.check_start`: the suite, its
     targets, the estimate and the caps, so a yes covers only the spend it names."""
     named = targets or [{"kind": checked.get("target_kind"), "ref": checked.get("target_ref")}]
     where = " vs ".join("%s %s" % (item.get("kind"), item.get("ref")) for item in named)
     estimate = checked.get("estimate_usd")
-    return ("start the paid %s run of %s case(s) on %s: estimated %s, at most $%s for the run "
-            "and $%s against the spend cap (%s)" % (
-                checked.get("suite_id"), checked.get("case_count"), where,
-                "unknown (no history)" if estimate is None else "$%s" % estimate,
-                checked.get("max_budget_usd"), checked.get("spend_cap_usd"),
-                checked.get("pricing_source")))
+    action = ("spend up to $%s on a paid %s run of %s case(s) against %s (estimated %s; spend "
+              "cap $%s, %s pricing)" % (
+                  checked.get("max_budget_usd"), checked.get("suite_id"), checked.get("case_count"),
+                  where, "unknown, no history" if estimate is None else "$%s" % estimate,
+                  checked.get("spend_cap_usd"), checked.get("pricing_source")))
+    return ask(who, action, purpose or "it can run the %s suite you previewed" % checked.get(
+        "suite_id"))
 
 
 def refusal(what: str) -> str:
@@ -157,8 +178,8 @@ def record(actor: str, words: Sequence[str], what: str) -> None:
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "detail": {"actor": actor, "outcome": "completed", "confirmed_via": "presence",
                       "command": " ".join(shlex.quote(str(w)) for w in words),
-                      "reason": "A person at this Mac confirmed %s with Touch ID or the login "
-                                "password." % what}}
+                      "reason": "A person at this Mac confirmed with Touch ID or the login "
+                                "password: %s" % what}}
     try:
         path = state_root() / ("decisions.jsonl" if _decisions_on() else CONSENT_LEDGER)
         path.parent.mkdir(parents=True, exist_ok=True)

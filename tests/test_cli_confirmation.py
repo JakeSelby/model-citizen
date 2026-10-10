@@ -81,7 +81,8 @@ FREE = (
     "python3 -c 'print(1)'",
 )
 APPLY = ["draft", "apply", "tuning", "--revision", "b" * 40, "--json"]
-PREFLIGHT = "apply draft tuning at revision %s to the live configuration" % ("b" * 40)
+PREFLIGHT = ("Model Citizen wants to apply draft tuning (revision %s) to your live harness "
+             "configuration, so your edits take effect." % ("b" * 40))
 # The CLI in a child with the presence check on, where the person at the Mac declines: `confirm`
 # records what it was asked and answers no, and the host counts as able to ask, so the refusal
 # can only be the person's. Written to a temporary directory by the test that runs it.
@@ -433,9 +434,9 @@ class SpendRoutes(Home):
             self.assertEqual(self.call("replay", {"request": {}, "confirmation_token": "t"})[0],
                              403)
         self.assertEqual(asked, [
-            "start the paid live-replay run of 2 case(s) on installed current vs draft tuning: "
-            "estimated $0.31, at most $0.50 for the run and $2.00 against the spend cap "
-            "(api_credit)"])
+            "Model Citizen wants to spend up to $0.50 on a paid live-replay run of 2 case(s) "
+            "against installed current vs draft tuning (estimated $0.31; spend cap $2.00, "
+            "api_credit pricing), so it can measure whether draft tuning helped."])
         _args, kwargs = admission.supervisor.check_start.call_args
         self.assertEqual((kwargs["confirmed"], kwargs["case_identities"]), ("t", ["a", "b"]))
 
@@ -462,13 +463,14 @@ class SpendRoutes(Home):
                 mock.patch.object(draft_tests, "power"), \
                 mock.patch.object(draft_tests, "start_registration", return_value=(None, [])), \
                 mock.patch.object(server.replay.ReplayRequest, "parse"), \
-                mock.patch.object(server, "_replay_spend", return_value=self.REASON), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON) as spend, \
                 mock.patch.object(server, "_replay_admission", return_value=admission):
             status, body = self.call("draft-test", {"draft": "d", "request": {},
                                                     "confirmation_token": "t", "effect": 0.1,
                                                     "cv": 0.2})
         self.assertEqual((status, body), (403, {"error": "person_confirmation_required"}))
-        self.assertEqual(asked, ["test draft d: " + self.REASON])
+        self.assertEqual(asked, [self.REASON])
+        self.assertEqual(spend.call_args[0][-1], "it can test whether draft d helped, as planned")
         admission.start_confirmed.assert_not_called()
 
     def test_a_studio_apply_rollback_or_recover_holds_no_shared_executor(self):
@@ -729,8 +731,10 @@ class CliPreflight(Home):
                 mock.patch.object(harness.studio_apply, "recover") as recover:
             self.refused("draft", "recover", "--draft", "tuning", "--json")
             recover.assert_not_called()
-        self.assertEqual(self.asked, ["restore the interrupted apply of draft tuning (%s, "
-                                      "revision %s)" % ("e" * 32, "b" * 40)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to undo the interrupted apply of draft tuning (%s, revision %s), "
+            "putting back the settings and files it wrote, so your live configuration is back "
+            "where it was before that change started." % ("e" * 32, "b" * 40)])
 
     def test_the_recover_dialog_names_an_interrupted_rollback_as_one(self):
         intent = {"apply_id": "e" * 32, "draft": "tuning", "revision": "b" * 40,
@@ -738,8 +742,10 @@ class CliPreflight(Home):
         with mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]), \
                 mock.patch.object(harness.studio_apply, "recover"):
             self.refused("draft", "recover", "--abandon", "--json")
-        self.assertEqual(self.asked, ["abandon the interrupted rollback of draft tuning's apply "
-                                      "%s (%s, revision %s)" % ("f" * 12, "e" * 32, "b" * 40)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to abandon the interrupted rollback of draft tuning's apply %s "
+            "(%s, revision %s), keeping what it already wrote, so it is closed and new applies "
+            "can run again." % ("f" * 12, "e" * 32, "b" * 40)])
 
     def test_an_apply_over_an_interrupted_apply_names_the_restore_that_runs(self):
         """`apply` restores an open interrupted apply instead; the dialog says so."""
@@ -749,8 +755,11 @@ class CliPreflight(Home):
                 mock.patch.object(harness.studio_apply, "apply") as apply:
             self.refused(*APPLY)
             apply.assert_not_called()
-        self.assertEqual(self.asked, ["restore the interrupted apply of draft other (%s), not "
-                                      "apply draft tuning" % ("e" * 32)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to undo the interrupted apply of draft other (%s), putting back "
+            "the settings and files it wrote, instead of applying draft tuning, so your live "
+            "configuration is back where it was before that change started (draft tuning is not "
+            "applied this time)." % ("e" * 32)])
 
     def test_an_apply_over_another_drafts_interrupted_rollback_is_refused_without_asking(self):
         intent = {"apply_id": "e" * 32, "draft": "other", "kind": "rollback",
