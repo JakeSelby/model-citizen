@@ -174,8 +174,8 @@ class StudioEndToEndFlows(support.StudioE2E):
     def test_tune_a_draft_then_plan_its_test_without_starting_it(self):
         """Flow 2 and #991/#1211: a checkpointed draft, then a test plan that starts nothing.
 
-        The change is a configuration switch, which the plan refuses by name; a source change a
-        replay can measure cannot be made from the Studio for a core module.
+        The change is a configuration switch: the plan measures it exploratory, giving both arms
+        a configuration snapshot, and planning starts no replay.
         """
         draft = self.create_draft("e2e-tune-")
         live_before = self.config_path.read_bytes()
@@ -189,11 +189,18 @@ class StudioEndToEndFlows(support.StudioE2E):
         self.choose_option("Tasks", self.options("Tasks")[0])
         self.wait("!__has('Choose at least one task.')", "the task was not chosen")
         self.click("Check power and spend")
-        # A replay builds the harness arm from the commit's defaults, so a configuration change
-        # is refused by name before any target is built or any spend is guarded.
-        self.wait("__has('This draft changed its configuration, which a replay cannot measure.')",
-                  "the plan route's refusal was not shown", seconds=60, section="Test this draft")
-        self.assertFalse(self.js("__buttonReady('Confirm and test')"))
+        # An edited configuration is measured: both arms carry a snapshot and run exploratory.
+        self.wait("[...document.querySelectorAll('pre, code')]"
+                  ".some(block => block.textContent.includes('--harness-config'))",
+                  "the plan's native commands were not shown", seconds=60)
+        commands = self.js("[...document.querySelectorAll('pre, code')].map(block => block.textContent)"
+                           ".find(text => text.includes('--harness-config'))")
+        lines = commands.strip().splitlines()
+        self.assertEqual(len(lines), 2, commands)
+        for index, line in enumerate(lines):
+            self.assertIn("--harness-config configuration/config-%d.json" % index, line)
+            self.assertIn("--exploratory", line)
+        self.assertNotIn("which a replay cannot measure", self.js("document.body.textContent"))
         listed = self.cli_json("runs", "history")
         self.assertEqual([item for item in listed.get("items", [])
                           if item.get("suite_id") == "live-replay"], [],
