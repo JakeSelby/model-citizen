@@ -1,0 +1,1 @@
+A replay or ablation run no longer refuses an arm whose selection switches off every skill or every role: the arm-pair check now counts every directory the harness sync creates under the Claude home, such as an empty `~/.claude/skills`, as the harness component, and still refuses anything else the harness arm holds.
