@@ -181,6 +181,8 @@ class RouteRegistry:
         self.entries = tuple(routes)
         self.error_media_type = "application/json"
         self.error_schema = ResponseSchema("json-object", (("error", "string"),))
+        # A refusal whose engine gave its reason: the code and that reason, verbatim.
+        self.reason_error_schema = ResponseSchema("json-object", (("error", "string"), ("reason", "string")))
         self._routes = {}
         for route in self.entries:
             key = (route.method, route.path)
@@ -302,9 +304,11 @@ class Handler(BaseHTTPRequestHandler):
         body = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
         self._send(code, body, "application/json")
 
-    def _error(self, code: int, name: str) -> None:
+    def _error(self, code: int, name: str, reason: Optional[str] = None) -> None:
         payload = {"error": name}
-        ROUTES.error_schema.validate(payload)
+        if reason:
+            payload["reason"] = reason
+        (ROUTES.reason_error_schema if reason else ROUTES.error_schema).validate(payload)
         body = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
         self._send(code, body, ROUTES.error_media_type)
 
@@ -825,7 +829,7 @@ def _replay_preview(handler: Handler, route: Route) -> None:
         resolved = admission.resolve(request["request"])
         payload = handler.server.mutations.call(lambda: admission.preview_resolved(resolved))
     except replay.ReplayError as exc:
-        handler._error(400, getattr(exc, "code", "replay_refused"))
+        _refusal(handler, 400, getattr(exc, "code", "replay_refused"), exc)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -847,7 +851,7 @@ def _replay_start(handler: Handler, route: Route) -> None:
         payload = handler.server.mutations.call(lambda: admission.start_confirmed(
             confirmed, request["confirmation_token"]))
     except replay.ReplayError as exc:
-        handler._error(400, getattr(exc, "code", "replay_refused"))
+        _refusal(handler, 400, getattr(exc, "code", "replay_refused"), exc)
         return
     route.response_schema.validate(payload)
     handler._json(200, payload)
@@ -936,12 +940,21 @@ _DRAFT_TEST_STATUS = {"draft_not_found": 404, "draft_test_mismatch": 409, "draft
                       "draft_test_registration_failed": 500}
 
 
+def _refusal(handler: Handler, status: int, code: str, exc: Exception) -> None:
+    """The error response for a refusal, with the engine's reason beside the code when it gave one."""
+    reason = getattr(exc, "reason", None)
+    if reason:
+        handler._error(status, code, reason)
+    else:
+        handler._error(status, code)
+
+
 def _draft_test_error(handler: Handler, exc: Exception) -> None:
     code = getattr(exc, "code", None) or "draft_test_refused"
     if isinstance(exc, draft_tests.DraftTestError):
         handler._error(_DRAFT_TEST_STATUS.get(code, 400), code)
     else:
-        handler._error(400, code if isinstance(exc, replay.ReplayRefusal) else "replay_refused")
+        _refusal(handler, 400, code if isinstance(exc, replay.ReplayRefusal) else "replay_refused", exc)
 
 
 def _draft_test_plan(handler: Handler, route: Route) -> None:

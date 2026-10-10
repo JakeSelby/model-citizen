@@ -10,6 +10,7 @@ export type ReplayTarget = ReplayTargetInput & {
   version: string | null;
   draft: string | null;
   config_digest?: string | null;
+  base_config_digest?: string;
 };
 
 export type ReplayLaunchInput = {
@@ -225,7 +226,7 @@ export function replayErrorMessage(code: string): string {
 }
 
 export const MEASURES_NOTE =
-  "A replay measures source and configuration: a draft's harness arm runs the draft's configuration and the other target's runs the configuration the draft was created with, so the pair differs by the draft's edit alone. Without a draft, each harness arm runs its commit's defaults.";
+  "A replay measures source. When a draft edited its configuration, the draft's harness arm runs it and the other target's runs the configuration the draft was created with, so the pair differs by the draft's edit alone; that replay is exploratory and writes no history row. Otherwise each harness arm runs its commit's defaults.";
 
 /** The result table's caption: which target's configuration the engine measured, by the digest it
  * stamped on its rows, or that none was applied. */
@@ -233,7 +234,7 @@ export function measuredConfigCaption(digests: (string | null)[] = []): string {
   const measured = digests.map((digest, index) => digest ? `target ${index + 1} configuration ${digest}` : null)
     .filter((line): line is string => line !== null);
   return measured.length
-    ? `Configuration measured by the engine: ${measured.join("; ")}.`
+    ? `Configuration measured by the engine: ${measured.join("; ")}. A replay that applies a configuration is exploratory and writes no history row.`
     : "Source only: target configuration was not applied.";
 }
 
@@ -332,8 +333,14 @@ export function comparisonLine(item: DraftComparison): string {
 }
 
 /** The form's message for a failed preview or start: the refusal's plain words, or a fallback. */
+/** The sentence for a refusal, followed by the engine's own reason when it gave one. */
+export function withEngineReason(message: string, error: unknown): string {
+  const reason = error instanceof Error ? (error as Error & { reason?: unknown }).reason : undefined;
+  return typeof reason === "string" && reason ? `${message} Engine: ${reason}` : message;
+}
+
 export function failureMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? replayErrorMessage(error.message) : fallback;
+  return error instanceof Error ? withEngineReason(replayErrorMessage(error.message), error) : fallback;
 }
 
 /** The preview a confirm may use, with the request generation that produced it. */

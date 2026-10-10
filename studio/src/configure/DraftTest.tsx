@@ -8,7 +8,7 @@ import { CompareReport } from "../experiments/compare/ComparePanel";
 import { compareRuns } from "../experiments/compare/api";
 import type { CompareResult } from "../experiments/compare/model";
 import { loadReplayCatalog } from "../experiments/replay/api";
-import { packKey, packOptions, type ReplayCatalog } from "../experiments/replay/model";
+import { packKey, packOptions, withEngineReason, type ReplayCatalog } from "../experiments/replay/model";
 import { loadDraftVerdicts, planDraftTest, registerDraftTest, startDraftTest } from "./draftTestApi";
 import {
   currentRegistration, draftTestErrorMessage, draftTestTasks, evidenceBadge, initialForm, planBody, readingLines, registerBlocked, registerBody,
@@ -19,7 +19,7 @@ import {
 type Props = { draft: string; revision: string };
 
 function message(error: unknown, fallback: string): string {
-  return error instanceof Error ? draftTestErrorMessage(error.message) : fallback;
+  return error instanceof Error ? withEngineReason(draftTestErrorMessage(error.message), error) : fallback;
 }
 
 /** One checkpoint's latest verdict: badge, headline, staleness, readings, spend and the comparison. */

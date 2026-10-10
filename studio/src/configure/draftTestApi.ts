@@ -2,8 +2,12 @@ import type { ReplayRequest } from "../experiments/replay/model";
 import type { DraftTestPlan, DraftTestRegistration, DraftTestStarted, DraftTestVerdicts } from "./draftTestModel";
 
 async function json<T>(response: Response): Promise<T> {
-  const body = await response.json() as T & { error?: string };
-  if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status}).`);
+  const body = await response.json() as T & { error?: string; reason?: string };
+  if (!response.ok) {
+    // The engine's own reason, when it refused a configuration, travels beside the code.
+    throw Object.assign(new Error(body.error ?? `Request failed (${response.status}).`),
+      body.reason ? { reason: body.reason } : {});
+  }
   return body;
 }
 
