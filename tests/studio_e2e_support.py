@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 
 import isolation  # noqa: F401 -- isolated suite home and quiet git maintenance
 import draft_support
+import presence_support
 import test_studio_browser as browser_support
 from test_replay_pack import make_pack
 
@@ -238,6 +239,9 @@ class StudioE2E(unittest.TestCase):
         })
         isolation.quiet_git_maintenance(env)
         self.env = env
+        # The CLI and the Studio it serves run as a person who confirmed at the Mac, so a
+        # flow's apply passes (`presence_support.present_cli`).
+        self.present = presence_support.present_cli(directory=base, root=self.checkout.root)
         self.prepare_home()
         self.addCleanup(self._stop_studio)
         launched = self.cli("studio", "--detach", "--no-open", "--json", timeout=60)
@@ -288,7 +292,7 @@ class StudioE2E(unittest.TestCase):
         self.cli("studio", "stop", "--json", timeout=15)
 
     def cli(self, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
-        return subprocess.run([sys.executable, str(self.checkout.cli), *args],
+        return subprocess.run([*self.present, *args],
                               cwd=str(self.checkout.root), env=self.env,
                               capture_output=True, text=True, timeout=timeout)
 

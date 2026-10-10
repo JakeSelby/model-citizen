@@ -36,17 +36,19 @@ sys.exit(module.main())
 '''
 
 
-def present_cli(test=None, directory=None) -> List[str]:
+def present_cli(test=None, directory=None, root=None) -> List[str]:
     """argv that runs `bin/harness` as a person who confirmed, for one test: written into
-    `directory` (a test's own temporary home), or a new directory `test`'s cleanup removes."""
+    `directory` (a test's own temporary home), or a new directory `test`'s cleanup removes.
+    `root` is the checkout whose CLI it runs, this one by default (a fixture clone for e2e)."""
     if directory is None:
         directory = tempfile.mkdtemp(prefix="presence-")
         test.addCleanup(shutil.rmtree, directory, True)
+    root = Path(root or REPO)
     path = Path(directory) / ".presence" / "present_cli.py"
     if not path.is_file():
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(LAUNCHER % {"lib": str(REPO / "lib"),
-                                    "cli": str(REPO / "bin" / "harness")}, encoding="utf-8")
+        path.write_text(LAUNCHER % {"lib": str(root / "lib"),
+                                    "cli": str(root / "bin" / "harness")}, encoding="utf-8")
     return [sys.executable, str(path)]
 
 
