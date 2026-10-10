@@ -5,6 +5,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import threading
@@ -49,6 +50,26 @@ class BrokerTests(unittest.TestCase):
         started = time.monotonic()
         self.assertEqual(broker.wait("epoch:0", 10), [])
         self.assertLess(time.monotonic() - started, 0.1)
+
+
+CPU_SAMPLES = 5
+
+
+def least_cpu_seconds(work, samples: int = CPU_SAMPLES) -> float:
+    """The least CPU time this thread spent on ``work`` over several runs.
+
+    Thread time leaves out every other thread in the test process, and the least of several
+    runs leaves out machine load: a contended run is scheduled onto a slower core or a lower
+    clock and spends more CPU on the same work, never less. A real regression, more work per
+    poll, raises every run, the least included, so the budget it is judged against still
+    measures the scanner.
+    """
+    spent = []
+    for _ in range(samples):
+        started = time.thread_time()
+        work()
+        spent.append(time.thread_time() - started)
+    return min(spent)
 
 
 class ScannerTests(unittest.TestCase):
@@ -179,12 +200,44 @@ class ScannerTests(unittest.TestCase):
                 path.unlink()
                 target.unlink()
 
-    def test_more_than_watch_capacity_forces_topic_wide_invalidation(self):
+    def overflow_tree(self):
+        """Watch capacity plus one rule module: the scan that aggregates its overflow."""
         created = []
         for index in range(MAX_WATCHED_PATHS + 1):
             path = self.primitives / "rules" / ("overflow-%d.md" % index)
             path.write_text("module\n", encoding="utf-8")
             created.append(path)
+        return created
+
+    def test_a_regression_of_four_fifths_of_the_overflow_budget_still_fails_it(self):
+        self.overflow_tree()
+        watcher = LiveWatcher(self.scanner, EventBroker("epoch"))
+        idle = self.scanner.scan()
+        original = live_updates._fingerprint
+        calls = 0
+
+        def slower(path, allowed_root=None, info=None):
+            # 10 microseconds per path is about 0.2 s over five polls of 4,097 paths: four
+            # fifths of the 0.25 s limit, on top of the scan's own cost.
+            nonlocal calls
+            calls += 1
+            deadline = time.thread_time() + 0.00001
+            while time.thread_time() < deadline:
+                pass
+            return original(path, allowed_root, info)
+
+        def five_polls():
+            nonlocal idle
+            for _ in range(5):
+                idle = watcher.poll(idle)
+
+        with mock.patch.object(live_updates, "_fingerprint", slower):
+            consumed = least_cpu_seconds(five_polls, samples=2)
+        self.assertGreaterEqual(calls, 2 * 5 * (MAX_WATCHED_PATHS + 1))
+        self.assertGreater(consumed, POLL_SECONDS * 5 * 0.05)
+
+    def test_more_than_watch_capacity_forces_topic_wide_invalidation(self):
+        created = self.overflow_tree()
         before = self.scanner.scan()
         self.assertIn(OVERFLOW_PATH, before)
         self.assertEqual(len(before), MAX_WATCHED_PATHS + 1)
@@ -192,13 +245,17 @@ class ScannerTests(unittest.TestCase):
 
         broker = EventBroker("epoch")
         watcher = LiveWatcher(self.scanner, broker)
-        started = time.process_time()
         idle = before
-        for _ in range(5):
-            idle = watcher.poll(idle)
-        consumed = time.process_time() - started
+
+        def five_polls():
+            nonlocal idle
+            for _ in range(5):
+                idle = watcher.poll(idle)
+
+        consumed = least_cpu_seconds(five_polls)
         self.assertLess(consumed, POLL_SECONDS * 5 * 0.05,
                         "overflow aggregation exceeded 5% of one core while idle")
+        self.assertEqual(watcher.scan_count, 5 * CPU_SAMPLES)
         self.assertEqual(broker.sequence, 0)
 
         dropped.write_text("changed\n", encoding="utf-8")
@@ -244,12 +301,60 @@ class ScannerTests(unittest.TestCase):
             (self.primitives / "rules" / ("local-%d.md" % index)).write_text(
                 "module\n", encoding="utf-8")
         self.scanner.scan()
-        started = time.process_time()
-        for _ in range(10):
-            self.scanner.scan()
-        consumed = time.process_time() - started
+
+        def ten_scans():
+            for _ in range(10):
+                self.scanner.scan()
+
+        consumed = least_cpu_seconds(ten_scans)
         self.assertLess(consumed, POLL_SECONDS * 10 * 0.02,
                         "500-module polling exceeded 2% of one core")
+
+    def test_least_cpu_seconds_judges_the_least_run_of_this_thread(self):
+        readings = iter([1.0, 1.5, 2.0, 2.1, 3.0, 3.9])
+        with mock.patch.object(time, "thread_time", side_effect=lambda: next(readings)):
+            self.assertAlmostEqual(least_cpu_seconds(lambda: None, samples=3), 0.1)
+
+    def test_a_regression_that_adds_work_to_every_poll_still_fails_the_budget(self):
+        for index in range(1, 500):
+            (self.primitives / "rules" / ("local-%d.md" % index)).write_text(
+                "module\n", encoding="utf-8")
+        original = live_updates._fingerprint
+
+        def slower(path, allowed_root=None, info=None):
+            deadline = time.thread_time() + 0.0001
+            while time.thread_time() < deadline:
+                pass
+            return original(path, allowed_root, info)
+
+        with mock.patch.object(live_updates, "_fingerprint", slower):
+            consumed = least_cpu_seconds(lambda: [self.scanner.scan() for _ in range(10)],
+                                         samples=2)
+        self.assertGreater(consumed, POLL_SECONDS * 10 * 0.02)
+
+    def test_nested_modules_record_each_file_and_its_parent_once(self):
+        unit = self.primitives / "stances" / "tone"
+        unit.mkdir(parents=True)
+        variants = [unit / (name + ".md") for name in ("brief", "plain", "warm")]
+        for variant in variants:
+            variant.write_text("# Tone\n", encoding="utf-8")
+        original = live_updates._fingerprint
+        looked_up = []
+
+        def counted(path, allowed_root=None, info=None):
+            looked_up.append(str(path))
+            return original(path, allowed_root, info)
+
+        with mock.patch.object(live_updates, "_fingerprint", counted):
+            snapshot = self.scanner.scan()
+        parent = str(unit.absolute())
+        # Three variants share one parent directory, which is looked up once, not per variant.
+        self.assertEqual(looked_up.count(parent), 1)
+        for variant in variants:
+            self.assertEqual(looked_up.count(str(variant.absolute())), 1)
+            self.assertEqual(snapshot[str(variant.absolute())][1], ("library", "overview"))
+            self.assertEqual(snapshot[str(variant.absolute())][0][0], stat.S_IFREG)
+        self.assertEqual(snapshot[parent][1], ("library-index", "overview", "selection"))
 
     def test_twenty_live_streams_and_five_hundred_modules_stay_below_two_percent(self):
         for index in range(1, 500):

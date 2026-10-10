@@ -2,6 +2,7 @@
 """Read-only inventory for every module visible to Studio."""
 from __future__ import annotations
 
+import copy
 import difflib
 import hashlib
 import json
@@ -57,21 +58,36 @@ def _roots(root: Path, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
-def _frontmatter_description(path: Path) -> str:
+def _frontmatter_description(path: Path, texts: Optional[Texts] = None) -> str:
     try:
-        fields, _ = catalog.frontmatter(path)
+        fields, _ = catalog.frontmatter(path, _read_text(path, texts))
     except (OSError, ValueError):
         return ""
     return fields.get("description", "")
 
 
-def _cost(kind: str, path: Path, name: str) -> Dict[str, Any]:
+Texts = Dict[Path, str]
+
+
+def _read_text(path: Path, texts: Optional[Texts] = None) -> str:
+    """A file's text, read once per inventory when a memo is given: a module's source, its
+    rendering and its cost all read the same file, and each extra open was most of the
+    library route's served time. A failed read raises and is not remembered."""
+    if texts is None:
+        return path.read_text(encoding="utf-8")
+    text = texts.get(path)
+    if text is None:
+        text = texts[path] = path.read_text(encoding="utf-8")
+    return text
+
+
+def _cost(kind: str, path: Path, name: str, texts: Optional[Texts] = None) -> Dict[str, Any]:
     if kind in ("skills", "roles", "workflows"):
-        text = name + ": " + _frontmatter_description(path)
+        text = name + ": " + _frontmatter_description(path, texts)
         method = "chars/4 of resident listing name and description"
     elif kind in ("rules", "stances"):
         try:
-            text = path.read_text(encoding="utf-8")
+            text = _read_text(path, texts)
         except (OSError, ValueError):
             text = ""
         method = "chars/4 of resident source text"
@@ -104,25 +120,42 @@ def _projection_paths(kind: str, name: str, core: bool) -> List[Dict[str, str]]:
     return [{"runtime": runtime, "path": path} for runtime, path in mappings.get(kind, ())]
 
 
-def _rendered(root: Path, kind: str, path: Path, name: str) -> str:
+def _rendered(root: Path, kind: str, path: Path, name: str,
+              texts: Optional[Texts] = None) -> str:
     try:
         if kind == "roles" and path.is_relative_to(root):
-            return catalog.role_projection(root, "claude-code", path)
+            # role_contract reads the core role of this name; reuse the text only for that file.
+            core = root / "primitives" / "roles" / (path.stem + ".md")
+            return catalog.role_projection(root, "claude-code", path,
+                                           text=_read_text(path, texts) if path == core else None)
         if kind == "workflows":
-            return path.read_text(encoding="utf-8").replace("{{arguments}}", "$ARGUMENTS")
-        return path.read_text(encoding="utf-8")
+            return _read_text(path, texts).replace("{{arguments}}", "$ARGUMENTS")
+        return _read_text(path, texts)
     except (OSError, ValueError):
         return ""
 
 
-def _manifest(root_path: Path, kind: str, name: str) -> Optional[Dict[str, Any]]:
-    path = root_path / "manifests.json"
+def _manifests(root_path: Path) -> Optional[Dict[str, Any]]:
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads((root_path / "manifests.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    value = (data.get(kind) or {}).get(name)
-    return value if isinstance(value, dict) else None
+    return data if isinstance(data, dict) else None
+
+
+def _manifest(root_path: Path, kind: str, name: str,
+              manifests: Optional[Dict[Path, Optional[Dict[str, Any]]]] = None
+              ) -> Optional[Dict[str, Any]]:
+    """One module's manifest entry. With a memo the root's manifests file is parsed once per
+    inventory, and each module still receives its own copy."""
+    if manifests is None:
+        data = _manifests(root_path)
+    else:
+        if root_path not in manifests:
+            manifests[root_path] = _manifests(root_path)
+        data = manifests[root_path]
+    value = ((data or {}).get(kind) or {}).get(name)
+    return copy.deepcopy(value) if isinstance(value, dict) else None
 
 
 def identifier(value: Any) -> bool:
@@ -333,6 +366,8 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
     resolved_config, selection = _config_and_selection(root, config)
     roots = _roots(root, resolved_config)
     modules: List[Dict[str, Any]] = []
+    texts: Texts = {}
+    manifests: Dict[Path, Optional[Dict[str, Any]]] = {}
     for root_entry in roots:
         forks = {} if root_entry["core"] else _forks(root_entry["path"])
         for kind, definition in KINDS.items():
@@ -346,20 +381,22 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
                              "path": str(root_entry["path"]), "core": root_entry["core"]},
                     "state": _state(kind, name, selection),
                     "collision": False,
-                    "manifest": _manifest(root_entry["path"], kind, manifest_name),
+                    "manifest": _manifest(root_entry["path"], kind, manifest_name, manifests),
                     "fork": _fork(root, forks, kind, name) if forks else None,
                     "source": {"path": str(path),
-                               "text": "" if metadata_only else _rendered(root, "source", path, name)},
-                    "rendered": {"text": "" if metadata_only else _rendered(root, kind, path, name)},
+                               "text": "" if metadata_only else _rendered(root, "source", path, name,
+                                                                         texts)},
+                    "rendered": {"text": "" if metadata_only else _rendered(root, kind, path, name,
+                                                                            texts)},
                     "projections": _projection_paths(kind, name, root_entry["core"]),
                     "context_cost": ({"tokens": 0, "estimate": "not measured",
                                       "method": "source is validated before measurement"}
-                                     if metadata_only else _cost(kind, path, name)),
+                                     if metadata_only else _cost(kind, path, name, texts)),
                 })
     # Hooks live in the kernel rather than under primitives.
-    manifests = root / "policy" / "hooks" / "manifests.json"
+    hook_manifests_path = root / "policy" / "hooks" / "manifests.json"
     try:
-        hook_manifests = json.loads(manifests.read_text(encoding="utf-8")).get("hooks", {})
+        hook_manifests = json.loads(hook_manifests_path.read_text(encoding="utf-8")).get("hooks", {})
     except (OSError, ValueError):
         hook_manifests = {}
     for name in catalog.HOOK_IDS:

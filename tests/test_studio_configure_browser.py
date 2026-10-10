@@ -230,8 +230,11 @@ class ConfigureBrowserTests(unittest.TestCase):
                   body: JSON.parse(init.body || '{}'),
                 });
               }
-              return originalFetch(input, init);
+              const response = await originalFetch(input, init);
+              if (url.includes('/api/configure/save')) globalThis.__savesAnswered += 1;
+              return response;
             };
+            globalThis.__savesAnswered = 0;
         """)
         self.devtools.evaluate("__setLabelValue('Draft name', %s)" % json.dumps(self.draft))
         self.devtools.evaluate(
@@ -263,6 +266,10 @@ class ConfigureBrowserTests(unittest.TestCase):
             "![...document.querySelectorAll('button')].some(b => b.textContent === 'Clear malformed reference')",
             "Clear action remained after the malformed reference was removed",
         )
+        # The save holds the draft's writer lock until it answers; ending the test before then
+        # sends the cleanup's discard into that lock.
+        self._wait("__savesAnswered === __settingsCalls.filter(call => call.kind === 'save').length",
+                   "the repair's save did not answer")
 
 
 if __name__ == "__main__":
