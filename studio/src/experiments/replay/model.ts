@@ -10,6 +10,7 @@ export type ReplayTarget = ReplayTargetInput & {
   version: string | null;
   draft: string | null;
   config_digest?: string | null;
+  base_config_digest?: string;
 };
 
 export type ReplayLaunchInput = {
@@ -107,7 +108,8 @@ export type ReplayRunResult = {
     reported_spend_usd: number;
     spend_cap_usd: string;
     stopped_at_cap: boolean;
-    measures?: "source";
+    measures?: "source" | "source and configuration";
+    measured_config_digests?: (string | null)[];
     analysis?: ReplayAnalysis[] | null;
     analysis_error?: string | null;
     evidence?: "pre-registered" | "exploratory";
@@ -194,6 +196,18 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
 }
 
 const refusals: Record<string, string> = {
+  replay_target_config_pair:
+    "Two drafts cannot be compared once either edited its configuration. Compare an edited configuration against its base commit or a release.",
+  replay_target_config_invalid:
+    "The engine refused the draft's configuration: it is not a JSON object of finite values.",
+  replay_target_config_root_unreadable:
+    "The engine refused the draft's configuration: a primitive root outside the checkout is not a readable directory of regular files, so the arm has nothing to copy.",
+  replay_target_config_root_unsupported:
+    "The engine refused the draft's configuration: a primitive root adds a role or workflow, which the arm accepts only from the commit's own primitives.",
+  replay_target_config_host_path:
+    "The engine refused the draft's configuration: it names a path on this machine, which no arm may see.",
+  replay_target_config_unresolved:
+    "The engine refused the draft's configuration: the commit's resolver does not accept its switches, manifests or modes.",
   replay_target_config_unsupported:
     "A draft changed its configuration, but the benchmark builds the harness arm from the commit's defaults and cannot apply it. Checkpoint the change as source or restore the inherited configuration.",
   replay_target_busy: "A draft is being saved. Preview again in a moment.",
@@ -213,8 +227,18 @@ export function replayErrorMessage(code: string): string {
   return refusals[code] ?? code;
 }
 
-export const SOURCE_ONLY_NOTE =
-  "A replay measures source only: each harness arm runs its commit's defaults, so a draft's inherited configuration is not applied.";
+export const MEASURES_NOTE =
+  "A replay measures source. When a draft edited its configuration, the draft's harness arm runs it and the other target's runs the configuration the draft was created with, so the pair differs by the draft's edit alone; that replay is exploratory and writes no history row. Otherwise each harness arm runs its commit's defaults.";
+
+/** The result table's caption: which target's configuration the engine measured, by the digest it
+ * stamped on its rows, or that none was applied. */
+export function measuredConfigCaption(digests: (string | null)[] = []): string {
+  const measured = digests.map((digest, index) => digest ? `target ${index + 1} configuration ${digest}` : null)
+    .filter((line): line is string => line !== null);
+  return measured.length
+    ? `Configuration measured by the engine: ${measured.join("; ")}. A replay that applies a configuration is exploratory and writes no history row.`
+    : "Source only: target configuration was not applied.";
+}
 
 export function readinessSummary(errors: string[]): string {
   if (!errors.length) return "Ready to preview.";
@@ -311,8 +335,14 @@ export function comparisonLine(item: DraftComparison): string {
 }
 
 /** The form's message for a failed preview or start: the refusal's plain words, or a fallback. */
+/** The sentence for a refusal, followed by the engine's own reason when it gave one. */
+export function withEngineReason(message: string, error: unknown): string {
+  const reason = error instanceof Error ? (error as Error & { reason?: unknown }).reason : undefined;
+  return typeof reason === "string" && reason ? `${message} Engine: ${reason}` : message;
+}
+
 export function failureMessage(error: unknown, fallback: string): string {
-  return error instanceof Error ? replayErrorMessage(error.message) : fallback;
+  return error instanceof Error ? withEngineReason(replayErrorMessage(error.message), error) : fallback;
 }
 
 /** The preview a confirm may use, with the request generation that produced it. */

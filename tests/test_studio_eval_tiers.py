@@ -116,9 +116,11 @@ class FakeSupervisor:
 class FakeReplayAdmission:
     revision = REVISION
 
-    def _resolve(self, kind, ref):
+    def _resolve(self, kind, ref, apply_config=True):
         if ref == "dirty":
             raise replay.ReplayRefusal("replay_worktree_dirty", "dirty")
+        if apply_config:  # a tier's command carries no configuration, so it never asks for one
+            raise AssertionError("an evaluation tier asked the replay to apply a configuration")
         return {"kind": kind, "ref": ref, "revision": self.revision, "version": None,
                 "draft": None, "config_digest": replay.DEFAULT_CONFIG_DIGEST}
 

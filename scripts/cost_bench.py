@@ -552,10 +552,12 @@ def arm_profile(arm, env, opts):
 
 
 def declared_selection(opts, arm):
-    """An ablation arm's declared selection, which its image holds as the user configuration, so
-    its profile and attribution resolve with it; None for every other arm, which resolves with
-    the empty home's own (absent) configuration as before."""
-    return (opts.get("ablation_selections") or {}).get(arm)
+    """An ablation arm's declared selection, or a configured harness arm's configuration re-rooted
+    into the profile checkout, which its image holds as the user configuration, so its profile and
+    attribution resolve with it; None for every other arm, which resolves with the empty home's own
+    (absent) configuration as before."""
+    selected = (opts.get("ablation_selections") or {}).get(arm)
+    return selected if selected is not None else (opts.get("arm_configurations") or {}).get(arm)
 
 
 def arm_attribution(arm, env, opts):
@@ -1475,7 +1477,16 @@ def arm_stamp(record):
             "arm_declaration_sha256": record["declaration_sha256"],
             "arm_manifest_sha256": record["manifest_sha256"],
             "arm_base_image": record["declaration"]["base_image"],
-            "harness_ref": record["harness_ref"], "harness_commit": record["harness_commit"]}
+            "harness_ref": record["harness_ref"], "harness_commit": record["harness_commit"],
+            **configuration_stamp(record)}
+
+
+def configuration_stamp(record):
+    """`{arm_configuration_sha256}` for a harness arm built from a configuration, the digest of the
+    configuration as given, which is what the run measured; nothing for any other arm, whose rows
+    are what they always were."""
+    sha = (record.get("declaration") or {}).get(arms.CONFIGURATION_SHA256)
+    return {"arm_configuration_sha256": sha} if sha else {}
 
 
 def _scorer(opts, launch, stream=None):
@@ -2829,15 +2840,162 @@ def tag_version(repo, commit, ref):
     return done.stdout.strip() if not done.returncode and done.stdout.strip() else ref
 
 
-def declarations(tags, repo=None, effort=arms.DEFAULT_EFFORT):
+def declarations(tags, repo=None, effort=arms.DEFAULT_EFFORT, configuration=None):
     """`(bare declaration, [(tag, harness declaration)])` for a replay, each ref resolved to its
     full commit first, so a typo costs nothing and a moved tag is a new declaration. Every arm
-    declares the one pinned `effort` it launches at."""
+    declares the one pinned `effort` it launches at. `configuration`, from `harness_configuration`,
+    is applied to every harness arm, re-rooted into the image; None builds each from its defaults."""
     repo, inputs = repo or ROOT, arms.qualification_inputs()
+    applied = {}
+    if configuration is not None:
+        applied = {"configuration": arms.arm_configuration(configuration["config"], repo, arms.HARNESS_ROOT),
+                   "configuration_sha": configuration["sha256"], "configuration_roots": configuration.get("roots")}
     harness = [(tag, arms.declaration("harness", inputs, {"ref": tag, "commit": resolve_tag(repo, tag)},
-                                      effort=effort))
+                                      effort=effort, **applied))
                for tag in tags]
     return arms.declaration("bare", inputs, effort=effort), harness
+
+
+def read_configuration(path, flag):
+    """The JSON configuration at `path`; SystemExit naming `flag` when it cannot be read."""
+    try:
+        text = Path(path).expanduser().read_text(encoding="utf-8")
+    except OSError as exc:
+        raise SystemExit("cost-bench: cannot read the %s file %s: %s" % (flag, path, exc))
+    try:
+        return json.loads(text, parse_constant=lambda name: float(name))
+    except (ValueError, RecursionError):
+        raise arms.ConfigurationRefused(arms.CONFIG_INVALID, "the %s file is not JSON" % flag)
+
+
+def harness_configuration(args):
+    """`{config, sha256, sources, roots}` for `--harness-config`, or None when the harness arm is built
+    from its commit's defaults: no flag, an empty configuration, or the configuration the draft
+    inherited (`--inherited-config`), so those runs are the plain harness arm's, digests and all.
+    Refused with the flags that declare arms or settings of their own; a configuration that is
+    not an object of finite JSON, or names an unreadable root, raises `ConfigurationRefused`."""
+    path = getattr(args, "harness_config", None)
+    inherited_path = getattr(args, "inherited_config", None)
+    if not path:
+        if inherited_path:
+            raise SystemExit("cost-bench: --inherited-config needs --harness-config")
+        return None
+    clashes = [flag for flag, value in (("--pair", getattr(args, "pair", None)),
+                                        ("--ablations", getattr(args, "ablations", None)),
+                                        ("--design", getattr(args, "design", None)),
+                                        ("--arm-config", getattr(args, "arm_config", None)),
+                                        ("--stance-cost", getattr(args, "stance_cost", None))) if value]
+    if clashes:
+        raise SystemExit("cost-bench: --harness-config is refused with %s, which set the harness arm's "
+                         "selection another way" % ", ".join(clashes))
+    config = read_configuration(path, "--harness-config")
+    inherited = read_configuration(inherited_path, "--inherited-config") if inherited_path else None
+    applied = arms.applied_configuration(config, inherited)
+    if applied is None:
+        return None
+    sources, roots = arms.configuration_roots(applied, ROOT)
+    return {"config": applied, "sha256": arms.measured_sha256(applied, ROOT), "sources": sources, "roots": roots}
+
+
+def configuration_refusal(configuration, commit, tmp=None):
+    """`(code, reason)` when the arm built from `commit` cannot apply `configuration`, else None:
+    `replay_arms.configuration_problem` against a clone of that commit, read by its own resolver.
+    No image is built and no model is called."""
+    parent = Path(tempfile.mkdtemp(prefix="cost-harness-config-check-", dir=tmp))
+    try:
+        root = snapshot(ROOT, commit, parent / "checkout")
+        posture = catalog.posture_module(root)
+        if posture is None:
+            return arms.CONFIG_UNRESOLVED, "the commit has no selection resolver"
+        return arms.configuration_problem(configuration["config"], posture, root, ROOT)
+    finally:
+        shutil.rmtree(str(parent), ignore_errors=True)
+
+
+def cmd_check_config(args):
+    """Whether the harness arm built from `--tag` applies `--harness-config`, as one JSON line:
+    `{applied, config_sha256, code, reason}`. 0 when it is applied or not needed, 2 when refused.
+    Calls no model and builds no image: the same check a replay makes before anything is built."""
+    try:
+        configuration = harness_configuration(args)
+    except arms.ConfigurationRefused as exc:
+        print(json.dumps({"applied": False, "config_sha256": None, "code": exc.code, "reason": exc.reason},
+                         sort_keys=True))
+        return 2
+    out = {"applied": configuration is not None,
+           "config_sha256": configuration["sha256"] if configuration else None, "code": None, "reason": None}
+    if configuration is not None:
+        refused = configuration_refusal(configuration, resolve_tag(ROOT, args.tag), args.tmp)
+        if refused:
+            out.update(applied=False, code=refused[0], reason=refused[1])
+    print(json.dumps(out, sort_keys=True))
+    return 2 if out["code"] else 0
+
+
+def snapshot_configurations(pairs, out, tmp=None):
+    """Check and snapshot several configurations at once: `pairs` is `[(tag, config)]`. Every root
+    outside the checkout any of them names is copied once into `out/roots/<n>`, and each
+    configuration is written to `out/config-<i>.json` pointing at those copies, so every run that
+    reads the snapshot measures the same bytes whatever happens to the originals. Each answer is
+    check-config's, plus the `path` to give `--harness-config`."""
+    out = Path(out)
+    if arms._inside(os.path.realpath(str(out)), os.path.realpath(str(ROOT))):
+        raise SystemExit("cost-bench: a configuration snapshot must lie outside the checkout")
+    (out / "roots").mkdir(parents=True, exist_ok=True)
+    copied, answers = {}, []
+    for index, (tag, config) in enumerate(pairs):
+        answer = {"applied": False, "config_sha256": None, "code": None, "reason": None, "path": None}
+        answers.append(answer)
+        try:
+            found = arms._roots(config, ROOT)
+            rewritten = json.loads(json.dumps(config))
+            mapped = []
+            for entry, kind, path in found:
+                if kind != "outside":
+                    mapped.append(entry)
+                    continue
+                if path not in copied:
+                    files = arms._root_files(path)
+                    target = out / "roots" / str(len(copied))
+                    for relative in sorted(files):
+                        (target / relative).parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(os.path.join(path, relative), str(target / relative))
+                    if arms._root_files(str(target)) != files:
+                        raise arms.ConfigurationRefused(arms.CONFIG_ROOT_UNREADABLE, "a primitive root outside "
+                                                        "the checkout changed while it was copied")
+                    copied[path] = str(target)
+                mapped.append(copied[path])
+            if "primitive_roots" in rewritten:
+                rewritten["primitive_roots"] = mapped
+            path = out / ("config-%d.json" % index)
+            path.write_text(json.dumps(rewritten, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+            applied = arms.applied_configuration(rewritten)
+            if applied is None:
+                continue
+            answer.update(applied=True, path=str(path), config_sha256=arms.measured_sha256(applied, ROOT))
+            refused = configuration_refusal({"config": applied}, resolve_tag(ROOT, tag), tmp)
+        except arms.ConfigurationRefused as exc:
+            refused = (exc.code, exc.reason)
+        if refused:
+            answer.update(applied=False, code=refused[0], reason=refused[1])
+    return answers
+
+
+def cmd_snapshot_config(args):
+    """`snapshot-config`: `snapshot_configurations` for each `--tag` and `--harness-config` in
+    order, as one JSON line `{configs: [...]}`; 0 when every one is applied or not needed, 2 when
+    any is refused. Calls no model and builds no image."""
+    if len(args.tag) != len(args.harness_config):
+        raise SystemExit("cost-bench: snapshot-config takes one --tag per --harness-config")
+    pairs = []
+    for tag, path in zip(args.tag, args.harness_config):
+        try:
+            pairs.append((tag, read_configuration(path, "--harness-config")))
+        except arms.ConfigurationRefused:
+            pairs.append((tag, float("nan")))  # answered as invalid below
+    answers = snapshot_configurations(pairs, args.out, args.tmp)
+    print(json.dumps({"configs": answers}, sort_keys=True))
+    return 2 if any(answer["code"] for answer in answers) else 0
 
 
 def refuse_candidate(tags):
@@ -3089,6 +3247,7 @@ def _cmd_replay(args, pack):
         print("cost-bench: %s" % exc, file=sys.stderr)
         raise SystemExit(2)
     configs = arm_configs(args)
+    configuration = harness_configuration(args)
     if getattr(args, "design", None):
         return replay_design(args, tasks, protocol)
     if getattr(args, "unit", None):
@@ -3109,7 +3268,14 @@ def _cmd_replay(args, pack):
     refuse_candidate(tags)
     if not args.model:
         raise SystemExit("cost-bench: --model is required, and every arm gets the same one")
-    bare_decl, harness_decls = declarations(tags, effort=args.effort)  # every ref resolves before anything is built
+    # every ref resolves, and the configuration is checked against each, before anything is built
+    bare_decl, harness_decls = declarations(tags, effort=args.effort, configuration=configuration)
+    if configuration is not None:
+        for _tag, decl in harness_decls:
+            refused = configuration_refusal(configuration, decl["harness"]["commit"], args.tmp)
+            if refused:
+                raise SystemExit("cost-bench: refusing the harness configuration before any spend (%s): %s"
+                                 % refused)
     if configs:
         errors = [error for _tag, decl in harness_decls
                   for error in arm_config_errors(configs, decl["harness"]["commit"], args.tmp)]
@@ -3152,6 +3318,8 @@ def _cmd_replay(args, pack):
         for tag, decl in harness_decls:
             print("  tag %s: arm %s at %s: %s" % (tag, arms.label(decl), decl["harness"]["commit"],
                                                    arms.image_name(decl)))
+            if decl.get(arms.CONFIGURATION_SHA256):
+                print("    harness configuration sha256 %s applied" % decl[arms.CONFIGURATION_SHA256])
             for (name, config), (_name, config_decl) in zip(configs, config_declarations(configs, decl, args.effort)):
                 print("    arm %s (config sha256 %s) sets %s: %s" % (
                     name, arms.arm_config_sha256(config)[:12],
@@ -3192,7 +3360,9 @@ def _cmd_replay(args, pack):
     status = 0
     with arms.egress(bare["image"]) as net:
         for tag, decl in harness_decls:
-            harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp)
+            # Only a configured arm has roots to copy; every other build is called as it always was.
+            sources = {"root_sources": configuration["sources"]} if configuration else {}
+            harness = arms.build_arm(decl, arms_dir, snapshot, tmp=args.tmp, **sources)
             extra = {}
             if configs:
                 stamps = {name: arms.arm_config_stamp(name, config) for name, config in configs}
@@ -3506,6 +3676,7 @@ def replay_tag(tag, args, common, harness):
     and attribution are resolved over a clone of that commit with an empty home, as the image has
     no configuration of the user's; see `arm_profile`."""
     tasks, commit = common["tasks"], harness["harness_commit"]
+    configured = (harness.get("declaration") or {}).get(arms.CONFIGURATION)
     version = tag_version(ROOT, commit, tag)
     # The arms are part of what is compared, so they rotate the series: a container run is not
     # comparable with one whose harness arm read a host profile.
@@ -3561,6 +3732,11 @@ def replay_tag(tag, args, common, harness):
                         schedule_seed=common["schedule_seed"],
                         ablation_selections=ablations.selections(ablation),
                         arms=dict({"bare": common["bare"], "harness": harness}, **common["ablation_records"]))
+        if configured is not None:
+            # The image holds the configuration re-rooted at /opt/model-citizen; the profile
+            # resolves the same configuration re-rooted at this clone of the same commit.
+            opts["arm_configurations"] = {"harness": arms.arm_configuration(
+                configured, arms.HARNESS_ROOT, profile_root)}
         if common.get("config_records"):
             # Each config arm is its own declared-selection image beside the tag's harness arm.
             opts.update(arm_names=ARMS + tuple(common["config_records"]), arm_configs=common["arm_configs"],
@@ -3613,6 +3789,9 @@ def replay_tag(tag, args, common, harness):
     if common.get("config_records"):
         print("cost-bench: a run with config arms writes no history row; its rows are in %s, and summarise "
               "reads them" % (out / RESULTS), file=sys.stderr)
+    elif configured is not None:
+        print("cost-bench: a run with a harness configuration writes no history row; its rows are in %s, "
+              "and summarise reads them" % (out / RESULTS), file=sys.stderr)
     elif pair or common.get("ablation") or design or is_long:
         print("cost-bench: %s writes no history row; results are in %s, and summarise reads them"
               % ("a pair" if pair else "a grid" if design else "a long-session set" if is_long
@@ -3814,6 +3993,12 @@ def main(argv=None):
                      help="a further harness arm built from the stance selection in an arm config "
                      "(benchmarks/arms/<name>.json), beside bare and harness; repeatable; needs "
                      "--spend-cap; writes no history row")
+    run.add_argument("--harness-config", metavar="PATH",
+                     help="a whole user configuration, such as a draft's, installed as the harness arm's "
+                     "before its sync once it resolves strictly against the tag; empty, or equal to "
+                     "--inherited-config, it is not applied; writes no history row when applied")
+    run.add_argument("--inherited-config", metavar="PATH",
+                     help="with --harness-config, the configuration the draft inherited when it was created")
     run.add_argument("--schedule-seed", type=int, help="with --ablations or --design, the seed the schedule's order is "
                      "drawn from; default derived from the manifest's digest; recorded on every row")
     run.add_argument("--design", choices=(unit_economy.MANIFEST_DESIGN,),
@@ -3877,6 +4062,19 @@ def main(argv=None):
                       "pooled as well; refused unless the run's pre-registration names a pooled analysis")
     summ.add_argument("--correction", choices=("bonferroni",), help="for an ablation run, the multiplicity "
                       "correction its pre-registration names; without one, several arms read exploratory")
+    conf = sub.add_parser("check-config", help="whether the harness arm of --tag applies --harness-config, "
+                          "as one JSON line; exit 2 when refused; builds nothing and calls no model")
+    conf.add_argument("--tag", required=True, help="the harness ref the arm is built from")
+    conf.add_argument("--harness-config", required=True, metavar="PATH", help="the configuration to apply")
+    conf.add_argument("--inherited-config", metavar="PATH", help="the configuration the draft inherited")
+    conf.add_argument("--tmp", help="parent for the checkout the configuration is resolved in")
+    snap = sub.add_parser("snapshot-config", help="check several configurations and copy each root outside "
+                          "the checkout once into --out, as one JSON line; exit 2 when any is refused")
+    snap.add_argument("--tag", action="append", required=True, help="the harness ref each arm is built from")
+    snap.add_argument("--harness-config", action="append", required=True, metavar="PATH",
+                      help="a configuration, in the order of --tag")
+    snap.add_argument("--out", required=True, help="a new directory outside the checkout for the snapshot")
+    snap.add_argument("--tmp", help="parent for the checkouts the configurations are resolved in")
     back = sub.add_parser("backfill", help="derive the diagnostic fields for rows already written")
     back.add_argument("--results", required=True, help="directory holding %s" % RESULTS)
     back.add_argument("--raw", required=True, help="directory of the runs' raw CLI output")
@@ -3898,6 +4096,10 @@ def main(argv=None):
         return cmd_replay(args)
     if args.command == "backfill":
         return cmd_backfill(args)
+    if args.command == "check-config":
+        return cmd_check_config(args)
+    if args.command == "snapshot-config":
+        return cmd_snapshot_config(args)
     if args.command == "summarise":
         return cmd_summarise(args)
     if args.command == "arms":

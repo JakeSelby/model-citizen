@@ -840,6 +840,10 @@ def evidence(root: Path, registration_id: Optional[str], recorded: List[str], ru
     if comparison.get("base") and comparison.get("candidate"):
         found = deviations(record["committed"], from_comparison(comparison))
         reasons.extend(item for item in found if item not in reasons)
+    measured = (comparison.get("candidate") or {}).get("ref") or {}
+    if measured.get("base_config_digest") not in (None, measured.get("config_digest")):
+        # A replay applying an edited configuration is exploratory (`replay.configured`).
+        reasons.append("the run applied the draft's edited configuration, which is never pre-registered")
     return (replay.EXPLORATORY if reasons else replay.PREREGISTERED), reasons
 
 

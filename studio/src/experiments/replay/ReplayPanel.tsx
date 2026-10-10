@@ -8,7 +8,7 @@ import { previewReplay, startReplay } from "./api";
 import {
   analysisLines, comparisonLine, formatCost, formatPercent, initialPack, packKey, packOptions, packSelection, samplingLines, progressResult, readinessSummary,
   confirmableToken, failureMessage, launchKind, previewReducer, replayErrorMessage, tasksFor, validateReplay, type ReplayPack,
-  SOURCE_ONLY_NOTE,
+  MEASURES_NOTE, measuredConfigCaption,
   ReplayRequestGate, type DraftComparison, type ReplayAnalysis, type ReplayLaunchInput, type ReplayMetricRow, type ReplayPreview,
   type ReplayProgressRow,
   type ReplayTargetKind,
@@ -25,6 +25,7 @@ type Props = {
   analysis?: ReplayAnalysis[] | null;
   analysisError?: string | null;
   comparisons?: DraftComparison[];
+  measuredConfigs?: (string | null)[];
   progress?: ReplayProgressRow[];
   runStatus?: string;
   onStarted?: (runId: string) => void;
@@ -41,7 +42,7 @@ export function ReplayReadiness({ errors }: { errors: string[] }) {
   );
 }
 
-export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], analysis = null, analysisError = null, comparisons = [], progress = [], runStatus, onStarted }: Props) {
+export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultModel = "", rows = [], analysis = null, analysisError = null, comparisons = [], measuredConfigs = [], progress = [], runStatus, onStarted }: Props) {
   const startingPack = initialPack(packs, defaultPack);
   const [draft, setDraft] = useState<ReplayLaunchInput>({
     targets: [{ kind: "release", ref: "" }, { kind: "draft", ref: "" }],
@@ -118,7 +119,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
         <Text className="eyebrow">Experiments / Live replay</Text>
         <Title order={2}>Measure two explicit targets.</Title>
         <Text c="dimmed">Each target is built in its own isolated profile. The installed harness is not an implicit fallback.</Text>
-        <Text c="dimmed" size="sm">{SOURCE_ONLY_NOTE}</Text>
+        <Text c="dimmed" size="sm">{MEASURES_NOTE}</Text>
       </div>
       <Paper>
         <Stack>
@@ -210,7 +211,7 @@ export function ReplayPanel({ tasks, packs = [], defaultPack = null, defaultMode
       {rows.length > 0 && (
         <Table.ScrollContainer minWidth={720} type="native" role="region" aria-label="Cost and pass rate" tabIndex={0}>
           <Table striped highlightOnHover>
-            <Table.Caption>Cost and pass rate by target, task and arm. Source only: target configuration was not applied.</Table.Caption>
+            <Table.Caption>Cost and pass rate by target, task and arm. {measuredConfigCaption(measuredConfigs)}</Table.Caption>
             <Table.Thead><Table.Tr><Table.Th>Target</Table.Th><Table.Th>Task</Table.Th><Table.Th>Arm</Table.Th><Table.Th>Cost per passed task</Table.Th><Table.Th>Pass rate</Table.Th></Table.Tr></Table.Thead>
             <Table.Tbody>{rows.map((row) => <Table.Tr key={`${row.target.kind}:${row.target.ref}:${row.task}:${row.arm}`}>
               <Table.Td>{row.target.ref}</Table.Td><Table.Td>{row.task}</Table.Td><Table.Td>{row.arm}</Table.Td>

@@ -1,4 +1,6 @@
-"""Replay admission against real drafts: an inherited configuration runs, an edited one is refused."""
+"""Admission without a configuration, as an evaluation tier resolves a draft, against real drafts:
+an inherited configuration runs and an edited one is refused. A replay applies an edited one
+instead; that path is tested in test_studio_replay_draft_config."""
 import importlib.machinery
 import importlib.util
 import os
@@ -92,7 +94,7 @@ class ReplayDraftConfigurationTests(unittest.TestCase):
             "targets": [{"kind": "branch", "ref": "main"}, {"kind": "draft", "ref": draft}],
             "model": "claude-test", "repetitions": 1, "tasks": ["one"],
             "max_budget_usd": "2", "spend_cap_usd": "20", "pre_registration": None,
-        }, self.admission._resolve)
+        }, lambda kind, ref: self.admission._resolve(kind, ref, apply_config=False))
 
     def test_an_inherited_unchanged_configuration_runs_as_source_only(self):
         self.create("inherits")
@@ -112,7 +114,7 @@ class ReplayDraftConfigurationTests(unittest.TestCase):
         created = self.create("cleared")
         drafts.checkpoint_config(self.repo, "cleared", created["revision"], "save-1", {},
                                  check_command=OK_CHECK)
-        resolved = self.admission._resolve("draft", "cleared")
+        resolved = self.admission._resolve("draft", "cleared", apply_config=False)
         self.assertEqual(resolved["config_digest"], replay.DEFAULT_CONFIG_DIGEST)
 
     def test_a_draft_being_saved_is_a_distinct_retryable_refusal(self):
