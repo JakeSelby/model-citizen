@@ -173,7 +173,8 @@ class ReplayTarget:
 
     @property
     def identity(self) -> str:
-        return self.kind + ":" + self.ref + ":" + self.revision + ":" + (self.config_digest or "")
+        return (self.kind + ":" + self.ref + ":" + self.revision + ":" + (self.config_digest or "")
+                + (":" + self.base_config_digest if self.base_config_digest else ""))
 
     def as_dict(self) -> Dict[str, Any]:
         out = {"kind": self.kind, "ref": self.ref, "revision": self.revision,
@@ -463,6 +464,8 @@ class ReplayAdmission:
         try:
             _config, base = draft_configs(self.repository, name)
             inherited = targets._config_digest(base)
+        except ReplayRefusal:
+            raise  # a save holding the lock stays `replay_target_busy`
         except (ReplayError, targets.TargetError) as exc:
             raise ReplayError("draft configuration base is unreadable") from exc
         if digest != inherited:
@@ -493,7 +496,8 @@ class ReplayAdmission:
                 raise ReplayError("replay pack identity changed after spend preview")
         for expected in request.targets:
             actual = ReplayTarget.parse(self._resolve(expected.kind, expected.ref))
-            if actual.identity != expected.identity or actual.version != expected.version:
+            if (actual.identity != expected.identity or actual.version != expected.version
+                    or actual.base_config_digest != expected.base_config_digest):
                 raise ReplayError("replay target identity changed after spend preview")
 
     def preview(self, value: Any) -> Dict[str, Any]:
@@ -610,6 +614,10 @@ def target_configs(repository: Path, request: ReplayRequest) -> List[Optional[Di
     defaults, so clearing an inherited configuration is measured too. An unedited draft gives
     neither arm a configuration and runs source-only. Each draft is read once; its digest must
     still be the one resolved."""
+    if (all(target.kind == "draft" for target in request.targets)
+            and any(target.edited for target in request.targets)):
+        raise ReplayRefusal("replay_target_config_pair",
+                            "compare an edited configuration against its base commit or a release")
     out: List[Optional[Dict[str, Any]]] = [None, None]
     for index, target in enumerate(request.targets):
         if not target.edited:
@@ -1254,8 +1262,11 @@ def execute(request: ReplayRequest, repository: Path, output: Path,
                                   "spend_usd": (round(float(charged_spend(
                                       mine, request.max_budget_usd)), 6)
                                                 if len(mine) == 1 else 0.0)})
+    # The engine's stamp on the rows, or, for a target that stopped before any harness row, the
+    # digest of the snapshot its image was built from.
     measured = [measured_config_digest(next((rows for known, rows in collected if known == target), []))
-                for target in request.targets]
+                or (snapshots[number]["config_sha256"] if snapshots[number] else None)
+                for number, target in enumerate(request.targets)]
     summary = {
         "schema_version": 1, "targets": [target.as_dict() for target in request.targets],
         "measures": MEASURES_CONFIGURED if any(measured) else MEASURES,

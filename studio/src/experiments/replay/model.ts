@@ -196,6 +196,8 @@ export function validateReplay(draft: ReplayLaunchInput): string[] {
 }
 
 const refusals: Record<string, string> = {
+  replay_target_config_pair:
+    "Two drafts cannot be compared once either edited its configuration. Compare an edited configuration against its base commit or a release.",
   replay_target_config_invalid:
     "The engine refused the draft's configuration: it is not a JSON object of finite values.",
   replay_target_config_root_unreadable:

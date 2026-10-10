@@ -246,6 +246,7 @@ export function draftTestErrorMessage(code: string): string {
     draft_test_cv_not_declared: "A registration plans from the repository's declared variance; clear the coefficient of variation.",
     draft_test_registration_subset: "Only the whole task set can be registered; choose every task.",
     replay_target_busy: "The draft is being saved; try again in a moment.",
+    replay_target_config_pair: "Compare an edited configuration against its base commit or a release.",
     replay_target_config_invalid: "The engine refused this draft's configuration: it is not a JSON object of finite values.",
     replay_target_config_root_unreadable: "The engine refused this draft's configuration: a primitive root outside the checkout is not a readable directory of regular files.",
     replay_target_config_root_unsupported: "The engine refused this draft's configuration: a primitive root adds a role or workflow, which the arm accepts only from the commit.",

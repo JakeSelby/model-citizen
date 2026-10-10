@@ -60,3 +60,8 @@ test("the engine's own reason follows the refusal's sentence", () => {
   assert.equal(withEngineReason("Refused.", new Error("replay_refused")), "Refused.");
   assert.equal(failureMessage(new Error("replay_target_config_new_code"), "fallback"), "replay_target_config_new_code");
 });
+
+test("a pair of drafts with an edited configuration is refused in plain words", () => {
+  assert.match(replayErrorMessage("replay_target_config_pair"), /against its base commit or a release/);
+  assert.match(draftTestErrorMessage("replay_target_config_pair"), /against its base commit or a release/);
+});

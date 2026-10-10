@@ -19,7 +19,7 @@ from unittest import mock
 
 from draft_support import draft_branch_exists
 from test_harness import REPO as ROOT  # also puts lib/ on the import path
-from harness_core.studio import draft_tests, drafts, replay, server, targets
+from harness_core.studio import draft_registration, draft_tests, drafts, replay, server, targets
 
 _loader = importlib.machinery.SourceFileLoader("harness_replay_draft_config_test", str(ROOT / "bin" / "harness"))
 _spec = importlib.util.spec_from_loader("harness_replay_draft_config_test", _loader)
@@ -369,6 +369,102 @@ class DraftConfigurationTests(unittest.TestCase):
         self.assertEqual(sent["body"], {"error": "replay_target_config_unresolved", "reason": "unknown mode 'x'"})
         server.Handler._error(handler, 400, "replay_refused")
         self.assertEqual(sent["body"], {"error": "replay_refused"})
+
+    # Round 3: a pair of drafts with an edited configuration is refused by name.
+    def resolve_pair(self, first, second):
+        with mock.patch.object(replay, "engine_snapshot", FakeEngine()):
+            request = replay.resolve_request({
+                "targets": [{"kind": "draft", "ref": first}, {"kind": "draft", "ref": second}],
+                "model": "claude-test", "repetitions": 1, "tasks": ["one"],
+                "max_budget_usd": "2", "spend_cap_usd": "20", "pre_registration": None,
+            }, self.admission._resolve)
+            self.admission._check_configs(request)
+        return request
+
+    def test_two_drafts_where_either_edited_its_configuration_are_refused(self):
+        self.create("pair-edited")
+        self.create("pair-plain", config=None)
+        self.create("pair-cleared", config={})
+        for first, second in (("pair-edited", "pair-plain"), ("pair-cleared", "pair-plain"),
+                              ("pair-plain", "pair-edited")):
+            with self.subTest(pair=(first, second)), self.assertRaises(replay.ReplayRefusal) as caught:
+                self.resolve_pair(first, second)
+            self.assertEqual(caught.exception.code, "replay_target_config_pair")
+            self.assertIn("against its base commit or a release", str(caught.exception))
+
+    def test_two_unedited_drafts_still_run_source_only(self):
+        self.create("plain-a", config=None)
+        self.create("plain-b", config=None)
+        self.assertEqual(replay.target_configs(self.repo, self.resolve_pair("plain-a", "plain-b")), [None, None])
+
+    # Round 3: a registered draft test of an edited configuration stays exploratory.
+    def test_a_registered_draft_test_applying_a_configuration_is_exploratory(self):
+        record = {"problems": [], "used_by": "run-1", "created_at": "2026-10-09T00:00:00Z", "committed": {}}
+
+        def label(ref):
+            comparison = {"base": {"ref": {}}, "candidate": {"ref": ref}}
+            with mock.patch.object(draft_registration, "load", return_value=record), \
+                    mock.patch.object(draft_registration, "from_comparison", return_value={}), \
+                    mock.patch.object(draft_registration, "deviations", return_value=[]):
+                return draft_registration.evidence(self.root, "reg-1", [], "run-1", comparison, None)
+
+        self.assertEqual(label({"config_digest": "a" * 64, "base_config_digest": "a" * 64}),
+                         (replay.PREREGISTERED, []))
+        edited, reasons = label({"config_digest": "b" * 64, "base_config_digest": "a" * 64})
+        self.assertEqual(edited, replay.EXPLORATORY)
+        self.assertIn("edited configuration", reasons[0])
+
+    # Round 3: an evaluation tier keeps the busy code when a save holds the lock.
+    def test_an_evaluation_tier_reading_a_draft_being_saved_answers_busy(self):
+        self.create("tier-busy")
+        worktree, _state = drafts.find(self.repo, "tier-busy")
+        with drafts._locked(worktree), mock.patch.object(replay, "CONFIG_READ_TIMEOUT", 0.1), \
+                self.assertRaises(replay.ReplayRefusal) as caught:
+            self.admission._refuse_edited_config("tier-busy", targets._config_digest(EDITED))
+        self.assertEqual(caught.exception.code, "replay_target_busy")
+
+    # Round 3: a target stopped before any harness row still names the configuration it built.
+    def test_a_target_stopped_before_a_harness_row_names_its_snapshot_digest(self):
+        self.create("capped")
+        resolved = self.resolve("capped")
+
+        def launch(command, **kwargs):
+            ref = command[command.index("--tag") + 1]
+            out = Path(command[command.index("--out") + 1]) / ref
+            out.mkdir(parents=True)
+            row = {"schema_version": 1, "tag": ref, "task": "one", "arm": "bare", "rep": 1, "passed": True,
+                   "error": False, "cost_usd": 0.25, "harness_sha": ref, "model": "claude-test"}
+            (out / replay.RESULTS_NAME).write_text(json.dumps(row) + "\n")
+            spend = out / replay.SPEND_NAME
+            spend.write_text(json.dumps({"schema_version": 1, "tag": ref,
+                                         "run_cap_usd": float(command[command.index("--run-cap") + 1]),
+                                         "spend_cap_usd": float(command[command.index("--spend-cap") + 1]),
+                                         "preflight_spend_usd": 0.0, "scored_spend_usd": 0.25,
+                                         "charged_spend_usd": 0.25, "stopped_at_cap": True}) + "\n")
+            spend.chmod(0o600)
+            return SimpleNamespace(returncode=1)
+
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(replay, "engine_snapshot", FakeEngine()):
+            summary = replay.execute(resolved, self.repo, Path(temporary) / "out", launch)
+        self.assertEqual(summary["measured_config_digests"][0], FakeEngine.digest(INHERITED))
+        self.assertEqual(summary["measures"], replay.MEASURES_CONFIGURED)
+
+    # Round 3: the base digest is part of the target's identity and of what the token binds.
+    def test_the_base_digest_is_bound_by_identity_confirmation_and_token(self):
+        self.create("bound")
+        resolved = self.resolve("bound")
+        target = resolved.targets[1]
+        dropped = replay._replace(target, base_config_digest=None)
+        self.assertNotEqual(target.identity, dropped.identity)
+        stripped = replay._replace(resolved, targets=(resolved.targets[0], dropped))
+        self.assertNotEqual(replay.preview_payload([], resolved)["confirmation_digest"],
+                            replay.preview_payload([], stripped)["confirmation_digest"])
+        actual = dict(target.as_dict())
+        actual.pop("base_config_digest")
+        with mock.patch.object(self.admission, "_resolve", return_value=actual), \
+                self.assertRaisesRegex(replay.ReplayError, "identity changed"):
+            self.admission._confirm_resolved(replay._replace(resolved, targets=(resolved.targets[1],
+                                                                                  resolved.targets[1])))
 
     # AC3: staleness keeps reading the configuration digest.
     def test_a_configuration_edit_after_testing_or_registering_marks_the_draft_stale(self):
