@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 186,
+    "bug": 187,
     "chore": 108,
     "decision": 15,
     "epic": 28,
@@ -9381,6 +9381,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B184.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B186",
+      "github_number": 1287,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1287",
+      "title": "fix(benchmarks): the replay pair check refuses an arm whose sync leaves an empty skills or agents directory",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B186.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
