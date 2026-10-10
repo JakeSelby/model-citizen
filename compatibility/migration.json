@@ -1,16 +1,19 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.2",
-  "summary": "Upgrade from v0.14.1 to package the Claude Directory submission as a minimal regular-file plugin bundle, fix the sandbox skill's network and credential guidance, and publish matching plugin metadata at v0.14.2. The patch changes no configuration schema or defaults, and the architecture-viewer preview is inert until an external adapter is registered and selected.",
+  "harness_version": "0.15.0",
+  "summary": "Upgrade from v0.14.2 by reviewing the generated v0.15.0 projection before applying it: a minor release that makes every layer switchable and covered by tests, without a benefit, cost or efficacy claim. Sync registers two new Claude Code hooks, `session-caps` (warns past 80% of the cost variant's fan-out cap and the 200-search cap, denies at either) and `steer-polling` (notes foreground waits, denies a foreground sleep past five minutes). `grade-bash` now snapshots tracked files under `refs/harness/snapshots/` before every command it grades 2 or more in a git working tree, and asks before a `git push` unless a green `## Gate` run is recorded for HEAD; the stop gate runs a repository's `## Stop gate` block once that checkout is trusted. The OS sandbox and the observation recorder stay off until you set `sandbox.enabled` or `observation.enabled`, and the new `off` variants of the autonomy and plan-ceremony stances apply only when selected. The plugin manifests, including a new Codex plugin manifest, report v0.15.0. The architecture-viewer preview is inert until an external adapter is registered and selected.",
   "actions": [
-    "Run `citizen upgrade --dry-run`, inspect the recorded plugin and checkout changes, then run `citizen upgrade`. The plugin marketplace and plugin manifests now report v0.14.2.",
-    "Run `citizen sync --dry-run`, resolve any unmanaged-file conflict it names, then run `citizen sync`. Existing configuration and stance selections remain unchanged.",
-    "Run `citizen diff` and `citizen doctor`; both should report no projection drift."
+    "Run `citizen sync --dry-run` from the v0.15.0 checkout and inspect every proposed write, ownership change and conflict. Expect hook registration changes for `session-caps` and `steer-polling` and relinks for changed skills, rules, roles and hooks; nothing outside the harness's own files should appear.",
+    "Run `citizen sync` only after resolving unmanaged-file and adoption conflicts, accept native hook trust again if the client asks, then run `citizen diff` and `citizen doctor`; both should report no projection drift.",
+    "If you installed the Claude Code plugin, run `citizen upgrade --dry-run`, inspect it, then `citizen upgrade`; the marketplace and plugin manifests now report v0.15.0.",
+    "Your configuration keeps working unchanged. To keep a repository's stop gate running, trust its checkout once with `citizen trust <repo>`; to let a push through without asking, record a green gate first with `citizen gate`. Switch a new hook off with `citizen config set hooks.session-caps off` or `hooks.steer-polling off`; see docs/modes.md and docs/runtime-controls.md.",
+    "Opt in to the OS sandbox with `citizen config set sandbox.enabled true` or to the observation recorder with `citizen config set observation.enabled true`, then `citizen sync`. Snapshots accumulate as refs in each repository the grader runs in and prune after fourteen days; `citizen snapshot list|restore|prune` manages them."
   ],
   "recovery": [
-    "Preserve every conflict or adopted backup reported by the dry run.",
-    "To return to v0.14.1, check out v0.14.1, run `citizen sync --dry-run`, then `citizen sync`; no configuration migration needs reversing.",
-    "If the Claude Code plugin was upgraded, reinstall the v0.14.1 checkout as the `model-citizen` marketplace source before installing its plugin version again.",
+    "Preserve reported conflicts, adopted backups, external viewer adapter descriptors and external viewer installations.",
+    "To return to v0.14.2, check out v0.14.2, run `citizen sync --dry-run`, then `citizen sync`; it removes the `session-caps` and `steer-polling` registrations and no configuration migration needs reversing. If you set `sandbox.enabled` or `observation.enabled`, set it to `false` and run `citizen sync` from v0.15.0 first, so sync removes what it wrote.",
+    "Snapshot refs under `refs/harness/snapshots/` survive a rollback; remove them with `citizen snapshot prune --days 0` before rolling back, or with `git for-each-ref --format='%(refname)' refs/harness/snapshots/ | xargs -n1 git update-ref -d` afterwards.",
+    "If the Claude Code plugin was upgraded, reinstall the v0.14.2 checkout as the `model-citizen` marketplace source before installing its plugin version again.",
     "Use `citizen uninstall` only to remove the installation entirely; see docs/runtime-installation.md for ownership recovery."
   ]
 }

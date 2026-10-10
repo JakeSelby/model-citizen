@@ -9,9 +9,11 @@ A **qualified** entry requires native evidence for its exact runtime, client and
 **Unqualified** means no complete passing evidence, **planned** means no current integration,
 and **unsupported** means a combination explicitly outside the integration contract.
 
-Claude Code and Codex are this release's integration targets. The v0.14.2 stable floor qualifies
-the Claude Code CLI on macOS and Linux from complete scripted records. The first-live hand
-comparisons tracked by #741 were explicitly deferred to v0.15.0 and remain a catalog limitation. The Codex CLI is
+Claude Code and Codex are this release's integration targets. The v0.15.0 candidate awaits
+native qualification on the Claude Code CLI for macOS and Linux; until each carries evidence for
+its source, neither reads qualified. The v0.14.2 stable floor qualifies those two targets from
+complete scripted records. The first-live hand comparisons tracked by #741 were explicitly deferred
+to v0.15.0 and remain a catalog limitation until its round records them. The Codex CLI is
 outside that contract until a
 scripted qualification round agrees with a hand-driven one, so the v0.11.1 stable floor remains
 the last one qualifying the Codex CLI on macOS and Linux. The Claude Code and Codex VS Code surfaces, Codex Desktop on macOS and the Claude Code
@@ -57,9 +59,7 @@ reaches Codex as projected prose alone. The marketplace install reads `advisory`
 reason that it installs no hooks at all.
 
 <!-- harness:compatibility:start -->
-**Qualified:** `claude-code-cli-macos`, `claude-code-cli-linux`.
-
-**Unqualified:** `claude-code-vscode-macos`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
+**Unqualified:** `claude-code-cli-macos`, `claude-code-vscode-macos`, `claude-code-cli-linux`, `claude-code-plugin-marketplace`, `codex-cli-macos`, `codex-vscode-macos`, `codex-desktop-macos`, `codex-cli-linux`.
 
 **Planned:** `cursor`, `grok`.
 
