@@ -42,16 +42,21 @@ file, environment variable, typed answer or marker is a person's yes.
 program asked.
 
 The dialog names Model Citizen, with its icon, because a small helper app named Model Citizen
-asks for it (`lib/harness_core/presence_app/`, `lib/harness_core/presence_helper.py`). Its reason
-line reads "Model Citizen wants to ... so ...", or "Model Citizen Studio" when the request came
-through the Studio. No binary is checked in: at first use the helper is compiled with `swiftc`
-and ad-hoc signed (`codesign -s -`) into `~/.local/state/agent-harness/presence-helper/`, taken
-from the account's home in the password database rather than `HOME`, and the hash of its code
-signature is recorded there. Before each use the bundle's signature is verified and its hash
-compared with that record; a mismatch, or source that changed since the build, rebuilds it. The
-helper only calls LocalAuthentication and relays its answer; a decline is a refusal. Where the
-developer tools are missing or the build fails, the check asks through `/usr/bin/osascript` as
-before, so it is never skipped; that dialog names "osascript".
+asks for it (`lib/harness_core/presence_app/`, `lib/harness_core/presence_helper.py`). macOS
+titles the dialog with the app's name, so the helper is given the action as a verb phrase,
+"apply draft tune-stances (revision a1b2c3) to your live harness configuration, so your edits
+take effect"; the `osascript` fallback, which macOS names "osascript", is given the whole
+sentence, "Model Citizen wants to ..., so ...", or "Model Citizen Studio" when the request came
+through the Studio. A refusal says what was not done: "Model Citizen did not apply draft ...".
+No binary is checked in: at first use the helper is compiled with `swiftc` and ad-hoc signed
+(`codesign -s -`) into `~/.local/state/agent-harness/presence-helper/<source digest>/`, a home
+taken from the password database rather than `HOME`, and the hash of its code signature is
+recorded there. Before each use the bundle's signature is verified and its hash compared with
+that record, under a file lock that a rebuild must wait for; a mismatch, or source that changed
+since the build, rebuilds it. A failed build is not retried for a day unless the toolchain or the
+source changes. The helper only calls LocalAuthentication and relays its answer; a decline is a
+refusal. Where the developer tools are missing or the build fails, the check asks through
+`/usr/bin/osascript` as before, so it is never skipped.
 
 The CLI, and the Studio and its CLI children (started with `python3 -I` and no `PYTHON*`
 variables), refuse a spend or apply while `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` or
@@ -64,9 +69,13 @@ both as one stream under one limit and cursor.
 a sandbox. Code running as the same user can still reach the files and APIs underneath them
 directly: the run library, the draft and apply modules, the configuration and the state
 directory. The ledgers are that user's files too, so an Activity row is a record, not proof that
-a person confirmed. The presence helper and its recorded hash are that user's files as well:
-same-user code can replace both together and the check would use the replacement, the same limit
-as replacing `presence.py` or the run library. Containing same-user code is the runtime's sandbox.
+a person confirmed. The presence helper, its recorded hash and the compiler's own caches are that
+user's files as well: same-user code can steer the build or replace the helper and its record
+together, and the check would trust the result. Unlike a change to `presence.py`, such a helper
+lives outside git, so no `git status`, review or repository scan sees it. Each confirmation row
+in Activity therefore names the program that answered and the helper's signature hash; a hash
+that changes without a change to the helper's source, or an unexpected program, is the sign to
+look for. Containing same-user code is the runtime's sandbox.
 
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.

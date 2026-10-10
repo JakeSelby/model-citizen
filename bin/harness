@@ -3974,7 +3974,8 @@ def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> in
     return 0
 
 
-def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+def _draft_preflight(args: argparse.Namespace,
+                     repo: Path) -> Tuple[Optional[Dict[str, Any]], Any]:
     """(a refusal in the action's own result shape, or None; the words the presence dialog shows).
 
     Lock-free reads only, so the person at the Mac is asked only for an apply, rollback or recover
@@ -7180,11 +7181,12 @@ _RUNS_ERROR_CODES = {"start": "invalid_run", "show": "run_not_found", "detail": 
                      "catalog": "run_catalog_unavailable"}
 
 
-def person_present(args: argparse.Namespace, what: str, shaped: bool = False) -> Optional[int]:
+def person_present(args: argparse.Namespace, what: "presence.Reason",
+                   shaped: bool = False) -> Optional[int]:
     """None when the person at this Mac confirmed `what` (`presence.confirm`), which is then
     recorded for Activity; otherwise the refusal printed and its exit code, 2. Nothing the
     caller passes or sets is consulted: see `harness_core.presence`."""
-    if presence.confirm(what):
+    if presence.confirm(*what):
         actor = "Studio" if getattr(args, "via_studio", False) else "citizen"  # a label only
         presence.record(actor, ["citizen"] + list(getattr(args, "argv", None) or []), what)
         return None

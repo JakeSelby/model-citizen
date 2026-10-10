@@ -774,7 +774,7 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
 
 
 def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any,
-                  purpose: str = "") -> str:
+                  purpose: str = "") -> presence.Reason:
     """The dialog's words for a replay start, once its token matches the exact request
     (`RunSupervisor.check_start`, through `mutations` as the start is, since both read the run
     index); a mismatch is the route's own refusal, before any dialog."""
@@ -1114,7 +1114,8 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
-def _eval_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+def _eval_spend(handler: Handler, admission: Any, confirmed: Any,
+                token: Any) -> presence.Reason:
     """The dialog's words for a paid eval tier, once its token matches the exact request."""
     if not isinstance(token, str) or not token or len(token) > 512:
         raise eval_tiers.EvalTierError("a paid tier needs its one-use confirmation token",
@@ -1788,13 +1789,13 @@ class _Declined(Exception):
     """The person at the Mac did not confirm; the route has already answered."""
 
 
-def _person_present(handler: Handler, what: str) -> bool:
+def _person_present(handler: Handler, what: presence.Reason) -> bool:
     """Whether the person at this Mac confirmed `what` (`presence.confirm`); a 403 when not.
 
     Asked at the moment a run would spend, after the request was checked, on both faces: the
     Studio's HTTP route and `citizen runs GROUP start`, which runs this handler. A session, its
     CSRF token or the bootstrap token proves a browser, not a person, so none of them is enough."""
-    if presence.confirm(what):
+    if presence.confirm(*what):
         face = getattr(handler, "face", "Studio")
         presence.record(face, [], what)
         return True

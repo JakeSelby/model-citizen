@@ -31,9 +31,9 @@ def main() -> int:
         print("unavailable: " + why)
         return 1
     print("A Touch ID or login-password dialog is open; answer or cancel it.", file=sys.stderr)
-    answer, path = presence.check(presence.ask(
+    answer, path, _cdhash = presence.check(
         presence.CLI_NAME, "check that you are at this Mac, spending and changing nothing",
-        "you can see the dialog a spend or an apply raises"))
+        "you can see the dialog a spend or an apply raises")
     print("%s (%s)" % ("present" if answer else "refused", PATHS.get(path, path)))
     return 0 if answer else 1
 
