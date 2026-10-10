@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.2",
-  "release_state": "released",
+  "harness_version": "0.15.0",
+  "release_state": "candidate",
   "required_cases": [
     "installation",
     "stance-switch",
@@ -68,14 +68,9 @@
       "provider": "anthropic",
       "client": "cli",
       "platform": "macos",
-      "status": "qualified",
+      "status": "unqualified",
       "required_for_release": true,
-      "evidence": [
-        {
-          "path": "compatibility/evidence/claude-code-cli-macos-0.14.2.json",
-          "sha256": "6b702a7c43ded278eaff6a190e196a6a6b96b302f2ef54fc9d1a9129724f3770"
-        }
-      ],
+      "evidence": [],
       "runtime_version": "2.1.283",
       "client_version": "2.1.283"
     },
@@ -95,14 +90,9 @@
       "provider": "anthropic",
       "client": "cli",
       "platform": "linux",
-      "status": "qualified",
+      "status": "unqualified",
       "required_for_release": true,
-      "evidence": [
-        {
-          "path": "compatibility/evidence/claude-code-cli-linux-0.14.2.json",
-          "sha256": "466e25b87316d235e7da300a082569d82fca75587e1e7cd4b4baec90aea7ca94"
-        }
-      ],
+      "evidence": [],
       "runtime_version": "2.1.283",
       "client_version": "2.1.283"
     },
@@ -202,6 +192,5 @@
     "In the 0.13.0 and 0.13.1 qualifications a band worker's effort was read from the installed worker definition, not from the subagent's transcript; its model, the budget sentence in its brief, the usage feed and the usage row were observed from the run.",
     "With a token-only login (`CLAUDE_CODE_OAUTH_TOKEN`, as in CI and containers, including the Linux target image), an isolated role worker that a Claude Code session launches cannot authenticate: the client strips the token from its tool subprocesses, and the worker reports that it is not logged in. A client whose confined layers cannot run may then do their work in its own context, unconfined, as the 0.13.0 BMad integration suite observed. Qualification rounds launch their workers from the runner rather than from a client session, so they do not exercise this path. Tracked in #759.",
     "In the 0.13.0 and 0.13.1 qualifications cost-posture compared each role the cost variant does not change by its content, byte for byte, rather than by its link, so a role replaced by an identical copy would also pass; step 8 asks that every other role keeps its link. Tracked in #742."
-  ],
-  "qualification_source_commit": "040462636205d8edc766775ebe2cc9571ac6b217"
+  ]
 }
