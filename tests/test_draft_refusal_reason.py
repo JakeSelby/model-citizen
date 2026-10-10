@@ -89,6 +89,26 @@ class DraftRefusalReasonTests(unittest.TestCase):
         self.assertEqual(json.loads(stdout)["error"]["code"], "not-found")
         self.assertIn("draft discard: not-found: ", stderr)
 
+    def test_a_first_run_refusal_under_quiet_says_why_on_stderr(self):
+        for argv in (("draft", "first-run", "bad name"), ("draft", "first-run", "bad name", "--json")):
+            code, stdout, stderr = self.run_cli(*argv)
+            self.assertEqual((code, stdout), (1, ""), argv)
+            self.assertIn("draft first-run: invalid-name: ", stderr)
+
+    def test_preflight_refusals_under_quiet_say_why_on_stderr(self):
+        cases = {
+            "apply": ("draft", "apply", "missing", "--revision", "0" * 40, "--json"),
+            "rollback": ("draft", "rollback", "no-such-apply", "--json"),
+            "recover": ("draft", "recover", "--json"),
+        }
+        for action, argv in cases.items():
+            with self.subTest(action=action), \
+                    mock.patch.object(harness, "person_present",
+                                      side_effect=AssertionError("asked before refusing")):
+                code, stdout, stderr = self.run_cli(*argv)
+                self.assertEqual((code, stdout), (1, ""))
+                self.assertRegex(stderr, r"^draft %s: [a-z-]+: \S" % action)
+
 
 if __name__ == "__main__":
     unittest.main()

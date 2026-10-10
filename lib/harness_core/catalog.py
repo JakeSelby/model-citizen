@@ -57,8 +57,10 @@ def identifier(value):
     return value
 
 
-def frontmatter(path):
-    text = path.read_text(encoding="utf-8")
+def frontmatter(path, text=None):
+    """A module's frontmatter fields and body; `text` is its already-read content, if any."""
+    if text is None:
+        text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
         raise ValueError("missing frontmatter: " + str(path))
     _, header, body = text.split("---", 2)
@@ -221,12 +223,12 @@ def catalog(root):
             "primitives": entries}
 
 
-def role_contract(root, name):
+def role_contract(root, name, text=None):
     identifier(name)
     path = root / "primitives" / "roles" / (name + ".md")
     if not path.is_file():
         raise ValueError("unknown harness role: " + name)
-    fields, body = frontmatter(path)
+    fields, body = frontmatter(path, text)
     if fields.get("name") != name or fields.get("authority") not in ("read-only", "artifact-write", "workspace-write"):
         raise ValueError("invalid shared role name or authority: " + name)
     if fields.get("context") != "fresh" or fields.get("delegation") != "none":
@@ -428,8 +430,8 @@ def role_binding(root, runtime, fields, overrides=None, tiers=None):
     return dict({"model": model} if model and model != "inherit" else {}, **binding)
 
 
-def role_projection(root, runtime, path, overrides=None, tiers=None):
-    fields, body = role_contract(root, path.stem)
+def role_projection(root, runtime, path, overrides=None, tiers=None, text=None):
+    fields, body = role_contract(root, path.stem, text)
     binding = role_binding(root, runtime, fields, overrides, tiers)
     if runtime == "claude-code":
         values = {k: fields[k] for k in ("name", "description")}

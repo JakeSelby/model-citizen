@@ -58,9 +58,9 @@ def _roots(root: Path, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     return result
 
 
-def _frontmatter_description(path: Path) -> str:
+def _frontmatter_description(path: Path, texts: Optional[Texts] = None) -> str:
     try:
-        fields, _ = catalog.frontmatter(path)
+        fields, _ = catalog.frontmatter(path, _read_text(path, texts))
     except (OSError, ValueError):
         return ""
     return fields.get("description", "")
@@ -83,7 +83,7 @@ def _read_text(path: Path, texts: Optional[Texts] = None) -> str:
 
 def _cost(kind: str, path: Path, name: str, texts: Optional[Texts] = None) -> Dict[str, Any]:
     if kind in ("skills", "roles", "workflows"):
-        text = name + ": " + _frontmatter_description(path)
+        text = name + ": " + _frontmatter_description(path, texts)
         method = "chars/4 of resident listing name and description"
     elif kind in ("rules", "stances"):
         try:
@@ -124,7 +124,10 @@ def _rendered(root: Path, kind: str, path: Path, name: str,
               texts: Optional[Texts] = None) -> str:
     try:
         if kind == "roles" and path.is_relative_to(root):
-            return catalog.role_projection(root, "claude-code", path)
+            # role_contract reads the core role of this name; reuse the text only for that file.
+            core = root / "primitives" / "roles" / (path.stem + ".md")
+            return catalog.role_projection(root, "claude-code", path,
+                                           text=_read_text(path, texts) if path == core else None)
         if kind == "workflows":
             return _read_text(path, texts).replace("{{arguments}}", "$ARGUMENTS")
         return _read_text(path, texts)
@@ -391,9 +394,9 @@ def inventory(root: Path, config: Optional[Mapping[str, Any]] = None,
                                      if metadata_only else _cost(kind, path, name, texts)),
                 })
     # Hooks live in the kernel rather than under primitives.
-    manifests = root / "policy" / "hooks" / "manifests.json"
+    hook_manifests_path = root / "policy" / "hooks" / "manifests.json"
     try:
-        hook_manifests = json.loads(manifests.read_text(encoding="utf-8")).get("hooks", {})
+        hook_manifests = json.loads(hook_manifests_path.read_text(encoding="utf-8")).get("hooks", {})
     except (OSError, ValueError):
         hook_manifests = {}
     for name in catalog.HOOK_IDS:

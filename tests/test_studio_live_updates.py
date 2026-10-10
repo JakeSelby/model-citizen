@@ -200,12 +200,44 @@ class ScannerTests(unittest.TestCase):
                 path.unlink()
                 target.unlink()
 
-    def test_more_than_watch_capacity_forces_topic_wide_invalidation(self):
+    def overflow_tree(self):
+        """Watch capacity plus one rule module: the scan that aggregates its overflow."""
         created = []
         for index in range(MAX_WATCHED_PATHS + 1):
             path = self.primitives / "rules" / ("overflow-%d.md" % index)
             path.write_text("module\n", encoding="utf-8")
             created.append(path)
+        return created
+
+    def test_a_regression_of_four_fifths_of_the_overflow_budget_still_fails_it(self):
+        self.overflow_tree()
+        watcher = LiveWatcher(self.scanner, EventBroker("epoch"))
+        idle = self.scanner.scan()
+        original = live_updates._fingerprint
+        calls = 0
+
+        def slower(path, allowed_root=None, info=None):
+            # 10 microseconds per path is about 0.2 s over five polls of 4,097 paths: four
+            # fifths of the 0.25 s limit, on top of the scan's own cost.
+            nonlocal calls
+            calls += 1
+            deadline = time.thread_time() + 0.00001
+            while time.thread_time() < deadline:
+                pass
+            return original(path, allowed_root, info)
+
+        def five_polls():
+            nonlocal idle
+            for _ in range(5):
+                idle = watcher.poll(idle)
+
+        with mock.patch.object(live_updates, "_fingerprint", slower):
+            consumed = least_cpu_seconds(five_polls, samples=2)
+        self.assertGreaterEqual(calls, 2 * 5 * (MAX_WATCHED_PATHS + 1))
+        self.assertGreater(consumed, POLL_SECONDS * 5 * 0.05)
+
+    def test_more_than_watch_capacity_forces_topic_wide_invalidation(self):
+        created = self.overflow_tree()
         before = self.scanner.scan()
         self.assertIn(OVERFLOW_PATH, before)
         self.assertEqual(len(before), MAX_WATCHED_PATHS + 1)
@@ -301,14 +333,28 @@ class ScannerTests(unittest.TestCase):
         self.assertGreater(consumed, POLL_SECONDS * 10 * 0.02)
 
     def test_nested_modules_record_each_file_and_its_parent_once(self):
-        skill = self.primitives / "skills" / "demo" / "SKILL.md"
-        skill.parent.mkdir(parents=True)
-        skill.write_text("---\nname: demo\n---\n", encoding="utf-8")
-        snapshot = self.scanner.scan()
-        self.assertEqual(snapshot[str(skill.absolute())][1], ("library", "overview"))
-        self.assertEqual(snapshot[str(skill.parent.absolute())][1],
-                         ("library-index", "overview", "selection"))
-        self.assertEqual(snapshot[str(skill.absolute())][0][0], stat.S_IFREG)
+        unit = self.primitives / "stances" / "tone"
+        unit.mkdir(parents=True)
+        variants = [unit / (name + ".md") for name in ("brief", "plain", "warm")]
+        for variant in variants:
+            variant.write_text("# Tone\n", encoding="utf-8")
+        original = live_updates._fingerprint
+        looked_up = []
+
+        def counted(path, allowed_root=None, info=None):
+            looked_up.append(str(path))
+            return original(path, allowed_root, info)
+
+        with mock.patch.object(live_updates, "_fingerprint", counted):
+            snapshot = self.scanner.scan()
+        parent = str(unit.absolute())
+        # Three variants share one parent directory, which is looked up once, not per variant.
+        self.assertEqual(looked_up.count(parent), 1)
+        for variant in variants:
+            self.assertEqual(looked_up.count(str(variant.absolute())), 1)
+            self.assertEqual(snapshot[str(variant.absolute())][1], ("library", "overview"))
+            self.assertEqual(snapshot[str(variant.absolute())][0][0], stat.S_IFREG)
+        self.assertEqual(snapshot[parent][1], ("library-index", "overview", "selection"))
 
     def test_twenty_live_streams_and_five_hundred_modules_stay_below_two_percent(self):
         for index in range(1, 500):

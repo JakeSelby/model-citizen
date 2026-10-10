@@ -67,6 +67,13 @@ class InventoryReadTests(unittest.TestCase):
                              round(len(item["source"]["text"]) / 4))
         self.assertEqual(reads[str(self.custom / "manifests.json")], 1)
         self.assertEqual(reads[str(ROOT / "primitives" / "manifests.json")], 1)
+        # Skills, workflows and roles read their frontmatter, and roles their projection, from
+        # the same cached text.
+        for kind in ("skills", "workflows", "roles"):
+            paths = [item["source"]["path"] for item in payload["modules"] if item["kind"] == kind]
+            self.assertTrue(paths, kind)
+            for path in paths:
+                self.assertEqual(reads[path], 1, path)
 
     def test_modules_sharing_a_manifest_entry_receive_their_own_copies(self):
         shared = [item["manifest"] for item in self.inventory()["modules"]
