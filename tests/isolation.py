@@ -135,7 +135,9 @@ def stub_presence():
     from unittest import mock
 
     patch = mock.patch.object(presence, "confirm", return_value=True)
-    patch.start()
+    # Entered, not `start()`ed: a started patch is one `mock.patch.stopall` stops, and a test
+    # that cleans up with it would switch the stub off for every test after it.
+    patch.__enter__()
     return patch
 
 
