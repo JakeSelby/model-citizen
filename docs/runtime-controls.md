@@ -38,7 +38,20 @@ without a desktop session, or in a Codex sandbox. A Studio apply runs the CLI, w
 same way, outside the Studio's shared executor so a pending dialog holds no other request; a
 Studio session or its bootstrap token alone applies nothing. No token, revision, `--via-studio`,
 file, environment variable, typed answer or marker is a person's yes.
-`scripts/presence_check.py` raises the dialog once and prints what it answered.
+`scripts/presence_check.py` raises the dialog once and prints what it answered and which
+program asked.
+
+The dialog names Model Citizen, with its icon, because a small helper app named Model Citizen
+asks for it (`lib/harness_core/presence_app/`, `lib/harness_core/presence_helper.py`). Its reason
+line reads "Model Citizen wants to ... so ...", or "Model Citizen Studio" when the request came
+through the Studio. No binary is checked in: at first use the helper is compiled with `swiftc`
+and ad-hoc signed (`codesign -s -`) into `~/.local/state/agent-harness/presence-helper/`, taken
+from the account's home in the password database rather than `HOME`, and the hash of its code
+signature is recorded there. Before each use the bundle's signature is verified and its hash
+compared with that record; a mismatch, or source that changed since the build, rebuilds it. The
+helper only calls LocalAuthentication and relays its answer; a decline is a refusal. Where the
+developer tools are missing or the build fails, the check asks through `/usr/bin/osascript` as
+before, so it is never skipped; that dialog names "osascript".
 
 The CLI, and the Studio and its CLI children (started with `python3 -I` and no `PYTHON*`
 variables), refuse a spend or apply while `PYTHONPATH`, `PYTHONSTARTUP`, `PYTHONHOME` or
@@ -51,7 +64,9 @@ both as one stream under one limit and cursor.
 a sandbox. Code running as the same user can still reach the files and APIs underneath them
 directly: the run library, the draft and apply modules, the configuration and the state
 directory. The ledgers are that user's files too, so an Activity row is a record, not proof that
-a person confirmed. Containing same-user code is the runtime's sandbox.
+a person confirmed. The presence helper and its recorded hash are that user's files as well:
+same-user code can replace both together and the check would use the replacement, the same limit
+as replacing `presence.py` or the run library. Containing same-user code is the runtime's sandbox.
 
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.

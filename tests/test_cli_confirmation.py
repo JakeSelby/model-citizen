@@ -807,7 +807,8 @@ class PresenceCheck(unittest.TestCase):
 
         with mock.patch.object(presence.subprocess, "run", side_effect=run), \
                 mock.patch.object(presence.platform, "system", return_value=system), \
-                mock.patch.object(presence.os, "access", return_value=True):
+                mock.patch.object(presence.os, "access", return_value=True), \
+                mock.patch.object(presence, "helper", return_value=None):
             return isolation.PRESENCE.temp_original("a paid live replay")
 
     def test_only_a_present_answer_from_the_absolute_helper_passes(self):
@@ -889,21 +890,26 @@ class PresenceCheck(unittest.TestCase):
                     "setattr(" + "presence", "real_" + "confirm", "presence" + "_stub")
         tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True,
                                  check=True).stdout.decode("utf-8").split("\0")
-        offenders = []
+        offenders, read = [], set()
         for name in filter(None, tracked):
             if any(part in name for part in ("stub_cli", "presence" + "_stub", "present_cli.py")):
                 offenders.append(name)
                 continue
             path = REPO / name
-            if not path.is_file() or path.suffix not in ("", ".py", ".sh"):
+            # `.swift` and `.plist`: the presence helper's source (`presence_helper`).
+            if not path.is_file() or path.suffix not in ("", ".py", ".sh", ".swift", ".plist"):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeError, OSError):
                 continue
+            read.add(name)
             if any(pattern in text for pattern in patterns):
                 offenders.append(name)
         self.assertEqual(offenders, [])
+        self.assertLessEqual({"lib/harness_core/presence_app/main.swift",
+                              "lib/harness_core/presence_app/Info.plist",
+                              "lib/harness_core/presence_helper.py"}, read)
         self.assertGreater(len(tracked), 100)
 
     def test_where_presence_cannot_be_checked_it_refuses_without_asking(self):

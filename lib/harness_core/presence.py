@@ -7,9 +7,11 @@ the user can produce, so none of them shows that a person agreed. macOS LocalAut
 `LAPolicyDeviceOwnerAuthentication`), in a dialog no agent can answer, and passes only when the
 system says the owner authenticated. A cancelled, failed, timed-out or unavailable check refuses.
 
-`confirm` is the only function that can say yes, and it reads nothing an agent can set to make it
-say yes: the helper is `/usr/bin/osascript` by absolute path, run with a fixed environment and a
-fixed script. Inputs can only make it refuse: a host other than macOS, a session with no GUI
+`confirm` is the only function the CLI and the Studio ask, and it reads nothing an agent can set
+to make it say yes. It asks through the Model Citizen helper app (`presence_helper`), built and
+ad-hoc signed on this Mac and verified against its recorded signature hash before each use, so the
+dialog names Model Citizen; where that helper cannot be built, through `/usr/bin/osascript` by
+absolute path. Either runs with a fixed environment, and only its `present` answer passes. Inputs can only make it refuse: a host other than macOS, a session with no GUI
 (`launchctl managername` other than `Aqua`), a Codex sandbox, or `OFF` set, which the test suite
 sets so no real dialog is ever raised under it. Where presence cannot be checked the CLI refuses
 and points to the Studio, whose own run would ask the same way.
@@ -28,7 +30,9 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Tuple
+
+from harness_core import presence_helper
 
 REFUSED = "person_confirmation_required"
 # Interpreter variables that load code into a Python process before it runs: a CLI or Studio
@@ -96,18 +100,39 @@ def unavailable() -> Optional[str]:
     return None
 
 
-def confirm(reason: str) -> bool:
-    """Whether the Mac's owner authenticated, just now, for `reason`. The one yes; see the module."""
-    if unavailable() is not None:
-        return False
+def helper() -> Optional[Path]:
+    """The verified Model Citizen helper, built first if need be, or None to ask through
+    `osascript`. Any failure preparing it is a fallback, never an error."""
     try:
-        done = subprocess.run([OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT, str(reason)[:REASON_LIMIT]],
-                              capture_output=True, text=True, timeout=TIMEOUT,
+        return presence_helper.executable()
+    except Exception:  # noqa: BLE001 - the osascript path still asks the person
+        return None
+
+
+def check(reason: str) -> Tuple[bool, str]:
+    """(whether the Mac's owner authenticated just now for `reason`, which program asked:
+    `helper`, `osascript`, or `none` where presence cannot be checked). A decline from the helper
+    is a refusal; nothing is asked a second way."""
+    if unavailable() is not None:
+        return False, "none"
+    text = str(reason)[:REASON_LIMIT]
+    found = helper()
+    if found is not None:
+        argv, path = [str(found), text], "helper"
+    else:
+        argv, path = [OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT, text], "osascript"
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT,
                               env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
                               stdin=subprocess.DEVNULL, cwd="/")
     except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0 and done.stdout.strip() == PRESENT
+        return False, path
+    return done.returncode == 0 and done.stdout.strip() == PRESENT, path
+
+
+def confirm(reason: str) -> bool:
+    """Whether the Mac's owner authenticated, just now, for `reason`. The one yes; see the module."""
+    return check(reason)[0]
 
 
 def requester(via_studio: bool) -> str:

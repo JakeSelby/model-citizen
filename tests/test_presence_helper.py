@@ -1,0 +1,267 @@
+# SPDX-License-Identifier: MIT
+"""The Model Citizen helper app that asks for presence (`harness_core.presence_helper`).
+
+`presence.confirm` asks through the helper when it is built and verified, relays its answer
+(a decline is a refusal, never a reason to ask another way), and falls back to `osascript` when
+the helper is missing or cannot be built. A helper whose signature no longer matches the hash
+recorded at its build is rebuilt or not used. No test here raises the real dialog: the helper
+is only ever run with no reason, which prints its usage.
+
+Run: python3 -m unittest tests.test_presence_helper
+"""
+import json
+import os
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+
+import isolation  # noqa: E402,F401  (switches the real check off in children)
+from harness_core import presence, presence_helper  # noqa: E402
+
+REPO = Path(__file__).resolve().parents[1]
+SCRIPT = REPO / "scripts" / "presence_check.py"
+
+
+class Asking(unittest.TestCase):
+    """Which program asks, and what its answer means."""
+
+    def setUp(self):
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ.pop(presence.OFF, None)
+        for name in presence.CODEX_VARIABLES:
+            os.environ.pop(name, None)
+        self.calls = []
+
+    def ask(self, helper, answer):
+        def run(argv, **kwargs):
+            self.calls.append((argv, kwargs))
+            if argv[0] == presence.LAUNCHCTL:
+                return subprocess.CompletedProcess(argv, 0, stdout="Aqua\n", stderr="")
+            return subprocess.CompletedProcess(argv, answer[0], stdout=answer[1], stderr="")
+
+        with mock.patch.object(presence.subprocess, "run", side_effect=run), \
+                mock.patch.object(presence.platform, "system", return_value="Darwin"), \
+                mock.patch.object(presence.os, "access", return_value=True), \
+                mock.patch.object(presence_helper, "executable", return_value=helper):
+            return presence.check("Model Citizen wants to apply draft d, so your edits take effect.")
+
+    def asked_with(self):
+        return [argv for argv, _ in self.calls if argv[0] != presence.LAUNCHCTL]
+
+    def test_the_helper_asks_when_it_is_built_and_verified(self):
+        helper = Path("/state/presence-helper/Model Citizen.app/Contents/MacOS/x")
+        self.assertEqual(self.ask(helper, (0, "present\n")), (True, "helper"))
+        argv = self.asked_with()
+        self.assertEqual(argv, [[str(helper), "Model Citizen wants to apply draft d, so your "
+                                              "edits take effect."]])
+        _argv, kwargs = self.calls[-1]
+        self.assertEqual(kwargs["env"], {"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"})
+
+    def test_a_declined_helper_is_a_refusal_and_nothing_else_is_asked(self):
+        helper = Path("/state/helper")
+        for answer in ((1, "declined\n"), (2, "timeout\n"), (3, "unavailable\n"), (0, "declined\n"),
+                       (1, "present\n"), (0, "")):
+            with self.subTest(answer=answer):
+                self.calls = []
+                self.assertEqual(self.ask(helper, answer), (False, "helper"))
+                self.assertEqual(len(self.asked_with()), 1)
+                self.assertNotIn(presence.OSASCRIPT, [argv[0] for argv in self.asked_with()])
+
+    def test_without_the_helper_it_falls_back_to_osascript(self):
+        self.assertEqual(self.ask(None, (0, "present\n")), (True, "osascript"))
+        self.assertEqual(self.asked_with()[0][:3], [presence.OSASCRIPT, "-l", "JavaScript"])
+        self.calls = []
+        self.assertEqual(self.ask(None, (0, "declined\n")), (False, "osascript"))
+
+    def test_a_helper_that_cannot_be_prepared_falls_back(self):
+        with mock.patch.object(presence_helper, "root", side_effect=KeyError("no such user")):
+            self.assertIsNone(presence.helper())
+
+    def test_where_presence_cannot_be_checked_no_helper_is_built(self):
+        os.environ[presence.OFF] = "1"
+        with mock.patch.object(presence_helper, "executable",
+                               side_effect=AssertionError("built a helper")):
+            self.assertEqual(presence.check("x"), (False, "none"))
+
+
+class Verification(unittest.TestCase):
+    """The recorded code-signing hash decides whether a built helper is used."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix="presence-helper-"))
+        self.addCleanup(shutil.rmtree, str(self.directory), True)
+        os.chmod(str(self.directory), 0o700)
+        (self.directory / presence_helper.APP).mkdir()
+
+    def write_record(self, cdhash="a" * 40, source=None):
+        (self.directory / presence_helper.RECORD).write_text(json.dumps(
+            {"cdhash": cdhash, "source": source or presence_helper.source_digest()}))
+
+    def test_a_matching_hash_is_used(self):
+        self.write_record()
+        with mock.patch.object(presence_helper, "cdhash", return_value="a" * 40):
+            found = presence_helper.verified(self.directory)
+        self.assertEqual(found, self.directory / presence_helper.APP / "Contents" / "MacOS"
+                         / presence_helper.EXECUTABLE)
+
+    def test_a_tampered_helper_is_refused_and_rebuilt(self):
+        self.write_record()
+        rebuilt = self.directory / "rebuilt"
+        with mock.patch.object(presence_helper, "cdhash", return_value="b" * 40), \
+                mock.patch.object(presence_helper, "build", return_value=rebuilt) as build:
+            self.assertIsNone(presence_helper.verified(self.directory))
+            self.assertEqual(presence_helper.executable(self.directory), rebuilt)
+        build.assert_called_once_with(self.directory)
+
+    def test_a_tampered_helper_that_cannot_be_rebuilt_is_not_used(self):
+        self.write_record()
+        with mock.patch.object(presence_helper, "cdhash", return_value=None), \
+                mock.patch.object(presence_helper, "developer_tools", return_value=False):
+            self.assertIsNone(presence_helper.executable(self.directory))
+
+    def test_a_record_of_older_source_or_a_missing_record_rebuilds(self):
+        for write in (lambda: self.write_record(source="0" * 64), lambda: None):
+            with self.subTest(write=write):
+                (self.directory / presence_helper.RECORD).unlink(missing_ok=True)
+                write()
+                with mock.patch.object(presence_helper, "cdhash", return_value="a" * 40):
+                    self.assertIsNone(presence_helper.verified(self.directory))
+
+    def test_a_directory_others_can_write_is_not_trusted(self):
+        self.write_record()
+        os.chmod(str(self.directory), 0o777)
+        with mock.patch.object(presence_helper, "cdhash", return_value="a" * 40):
+            self.assertIsNone(presence_helper.verified(self.directory))
+
+    def test_without_developer_tools_nothing_is_compiled(self):
+        with mock.patch.object(presence_helper, "developer_tools", return_value=False), \
+                mock.patch.object(presence_helper.subprocess, "run",
+                                  side_effect=AssertionError("ran a tool")):
+            self.assertIsNone(presence_helper.build(self.directory / "fresh"))
+
+    def test_no_environment_variable_moves_the_helper(self):
+        before = presence_helper.root()
+        with mock.patch.dict(os.environ, {"HOME": str(self.directory),
+                                          "HARNESS_HOME": str(self.directory)}):
+            self.assertEqual(presence_helper.root(), before)
+        self.assertNotIn(str(self.directory), str(before))
+
+    def test_the_tools_run_with_a_fixed_environment(self):
+        with mock.patch.dict(os.environ, {"DEVELOPER_DIR": "/planted", "SDKROOT": "/planted",
+                                          "PATH": "/planted"}):
+            environment = presence_helper._environment()
+        self.assertEqual(set(environment), {"PATH", "HOME", "LANG"})
+        self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+
+
+class Source(unittest.TestCase):
+    """The helper's source relays LocalAuthentication's answer and reads nothing else."""
+
+    def setUp(self):
+        self.text = (presence_helper.SOURCE / "main.swift").read_text(encoding="utf-8")
+
+    def test_present_is_printed_only_from_the_policys_success_reply(self):
+        self.assertEqual(self.text.count('print("present")'), 1)
+        reply = self.text.index("localizedReason: arguments[1]) { success, _ in")
+        success = self.text.index("if success {", reply)
+        self.assertLess(success, self.text.index('print("present")'))
+        self.assertEqual(self.text.count("exit(0)"), 1)
+        self.assertLess(self.text.index('print("present")'), self.text.index("exit(0)"))
+        self.assertIn(".deviceOwnerAuthentication", self.text)
+
+    def test_it_reads_no_environment_file_or_defaults(self):
+        for reader in ("ProcessInfo", "getenv", "FileManager", "UserDefaults", "contentsOf",
+                       "Process(", "NSTask", "dlopen"):
+            self.assertNotIn(reader, self.text)
+
+    def test_the_bundle_is_named_model_citizen(self):
+        import plistlib
+        info = plistlib.loads((presence_helper.SOURCE / "Info.plist").read_bytes())
+        self.assertEqual((info["CFBundleName"], info["CFBundleDisplayName"]),
+                         ("Model Citizen", "Model Citizen"))
+        self.assertEqual(info["CFBundleExecutable"], presence_helper.EXECUTABLE)
+        self.assertEqual(info["CFBundleIconFile"] + ".icns", presence_helper.ICON)
+
+    def test_no_built_helper_is_tracked(self):
+        tracked = subprocess.run(["git", "-C", str(REPO), "ls-files"], capture_output=True,
+                                 text=True, check=True).stdout.splitlines()
+        self.assertEqual([name for name in tracked if name.endswith((".app", ".icns"))
+                          or "/Model Citizen.app/" in name or name.endswith(
+                              "/" + presence_helper.EXECUTABLE)], [])
+
+    def test_the_icon_is_drawn_as_an_icns_of_png_entries(self):
+        data = presence_helper.icon()
+        self.assertEqual((data[:4], struct.unpack(">I", data[4:8])[0]), (b"icns", len(data)))
+        offset, kinds = 8, []
+        while offset < len(data):
+            kind, length = data[offset:offset + 4], struct.unpack(">I", data[offset + 4:offset + 8])[0]
+            self.assertEqual(data[offset + 8:offset + 16], b"\x89PNG\r\n\x1a\n")
+            kinds.append(kind)
+            offset += length
+        self.assertEqual(kinds, [b"ic07", b"ic08", b"ic09"])
+
+
+@unittest.skipUnless(sys.platform == "darwin" and presence_helper.developer_tools(),
+                     "needs macOS with the developer tools")
+class RealBuild(unittest.TestCase):
+    """Compile and sign the helper for real, without ever asking: run with no reason, it prints
+    its usage."""
+
+    def test_built_verified_tampered_and_rebuilt(self):
+        directory = Path(tempfile.mkdtemp(prefix="presence-build-"))
+        self.addCleanup(shutil.rmtree, str(directory), True)
+        built = presence_helper.build(directory)
+        self.assertIsNotNone(built)
+        self.assertEqual(presence_helper.verified(directory), built)
+        done = subprocess.run([str(built)], capture_output=True, text=True, timeout=30)
+        self.assertEqual((done.returncode, done.stdout), (64, "usage\n"))
+        info = subprocess.run(["/usr/bin/codesign", "--display", "--verbose=2", str(
+            directory / presence_helper.APP)], capture_output=True, text=True, timeout=30)
+        self.assertIn("Signature=adhoc", info.stderr)
+        data = bytearray(built.read_bytes())
+        data[len(data) // 4] ^= 1
+        built.write_bytes(bytes(data))
+        self.assertIsNone(presence_helper.verified(directory))
+        self.assertEqual(presence_helper.executable(directory), built)
+        self.assertEqual(presence_helper.verified(directory), built)
+
+
+class ManualCheck(unittest.TestCase):
+    """`scripts/presence_check.py` says which program asked; here it is only ever unavailable."""
+
+    def test_it_says_unavailable_without_asking(self):
+        env = {k: v for k, v in os.environ.items() if k != "HARNESS_QUIET"}
+        env[presence.OFF] = "1"
+        done = subprocess.run([sys.executable, "-I", str(SCRIPT)], capture_output=True, text=True,
+                              env=env, timeout=60)
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(done.stdout, "unavailable: presence checks are switched off in this "
+                                      "process\n")
+
+    def test_it_names_the_path_it_used(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("presence_check_script", str(SCRIPT))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for answer, printed in (((True, "helper"), "present (asked by the Model Citizen helper)"),
+                                ((False, "osascript"), "refused (asked by osascript; the helper "
+                                                       "could not be built or verified)")):
+            with self.subTest(answer=answer), \
+                    mock.patch.object(module.presence, "unavailable", return_value=None), \
+                    mock.patch.object(module.presence, "check", return_value=answer), \
+                    mock.patch("sys.stdout") as stdout, mock.patch("sys.stderr"):
+                code = module.main()
+            self.assertEqual(code, 0 if answer[0] else 1)
+            self.assertEqual(stdout.write.call_args_list[0][0][0], printed)
+
+
+if __name__ == "__main__":
+    unittest.main()
