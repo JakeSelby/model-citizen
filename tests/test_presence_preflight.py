@@ -51,7 +51,7 @@ class CheckStart(unittest.TestCase):
                           "target_ref": "current", "case_count": 2, "max_budget_usd": "0.20",
                           "spend_cap_usd": "1.00", "pricing_source": "api_credit"})
         self.assertEqual(self.check(token)["case_count"], 2)  # not consumed
-        reason = presence.spend_reason(checked)
+        reason = presence.sentence(*presence.spend_reason(checked))
         for part in ("paid-suite", "2 case(s)", "installed current", "$0.20", "$1.00"):
             self.assertIn(part, reason)
 

@@ -723,7 +723,9 @@ def _native_start(handler: Handler, route: Route) -> None:
     except (native_acceptance.NativeAcceptanceError, runs.RunError):
         handler._error(400, "native_acceptance_refused")
         return
-    if not _person_present(handler, presence.spend_reason(checked)):
+    if not _person_present(handler, presence.spend_reason(
+            checked, who=_requester(handler),
+            purpose="it can run the native acceptance cases you previewed")):
         return
     try:
         payload = handler.server.mutations.call(lambda: _native_adapter(handler).start(
@@ -771,7 +773,8 @@ def _replay_admission(handler: Handler) -> replay.ReplayAdmission:
         handler.server.run_supervisor, handler.server.target_service)
 
 
-def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any,
+                  purpose: str = "") -> presence.Reason:
     """The dialog's words for a replay start, once its token matches the exact request
     (`RunSupervisor.check_start`, through `mutations` as the start is, since both read the run
     index); a mismatch is the route's own refusal, before any dialog."""
@@ -794,7 +797,10 @@ def _replay_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) 
             raise replay.ReplayRefusal(definitive_launch.CEILING_CODES[cause.code],
                                        str(cause)) from exc
         raise replay.ReplayError(str(exc)) from exc
-    return presence.spend_reason(checked, launch["targets"])
+    drafts = [str(item.get("ref")) for item in launch["targets"] if item.get("kind") == "draft"]
+    return presence.spend_reason(checked, launch["targets"], who=_requester(handler), purpose=(
+        purpose or ("it can measure whether draft %s helped" % " and ".join(drafts) if drafts
+                    else "it can measure how these targets compare")))
 
 
 def _replay_launch(handler: Handler, value: Any) -> Any:
@@ -1040,8 +1046,8 @@ def _draft_test_start(handler: Handler, route: Route) -> None:
             request.get("registration"))
         admission = _replay_admission(handler)
         confirmed = admission.confirm(request["request"])
-        reason = "test draft %s: %s" % (request["draft"], _replay_spend(
-            handler, admission, confirmed, request["confirmation_token"]))
+        reason = _replay_spend(handler, admission, confirmed, request["confirmation_token"],
+                               "it can test whether draft %s helped, as planned" % request["draft"])
     except (draft_tests.DraftTestError, replay.ReplayError) as exc:
         _draft_test_error(handler, exc)
         return
@@ -1108,7 +1114,8 @@ def _draft_test_verdicts(handler: Handler, route: Route) -> None:
     handler._json(200, payload)
 
 
-def _eval_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) -> str:
+def _eval_spend(handler: Handler, admission: Any, confirmed: Any,
+                token: Any) -> presence.Reason:
     """The dialog's words for a paid eval tier, once its token matches the exact request."""
     if not isinstance(token, str) or not token or len(token) > 512:
         raise eval_tiers.EvalTierError("a paid tier needs its one-use confirmation token",
@@ -1120,7 +1127,8 @@ def _eval_spend(handler: Handler, admission: Any, confirmed: Any, token: Any) ->
             spend_cap_usd=confirmed.spend_cap_usd, pricing_source=eval_tiers.PRICING_SOURCE))
     except runs.RunError as exc:
         raise eval_tiers.EvalTierError(str(exc)) from exc
-    return presence.spend_reason(checked)
+    return presence.spend_reason(checked, who=_requester(handler),
+                                 purpose="it can score the target on the eval tier you previewed")
 
 
 def _eval_admission(handler: Handler) -> eval_tiers.EvalAdmission:
@@ -1772,17 +1780,22 @@ def _child_environment() -> Dict[str, str]:
             if key != "HARNESS_QUIET" and not key.startswith("PYTHON")}
 
 
+def _requester(handler: Handler) -> str:
+    """Who the presence dialog names: the Studio for its HTTP route, the CLI for `citizen runs`."""
+    return presence.requester(getattr(handler, "face", "Studio") == "Studio")
+
+
 class _Declined(Exception):
     """The person at the Mac did not confirm; the route has already answered."""
 
 
-def _person_present(handler: Handler, what: str) -> bool:
+def _person_present(handler: Handler, what: presence.Reason) -> bool:
     """Whether the person at this Mac confirmed `what` (`presence.confirm`); a 403 when not.
 
     Asked at the moment a run would spend, after the request was checked, on both faces: the
     Studio's HTTP route and `citizen runs GROUP start`, which runs this handler. A session, its
     CSRF token or the bootstrap token proves a browser, not a person, so none of them is enough."""
-    if presence.confirm(what):
+    if presence.confirm(*what):
         face = getattr(handler, "face", "Studio")
         presence.record(face, [], what)
         return True

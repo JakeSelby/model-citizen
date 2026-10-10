@@ -81,7 +81,11 @@ FREE = (
     "python3 -c 'print(1)'",
 )
 APPLY = ["draft", "apply", "tuning", "--revision", "b" * 40, "--json"]
-PREFLIGHT = "apply draft tuning at revision %s to the live configuration" % ("b" * 40)
+PREFLIGHT_REASON = presence.Reason(
+    "Model Citizen", "apply draft tuning (revision %s) to your live harness configuration"
+    % ("b" * 40), "your edits take effect")
+PREFLIGHT = ("Model Citizen wants to apply draft tuning (revision %s) to your live harness "
+             "configuration, so your edits take effect." % ("b" * 40))
 # The CLI in a child with the presence check on, where the person at the Mac declines: `confirm`
 # records what it was asked and answers no, and the host counts as able to ask, so the refusal
 # can only be the person's. Written to a temporary directory by the test that runs it.
@@ -89,16 +93,16 @@ DECLINING_CLI = """import importlib.machinery, importlib.util, sys
 sys.path.insert(0, %(lib)r)
 from unittest import mock
 from harness_core import presence
-def declined(reason):
+def declined(*parts):
     with open(%(asked)r, "a") as handle:
-        handle.write(reason + "\\n")
+        handle.write(presence.sentence(*parts) + "\\n")
     return False
 mock.patch.object(presence, "confirm", declined).start()
 mock.patch.object(presence, "unavailable", lambda: None).start()
 loader = importlib.machinery.SourceFileLoader("declining_harness", %(cli)r)
 module = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
 loader.exec_module(module)
-module._draft_preflight = lambda args, repo: (None, %(reason)r)
+module._draft_preflight = lambda args, repo: (None, presence.Reason(*%(reason)r))
 sys.exit(module.main())
 """
 APPLIED = {"applied": True, "status": "applied", "message": "applied", "log": [],
@@ -244,11 +248,12 @@ class AgentCannotConfirm(Home):
         super().setUp()
         self.asked = []
         declined = mock.patch.object(presence, "confirm",
-                                     side_effect=lambda reason: self.asked.append(reason) or False)
+                                     side_effect=lambda *parts: self.asked.append(presence.sentence(*parts)) or False)
         declined.start()
         self.addCleanup(declined.stop)
         # The draft, apply and interrupted apply each names exist, so only the person refuses.
-        found = mock.patch.object(harness, "_draft_preflight", return_value=(None, PREFLIGHT))
+        found = mock.patch.object(harness, "_draft_preflight",
+                                  return_value=(None, PREFLIGHT_REASON))
         found.start()
         self.addCleanup(found.stop)
 
@@ -287,7 +292,7 @@ class AgentCannotConfirm(Home):
         launcher = directory / "declining_cli.py"
         launcher.write_text(DECLINING_CLI % {
             "lib": str(REPO / "lib"), "asked": str(asked), "cli": str(REPO / "bin" / "harness"),
-            "reason": PREFLIGHT}, encoding="utf-8")
+            "reason": tuple(PREFLIGHT_REASON)}, encoding="utf-8")
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("CLAUDE", "CODEX")) and k != presence.OFF}
         leader, follower = pty.openpty()
@@ -355,7 +360,8 @@ class AgentCannotConfirm(Home):
 class SpendRoutes(Home):
     """Both faces of each paid start check the request, then ask the person, then start."""
 
-    REASON = "start the paid live-replay run of 2 case(s) on installed current vs draft d"
+    REASON = presence.Reason("Model Citizen", "start the paid live-replay run of 2 case(s) on "
+                             "installed current vs draft d", "it can measure whether draft d helped")
 
     def call(self, group, body):
         return headless.call(REPO, self.home / "state" / "studio", group, "start", body)
@@ -427,15 +433,15 @@ class SpendRoutes(Home):
             "case_count": 2, "estimate_usd": 0.31, "max_budget_usd": "0.50",
             "spend_cap_usd": "2.00", "pricing_source": "api_credit"}
         with mock.patch.object(presence, "confirm",
-                               side_effect=lambda reason: asked.append(reason) or False), \
+                               side_effect=lambda *parts: asked.append(presence.sentence(*parts)) or False), \
                 mock.patch.object(server, "_replay_launch", return_value=admission), \
                 mock.patch.object(server.replay, "launch_payload", return_value=launch):
             self.assertEqual(self.call("replay", {"request": {}, "confirmation_token": "t"})[0],
                              403)
         self.assertEqual(asked, [
-            "start the paid live-replay run of 2 case(s) on installed current vs draft tuning: "
-            "estimated $0.31, at most $0.50 for the run and $2.00 against the spend cap "
-            "(api_credit)"])
+            "Model Citizen wants to spend up to $0.50 on a paid live-replay run of 2 case(s) "
+            "against installed current vs draft tuning (estimated $0.31; spend cap $2.00, "
+            "api_credit pricing), so it can measure whether draft tuning helped."])
         _args, kwargs = admission.supervisor.check_start.call_args
         self.assertEqual((kwargs["confirmed"], kwargs["case_identities"]), ("t", ["a", "b"]))
 
@@ -455,20 +461,21 @@ class SpendRoutes(Home):
         draft_tests = server.draft_tests
         asked = []
         with mock.patch.object(presence, "confirm",
-                               side_effect=lambda reason: asked.append(reason) or False), \
+                               side_effect=lambda *parts: asked.append(presence.sentence(*parts)) or False), \
                 mock.patch.object(draft_tests, "parse_plan"), \
                 mock.patch.object(draft_tests, "identity"), \
                 mock.patch.object(draft_tests, "check_request"), \
                 mock.patch.object(draft_tests, "power"), \
                 mock.patch.object(draft_tests, "start_registration", return_value=(None, [])), \
                 mock.patch.object(server.replay.ReplayRequest, "parse"), \
-                mock.patch.object(server, "_replay_spend", return_value=self.REASON), \
+                mock.patch.object(server, "_replay_spend", return_value=self.REASON) as spend, \
                 mock.patch.object(server, "_replay_admission", return_value=admission):
             status, body = self.call("draft-test", {"draft": "d", "request": {},
                                                     "confirmation_token": "t", "effect": 0.1,
                                                     "cv": 0.2})
         self.assertEqual((status, body), (403, {"error": "person_confirmation_required"}))
-        self.assertEqual(asked, ["test draft d: " + self.REASON])
+        self.assertEqual(asked, [presence.sentence(*self.REASON)])
+        self.assertEqual(spend.call_args[0][-1], "it can test whether draft d helped, as planned")
         admission.start_confirmed.assert_not_called()
 
     def test_a_studio_apply_rollback_or_recover_holds_no_shared_executor(self):
@@ -539,7 +546,7 @@ class CheckedBeforeAsking(Home):
     def test_a_declined_person_releases_the_registration_claimed_before_asking(self):
         order = []
         with mock.patch.object(presence, "confirm",
-                               side_effect=lambda reason: order.append("asked") or False):
+                               side_effect=lambda *parts: order.append("asked") or False):
             status, body = self.draft_test(
                 "r" * 32, claim=mock.Mock(side_effect=lambda *a: order.append("claimed")),
                 release=mock.Mock(side_effect=lambda *a: order.append("released")))
@@ -597,7 +604,7 @@ class CheckedBeforeAsking(Home):
         expected = native_acceptance.native_estimate(directory / "native-evidence", 3)
         self.assertEqual((checked["case_count"], checked["estimate_usd"]),
                          (3, expected["amount_usd"]))
-        self.assertIn("3 case(s)", presence.spend_reason(checked))
+        self.assertIn("3 case(s)", presence.spend_reason(checked).action)
 
     def test_confirmations_page_with_decisions_in_one_bounded_stream(self):
         """Two kept in the decision ledger, three beside it with the decision log off: every page
@@ -607,7 +614,8 @@ class CheckedBeforeAsking(Home):
         state = self.home / ".local" / "state" / "agent-harness"
         for index in range(5):
             config.write_text(json.dumps({"telemetry": {"decisions": index < 2}}))
-            presence.record("citizen", ["citizen", "draft", "apply", str(index)], "apply %d" % index)
+            presence.record("citizen", ["citizen", "draft", "apply", str(index)],
+                            presence.ask(presence.CLI_NAME, "apply %d" % index, "it takes effect"))
         self.assertTrue((state / "decisions.jsonl").exists())
         self.assertTrue((state / "confirmations.jsonl").exists())
         seen, cursor, pages = [], "", 0
@@ -656,7 +664,8 @@ class Recorded(Home):
         config.parent.mkdir(parents=True)
         config.write_text(json.dumps({"telemetry": {"decisions": False}}))
         with mock.patch.object(harness.studio_apply, "apply", return_value=APPLIED) as apply, \
-                mock.patch.object(harness, "_draft_preflight", return_value=(None, PREFLIGHT)):
+                mock.patch.object(harness, "_draft_preflight",
+                                  return_value=(None, PREFLIGHT_REASON)):
             code, _printed, _said = self.cli(*APPLY)
         self.assertEqual(code, 0)
         apply.assert_called_once()
@@ -696,7 +705,7 @@ class CliPreflight(Home):
         super().setUp()
         self.asked = []
         declined = mock.patch.object(presence, "confirm",
-                                     side_effect=lambda reason: self.asked.append(reason) or False)
+                                     side_effect=lambda *parts: self.asked.append(presence.sentence(*parts)) or False)
         declined.start()
         self.addCleanup(declined.stop)
 
@@ -729,8 +738,10 @@ class CliPreflight(Home):
                 mock.patch.object(harness.studio_apply, "recover") as recover:
             self.refused("draft", "recover", "--draft", "tuning", "--json")
             recover.assert_not_called()
-        self.assertEqual(self.asked, ["restore the interrupted apply of draft tuning (%s, "
-                                      "revision %s)" % ("e" * 32, "b" * 40)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to undo the interrupted apply of draft tuning (%s, revision %s), "
+            "putting back the settings and files it wrote, so your live configuration is back "
+            "where it was before that change started." % ("e" * 32, "b" * 40)])
 
     def test_the_recover_dialog_names_an_interrupted_rollback_as_one(self):
         intent = {"apply_id": "e" * 32, "draft": "tuning", "revision": "b" * 40,
@@ -738,8 +749,10 @@ class CliPreflight(Home):
         with mock.patch.object(harness.studio_apply, "unfinished_applies", return_value=[intent]), \
                 mock.patch.object(harness.studio_apply, "recover"):
             self.refused("draft", "recover", "--abandon", "--json")
-        self.assertEqual(self.asked, ["abandon the interrupted rollback of draft tuning's apply "
-                                      "%s (%s, revision %s)" % ("f" * 12, "e" * 32, "b" * 40)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to abandon the interrupted rollback of draft tuning's apply %s "
+            "(%s, revision %s), keeping what it already wrote, so it is closed and new applies "
+            "can run again." % ("f" * 12, "e" * 32, "b" * 40)])
 
     def test_an_apply_over_an_interrupted_apply_names_the_restore_that_runs(self):
         """`apply` restores an open interrupted apply instead; the dialog says so."""
@@ -749,8 +762,11 @@ class CliPreflight(Home):
                 mock.patch.object(harness.studio_apply, "apply") as apply:
             self.refused(*APPLY)
             apply.assert_not_called()
-        self.assertEqual(self.asked, ["restore the interrupted apply of draft other (%s), not "
-                                      "apply draft tuning" % ("e" * 32)])
+        self.assertEqual(self.asked, [
+            "Model Citizen wants to undo the interrupted apply of draft other (%s), putting back "
+            "the settings and files it wrote, instead of applying draft tuning, so your live "
+            "configuration is back where it was before that change started (draft tuning is not "
+            "applied this time)." % ("e" * 32)])
 
     def test_an_apply_over_another_drafts_interrupted_rollback_is_refused_without_asking(self):
         intent = {"apply_id": "e" * 32, "draft": "other", "kind": "rollback",
@@ -798,8 +814,11 @@ class PresenceCheck(unittest.TestCase):
 
         with mock.patch.object(presence.subprocess, "run", side_effect=run), \
                 mock.patch.object(presence.platform, "system", return_value=system), \
-                mock.patch.object(presence.os, "access", return_value=True):
-            return isolation.PRESENCE.temp_original("a paid live replay")
+                mock.patch.object(presence.os, "access", return_value=True), \
+                mock.patch.object(presence.presence_helper, "ready",
+                                  return_value=contextlib.nullcontext(None)):
+            return isolation.PRESENCE.temp_original(presence.CLI_NAME, "start a paid live replay",
+                                                    "it can measure the targets")
 
     def test_only_a_present_answer_from_the_absolute_helper_passes(self):
         self.assertTrue(self.run_with((0, "present\n")))
@@ -835,7 +854,8 @@ class PresenceCheck(unittest.TestCase):
                 self.calls = []
                 self.assertFalse(self.run_with((0, "present\n")))
                 self.assertFalse(any(argv[0] == presence.OSASCRIPT for argv, _ in self.calls))
-                self.assertIn(name + " is set", presence.refusal("apply draft d"))
+                self.assertIn(name + " is set", presence.refusal(
+                    presence.ask(presence.CLI_NAME, "apply draft d", "your edits take effect")))
                 del os.environ[name]
 
     def test_the_cli_refuses_an_apply_with_a_loader_variable_set(self):
@@ -848,7 +868,8 @@ class PresenceCheck(unittest.TestCase):
         with mock.patch.object(presence, "confirm", isolation.PRESENCE.temp_original), \
                 mock.patch.object(presence.subprocess, "run",
                                   side_effect=AssertionError("asked the helper")), \
-                mock.patch.object(harness, "_draft_preflight", return_value=(None, "apply x")), \
+                mock.patch.object(harness, "_draft_preflight", return_value=(
+                    None, presence.ask(presence.CLI_NAME, "apply x", "x takes effect"))), \
                 mock.patch.object(harness.studio_apply, "apply") as apply, \
                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             code = harness.main(APPLY)
@@ -880,21 +901,26 @@ class PresenceCheck(unittest.TestCase):
                     "setattr(" + "presence", "real_" + "confirm", "presence" + "_stub")
         tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z"], capture_output=True,
                                  check=True).stdout.decode("utf-8").split("\0")
-        offenders = []
+        offenders, read = [], set()
         for name in filter(None, tracked):
             if any(part in name for part in ("stub_cli", "presence" + "_stub", "present_cli.py")):
                 offenders.append(name)
                 continue
             path = REPO / name
-            if not path.is_file() or path.suffix not in ("", ".py", ".sh"):
+            # `.swift` and `.plist`: the presence helper's source (`presence_helper`).
+            if not path.is_file() or path.suffix not in ("", ".py", ".sh", ".swift", ".plist"):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeError, OSError):
                 continue
+            read.add(name)
             if any(pattern in text for pattern in patterns):
                 offenders.append(name)
         self.assertEqual(offenders, [])
+        self.assertLessEqual({"lib/harness_core/presence_app/main.swift",
+                              "lib/harness_core/presence_app/Info.plist",
+                              "lib/harness_core/presence_helper.py"}, read)
         self.assertGreater(len(tracked), 100)
 
     def test_where_presence_cannot_be_checked_it_refuses_without_asking(self):

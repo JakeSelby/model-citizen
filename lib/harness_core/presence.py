@@ -7,11 +7,16 @@ the user can produce, so none of them shows that a person agreed. macOS LocalAut
 `LAPolicyDeviceOwnerAuthentication`), in a dialog no agent can answer, and passes only when the
 system says the owner authenticated. A cancelled, failed, timed-out or unavailable check refuses.
 
-`confirm` is the only function that can say yes, and it reads nothing an agent can set to make it
-say yes: the helper is `/usr/bin/osascript` by absolute path, run with a fixed environment and a
-fixed script. Inputs can only make it refuse: a host other than macOS, a session with no GUI
-(`launchctl managername` other than `Aqua`), a Codex sandbox, or `OFF` set, which the test suite
-sets so no real dialog is ever raised under it. Where presence cannot be checked the CLI refuses
+`confirm` is the only function the CLI and the Studio ask, and it reads nothing an agent can set
+to make it say yes. It asks through the Model Citizen helper app (`presence_helper`), built and
+ad-hoc signed on this Mac and verified against its recorded signature hash before each use, so the
+dialog names Model Citizen; where that helper cannot be built, through `/usr/bin/osascript` by
+absolute path. Either runs with a fixed environment, and only its `present` answer passes. The
+helper is told the action as a verb phrase, since macOS words its dialog as that app "trying to"
+do it; `osascript`, which macOS names, is told the whole sentence. Inputs can only make it
+refuse: a host other than macOS, a session with no GUI (`launchctl managername` other than
+`Aqua`), a Codex sandbox, or `OFF` set, which the test suite sets so no real dialog is ever raised
+under it. Where presence cannot be checked the CLI refuses
 and points to the Studio, whose own run would ask the same way.
 
 This raises the bar from "anything the agent writes" to "a person at the machine"; it does not
@@ -25,10 +30,13 @@ import os
 import platform
 import shlex
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, NamedTuple, Optional, Sequence
+
+from harness_core import presence_helper
 
 REFUSED = "person_confirmation_required"
 # Interpreter variables that load code into a Python process before it runs: a CLI or Studio
@@ -40,6 +48,9 @@ OSASCRIPT = "/usr/bin/osascript"
 LAUNCHCTL = "/bin/launchctl"
 TIMEOUT = 180
 REASON_LIMIT = 480
+# The requester the reason line names; macOS names the calling program in the dialog's title.
+CLI_NAME = "Model Citizen"
+STUDIO_NAME = "Model Citizen Studio"
 # Set only by Codex's sandboxed shell; tighten-only, since it can only make the check refuse.
 CODEX_VARIABLES = ("CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED")
 PRESENT = "present"
@@ -93,40 +104,113 @@ def unavailable() -> Optional[str]:
     return None
 
 
-def confirm(reason: str) -> bool:
-    """Whether the Mac's owner authenticated, just now, for `reason`. The one yes; see the module."""
-    if unavailable() is not None:
-        return False
+class Reason(NamedTuple):
+    """What the dialog asks for: who asks, the action as a verb phrase, and why."""
+    requester: str
+    action: str
+    purpose: str
+
+
+class Answer(NamedTuple):
+    """What the check answered and which program asked: `helper`, `osascript`, or `none` where
+    presence cannot be checked; `cdhash` is the helper's code-signing hash when it asked."""
+    present: bool
+    program: str
+    cdhash: str
+
+
+# The last answer on this thread, for `record`: the confirmation row names who answered.
+_LAST = threading.local()
+
+
+def _clip(head: str, action: str, tail: str) -> str:
+    """`head + action + tail` within `REASON_LIMIT`, shortening only the action."""
+    room = REASON_LIMIT - len(head) - len(tail)
+    if len(action) > room:
+        action = action[:max(room - 3, 0)].rstrip() + "..."
+    return (head + action + tail)[:REASON_LIMIT]
+
+
+def phrase(action: str, purpose: str) -> str:
+    """The helper's reason, "<action>, so <purpose>": a verb phrase, since macOS titles the
+    dialog with the app's name and words it as that app trying to do this."""
+    return _clip("", action, ", so " + purpose)
+
+
+def sentence(requester: str, action: str, purpose: str) -> str:
+    """The whole sentence, "<requester> wants to <action>, so <purpose>.": the `osascript`
+    fallback's reason, where macOS names osascript, and the words Activity records."""
+    return _clip(requester + " wants to ", action, ", so " + purpose + ".")
+
+
+def _ask(argv: Sequence[str], program: str, cdhash: str = "") -> Answer:
     try:
-        done = subprocess.run([OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT, str(reason)[:REASON_LIMIT]],
-                              capture_output=True, text=True, timeout=TIMEOUT,
+        done = subprocess.run(list(argv), capture_output=True, text=True, timeout=TIMEOUT,
                               env={"PATH": "/usr/bin:/bin", "LANG": "en_US.UTF-8"},
                               stdin=subprocess.DEVNULL, cwd="/")
     except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0 and done.stdout.strip() == PRESENT
+        return Answer(False, program, cdhash)
+    return Answer(done.returncode == 0 and done.stdout.strip() == PRESENT, program, cdhash)
 
 
-def spend_reason(checked: Dict[str, Any], targets: Optional[Sequence[Dict[str, Any]]] = None) -> str:
+def check(requester: str, action: str, purpose: str) -> Answer:
+    """Whether the Mac's owner authenticated just now for this action, and which program asked.
+
+    The Model Citizen helper asks when it is built and verified, holding it under a shared lock
+    so no build replaces it meanwhile (`presence_helper.ready`); otherwise `osascript`. A decline
+    from either is a refusal: nothing is asked a second way."""
+    answer = Answer(False, "none", "")
+    if unavailable() is None:
+        with presence_helper.ready() as found:
+            if found is not None:
+                answer = _ask([str(found.path), phrase(action, purpose)], "helper", found.cdhash)
+        if answer.program == "none":
+            answer = _ask([OSASCRIPT, "-l", "JavaScript", "-e", SCRIPT,
+                           sentence(requester, action, purpose)], "osascript")
+    _LAST.answer = answer
+    return answer
+
+
+def confirm(requester: str, action: str, purpose: str) -> bool:
+    """Whether the Mac's owner authenticated, just now, for this action. The one yes; see the
+    module."""
+    return check(requester, action, purpose).present
+
+
+def requester(via_studio: bool) -> str:
+    """Who the dialog says is asking: the Studio, or the CLI."""
+    return STUDIO_NAME if via_studio else CLI_NAME
+
+
+def ask(who: str, action: str, purpose: str) -> Reason:
+    """The `Reason` a caller passes to `confirm` as `confirm(*reason)`."""
+    return Reason(who, action, purpose)
+
+
+def spend_reason(checked: Dict[str, Any], targets: Optional[Sequence[Dict[str, Any]]] = None,
+                 who: str = CLI_NAME, purpose: str = "") -> Reason:
     """The dialog's words for a paid start, from `RunSupervisor.check_start`: the suite, its
     targets, the estimate and the caps, so a yes covers only the spend it names."""
     named = targets or [{"kind": checked.get("target_kind"), "ref": checked.get("target_ref")}]
     where = " vs ".join("%s %s" % (item.get("kind"), item.get("ref")) for item in named)
     estimate = checked.get("estimate_usd")
-    return ("start the paid %s run of %s case(s) on %s: estimated %s, at most $%s for the run "
-            "and $%s against the spend cap (%s)" % (
-                checked.get("suite_id"), checked.get("case_count"), where,
-                "unknown (no history)" if estimate is None else "$%s" % estimate,
-                checked.get("max_budget_usd"), checked.get("spend_cap_usd"),
-                checked.get("pricing_source")))
+    action = ("spend up to $%s on a paid %s run of %s case(s) against %s (estimated %s; spend "
+              "cap $%s, %s pricing)" % (
+                  checked.get("max_budget_usd"), checked.get("suite_id"), checked.get("case_count"),
+                  where, "unknown, no history" if estimate is None else "$%s" % estimate,
+                  checked.get("spend_cap_usd"), checked.get("pricing_source")))
+    return ask(who, action, purpose or "it can run the %s suite you previewed" % checked.get(
+        "suite_id"))
 
 
-def refusal(what: str) -> str:
-    """The sentence a refused spend or apply prints."""
+def refusal(reason: Reason) -> str:
+    """The sentence a refused spend or apply prints, from its action: "<requester> did not
+    <action>: it needs a person's confirmation ..."."""
     why = unavailable() or "the presence check was declined, cancelled or failed"
-    return ("%s needs a person's confirmation at this Mac (Touch ID or the login password), and "
-            "none was given: %s. A confirmation token, a revision, a flag, an environment "
-            "variable, a file or a typed answer does not confirm it. %s" % (what, why, STUDIO_HINT))
+    return ("%s did not %s: it needs a person's confirmation at this Mac (Touch ID or the login "
+            "password), and none was given: %s. A confirmation token, a revision, a flag, an "
+            "environment variable, a file or a typed answer does not confirm it. %s" % (
+                reason.requester, reason.action, why, STUDIO_HINT))
 
 
 def state_root() -> Path:
@@ -146,19 +230,28 @@ def _decisions_on() -> bool:
     return not (isinstance(telemetry, dict) and telemetry.get("decisions") is False)
 
 
-def record(actor: str, words: Sequence[str], what: str) -> None:
+def record(actor: str, words: Sequence[str], reason: Reason) -> None:
     """Append one `studio.person-confirmed` event, which Activity shows.
+
+    The row names the program that answered on this thread (`check`), and for the helper its
+    code-signing hash, in its detail and in the words Activity shows: a helper that was replaced
+    outside git shows up here as a hash that changed without a source change.
 
     It goes to the decision ledger, or, with `telemetry.decisions` off and so no ledger written, to
     `CONSENT_LEDGER` beside it: the record of a person's consent is kept whatever telemetry says.
     Activity pages both as one stream. Anything running as the user can write either file, so a
     row is a record, not proof. A failed write is not raised."""
+    answer = getattr(_LAST, "answer", None) or Answer(True, "unknown", "")
+    _LAST.answer = None
+    asked_by = {"helper": "the Model Citizen helper's dialog (signature %s)" % answer.cdhash,
+                "osascript": "osascript's dialog"}.get(answer.program, "a dialog not recorded")
     row = {"kind": "event", "event": "studio.person-confirmed", "id": uuid.uuid4().hex[:24],
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "detail": {"actor": actor, "outcome": "completed", "confirmed_via": "presence",
+                      "program": answer.program, "helper_cdhash": answer.cdhash,
                       "command": " ".join(shlex.quote(str(w)) for w in words),
-                      "reason": "A person at this Mac confirmed %s with Touch ID or the login "
-                                "password." % what}}
+                      "reason": "A person at this Mac confirmed with Touch ID or the login "
+                                "password, in %s: %s" % (asked_by, sentence(*reason))}}
     try:
         path = state_root() / ("decisions.jsonl" if _decisions_on() else CONSENT_LEDGER)
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -3974,12 +3974,15 @@ def _draft_test_register(args: argparse.Namespace, repo: Path, root: Path) -> in
     return 0
 
 
-def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dict[str, Any]], str]:
+def _draft_preflight(args: argparse.Namespace,
+                     repo: Path) -> Tuple[Optional[Dict[str, Any]], Any]:
     """(a refusal in the action's own result shape, or None; the words the presence dialog shows).
 
     Lock-free reads only, so the person at the Mac is asked only for an apply, rollback or recover
     that names something real, and is shown exactly what. The action checks everything again under
-    its locks; the draft's checks and the sync dry run stay after the dialog, since they run there."""
+    its locks; the draft's checks and the sync dry run stay after the dialog, since they run there.
+    The words name the requester (`presence.ask`): the Studio when it ran this CLI, else the CLI."""
+    who = presence.requester(bool(getattr(args, "via_studio", False)))
     if args.action == "apply":
         if not isinstance(args.revision, str) or not args.revision:
             return studio_apply._result("refused", "invalid-request",
@@ -4002,10 +4005,15 @@ def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dic
                     "it (`citizen draft recover --abandon`) first. Nothing was applied"
                     % studio_apply.interrupted_what(intent)),
                     apply_id=str(intent.get("apply_id", ""))), ""
-            return None, "restore the interrupted %s (%s), not apply draft %s" % (
-                studio_apply.interrupted_what(intent), intent.get("apply_id"), args.name)
-        return None, "apply draft %s at revision %s to the live configuration" % (
-            args.name, args.revision)
+            return None, presence.ask(who, "undo the interrupted %s (%s), putting back the "
+                                      "settings and files it wrote, instead of applying "
+                                      "draft %s" % (studio_apply.interrupted_what(intent),
+                                                    intent.get("apply_id"), args.name),
+                                      "your live configuration is back where it was before that "
+                                      "change started (draft %s is not applied this time)" % args.name)
+        return None, presence.ask(who, "apply draft %s (revision %s) to your live harness "
+                                  "configuration" % (args.name, args.revision),
+                                  "your edits take effect")
     if args.action == "rollback":
         preview = studio_rollback.preview(args.apply_id, home())
         target = preview.get("apply") or {}
@@ -4017,9 +4025,11 @@ def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dic
         if refusals:
             return studio_rollback._outcome("refused", refusals[0]["code"],
                                             refusals[0]["message"], preview), ""
-        return None, "roll back apply %s of draft %s at revision %s (%d key(s), %d file(s))" % (
-            args.apply_id, target.get("draft"), target.get("revision"), len(preview["config"]),
-            len(preview["files"]))
+        return None, presence.ask(
+            who, "roll back apply %s of draft %s (revision %s), restoring %d setting(s) and %d "
+            "file(s)" % (args.apply_id, target.get("draft"), target.get("revision"),
+                         len(preview["config"]), len(preview["files"])),
+            "your live configuration returns to how it was before that apply")
     open_intents = studio_apply.unfinished_applies(home())
     if not open_intents:
         return studio_apply._result("refused", "nothing-to-recover",
@@ -4029,9 +4039,14 @@ def _draft_preflight(args: argparse.Namespace, repo: Path) -> Tuple[Optional[Dic
         return studio_apply._result("refused", "confirmation-mismatch", (
             "the open interrupted apply is of draft %s, not %s; nothing was changed"
             % (intent.get("draft"), args.draft)), apply_id=str(intent.get("apply_id", ""))), ""
-    return None, "%s the interrupted %s (%s, revision %s)" % (
-        "abandon" if args.abandon else "restore", studio_apply.interrupted_what(intent),
-        intent.get("apply_id"), intent.get("revision"))
+    what = "the interrupted %s (%s, revision %s)" % (
+        studio_apply.interrupted_what(intent), intent.get("apply_id"), intent.get("revision"))
+    if args.abandon:
+        return None, presence.ask(who, "abandon " + what + ", keeping what it already wrote",
+                                  "it is closed and new applies can run again")
+    return None, presence.ask(who, "undo " + what + ", putting back the settings and files it "
+                              "wrote", "your live configuration is back where "
+                              "it was before that change started")
 
 
 def cmd_draft(args: argparse.Namespace) -> int:
@@ -7166,11 +7181,12 @@ _RUNS_ERROR_CODES = {"start": "invalid_run", "show": "run_not_found", "detail": 
                      "catalog": "run_catalog_unavailable"}
 
 
-def person_present(args: argparse.Namespace, what: str, shaped: bool = False) -> Optional[int]:
+def person_present(args: argparse.Namespace, what: "presence.Reason",
+                   shaped: bool = False) -> Optional[int]:
     """None when the person at this Mac confirmed `what` (`presence.confirm`), which is then
     recorded for Activity; otherwise the refusal printed and its exit code, 2. Nothing the
     caller passes or sets is consulted: see `harness_core.presence`."""
-    if presence.confirm(what):
+    if presence.confirm(*what):
         actor = "Studio" if getattr(args, "via_studio", False) else "citizen"  # a label only
         presence.record(actor, ["citizen"] + list(getattr(args, "argv", None) or []), what)
         return None
@@ -7217,7 +7233,8 @@ def cmd_runs(args: argparse.Namespace) -> int:
                     supervisor.check_start(
                         args.suite, parameters, args.target_kind, args.target_ref,
                         confirmed=args.confirm_spend, max_budget_usd=args.max_budget_usd,
-                        spend_cap_usd=args.spend_cap, pricing_source=args.pricing_source))) is not None:
+                        spend_cap_usd=args.spend_cap, pricing_source=args.pricing_source),
+                    who=presence.requester(bool(getattr(args, "via_studio", False))))) is not None:
                 # The token is checked against the exact request before the person is asked.
                 return 2
             else:
