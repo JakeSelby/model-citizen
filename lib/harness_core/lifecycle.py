@@ -19,7 +19,9 @@ BASE_EVENTS = ("PreToolUse", "PostToolUse", "SessionStart", "Stop", "SessionEnd"
 # The usage feed's own events. Only Claude Code carries them; `adapters/codex/capabilities.json`
 # declares the gap rather than registering an event that runtime does not raise.
 FEED_EVENTS = ("UserPromptSubmit", "SubagentStart", "SubagentStop")
-EVENTS = {"claude-code": BASE_EVENTS + FEED_EVENTS, "codex": BASE_EVENTS}
+# The compaction snapshot's event (`policy/hooks/pre-compact.py`). Claude Code only, like the feed's.
+COMPACT_EVENTS = ("PreCompact",)
+EVENTS = {"claude-code": BASE_EVENTS + FEED_EVENTS + COMPACT_EVENTS, "codex": BASE_EVENTS}
 # The tools that write a file by path, after `ALIASES`; `apply_patch` names its paths in the patch.
 FILE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch")
 ROLE_NAME = re.compile(r"[a-z][a-z0-9-]*")
@@ -84,7 +86,7 @@ def settle_adherence():
 
 
 def note_adherence(runtime, event):
-    """Record a prompt or a session end for the adherence reading (`adherence.note_event`).
+    """Record a prompt, compaction or session end for the adherence reading (`adherence.note_event`).
 
     Observation, like `settle_adherence`: nothing it does or fails to do changes the answer.
     """
@@ -1617,6 +1619,17 @@ def _dispatch(runtime, payload):
             # Journals the start or stop the fan-out count reads; it never answers these events.
             invoke("session-caps", event)
         return invoke("usage-feed", event)
+    if kind in COMPACT_EVENTS:
+        # Never an answer: a block here runs the context on toward the window's limit. The
+        # snapshot is written for an automatic compaction and its failures stay in the hook.
+        if runtime != "claude-code":
+            return {}
+        note_adherence(runtime, event)
+        try:
+            invoke("pre-compact", event)
+        except Exception:
+            pass
+        return {}
     if kind == "SessionStart":
         settle_adherence()
         return invoke("harness-session", event)
