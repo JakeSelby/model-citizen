@@ -34,8 +34,9 @@ question it exists to ask. Outside a repository steps 3 and 5 do not apply; say 
    every pull request step 4 opened has merged. Never clear or compact first, since
    archiving ends the session and both only burn the context you still need. With anything
    open, end on the checklist and wait. With nothing open and no archive, inside a repository,
-   end with the `handoff` workflow's task-end step: step 5 did its writes, so it only decides the
-   clear. Outside a repository there is no clear and no reseed: say so in one line and stop.
+   end with the `handoff` workflow's task-end step, which skips the writes step 5 just ran and
+   only decides the clear. Outside a repository there is no clear and no reseed: say so in one line
+   and stop.
 
 Log the close-out before the archive or clear call, and report what landed, what you filed, whom
 you told, and what you are leaving open.

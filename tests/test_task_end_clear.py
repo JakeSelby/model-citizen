@@ -64,6 +64,12 @@ class TaskEndClearTest(unittest.TestCase):
         self.assertIn("Otherwise, CLI and Codex included, say why in one line and stop", text)
         self.assertIn("before any step 4 clear", flat(body(WORKFLOWS / "handoff.md")))
 
+    def test_close_out_task_end_decides_the_clear_without_writing_twice(self):
+        self.assertIn("Run steps 1 and 2 unless `/close-out` step 5 just ran them, then clear only",
+                      self.task_end())
+        self.assertIn("task-end step, which skips the writes step 5 just ran and only decides the clear",
+                      step(body(WORKFLOWS / "close-out.md"), 7))
+
     def test_only_handoff_holds_the_clear_mechanics(self):
         for name in ("land.md", "close-out.md"):
             self.assertNotIn("clear_session", body(WORKFLOWS / name), msg=name)
