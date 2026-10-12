@@ -310,6 +310,32 @@ class BreakdownTests(unittest.TestCase):
                                                 {"input": 99, "output": 2,
                                                  "cache_read": 0, "cache_write": 0}))
 
+    def test_each_part_records_its_largest_prompt_cache_included(self):
+        per_message = {"m1": {"input": 10, "output": 2, "cache_read": 90000, "cache_write": 5,
+                              "model": "test-model", "day": ""},
+                       "m2": {"input": 20, "output": 2, "cache_read": 1000, "cache_write": 0,
+                              "model": "test-model", "day": ""},
+                       "m3": {"input": 7, "output": 2, "cache_read": 0, "cache_write": 0,
+                              "model": "test-model-mini", "day": ""}}
+        for slot in per_message.values():
+            slot["prompt_known"] = True
+        parts = usage_log.by_model(per_message)
+        self.assertEqual(parts["test-model"]["max_prompt"], 90015)
+        self.assertEqual(parts["test-model-mini"]["max_prompt"], 7)
+        self.assertTrue(usage_log.models_agree(parts, usage_log.summed(per_message)))
+
+    def test_a_record_omitting_a_prompt_field_leaves_the_largest_prompt_unknown(self):
+        per_message = {}
+        full = {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 500,
+                "cache_creation_input_tokens": 0}
+        usage_log.record_usage(per_message, "m1", full, model="test-model")
+        usage_log.record_usage(per_message, "m2", {"input_tokens": 10, "output_tokens": 2,
+                                                   "cache_read_input_tokens": 99000}, model="test-model")
+        usage_log.record_usage(per_message, "m3", full, model="test-model-mini")
+        parts = usage_log.by_model(per_message)
+        self.assertNotIn("max_prompt", parts["test-model"])
+        self.assertEqual(parts["test-model-mini"]["max_prompt"], 510)
+
     def test_a_record_naming_no_model_drops_the_whole_map(self):
         per_message = {"m1": {"input": 1, "output": 2, "cache_read": 0, "cache_write": 0,
                               "model": "test-model", "day": ""},
