@@ -31,15 +31,16 @@ Note to carry over: $ARGUMENTS
    bullet of a sentence or two in `docs/solutions/<yyyy-mm-dd>-<slug>.md` under the repository root,
    or `.agent-harness/` when there is no repository; nothing durable, no file.
 
-4. **Task end, from `/land` or `/close-out`.** Skip it in a `/land` run by `/close-out`, from any
-   step. Run steps 1 and 2 unless `/close-out` step 5 just ran them, then clear only if all hold:
-   a Claude desktop session (`clear_session` available) inside a repository; both writes succeeded
-   (`task save` exited 0); zero open items: no review thread, pending approval or release card,
-   unmerged pull request, refused or dirty worktree, stale checkout, parked decision, unanswered
-   question, mid-task user work or `/close-out` archive. Say in one line that the context will be
-   cleared and the handoff reseeds the next prompt, then call `clear_session` with session_id
-   `self` as the turn's final action. It clears at turn end, nothing from before carries over, a
-   queued user message cancels it, and the app asks for approval unless auto or bypass mode is on.
-   Otherwise, CLI and Codex included, say why in one line and stop.
+4. **Task end, from `/land` or `/close-out` step 7.** Skip it in a `/land` run by `/close-out`, from
+   any step. Skip it too in a plain `/handoff` and in `/close-out` step 5. Run steps 1 and 2 unless
+   `/close-out` step 5 just ran them, then clear only if all hold: a Claude desktop session
+   (`clear_session` available) inside a repository; both writes succeeded (`task save` exited 0);
+   zero open items: no review thread, pending approval or release card, unmerged pull request,
+   refused or dirty worktree, stale checkout, parked decision, unanswered question, mid-task user
+   work or `/close-out` archive. Say in one line that the context will be cleared and the handoff
+   reseeds the next prompt, then call `clear_session` with session_id `self` as the turn's final
+   action. It clears at turn end, nothing from before carries over, a queued user message cancels
+   it, and the app asks for approval unless auto or bypass mode is on. Otherwise, CLI and Codex
+   included, say why in one line and stop.
 
 End the turn with the two paths, the progress file and any solutions file, before any step 4 clear.
