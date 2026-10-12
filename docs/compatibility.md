@@ -40,8 +40,8 @@ a stance entry or on `role_execution` in `adapters/<runtime>/capabilities.json`;
 must be one of the catalog's `required_cases`. Listing cases under a capability that is not
 `qualified`, or claiming `qualified` without them, is a contradiction between the two files:
 `bin/citizen compatibility --release-check` blocks the release and the test suite fails. Today no
-adapter names a case, so every capability cell below reads `unqualified` even though two client
-rows are qualified. `bin/citizen compatibility --json` emits both levels,
+adapter names a case, so every capability cell below reads `unqualified`, and while 0.15.0 is a
+candidate no client row is qualified either. `bin/citizen compatibility --json` emits both levels,
 each client row carrying its derived `capabilities`. The capability-by-client layout follows the
 generated matrix in [wshobson/agents' `docs/harnesses.md`](https://github.com/wshobson/agents/blob/main/docs/harnesses.md).
 

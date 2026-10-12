@@ -11,7 +11,7 @@
   ],
   "recovery": [
     "Preserve reported conflicts, adopted backups, external viewer adapter descriptors and external viewer installations.",
-    "To return to v0.14.2, check out v0.14.2, run `citizen sync --dry-run`, then `citizen sync`; it removes the `session-caps` and `steer-polling` registrations and no configuration migration needs reversing. If you set `sandbox.enabled` or `observation.enabled`, set it to `false` and run `citizen sync` from v0.15.0 first, so sync removes what it wrote.",
+    "To return to v0.14.2: first, while still on v0.15.0, set `sandbox.enabled` and `observation.enabled` to `false` if you set either, and run `citizen sync` so it removes what it wrote. Then check out v0.14.2, run `citizen sync --dry-run`, then `citizen sync`; it removes the `session-caps` and `steer-polling` registrations and no configuration migration needs reversing.",
     "Snapshot refs under `refs/harness/snapshots/` survive a rollback; remove them with `citizen snapshot prune --days 0` before rolling back, or with `git for-each-ref --format='%(refname)' refs/harness/snapshots/ | xargs -n1 git update-ref -d` afterwards.",
     "If the Claude Code plugin was upgraded, reinstall the v0.14.2 checkout as the `model-citizen` marketplace source before installing its plugin version again.",
     "Use `citizen uninstall` only to remove the installation entirely; see docs/runtime-installation.md for ownership recovery."
