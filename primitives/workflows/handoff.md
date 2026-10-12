@@ -7,8 +7,8 @@ argument-hint: [note to carry into the next session]
 
 Note to carry over: {{arguments}}
 
-1. **Overwrite `.agent-harness/progress.md`** at the repository root, or in the current directory when
-   there is no repository. It is a snapshot, never append; session start reads its first eighty lines. Use exactly these headings:
+1. **Overwrite `.agent-harness/progress.md`** at the repository root, or here when there is no
+   repository; never append: session start reads its first eighty lines. Use these headings:
 
    ```markdown
    # Handoff <ISO date>
@@ -20,21 +20,26 @@ Note to carry over: {{arguments}}
    ## Learnings
    ```
 
-   Fill them from this session, not from the file you are replacing. **Done** and **Open** are
-   short bullets naming files and commands. **Next command** is one runnable line and nothing
-   else. **Decisions needed** is what only the user can settle. **Learnings** is what you would
-   have wanted to know when this session started.
+   Fill them from this session, not the file you replace. **Done** and **Open** are short bullets
+   naming files and commands; **Next command** is one runnable line; **Decisions needed** is what
+   only the user can settle; **Learnings** is what you wish you had known at the start.
+2. **Save the shared task contract.** After `citizen task show`, save a JSON input of `objective`,
+   `next_steps`, `decisions` and `artifacts` (plus a planning framework's checkout and baseline)
+   with `citizen task save --input <file> --runtime <runtime> --revision <current-revision>`. The
+   next runtime rechecks the tree; a handoff never transfers an approval.
+3. **Promote anything durable** (a fix that generalizes, a trap, a working command) as a dated
+   bullet of a sentence or two in `docs/solutions/<yyyy-mm-dd>-<slug>.md` under the repository root,
+   or `.agent-harness/` when there is no repository; nothing durable, no file.
 
-2. **Save the shared task contract.** Read `citizen task show` first. Write a JSON input with
-   `objective`, `next_steps`, `decisions`, and `artifacts`; add the framework checkout and
-   baseline when a planning framework owns the artifacts. Save with `citizen task save --input <file> --runtime <runtime>
-   --revision <current-revision>`. The next runtime reads the same data, rechecks the tree,
-   and establishes its own permissions. A handoff never transfers an approval.
+4. **Task end, from `/land` or `/close-out`.** Skip it in a `/land` run by `/close-out`, from any
+   step. Run steps 1 and 2, then clear only if all hold: a Claude desktop session (`clear_session`
+   available) inside a repository; both writes succeeded (`task save` exited 0); zero open items: no
+   review thread, pending approval or release card, unmerged pull request, refused or dirty
+   worktree, stale checkout, parked decision, unanswered question, mid-task user work or
+   `/close-out` archive. Say in one line that the context will be cleared and the handoff reseeds
+   the next prompt, then call `clear_session` with session_id `self` as the turn's final action. It
+   clears at turn end, nothing from before carries over, a queued user message cancels it, and the
+   app asks for approval unless auto or bypass mode is on. Otherwise, CLI and Codex included, say
+   why in one line and stop.
 
-3. **Promote anything durable.** If a learning would help a future session in this repository —
-   a fix that generalizes, a trap worth avoiding, a command that actually works — append it as
-   a dated bullet to `docs/solutions/<yyyy-mm-dd>-<slug>.md` under the repository root, or under
-   `.agent-harness/` when there is no repository, creating the folder when it is missing. One or two sentences, carrying the command or the path, so a correction becomes an
-   artifact instead of a prompt the user has to repeat. Nothing durable, no file.
-
-End the turn with the two paths: the progress file, and the solutions file if you wrote one.
+End the turn with the two paths, the progress file and any solutions file, before any step 4 clear.
