@@ -5767,8 +5767,8 @@
       "type": "story",
       "native_type": "Feature",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S228.md",
-      "parent_bmad_id": "AH-E018",
-      "parent_github_number": 745,
+      "parent_bmad_id": "AH-E028",
+      "parent_github_number": 1290,
       "lifecycle": "active",
       "provenance": "authored"
     },

@@ -310,7 +310,6 @@ development_status:
   ah-e018-cut-cache-rebuild-spend-in-long-interactive: in-progress
   ah-c067-reserve-ids-and-write-story-files-for-the-cache: done
   ah-s227-harness-usage-by-rebuild-attribute-cache: done
-  ah-s228-refresh-the-handoff-at-task-boundaries-in-land: ready-for-dev
   ah-s229-cold-resume-guard-hold-one-prompt-after-a-long: ready-for-dev
   ah-sp010-spike-does-a-userpromptsubmit-block-hold-the: ready-for-dev
   ah-sp011-spike-one-week-trial-of-an-earlier-auto-compact: ready-for-dev
@@ -436,6 +435,7 @@ development_status:
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
 
   ah-e028-sessions-reset-their-own-context-and-keep: in-progress
+  ah-s228-refresh-the-handoff-at-task-boundaries-in-land: ready-for-dev
   ah-s363-project-the-cost-stance-s-context-reset-point: ready-for-dev
   ah-s364-hand-off-before-the-context-reset-with-a-lowered: ready-for-dev
   ah-s365-reseed-the-session-s-context-from-its-own: ready-for-dev
