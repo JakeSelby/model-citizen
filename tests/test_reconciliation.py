@@ -20,6 +20,20 @@ class ReconciliationTests(unittest.TestCase):
         self.assertIn('# untouched', result)
         self.assertEqual(result, harness.update_codex_config(result, dict(CFG, permissions="manual")))
 
+    def test_removing_the_last_nested_key_drops_the_parent_a_write_created(self):
+        document = {"theme": "mine"}
+        reconcile.assign(document, ["env", "A"], {"present": True, "value": "1"})
+        reconcile.assign(document, ["env", "B"], {"present": True, "value": "2"})
+        reconcile.assign(document, ["env", "A"], {"present": False, "value": None})
+        self.assertEqual(document, {"theme": "mine", "env": {"B": "2"}})
+        reconcile.assign(document, ["env", "B"], {"present": False, "value": None})
+        self.assertEqual(document, {"theme": "mine"})
+
+    def test_removing_an_absent_key_keeps_an_empty_parent_the_user_wrote(self):
+        document = {"env": {}}
+        reconcile.assign(document, ["env", "A"], {"present": False, "value": None})
+        self.assertEqual(document, {"env": {}})
+
     def test_toml_rollback_preserves_new_unowned_keys_and_user_conflicts(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); config = root / "config.toml"
@@ -161,7 +175,7 @@ class ReconciliationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             target, store, _ = self.hook_store(Path(temp))
             store.uninstall()
-            self.assertEqual(json.loads(target.read_text()), {"hooks": {}})
+            self.assertEqual(json.loads(target.read_text()), {})
         with tempfile.TemporaryDirectory() as temp:
             target, store, _ = self.hook_store(Path(temp), prior=[])
             store.uninstall()
