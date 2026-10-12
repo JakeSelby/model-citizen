@@ -60,3 +60,13 @@ RUN mkdir -p "$HOME/.config/agent-harness" \
 RUN if python3 -c 'import json, os, sys; c = json.load(open(os.path.expanduser("~/.config/agent-harness/config.json"))); sys.exit(0 if (c.get("instructions") or {}).get("CLAUDE.md") == "off" else 1)'; \
     then { test -L "$HOME/.claude/CLAUDE.md" || test -e "$HOME/.claude/CLAUDE.md"; } && rm "$HOME/.claude/CLAUDE.md"; fi
 CMD ["bash"]
+
+# A harness arm with a declared settings env (an ablation arm that sets, say, the auto-compaction
+# window): the harness stage, then the runner's `settings-env.json` merged into the agent user's
+# Claude Code settings `env`, a null taking the variable out. Its digest is the declaration's
+# `settings-env` component, and admission reads the result back from the manifest's `settings_env`.
+FROM harness AS harness-env
+COPY --chown=agent:agent settings-env.json /tmp/model-citizen-settings-env.json
+RUN python3 -c 'import json, os; p = os.path.expanduser("~/.claude/settings.json"); s = json.load(open(p)) if os.path.exists(p) else {}; env = s.setdefault("env", {}); [env.pop(k, None) if v is None else env.__setitem__(k, v) for k, v in json.load(open("/tmp/model-citizen-settings-env.json")).items()]; s["env"] or s.pop("env"); json.dump(s, open(p, "w"), indent=2, sort_keys=True)' \
+    && rm /tmp/model-citizen-settings-env.json
+CMD ["bash"]

@@ -572,8 +572,18 @@ python3 scripts/cost_bench.py summarise --results <dir> [--correction bonferroni
 
 - **The manifest is schema 2.** It holds `name`, `planning` (`cv`, the assumed per-attempt
   coefficient of variation, and its `source`) and `arms`, each an `id` and exactly one of
-  `removes: "<kind>/<unit>"`, which switches a module off, or `sets: {"<kind>/<unit>": "<variant>"}`,
-  which gives a variant kind another variant. Bare and control are implicit, so N arms run N + 2.
+  `removes: "<kind>/<unit>"`, which switches a module off, `sets: {"<kind>/<unit>": "<variant>"}`,
+  which gives a variant kind another variant, or `settings_env`, below. Bare and control are
+  implicit, so N arms run N + 2.
+- **A `settings_env` arm changes what the resolver cannot see.** `settings_env` maps upper-case
+  variable names to strings, or to `null` to take one out, for Claude Code's settings `env`: the
+  auto-compaction window pair, say (`benchmarks/ablations/context-reset.json`). The image is the
+  synced harness with those values merged into the agent user's `~/.claude/settings.json` after the
+  sync. The declaration records the values in full and as a `settings-env` component digest, so
+  the image name changes with them; the manifest lister reads the image's settings `env` back, and
+  admission refuses the arm unless each declared value is there and each `null` is absent. Such an
+  arm installs no selection and has no profile difference to check; every row names its values as
+  `ablation_settings_env`.
 - **Each arm's selection is in its image, not its environment.** The arm is declared with its
   selection in the user-config shape (`{"rules": {"secrets": "off"}}`); the image installs it as
   the agent user's configuration before the sync, which then withholds what it switches off.

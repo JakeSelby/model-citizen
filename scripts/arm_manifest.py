@@ -16,6 +16,8 @@ compared entry by entry:
   whose pack layout differs between two clones of one commit. The commit itself is recorded.
 - `cli_packages`: every global npm package by name and version, which is where agent clients live.
 - `environment`: image-baked variables that can override a launch pin.
+- `settings_env`: the `env` object of the agent user's Claude Code settings, which a declared
+  settings env (`replay_arms.SETTINGS_ENV`) must match; null when there is no settings file.
 
 A file is recorded by mode, size and sha256; a link by its target; a directory by its mode.
 Timestamps are never recorded. A file whose bytes carry a build time is normalised by
@@ -150,6 +152,19 @@ def summary(entries):
                                    and e["path"].endswith(".md") and e["path"].count("/") == 1)}
 
 
+def settings_env():
+    """The `env` object of the agent user's `~/.claude/settings.json`, {} when it has none, or None
+    when there is no readable settings file."""
+    try:
+        with open(os.path.join(dict(ROOTS).get("home", HOME), ".claude", "settings.json"),
+                  encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    env = data.get("env") if isinstance(data, dict) else None
+    return dict(env) if isinstance(env, dict) else {}
+
+
 def main():
     entries, roots = [], {}
     for section, root in ROOTS:
@@ -162,6 +177,7 @@ def main():
                 "normalised": sorted(VOLATILE), "claude_code_version": cli_version(),
                 "cli_packages": cli_packages(),
                 "environment": {EFFORT_ENV: os.environ.get(EFFORT_ENV)},
+                "settings_env": settings_env(),
                 "harness_commit": harness_commit(roots["harness"]) if "harness" in roots else None,
                 "summary": summary(entries), "entries": entries}
     json.dump(manifest, sys.stdout, sort_keys=True, indent=1)
