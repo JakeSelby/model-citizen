@@ -79,7 +79,8 @@ def isolated_home(pair=None, harness_wrote=True, user_window=False, override=Non
         env = {"HOME": tmp, "HARNESS_HOME": tmp}
         with patch.dict(os.environ, env):
             os.environ.pop("CLAUDE_CONFIG_DIR", None)
-            os.environ.pop("HARNESS_STANCE_COST", None)
+            for name in ("HARNESS_STANCE_COST", "HARNESS_PROJECT_CONFIG", "HARNESS_SESSION_CONFIG"):
+                os.environ.pop(name, None)
             if override:
                 os.environ["HARNESS_STANCE_COST"] = override
             yield home
