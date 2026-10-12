@@ -63,7 +63,10 @@ def lookup(document, keys):
 
 
 def assign(document, keys, item):
+    """Set or remove one nested value. A removal also drops each parent it leaves empty, the
+    inverse of the parents a write creates, so an uninstall restores a file that had none."""
     node = document
+    trail = []
     for key in keys[:-1]:
         if key not in node:
             if not item["present"]:
@@ -71,11 +74,18 @@ def assign(document, keys, item):
             node[key] = {}
         if not isinstance(node[key], dict):
             raise ValueError("configuration parent is not an object: " + key)
+        trail.append((node, key))
         node = node[key]
     if item["present"]:
         node[keys[-1]] = item["value"]
-    else:
-        node.pop(keys[-1], None)
+        return
+    if keys[-1] not in node:
+        return
+    del node[keys[-1]]
+    for parent, key in reversed(trail):
+        if parent[key]:
+            break
+        del parent[key]
 
 
 # Hook scripts earlier releases registered by name, before commands carried a marker.

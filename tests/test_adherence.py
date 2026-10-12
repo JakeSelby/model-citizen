@@ -103,7 +103,7 @@ class EmissionTests(Fixture):
         self.assertEqual(sorted(row), ROW_KEYS)
         self.assertEqual((row["kind"], row["recommendation"], row["module"], row["session_id"],
                           row["turn"], row["schema_version"]),
-                         ("emitted", "fresh-session", "hooks/usage-feed", self.SESSION, 2, 1))
+                         ("emitted", "context-reset-nudge", "hooks/usage-feed", self.SESSION, 2, 1))
 
     def test_a_session_told_once_records_once(self):
         self.nudged()
@@ -132,11 +132,17 @@ class EmissionTests(Fixture):
         self.assertEqual(self.ledger(), [])
 
     def test_every_kind_names_a_hook_that_exists_and_a_positive_window(self):
-        for kind, spec in adherence.KINDS.items():
+        for kind, spec in list(adherence.KINDS.items()) + list(adherence.RETIRED.items()):
             owner = spec["module"].split("/", 1)[1]
             self.assertTrue((REPO / "policy" / "hooks" / (owner + ".py")).is_file(), kind)
-            self.assertTrue(isinstance(spec["window"], int) and spec["window"] > 0, kind)
+            # A kind with no prompt window is closed by its `close` events instead.
+            if spec["window"] is None:
+                self.assertTrue(spec.get("close"), kind)
+            else:
+                self.assertTrue(isinstance(spec["window"], int) and spec["window"] > 0, kind)
             self.assertTrue(spec["follow"], kind)
+        self.assertFalse(set(adherence.RETIRED) & set(adherence.KINDS))
+        self.assertTrue(set(adherence.RENAMED.values()) <= set(adherence.KINDS))
 
 
 class RespondTests(unittest.TestCase):

@@ -892,7 +892,10 @@ guessed. Override or extend it under `prices` in `config.json` — see
   prefix, drops a context-window suffix and drops a release suffix — a date stamp, a reseller's
   `-v1:0`, an `@date`. So `claude-haiku-4-5`, `anthropic.claude-haiku-4-5-20251001-v1:0` and
   `claude-opus-5[1m]` all reach one family entry. Long context is not a separate rate: Anthropic
-  prices the full 1M-token window at the standard rate for Claude 4.6 and later. Nothing
+  prices the full 1M-token window at the standard rate for Claude 4.6 and later, except Claude
+  Haiku 5.5, whose requests over 100,000 prompt tokens pay a higher rate. Its entry carries that
+  tier as a `long_context` block, and the usage hook records each model's largest prompt, so a
+  Haiku 5.5 figure is priced only when every request in it stayed under the threshold. Nothing
   resolves by prefix: a variant the table does not name is unpriced, not billed at its family's
   rate — `gpt-5.5-pro` is $30/$180 where `gpt-5.5` is $5/$30. To price one, add it to
   [`policy/prices.json`](../policy/prices.json) or override it under `prices` in `config.json`.

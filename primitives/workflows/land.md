@@ -36,10 +36,10 @@ go-ahead before the merge — and this command never tags and never deploys.
    due. Either state "no release due" with the reason those instructions give, or post a release
    card — the version, what landed since the last one, the surfaces the instructions require —
    and wait for approval. Approval belongs to the release, not to this command.
+8. **End with the `handoff` workflow's task-end step**: refresh the handoff, then clear only if
+   nothing is open. Skip it when `/close-out` runs this command, from any of its steps.
 
-Step 5 is where a branch gets deleted, behind the merge proof. Never `git branch -D` in your own
-shell, which has no such proof, and keep deletions out of compound commands: the shell-grading
-hook denies a whole compound command when one segment is irreversible.
-
-Report the merge commit, what was removed, what the audit still shows, and the release decision
-with the line in the repository's instructions it came from.
+Never `git branch -D` in your own shell, which lacks step 5's merge proof, and keep deletions out of
+compound commands: the shell-grading hook denies a whole compound command when one segment is
+irreversible. Report the merge commit, what was removed, what the audit still shows, the handoff,
+and the release decision with the line in the repository's instructions it came from.

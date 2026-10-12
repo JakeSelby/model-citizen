@@ -196,6 +196,8 @@ class ScriptedSession:
             if folded["block"] is None:
                 break
             messages.append(self.user_turn("Stop hook feedback: " + folded["block"]))
+        # A manual compaction: the event is raised, and only an automatic one writes a snapshot.
+        self.fire("PreCompact", trigger="manual", custom_instructions="")
         self.fire("SessionEnd", reason="other")
 
 

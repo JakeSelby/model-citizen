@@ -101,6 +101,11 @@ BUDGET_UNITS = dict(zip(BUDGET_KEYS, ("output tokens", "tool calls")))
 MAX_MULTIPLIER = 100
 MAX_BUDGET = 10 ** 9
 MAX_NUDGES = 8
+# The hand-off point a variant gets from its context reset point when it names none, in tenths.
+HANDOFF_SHARE_TENTHS = 9
+# The reset points a variant may name: with the 20,000-token reserve sync adds, the projected
+# auto-compaction window stays inside Claude Code's documented 100,000 to 1,000,000.
+CONTEXT_RESET_MIN, CONTEXT_RESET_MAX = 80000, 980000
 SIDECAR_KEYS = ("schema_version", "extends", "switches", "default_band", "rows")
 # The selection document: `mode`, then one object per kind in `catalog.KINDS`. `sources` and
 # `shadowed` are what `harness selection --json` prints beside them; they select nothing, and are
@@ -738,8 +743,11 @@ def validate_sidecar(data, roles=None):
                 continue
             ok = True
         elif key == "session_handoff_at":
-            # The hard threshold: one size, or null for a variant that never blocks.
+            # The hard threshold: one size, or null for the one derived from `context_reset_at`.
             ok = value is None or (_number(value, 0, MAX_BUDGET, integer=True) and value > 0)
+        elif key == "context_reset_at":
+            # Bounded so the projected window, reset plus reserve, stays in Claude Code's range.
+            ok = value is None or _number(value, CONTEXT_RESET_MIN, CONTEXT_RESET_MAX, integer=True)
         elif key == "context_cost_curve":
             problem = _curve(value)
             if problem:
@@ -753,6 +761,11 @@ def validate_sidecar(data, roles=None):
             kept[key] = value
         else:
             findings.append("switch '" + key + "' has an unusable value")
+    handoff, reset = kept.get("session_handoff_at"), kept.get("context_reset_at")
+    if isinstance(handoff, int) and isinstance(reset, int) and handoff >= reset:
+        findings.append("switch 'session_handoff_at' " + str(handoff) + " is not below "
+                        "'context_reset_at' " + str(reset) + "; the hand-off comes before the reset")
+        del kept["session_handoff_at"]
     if kept:
         clean["switches"] = kept
     rows = data.get("rows", {})
@@ -794,6 +807,39 @@ def validate_sidecar(data, roles=None):
     if resolved_rows:
         clean["rows"] = resolved_rows
     return clean, findings
+
+
+def _size(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def context_reset_at(table):
+    """The context size at which the cost variant has the runtime reset its context, or None.
+
+    `citizen sync` projects it into Claude Code's native auto-compaction settings; None leaves
+    the runtime's own default in place.
+    """
+    switches = table.get("switches") if isinstance(table, dict) else None
+    return _size(switches.get("context_reset_at")) if isinstance(switches, dict) else None
+
+
+def handoff_at(table):
+    """The effective hand-off point: the context size past which a turn's end is blocked once.
+
+    An explicit `session_handoff_at` below `context_reset_at` wins. Otherwise, null or absent
+    included, so a variant extending `max` that names a reset point still hands off, it is
+    nine tenths of `context_reset_at`: the handoff is written before the reset rather than
+    after it. With neither there is no hand-off point. `table_for` writes the result back into
+    the resolved switches, so every reader agrees.
+    """
+    switches = table.get("switches") if isinstance(table, dict) else None
+    if not isinstance(switches, dict):
+        return None
+    explicit = _size(switches.get("session_handoff_at"))
+    reset = context_reset_at(table)
+    if explicit is not None and (reset is None or explicit < reset):
+        return explicit
+    return None if reset is None else reset * HANDOFF_SHARE_TENTHS // 10
 
 
 def stance_roots(config=None, root=None):
@@ -1047,6 +1093,15 @@ def table_for(stances=None, config=None, strict=True, root=None):
     for layer in reversed(layers):
         resolved = _merge(resolved, layer)
     switches = resolved.get("switches", {})
+    effective = handoff_at({"switches": switches})
+    explicit = switches.get("session_handoff_at")
+    if isinstance(explicit, int) and explicit != effective:
+        # Each sidecar passed alone, but the chain put the hand-off at or past the reset.
+        warnings.append("cost variant '" + variant + "': session_handoff_at " + str(explicit) +
+                        " is not below context_reset_at " + str(context_reset_at(
+                            {"switches": switches})) + "; using " + str(effective))
+    if effective is not None or "session_handoff_at" in switches:
+        switches["session_handoff_at"] = effective
     multiplier = switches.get("budget_multiplier", 1)
     rows = {}
     for row_name, cells in sorted(resolved.get("rows", {}).items()):

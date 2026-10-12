@@ -60,6 +60,7 @@ import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity
 import replay_session  # noqa: E402  the long-session tier: scripted multi-turn sessions and their rows
 import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
 import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
+PRICING = replay_pair.load_pricing()  # `policy/hooks/pricing.py`, the one place a rate is read
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -242,11 +243,15 @@ def measure(root=ROOT):
 
 
 def _cache_rates(root):
-    """The models the static figure is priced on: Anthropic ones with both cache rates."""
+    """The models the static figure is priced on: Anthropic ones with both cache rates.
+
+    A model priced by prompt length is left out: the layer's cost on it turns on the size of the
+    whole prompt it sits in, which a count of the layer alone cannot show."""
     table = root / "policy" / "prices.json"
     models = json.loads(table.read_text(encoding="utf-8")).get("models", {}) if table.is_file() else {}
     return {name: row for name, row in sorted(models.items())
-            if name.startswith("claude-") and "cache_write" in row and "cache_read" in row}
+            if name.startswith("claude-") and "cache_write" in row and "cache_read" in row
+            and "long_context" not in row}
 
 
 def price(root, tokens, models=None):
@@ -1081,7 +1086,10 @@ def _stream_diagnostics(messages, streamed):
             continue
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
-                            "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
+                            "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0),
+                            # A field the CLI left out makes the prompt unknown, never smaller.
+                            "prompt": None if any(not isinstance(body["usage"].get(key), int) for key in PREFIX_FIELDS)
+                            else sum(body["usage"][key] for key in PREFIX_FIELDS)})
     # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
     count = lambda value: value if assistant else None
     active = {m.get("parent_tool_use_id") for m in messages
@@ -1185,13 +1193,14 @@ def normalised_cost(cost, first_turns, prices):
     """Reported cost with each thread's first-turn cache reads repriced as cache writes.
 
     Whether a run finds its prefix already cached depends on what ran before it, so run order moves
-    the reported dollars. None when the first turns or a model's rates are unknown: never a guess."""
+    the reported dollars. None when the first turns or a model's rates are unknown: never a guess.
+    A model priced by prompt length takes the tier of the turn's own prompt (`pricing.prompt_rate`)."""
     if not first_turns:
         return None
     extra = 0.0
     for turn in first_turns:
-        rates = _rates(prices, turn["model"])
-        if not rates or "cache_write" not in rates or "cache_read" not in rates:
+        rates = PRICING.prompt_rate(PRICING.usable_rate(_rates(prices, turn["model"])), turn.get("prompt"))
+        if not rates:
             return None
         extra += turn["cache_read"] * (rates["cache_write"] - rates["cache_read"]) / 1e6
     return round(cost + extra, 6)

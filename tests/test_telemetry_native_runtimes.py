@@ -165,7 +165,8 @@ class SyncTests(unittest.TestCase):
 
     def env(self):
         live = json.loads(self.settings_file.read_text()) if self.settings_file.exists() else {}
-        return live.get("env") or {}
+        # The cost stance's reset pair has its own owner and tests (test_context_reset_projection).
+        return {k: v for k, v in (live.get("env") or {}).items() if k not in harness.CONTEXT_RESET_ENV}
 
     def otel(self):
         if not self.config_toml.exists():
