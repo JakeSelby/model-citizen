@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.15.0] — 2026-10-09
+## [0.15.0] — 2026-10-12
 
 ### Added
 
@@ -194,6 +194,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A replay or ablation run no longer refuses an arm whose selection switches off every skill or
+  every role: the arm-pair check now counts every directory the harness sync creates under the
+  Claude home, such as an empty `~/.claude/skills`, as the harness component, and still refuses
+  anything else the harness arm holds. (#1287)
 - Two rule detectors no longer count false positives. `secrets/git-add-secret-file` now reads only a
   basename that is exactly `id_rsa` or `id_ed25519` as a private key, so staging a runbook such as
   `docs/id_rsa-rotation.md` or a public `.pub` half is not a hit. `autonomy/denied-by-grade` now reads
