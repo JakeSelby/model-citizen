@@ -1216,7 +1216,11 @@ def _switch(table, key):
 
 
 def handoff_at(table):
-    """The hard threshold, the context size past which a turn's end is blocked once, or None."""
+    """The hard threshold, the context size past which a turn's end is blocked once, or None.
+
+    The resolved table already carries the effective value, derived from `context_reset_at`
+    when the variant names none; `posture.handoff_at` is the one place that rule lives.
+    """
     value = _switch(table, "session_handoff_at")
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 

@@ -60,7 +60,7 @@ class CostStanceTests(TempHome):
     def test_off_keeps_balanceds_role_table_and_turns_the_feed_off(self):
         sidecar = json.loads((COST / "off.json").read_text(encoding="utf-8"))
         self.assertEqual(sidecar["extends"], "balanced")
-        self.assertEqual(sidecar["switches"], {"turn_feed": "off"})
+        self.assertEqual(sidecar["switches"], {"turn_feed": "off", "context_reset_at": None})
         self.assertNotIn("rows", sidecar)
 
     def test_default_is_balanced(self):

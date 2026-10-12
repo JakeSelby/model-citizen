@@ -2,6 +2,7 @@
   "schema_version": 1,
   "extends": "balanced",
   "switches": {
-    "turn_feed": "off"
+    "turn_feed": "off",
+    "context_reset_at": null
   }
 }
