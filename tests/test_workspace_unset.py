@@ -63,7 +63,9 @@ class Fixture(unittest.TestCase):
             dry_run=False, adopt=False, adopt_codex=False, print_only=False))
 
     def env(self):
-        return json.loads(self.settings_file.read_text()).get("env") or {}
+        # The cost stance's reset pair has its own owner and tests (test_context_reset_projection).
+        found = json.loads(self.settings_file.read_text()).get("env") or {}
+        return {k: v for k, v in found.items() if k not in harness.CONTEXT_RESET_ENV}
 
     def session_context(self):
         env = without_harness_vars()

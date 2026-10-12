@@ -38,7 +38,7 @@ class Ownership(unittest.TestCase):
 
     def test_the_manifest_owns_the_variable_and_widens_never_touch(self):
         self.assertEqual(OWNERSHIP["claude"]["workspaces"]["env_keys"], [VAR])
-        self.assertIn("env except native_telemetry.env_keys and workspaces.env_keys",
+        self.assertIn("env except native_telemetry.env_keys, workspaces.env_keys and context_reset.env_keys",
                       OWNERSHIP["claude"]["never_touch"])
 
     def test_set_writes_the_variable_beside_the_users_own(self):
@@ -97,7 +97,9 @@ class Sync(unittest.TestCase):
             dry_run=False, adopt=False, adopt_codex=False, print_only=False))
 
     def env(self):
-        return json.loads(self.settings_file.read_text()).get("env") or {}
+        # The cost stance's reset pair has its own owner and tests (test_context_reset_projection).
+        found = json.loads(self.settings_file.read_text()).get("env") or {}
+        return {k: v for k, v in found.items() if k not in harness.CONTEXT_RESET_ENV}
 
     def test_set_then_unset_writes_and_removes_only_the_variable(self):
         self.settings_file.parent.mkdir(parents=True, exist_ok=True)
