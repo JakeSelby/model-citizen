@@ -110,6 +110,18 @@
       "dependencies": [],
       "conflicts": []
     },
+    "pre-compact": {
+      "claims": [
+        "Writes a deterministic snapshot of the task state to .agent-harness/handoffs/ before an automatic compaction on Claude Code."
+      ],
+      "surface": [
+        "hook-events"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
     "session-caps": {
       "claims": [
         "Counts live subagents and web searches per session, warns past 80% of the cost variant's fan-out cap and the research rule's search cap, and denies a spawn or search at the cap."

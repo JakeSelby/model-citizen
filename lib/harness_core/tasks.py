@@ -15,6 +15,13 @@ def repository(path):
     return Path(git(path, "rev-parse", "--show-toplevel")).resolve()
 
 
+def snapshot_file(name):
+    """A file pre-compact.py keeps in `.agent-harness/handoffs/`: a snapshot, a leftover temporary
+    one, or the `.gitignore` that keeps them out of commits."""
+    return name.startswith("auto-") or (name.startswith(".auto-") and name.endswith("tmp")) \
+        or name == ".gitignore"
+
+
 def fingerprint(root):
     # Exclude only bookkeeping; plans and progress remain task inputs even when gitignored.
     import hashlib
@@ -31,11 +38,15 @@ def fingerprint(root):
     directory = root / ".agent-harness"
     # Copies of files sent to a Remote Control client are not task inputs: policy/hooks/stage-user-files.py.
     outbox = directory / "outbox"
+    # Nor are the snapshots policy/hooks/pre-compact.py writes at a compaction, which would
+    # otherwise mark the record saved just before it stale.
+    snapshots = directory / "handoffs"
     if directory.is_symlink():
         raise ValueError("task storage cannot be a symlink")
     if directory.is_dir():
         names.update(str(p.relative_to(root)) for p in directory.rglob("*")
                      if (p.is_file() or p.is_symlink()) and outbox not in p.parents)
+    names = {name for name in names if not ((root / name).parent == snapshots and snapshot_file(Path(name).name))}
     for name in sorted(names - bookkeeping - {""}):
         path = root / name
         digest.update(name.encode())
@@ -65,7 +76,8 @@ def read(root):
     return record
 
 
-def save(root, payload, runtime, revision=0):
+def save(root, payload, runtime, revision=0, session_id=None):
+    """Write the next revision; `session_id`, the saving session's, is recorded when given."""
     if runtime not in ("claude-code", "codex") or not isinstance(payload, dict) or set(payload) - FIELDS:
         raise ValueError("invalid task contract fields or runtime")
     if not isinstance(payload.get("objective"), str) or not payload["objective"].strip():
@@ -84,6 +96,8 @@ def save(root, payload, runtime, revision=0):
         record = dict(payload, schema_version=1, revision=revision + 1, runtime=runtime,
                       repository=str(root), branch=git(root, "branch", "--show-current"),
                       head=git(root, "rev-parse", "HEAD"), fingerprint=fingerprint(root))
+        if isinstance(session_id, str) and session_id:
+            record["session_id"] = session_id
         # A caller's claim is not a gate result. Retain it as evidence, never certification.
         record["verification"] = {"status": "unverified", "reported": payload.get("verification")}
         reconcile.atomic_text(directory / "task.json", json.dumps(record, indent=2) + "\n")
