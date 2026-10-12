@@ -73,7 +73,11 @@ def load_prices(cfg, path=None):
             continue
         name = normalise_model(key)
         merged = dict(table.get(name) or {})
+        tier = merged.get("long_context")
         merged.update(value)
+        # The prompt-length tier merges field by field too, so one overridden rate keeps the rest.
+        if isinstance(tier, dict) and isinstance(value.get("long_context"), dict):
+            merged["long_context"] = dict(tier, **value["long_context"])
         table[name] = merged
     return table
 
@@ -105,7 +109,12 @@ def normalise_model(model):
 
 
 def usable_rate(entry):
-    """An entry's four rates as floats, or None when any of them is missing or not a number."""
+    """An entry's four rates as floats, or None when any of them is missing or not a number.
+
+    An entry priced by prompt length carries a `long_context` block: the prompt size past which
+    a request is billed at the block's own rates. A block that cannot be read leaves the whole
+    entry unusable, since no figure could then say which tier it was charged at.
+    """
     if not isinstance(entry, dict):
         return None
     rate = {}
@@ -116,7 +125,37 @@ def usable_rate(entry):
                 return None
             continue
         rate[field] = float(value)
+    if "long_context" in entry:
+        block = entry["long_context"]
+        if not isinstance(block, dict) or "long_context" in block:
+            return None
+        tier, over = usable_rate(block), block.get("over_prompt_tokens")
+        if tier is None or isinstance(over, bool) or not isinstance(over, int) or over <= 0:
+            return None
+        rate["long_context"] = dict(tier, over_prompt_tokens=over)
     return rate
+
+
+def prompt_rate(rate, prompt, many=False):
+    """The rate a prompt of `prompt` tokens is billed at, or None when that cannot be known.
+
+    A prompt counts every input token of the request, cache reads and writes included. A rate
+    with no `long_context` block ignores the size. One with a block needs it: a single request
+    over the threshold is billed at the block's rates. With `many`, `prompt` is the largest of
+    several requests, so at or under the threshold all of them took the base rate, and over it
+    the mix is unknown and the figure is unpriced rather than charged at the cheaper tier.
+    """
+    if rate is None:
+        return None
+    base = dict((k, v) for k, v in rate.items() if k != "long_context")
+    tier = rate.get("long_context")
+    if not tier:
+        return base
+    if isinstance(prompt, bool) or not isinstance(prompt, int) or prompt < 0:
+        return None
+    if prompt <= tier["over_prompt_tokens"]:
+        return base
+    return None if many else dict((k, v) for k, v in tier.items() if k != "over_prompt_tokens")
 
 
 def price_key(table, model):
@@ -209,7 +248,7 @@ def breakdown_cost(row, table):
             if any(part.get(field) for field in RATE_FIELDS):
                 return None
             continue
-        rate = price_for(table, name)
+        rate = prompt_rate(price_for(table, name), part.get("max_prompt"), many=True)
         if rate is None:
             return None
         tokens = row_tokens(dict(part, partial=row.get("partial")), rate)
@@ -280,7 +319,7 @@ def row_cost(row, table, children=None):
                 return None
             child_cost += cost
         excluded = set(normalise_model(c.get("model") or "") for c in children or [])
-    rate = price_for(table, row_model(row, excluded) or "")
+    rate = prompt_rate(price_for(table, row_model(row, excluded) or ""), row.get("max_prompt"), many=True)
     if rate is None:
         return None
     tokens = joined if joined is not None else row_tokens(row, rate)

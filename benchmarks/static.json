@@ -90,7 +90,7 @@
     },
     "claude-sonnet-5-5": {
       "session_start": 0.016803,
-      "later_turn": 0.001344
+      "later_turn": 0.000672
     }
   },
   "files": {
@@ -133,7 +133,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000339,
-          "later_turn": 2.7e-05
+          "later_turn": 1.4e-05
         }
       }
     },
@@ -176,7 +176,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000281,
-          "later_turn": 2.2e-05
+          "later_turn": 1.1e-05
         }
       }
     },
@@ -219,7 +219,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000546,
-          "later_turn": 4.4e-05
+          "later_turn": 2.2e-05
         }
       }
     },
@@ -262,7 +262,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000442,
-          "later_turn": 3.5e-05
+          "later_turn": 1.8e-05
         }
       }
     },
@@ -305,7 +305,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000641,
-          "later_turn": 5.1e-05
+          "later_turn": 2.6e-05
         }
       }
     },
@@ -348,7 +348,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000553,
-          "later_turn": 4.4e-05
+          "later_turn": 2.2e-05
         }
       }
     },
@@ -391,7 +391,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.0005,
-          "later_turn": 4e-05
+          "later_turn": 2e-05
         }
       }
     },
@@ -434,7 +434,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000617,
-          "later_turn": 4.9e-05
+          "later_turn": 2.5e-05
         }
       }
     },
@@ -477,7 +477,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000546,
-          "later_turn": 4.4e-05
+          "later_turn": 2.2e-05
         }
       }
     },
@@ -520,7 +520,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000187,
-          "later_turn": 1.5e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -563,7 +563,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.00116,
-          "later_turn": 9.3e-05
+          "later_turn": 4.6e-05
         }
       }
     },
@@ -606,7 +606,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.002149,
-          "later_turn": 0.000172
+          "later_turn": 8.6e-05
         }
       }
     },
@@ -649,7 +649,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000384,
-          "later_turn": 3.1e-05
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -692,7 +692,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000374,
-          "later_turn": 3e-05
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -735,7 +735,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000385,
-          "later_turn": 3.1e-05
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -778,7 +778,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000371,
-          "later_turn": 3e-05
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -821,7 +821,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000603,
-          "later_turn": 4.8e-05
+          "later_turn": 2.4e-05
         }
       }
     },
@@ -864,7 +864,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000388,
-          "later_turn": 3.1e-05
+          "later_turn": 1.6e-05
         }
       }
     },
@@ -907,7 +907,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000454,
-          "later_turn": 3.6e-05
+          "later_turn": 1.8e-05
         }
       }
     },
@@ -950,7 +950,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000426,
-          "later_turn": 3.4e-05
+          "later_turn": 1.7e-05
         }
       }
     },
@@ -993,7 +993,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000264,
-          "later_turn": 2.1e-05
+          "later_turn": 1.1e-05
         }
       }
     },
@@ -1036,7 +1036,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000144,
-          "later_turn": 1.2e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1079,7 +1079,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000184,
-          "later_turn": 1.5e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1122,7 +1122,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000176,
-          "later_turn": 1.4e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1165,7 +1165,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000304,
-          "later_turn": 2.4e-05
+          "later_turn": 1.2e-05
         }
       }
     },
@@ -1208,7 +1208,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000102,
-          "later_turn": 8e-06
+          "later_turn": 4e-06
         }
       }
     },
@@ -1251,7 +1251,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000159,
-          "later_turn": 1.3e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1294,7 +1294,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000238,
-          "later_turn": 1.9e-05
+          "later_turn": 1e-05
         }
       }
     },
@@ -1337,7 +1337,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000188,
-          "later_turn": 1.5e-05
+          "later_turn": 8e-06
         }
       }
     },
@@ -1380,7 +1380,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000157,
-          "later_turn": 1.3e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1423,7 +1423,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000206,
-          "later_turn": 1.7e-05
+          "later_turn": 8e-06
         }
       }
     },
@@ -1466,7 +1466,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000185,
-          "later_turn": 1.5e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1509,7 +1509,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000162,
-          "later_turn": 1.3e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1552,7 +1552,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000134,
-          "later_turn": 1.1e-05
+          "later_turn": 5e-06
         }
       }
     },
@@ -1595,7 +1595,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000207,
-          "later_turn": 1.7e-05
+          "later_turn": 8e-06
         }
       }
     },
@@ -1638,7 +1638,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000178,
-          "later_turn": 1.4e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1681,7 +1681,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000386,
-          "later_turn": 3.1e-05
+          "later_turn": 1.5e-05
         }
       }
     },
@@ -1724,7 +1724,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000184,
-          "later_turn": 1.5e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1767,7 +1767,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000152,
-          "later_turn": 1.2e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1810,7 +1810,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000146,
-          "later_turn": 1.2e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1853,7 +1853,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000174,
-          "later_turn": 1.4e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -1896,7 +1896,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000159,
-          "later_turn": 1.3e-05
+          "later_turn": 6e-06
         }
       }
     },
@@ -1939,7 +1939,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000196,
-          "later_turn": 1.6e-05
+          "later_turn": 8e-06
         }
       }
     },
@@ -1982,7 +1982,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 7.9e-05,
-          "later_turn": 6e-06
+          "later_turn": 3e-06
         }
       }
     },
@@ -2025,7 +2025,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000165,
-          "later_turn": 1.3e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -2068,7 +2068,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000194,
-          "later_turn": 1.6e-05
+          "later_turn": 8e-06
         }
       }
     },
@@ -2111,7 +2111,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 0.000186,
-          "later_turn": 1.5e-05
+          "later_turn": 7e-06
         }
       }
     },
@@ -2154,7 +2154,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 5.8e-05,
-          "later_turn": 5e-06
+          "later_turn": 2e-06
         }
       }
     },
@@ -2197,7 +2197,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 9.7e-05,
-          "later_turn": 8e-06
+          "later_turn": 4e-06
         }
       }
     },
@@ -2240,7 +2240,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 5.5e-05,
-          "later_turn": 4e-06
+          "later_turn": 2e-06
         }
       }
     },
@@ -2283,7 +2283,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 6.4e-05,
-          "later_turn": 5e-06
+          "later_turn": 3e-06
         }
       }
     },
@@ -2326,7 +2326,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 5e-05,
-          "later_turn": 4e-06
+          "later_turn": 2e-06
         }
       }
     },
@@ -2369,7 +2369,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 5.5e-05,
-          "later_turn": 4e-06
+          "later_turn": 2e-06
         }
       }
     },
@@ -2412,7 +2412,7 @@
         },
         "claude-sonnet-5-5": {
           "session_start": 7.1e-05,
-          "later_turn": 6e-06
+          "later_turn": 3e-06
         }
       }
     }

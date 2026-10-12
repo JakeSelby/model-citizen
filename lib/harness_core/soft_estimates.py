@@ -208,10 +208,13 @@ def reprice(calls, turn, table, pricing, context):
     carried = max(0, context(context_of(last)) - context(context_of(calls[0])) - HANDOFF_TOKENS)
     actual = counterfactual = 0.0
     for index, call in enumerate(horizon(calls, turn)):
-        rate = pricing.price_for(table, call["model"])
+        # Each call is one request, priced at its own prompt's tier; the counterfactual call has
+        # a smaller prompt, so it can fall in a cheaper tier than the call that ran.
+        entry = pricing.price_for(table, call["model"])
+        read, write = call["cache_read"], call["cache_write"]
+        rate = pricing.prompt_rate(entry, call["input"] + read + write)
         if rate is None:
             return {"status": "unpriced"}
-        read, write = call["cache_read"], call["cache_write"]
         actual += pricing.tokens_cost(_tokens(call, read, write), rate)
         if index == 0:
             read, write = 0, write + max(0, read - carried)
@@ -219,6 +222,7 @@ def reprice(calls, turn, table, pricing, context):
             write = write - min(carried, call["rewritten"])
         else:
             read = max(0, read - carried)
+        rate = pricing.prompt_rate(entry, call["input"] + read + write)
         counterfactual += pricing.tokens_cost(_tokens(call, read, write), rate)
     return {"status": "priced", "actual": actual, "counterfactual": counterfactual,
             "saving": actual - counterfactual}
