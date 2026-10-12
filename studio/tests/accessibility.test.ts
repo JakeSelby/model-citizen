@@ -7,7 +7,7 @@ import { DEFAULT_THEME, MantineProvider, mergeMantineTheme } from "@mantine/core
 
 import { TrendChart } from "../src/reports/trends/TrendsPage.tsx";
 import type { Trends } from "../src/reports/trends/model.ts";
-import { studioCssVariables, studioTheme, toneFor } from "../src/theme.ts";
+import { STUDIO_TOKENS, studioCssVariables, studioTheme, toneFor } from "../src/theme.ts";
 
 // The trends route's payload; see trends.test.ts for its generator.
 const fixture = JSON.parse(readFileSync(new URL("./fixtures/trends.json", import.meta.url), "utf8")) as Trends;
@@ -30,18 +30,25 @@ test("placeholders and filled palette surfaces resolve to the Studio tokens in b
     assert.equal(scheme["--mantine-color-red-filled"], "var(--studio-danger)");
     assert.equal(scheme["--mantine-color-red-filled-hover"], "var(--studio-danger)");
   }
+  assert.equal(resolved.light["--studio-primary"], "#087F5B");
+  assert.equal(resolved.dark["--studio-primary"], "#63E6BE");
+  assert.equal(resolved.variables["--studio-control-height"], "30px");
 });
 
-// The Studio tokens as `studio/src/styles.css` declares them, light and dark.
+test("page text and the canvas keep 4.5:1 in both schemes", () => {
+  for (const [name, scheme] of Object.entries(tokens())) {
+    for (const ink of ["--studio-ink-primary", "--studio-ink-secondary", "--studio-primary", "--studio-success", "--studio-warning", "--studio-danger"] as const) {
+      for (const surface of ["--studio-surface-canvas", "--studio-surface-raised", "--studio-surface-subtle"] as const) {
+        const ratio = contrast(scheme[ink], scheme[surface]);
+        assert.ok(ratio >= 4.5, `${name} ${ink} on ${surface}: ${ratio.toFixed(2)}:1`);
+      }
+    }
+  }
+});
+
+// The Studio tokens as the theme declares them, light and dark.
 function tokens(): { light: Record<string, string>; dark: Record<string, string> } {
-  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-  const block = (selector: string) => {
-    const start = css.indexOf(selector + " {");
-    const body = css.slice(start, css.indexOf("}", start));
-    return Object.fromEntries([...body.matchAll(/(--studio-[a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})/g)].map((match) => [match[1], match[2]]));
-  };
-  const light = block(":root");
-  return { light, dark: { ...light, ...block(':root[data-mantine-color-scheme="dark"]') } };
+  return { light: { ...STUDIO_TOKENS.light }, dark: { ...STUDIO_TOKENS.dark } };
 }
 
 function luminance(hex: string): number {

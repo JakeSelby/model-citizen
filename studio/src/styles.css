@@ -1,92 +1,9 @@
 :root {
-  --studio-space-1: 4px;
-  --studio-space-2: 8px;
-  --studio-space-3: 12px;
-  --studio-space-4: 16px;
-  --studio-space-5: 20px;
-  --studio-space-6: 24px;
-  --studio-space-8: 32px;
-  --studio-space-10: 40px;
-  --studio-radius-sm: 4px;
-  --studio-radius-md: 6px;
-  --studio-border-width: 1px;
-  --studio-focus-width: 2px;
-  --studio-focus-offset: 2px;
-  /* Compact controls stay above the 24 px target floor (WCAG 2.5.8). */
-  --studio-control-height: 30px;
-  --studio-row-height: 30px;
-  --studio-text-xs: 12px;
-  --studio-text-sm: 13px;
-  --studio-text-md: 14px;
-  --studio-text-lg: 16px;
-  --studio-text-xl: 22px;
-  --studio-heading-size: 20px;
-  --studio-lead-size: 14px;
-  --studio-heading-tracking: -0.01em;
-  --studio-label-tracking: 0;
-  --studio-header-height: 52px;
-  --studio-navbar-width: 220px;
-  --studio-min-width: 320px;
-  --studio-brand-size: 24px;
-  --studio-state-min-height: 0;
-  --studio-foundation-min-height: 0;
-  --studio-draft-width: 28rem;
-  --studio-overview-width: 60ch;
-  --studio-report-min-width: 360px;
-  --studio-theme-width: 9.5rem;
-  --studio-toast-width: 28rem;
-  --studio-toast-shadow: 0 2px 12px rgb(0 0 0 / 10%);
-  --studio-skip-hidden: -80px;
-  /* Operational palette (DESIGN.md, 2026-10-06): white canvas, hairlines, one muted teal accent.
-     Status hues carry status only; each text shade keeps 4.5:1 on its canvas and wash, and the
-     brighter `-mark` shade draws the status dot. */
-  --studio-surface-canvas: #FFFFFF;
-  --studio-surface-raised: #FFFFFF;
-  --studio-surface-subtle: #F8F9FA;
-  --studio-ink-primary: #212529;
-  --studio-ink-secondary: #646C73;
-  --studio-border-default: #E9ECEF;
-  --studio-control-border: #868E96;
-  --studio-primary: #087F5B;
-  --studio-primary-foreground: #FFFFFF;
-  --studio-primary-wash: #E6FCF5;
-  --studio-success: #237032;
-  --studio-success-mark: #2B8A3E;
-  --studio-success-wash: #EBFBEE;
-  --studio-warning: #A85500;
-  --studio-warning-mark: #E67700;
-  --studio-warning-wash: #FFF4E6;
-  --studio-danger: #C92A2A;
-  --studio-danger-mark: #C92A2A;
-  --studio-danger-wash: #FFF5F5;
-  --studio-neutral-mark: #868E96;
+  /* Every --studio-* token is declared once, in theme.ts, and emitted by Mantine's resolver. */
   color: var(--studio-ink-primary);
   background: var(--studio-surface-canvas);
   color-scheme: light dark;
   font-synthesis: none;
-}
-
-:root[data-mantine-color-scheme="dark"] {
-  --studio-surface-canvas: #16181B;
-  --studio-surface-raised: #16181B;
-  --studio-surface-subtle: #1F2226;
-  --studio-ink-primary: #E9ECEF;
-  --studio-ink-secondary: #A6A7AB;
-  --studio-border-default: #2C2F34;
-  --studio-control-border: #7C8189;
-  --studio-primary: #63E6BE;
-  --studio-primary-foreground: #0B2B22;
-  --studio-primary-wash: #0F2A22;
-  --studio-success: #8CE99A;
-  --studio-success-mark: #51CF66;
-  --studio-success-wash: #17301D;
-  --studio-warning: #FFC078;
-  --studio-warning-mark: #FF922B;
-  --studio-warning-wash: #33260F;
-  --studio-danger: #FF8787;
-  --studio-danger-mark: #FF6B6B;
-  --studio-danger-wash: #3A1A1A;
-  --studio-neutral-mark: #7C8189;
 }
 
 * { box-sizing: border-box; }
@@ -152,10 +69,10 @@ textarea:focus-visible {
 
 .brand {
   display: flex;
-  min-height: 36px;
+  min-height: var(--studio-nav-item-height);
   align-items: center;
-  gap: var(--studio-space-1);
-  padding: 0 var(--studio-space-3);
+  gap: var(--studio-space-2);
+  padding: 0 var(--studio-space-2);
   margin-bottom: var(--studio-space-2);
   color: var(--studio-ink-primary);
   font-size: var(--studio-text-md);
@@ -169,17 +86,48 @@ textarea:focus-visible {
   font-weight: 400;
 }
 
-.primary-navigation {
+.brand-mark {
+  display: flex;
+  width: var(--studio-brand-size);
+  height: var(--studio-brand-size);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--studio-radius-md);
+  color: var(--studio-primary-foreground);
+  background: var(--studio-primary);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.primary-navigation,
+.nav-group,
+.nav-foot {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
+.nav-group-label {
+  padding: var(--studio-space-4) 10px 6px;
+  color: var(--studio-ink-secondary);
+  font-size: var(--studio-text-xs);
+  font-weight: 600;
+}
+
+.nav-foot {
+  margin-top: auto;
+  padding-top: var(--studio-space-4);
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+}
+
 .nav-link {
   display: flex;
-  min-height: var(--studio-control-height);
+  min-height: var(--studio-nav-item-height);
   align-items: center;
-  padding: 0 var(--studio-space-3);
+  gap: 10px;
+  padding: 0 10px;
   border-radius: var(--studio-radius-sm);
   color: var(--studio-ink-primary);
   font-size: var(--studio-text-md);
@@ -191,8 +139,21 @@ textarea:focus-visible {
 .nav-link[aria-current="page"] {
   color: var(--studio-primary);
   background: var(--studio-primary-wash);
-  font-weight: 500;
+  font-weight: 600;
 }
+
+.nav-icon {
+  width: var(--studio-icon-size);
+  height: var(--studio-icon-size);
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.evals-views { margin-bottom: var(--studio-space-2); }
 
 .studio-header {
   display: flex;
@@ -314,8 +275,6 @@ textarea:focus-visible {
 
 /* An item inside a section is a row: a hairline above, a tight inset. */
 .main-content .mantine-Paper-root .mantine-Paper-root { padding: var(--studio-space-2) 0; }
-
-.foundation-panel { min-height: var(--studio-foundation-min-height); }
 
 /* ---- Hub ---- */
 .number-strip {
@@ -682,7 +641,11 @@ textarea:focus-visible {
   }
   .studio-shell .studio-header { position: static; height: auto; padding: var(--studio-space-2) var(--studio-space-4); }
   .brand { margin-bottom: 0; padding: 0 var(--studio-space-2); }
-  .primary-navigation { flex-direction: row; flex-wrap: wrap; }
+  .primary-navigation,
+  .nav-group,
+  .nav-foot { flex-direction: row; flex-wrap: wrap; }
+  .nav-group-label { display: none; }
+  .nav-foot { margin-top: 0; padding-top: 0; border-top: 0; }
   .nav-link { padding: 0 var(--studio-space-2); }
   .header-title { flex-wrap: wrap; row-gap: 0; }
   .workspace-tools { justify-content: flex-start; }

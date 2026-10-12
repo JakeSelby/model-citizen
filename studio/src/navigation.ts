@@ -1,16 +1,46 @@
-export const NAVIGATION = [
-  { label: "Hub", path: "/" },
-  { label: "Configure", path: "/configure" },
-  { label: "Library", path: "/library" },
-  { label: "Experiments", path: "/experiments" },
-  { label: "Reports", path: "/reports" },
-  { label: "Activity", path: "/activity" },
-] as const;
+// The Studio's pages, grouped by the question each answers rather than by the harness part it reads.
+export type NavItem = { readonly key: string; readonly label: string; readonly path: string };
+export type NavGroup = { readonly label: string | null; readonly items: readonly NavItem[] };
+
+export const NAVIGATION_GROUPS: readonly NavGroup[] = [
+  { label: null, items: [
+    { key: "home", label: "Home", path: "/home" },
+    { key: "sessions", label: "Sessions", path: "/sessions" },
+  ] },
+  { label: "Harness", items: [
+    { key: "rules", label: "Rules", path: "/harness/rules" },
+    { key: "stances", label: "Stances", path: "/harness/stances" },
+    { key: "skills", label: "Skills", path: "/harness/skills" },
+    { key: "hooks", label: "Hooks", path: "/harness/hooks" },
+    { key: "roles", label: "Roles", path: "/harness/roles" },
+    { key: "workflows", label: "Workflows", path: "/harness/workflows" },
+    { key: "sources", label: "Sources", path: "/harness/sources" },
+  ] },
+  { label: "Operate", items: [
+    { key: "routines", label: "Routines", path: "/routines" },
+    { key: "changes", label: "Changes", path: "/changes" },
+  ] },
+  { label: "Measure", items: [
+    { key: "evals", label: "Evals", path: "/evals" },
+  ] },
+];
+
+// Pinned to the foot of the nav, apart from the groups.
+export const FOOT_NAVIGATION: readonly NavItem[] = [
+  { key: "baseline", label: "Baseline", path: "/baseline" },
+];
+
+export const NAVIGATION: readonly NavItem[] = [
+  ...NAVIGATION_GROUPS.flatMap((group) => group.items),
+  ...FOOT_NAVIGATION,
+];
+
+export const HOME_PATH = "/home";
+
+const matches = (pathname: string, path: string) => pathname === path || pathname.startsWith(`${path}/`);
 
 export function pageTitle(pathname: string): string {
-  if (pathname === "/setup") return "First run";
-  return NAVIGATION.find((item) => item.path === pathname
-    || (item.path !== "/" && pathname.startsWith(`${item.path}/`)))?.label ?? "Hub";
+  return NAVIGATION.find((item) => matches(pathname, item.path))?.label ?? "Home";
 }
 
 export function documentTitle(pathname: string): string {
@@ -18,17 +48,59 @@ export function documentTitle(pathname: string): string {
 }
 
 // The CLI command each page's evidence comes from, shown in the header beside the page title.
+// Longer paths come first, so a sub-page keeps its own command.
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["/setup", "citizen draft first-run"],
-  ["/configure", "citizen selection"],
-  ["/library", "citizen catalog --library"],
-  ["/experiments", "citizen runs history"],
-  ["/activity", "citizen activity"],
-  ["/reports/rules", "citizen usage --rules"],
-  ["/reports/usage", "citizen usage"],
-  ["/reports", "citizen reports trends"],
+  ["/home", "citizen doctor"],
+  ["/sessions", "citizen usage"],
+  ["/harness/rules", "citizen usage --rules"],
+  ["/harness/stances", "citizen stances"],
+  ["/harness/skills", "citizen catalog"],
+  ["/harness/hooks", "citizen activity"],
+  ["/harness/roles", "citizen usage --by role"],
+  ["/harness/workflows", "citizen usage --by role"],
+  ["/harness/sources", "citizen catalog --library"],
+  ["/changes", "citizen selection"],
+  ["/evals/trends", "citizen reports trends"],
+  ["/evals", "citizen runs history"],
+  ["/baseline", "citizen draft first-run"],
 ];
 
 export function pageCommand(pathname: string): string {
-  return COMMANDS.find(([path]) => pathname === path || pathname.startsWith(`${path}/`))?.[1] ?? "citizen doctor";
+  return COMMANDS.find(([path]) => matches(pathname, path))?.[1] ?? "citizen doctor";
+}
+
+// Every route the Studio served before the regrouping, and where it lands now. One table, so the
+// retirement story removes the old routes in one place. A `:param` segment carries over.
+export const LEGACY_REDIRECTS: ReadonlyArray<readonly [string, string]> = [
+  ["/", HOME_PATH],
+  ["/setup", "/baseline"],
+  ["/configure", "/changes"],
+  ["/library", "/harness/sources"],
+  ["/experiments", "/evals"],
+  ["/experiments/runs/:runId", "/evals/runs/:runId"],
+  ["/activity", "/harness/hooks"],
+  ["/reports", "/evals"],
+  ["/reports/rules", "/harness/rules"],
+  ["/reports/usage", "/sessions"],
+  ["/reports/trends", "/evals/trends"],
+];
+
+// The new path for an old one, keeping its parameters; null when the path was never an old route.
+export function legacyTarget(pathname: string): string | null {
+  const segments = pathname.split("/");
+  for (const [from, to] of LEGACY_REDIRECTS) {
+    const pattern = from.split("/");
+    if (pattern.length !== segments.length) continue;
+    const params: Record<string, string> = {};
+    const hit = pattern.every((part, index) => {
+      if (part.startsWith(":")) {
+        if (!segments[index]) return false;
+        params[part] = segments[index];
+        return true;
+      }
+      return part === segments[index];
+    });
+    if (hit) return to.split("/").map((part) => params[part] ?? part).join("/");
+  }
+  return null;
 }

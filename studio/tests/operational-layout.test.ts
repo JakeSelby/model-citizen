@@ -33,19 +33,18 @@ const overview: Overview = {
 const render = (element: ReturnType<typeof h>) => renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {}, element)));
 
 test("every page names the CLI command its evidence comes from", () => {
-  assert.equal(pageCommand("/"), "citizen doctor");
-  assert.equal(pageCommand("/setup"), "citizen draft first-run");
-  assert.equal(pageCommand("/configure"), "citizen selection");
-  assert.equal(pageCommand("/library"), "citizen catalog --library");
-  assert.equal(pageCommand("/experiments"), "citizen runs history");
-  assert.equal(pageCommand("/experiments/runs/r-1"), "citizen runs history");
-  assert.equal(pageCommand("/activity"), "citizen activity");
-  assert.equal(pageCommand("/reports"), "citizen reports trends");
-  assert.equal(pageCommand("/reports/trends"), "citizen reports trends");
-  assert.equal(pageCommand("/reports/rules"), "citizen usage --rules");
-  assert.equal(pageCommand("/reports/usage"), "citizen usage");
+  assert.equal(pageCommand("/home"), "citizen doctor");
+  assert.equal(pageCommand("/baseline"), "citizen draft first-run");
+  assert.equal(pageCommand("/changes"), "citizen selection");
+  assert.equal(pageCommand("/harness/sources"), "citizen catalog --library");
+  assert.equal(pageCommand("/evals"), "citizen runs history");
+  assert.equal(pageCommand("/evals/runs/r-1"), "citizen runs history");
+  assert.equal(pageCommand("/harness/hooks"), "citizen activity");
+  assert.equal(pageCommand("/evals/trends"), "citizen reports trends");
+  assert.equal(pageCommand("/harness/rules"), "citizen usage --rules");
+  assert.equal(pageCommand("/sessions"), "citizen usage");
   // A route that only shares a prefix does not borrow its neighbour's command.
-  assert.equal(pageCommand("/reportsx"), "citizen doctor");
+  assert.equal(pageCommand("/evalsx"), "citizen doctor");
   for (const { path } of NAVIGATION) assert.match(pageCommand(path), /^citizen [a-z]/);
 });
 

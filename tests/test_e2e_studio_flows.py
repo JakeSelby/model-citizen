@@ -115,33 +115,66 @@ class StudioEndToEndFlows(support.StudioE2E):
             self.run_ids = seed_finished_replays(self.home, self.checkout.root)
 
     def test_open_the_studio_and_reach_every_area(self):
-        """Flow 1: the launcher's session opens the Hub, and every stable area renders."""
+        """Flow 1: the launcher's session opens Home, and every page of the nav renders."""
         self.open()
-        self.wait("document.querySelector('.system-summary') !== null", "Hub did not load")
+        self.wait("document.querySelector('.system-summary') !== null", "Home did not load")
         self.assertIn("Installed system", self.js("document.querySelector('main').textContent"))
         # The detached Studio resolves the model clients to the stubs, so the model seal
         # watches the processes the Studio itself starts.
         status, overview = self.api("GET", "/api/overview")
         self.assertEqual(status, 200)
         self.assertIn("0.0.0-fixture", json.dumps(overview))
-        areas = (("#/configure", "Configure", "document.querySelector('input') !== null"),
-                 ("#/library", "Library", "document.querySelectorAll('.library-module').length > 0"),
-                 ("#/experiments", "Experiments",
-                  "document.querySelector('.experiment-launch') !== null"),
-                 ("#/reports", "Reports", "document.querySelector('h1') !== null"),
-                 ("#/activity", "Activity", "document.querySelector('h1') !== null"))
+        self.wait("location.hash === '#/home'", "the Studio did not open on Home")
+        areas = (("#/sessions", "Sessions", "document.querySelector('h1') !== null"),
+                 ("#/harness/rules", "Rules", "document.querySelector('h1') !== null"),
+                 ("#/harness/stances", "Stances", "__has('being rebuilt in story #1325')"),
+                 ("#/harness/hooks", "Hooks", "document.querySelector('h1') !== null"),
+                 ("#/harness/sources", "Sources",
+                  "document.querySelectorAll('.library-module').length > 0"),
+                 ("#/routines", "Routines", "__has('being rebuilt in story #1335')"),
+                 ("#/changes", "Changes", "document.querySelector('input') !== null"),
+                 ("#/evals", "Evals", "document.querySelector('.experiment-launch') !== null"),
+                 ("#/evals/trends", "Evals", "document.querySelector('h1') !== null"),
+                 ("#/baseline", "Baseline", "document.querySelector('h1') !== null"))
         for route, label, ready in areas:
-            with self.subTest(area=label):
+            with self.subTest(area=route):
                 self.js("location.hash = %s" % json.dumps(route))
                 self.wait("document.querySelector('.nav-link[aria-current=page]')?.textContent === %s"
                           % json.dumps(label), label + " was not the current area")
-                self.wait(ready, label + " did not render", seconds=60)
+                self.wait(ready, route + " did not render", seconds=60)
+                self.assertEqual(self.js("location.hash"), route)
+
+    def test_every_old_route_redirects_to_its_new_page(self):
+        """#1320: each route of the old nav lands on its regrouped page, query and run id kept."""
+        self.open("#/home")
+        redirects = (("#/", "#/home", "Home"),
+                     ("#/setup", "#/baseline", "Baseline"),
+                     ("#/configure", "#/changes", "Changes"),
+                     ("#/library?path=rules/a.md", "#/harness/sources?path=rules/a.md", "Sources"),
+                     ("#/experiments", "#/evals", "Evals"),
+                     ("#/experiments/runs/no-such-run", "#/evals/runs/no-such-run", "Evals"),
+                     ("#/activity", "#/harness/hooks", "Hooks"),
+                     ("#/reports", "#/evals", "Evals"),
+                     ("#/reports/rules", "#/harness/rules", "Rules"),
+                     ("#/reports/usage", "#/sessions", "Sessions"),
+                     ("#/reports/trends", "#/evals/trends", "Evals"),
+                     ("#/not-a-route", "#/home", "Home"))
+        for old, new, label in redirects:
+            with self.subTest(route=old):
+                # Start from a page neither route names, so every hop is a real navigation.
+                self.js("location.hash = '#/routines'")
+                self.wait("location.hash === '#/routines'", "could not leave " + old)
+                self.js("location.hash = %s" % json.dumps(old))
+                self.wait("location.hash === %s" % json.dumps(new),
+                          "%s did not redirect to %s" % (old, new))
+                self.wait("document.querySelector('.nav-link[aria-current=page]')?.textContent === %s"
+                          % json.dumps(label), "%s did not mark %s current" % (new, label))
 
     def test_first_run_guide_goes_from_health_to_an_applied_setup(self):
         """Flow 6 (#997): health, draft, identity, preferences, the free check, then apply."""
         self.discard_after(FIRST_RUN_DRAFT)
         live_before = self.config_path.read_bytes()
-        self.open("#/setup")
+        self.open("#/baseline")
         self.wait("__has('From this install to an applied setup.')", "the guide did not open")
         self.click("Continue")
         self.click("Create the draft")
@@ -207,10 +240,10 @@ class StudioEndToEndFlows(support.StudioE2E):
                          "planning a draft test started a replay")
 
     def tune(self, draft: str) -> None:
-        """Load ``draft`` in Configure, switch one rule off and wait for its checkpoint."""
+        """Load ``draft`` in Changes, switch one rule off and wait for its checkpoint."""
         created = drafts.find(self.checkout.root, draft)[1]["revision"]
-        self.open("#/configure")
-        self.wait("document.querySelector('input') !== null", "Configure did not render")
+        self.open("#/changes")
+        self.wait("document.querySelector('input') !== null", "Changes did not render")
         self.js("__setLabelValue('Draft name', %s)" % json.dumps(draft))
         self.click("Load draft")
         self.wait("__has('Selection controls are ready.')", "the selection editor did not load")
@@ -237,7 +270,7 @@ class StudioEndToEndFlows(support.StudioE2E):
 
     def test_free_suites_run_to_completion_with_no_model_usage(self):
         """Flow 4 and #988: a free suite from the launcher and an evaluation tier's free run."""
-        self.open("#/experiments")
+        self.open("#/evals")
         self.wait("document.querySelector('.experiment-launch') !== null",
                   "the free-suite launcher did not load", seconds=60)
         self.assertIn("No model usage", self.js(
@@ -298,7 +331,7 @@ class StudioEndToEndFlows(support.StudioE2E):
             self.assertTrue(answer["comparable"], answer)
             self.assertEqual(answer["result"]["arms"][0]["measures"]["cost_per_passed"]
                              ["reading"], "lower", "the cheaper target did not read lower")
-        self.open("#/experiments")
+        self.open("#/evals")
         self.wait("__has('Compare two runs, paired by task.')", "the compare panel did not render",
                   seconds=60)
         # One field at a time: each edit re-renders the form from the last one's state.
@@ -318,7 +351,7 @@ class StudioEndToEndFlows(support.StudioE2E):
                       "the panel did not show the route's answer", seconds=60,
                       section="Compare two runs")
 
-    def test_apply_a_draft_then_roll_it_back_from_activity(self):
+    def test_apply_a_draft_then_roll_it_back_from_hooks(self):
         """Flow 3 (#978/#979): review, confirm and apply; then preview and roll back."""
         draft = self.create_draft("e2e-apply-")
         live_before = self.config_path.read_bytes()
@@ -331,7 +364,7 @@ class StudioEndToEndFlows(support.StudioE2E):
         applied = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(applied.get("rules", {}).get(SWITCHED_RULE), "off", applied.get("rules"))
 
-        self.js("location.hash = '#/activity'")
+        self.js("location.hash = '#/harness/hooks'")
         self.click("Preview rollback", seconds=60)
         self.wait("__has('Preview ready. Nothing has changed.')", "rollback preview failed",
                   seconds=60)
@@ -348,7 +381,7 @@ class SealTests(support.StudioE2E):
 
     def test_the_network_seal_fails_on_a_request_outside_the_loopback_origin(self):
         self.open()
-        self.wait("document.querySelector('.system-summary') !== null", "Hub did not load")
+        self.wait("document.querySelector('.system-summary') !== null", "Home did not load")
         self.assert_no_network()
         # The browser blocks the foreign navigation itself, so nothing leaves this machine, yet
         # the request is still announced, as a real one would be.

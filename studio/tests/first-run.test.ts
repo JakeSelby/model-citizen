@@ -98,7 +98,7 @@ test("the Hub says nothing live changed and offers to resume a kept draft", () =
   assert.match(liveChangeNotice(KEPT), /Setup has changed nothing live\. Draft first-run is kept/);
   const html = render(h(FirstRunBanner, { status: KEPT }));
   assert.match(html, /Setup is waiting for you/);
-  assert.match(html, /href="\/setup"/);
+  assert.match(html, /href="\/baseline"/);
   assert.doesNotMatch(render(h(FirstRunBanner, { status: DONE })), /setup/i);
 });
 
@@ -117,19 +117,19 @@ test("the CLI sequence reproduces the choices headless and names the agent loop"
   assert.match(html, /citizen draft first-run --json/);
 });
 
-test("a finished run reports green doctor checks and links to the Hub", () => {
+test("a finished run reports green doctor checks and links to Home", () => {
   assert.equal(doctorPassed(DONE), true);
   assert.equal(doctorPassed({ ...DONE, applied: { ...DONE.applied, doctor: "attention" } }), false);
   assert.equal(doctorPassed(KEPT), false);
   const html = render(h(DoneSummary, { status: DONE, overview: null }));
   assert.match(html, /Setup applied and the doctor checks passed/);
   assert.match(html, /0123456789ab/);
-  assert.match(html, /href="\/"/);
+  assert.match(html, /href="\/home"/);
 });
 
-test("the setup route has its own title", () => {
-  assert.equal(pageTitle("/setup"), "First run");
-  assert.equal(documentTitle("/setup"), "First run · Model Citizen Studio");
+test("the setup guide lives on Baseline", () => {
+  assert.equal(pageTitle("/baseline"), "Baseline");
+  assert.equal(documentTitle("/baseline"), "Baseline · Model Citizen Studio");
 });
 
 test("status and start post the draft name with the session's CSRF token", async () => {

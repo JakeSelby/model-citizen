@@ -35,7 +35,7 @@ test("each series plots by version and date with its change notes", () => {
   assert.ok(html.includes("Series replay-v2"));
   // Each row's delegation tally sits beside a link to Rule health's current reading.
   const total = fixture.lines.reduce((sum, item) => sum + item.points.length, 0);
-  assert.equal((html.match(/href="\/reports\/rules"[^>]*>Rule health: current reading</g) ?? []).length, total);
+  assert.equal((html.match(/href="\/harness\/rules"[^>]*>Rule health: current reading</g) ?? []).length, total);
   assert.ok(html.includes("Series micro-v1"));
   // One polyline per line, joining only that line's points.
   assert.equal((html.match(/<polyline/g) ?? []).length, fixture.lines.length);

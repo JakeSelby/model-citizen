@@ -8,8 +8,8 @@ import unittest
 import test_studio_accessibility_browser as a11y
 
 # Every page restyled from cards and papers to hairline sections.
-PAGES = ("/configure", "/library", "/experiments", "/experiments/runs/no-such-run", "/activity",
-         "/reports/trends", "/reports/rules", "/reports/usage", "/setup")
+PAGES = ("/changes", "/harness/sources", "/evals", "/evals/runs/no-such-run", "/harness/hooks",
+         "/evals/trends", "/harness/rules", "/sessions", "/baseline")
 SHELL = """JSON.stringify((() => {
   const navbar = document.querySelector('.studio-navbar');
   const header = document.querySelector('.studio-header');
@@ -62,7 +62,7 @@ class OperationalLookBrowserTests(unittest.TestCase):
     def test_the_shell_is_a_220_px_navbar_with_a_hairline_and_a_header_that_never_covers_the_page(self):
         for width in (1440, 1100):
             self._open(width, "light")
-            self._go("/")
+            self._go("/home")
             shell = json.loads(self.devtools.evaluate(SHELL))
             self.assertEqual(shell["navbar"], 220, width)
             self.assertEqual((shell["borderWidth"], shell["borderStyle"], shell["borderColor"]),
@@ -73,7 +73,7 @@ class OperationalLookBrowserTests(unittest.TestCase):
             self.assertLessEqual(shell["headerOverflow"], 0, width)
             self.assertFalse(shell["toolsOverflow"], width)
         self._open(1440, "dark")
-        self._go("/")
+        self._go("/home")
         # The scheme attribute flips on the media query's change event, a frame after emulation.
         self._wait("document.documentElement.dataset.mantineColorScheme === 'dark'",
                    "the shell did not switch to the dark scheme")
@@ -81,7 +81,7 @@ class OperationalLookBrowserTests(unittest.TestCase):
 
     def test_hub_rows_are_compact_and_monospace_only_for_ids_and_commands(self):
         self._open(1440, "light")
-        self._go("/")
+        self._go("/home")
         self._wait("document.querySelector('.report-row') !== null", "the Hub report rows did not render")
         hub = json.loads(self.devtools.evaluate(HUB_ROWS))
         self.assertTrue(hub["reports"])

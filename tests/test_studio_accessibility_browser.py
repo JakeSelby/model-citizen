@@ -25,13 +25,14 @@ CHECKS = (Path(__file__).resolve().parent / "studio_a11y_checks.js").read_text(e
 
 # Every routed screen. The unknown run id renders the run page's not-found state.
 ROUTES = (
-    "/", "/setup", "/configure", "/library", "/experiments", "/experiments/runs/no-such-run",
-    "/activity", "/reports", "/reports/rules", "/reports/usage", "/reports/trends",
+    "/home", "/sessions", "/harness/rules", "/harness/stances", "/harness/skills", "/harness/hooks",
+    "/harness/roles", "/harness/workflows", "/harness/sources", "/routines", "/changes", "/evals",
+    "/evals/runs/no-such-run", "/evals/trends", "/baseline",
 )
 FIXTURES = browser_support.REPO / "studio" / "tests" / "fixtures"
 # Report routes in their populated state, served from the committed fixtures the frontend unit
 # tests read, so charts, tables and legends are audited and not only the empty states.
-POPULATED = ("/reports/trends", "/reports/rules", "/reports/usage")
+POPULATED = ("/evals/trends", "/harness/rules", "/sessions")
 POPULATE = """
 (() => {
   const fixtures = { trends: %s, rules: %s, spend: %s };
@@ -558,7 +559,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # planted node where the rule names one. Page-wide rules are planted on the document and
         # restored, and the clean audit afterwards proves every plant was the cause.
         self._open(PHONE, "light")
-        self._visit("/", "light")
+        self._visit("/home", "light")
         self.devtools.evaluate(r"""(() => {
           const main = document.querySelector('main');
           const planted = document.createElement('div');
@@ -652,7 +653,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # away, a static shadow that never changes on focus, a control covered when focused, a
         # control Tab never reaches, and a control that keeps Tab.
         self._open(PHONE, "light")
-        self._visit("/", "light")
+        self._visit("/home", "light")
         self.devtools.evaluate(r"""(() => {
           const planted = document.createElement('div');
           planted.id = 'planted';
@@ -700,12 +701,12 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             for scheme in ("light", "dark"):
                 self._open(width, scheme)
                 self._install_stubs()
-                self._visit("/experiments", scheme)
-                label = "/experiments populated @%dpx %s" % (width, scheme)
+                self._visit("/evals", scheme)
+                label = "/evals populated @%dpx %s" % (width, scheme)
                 self._fill_experiments(failures, label)
                 self._audit_into(failures, label)
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/experiments populated"))
+                    failures.extend(self._tab_walk("/evals populated"))
                 self._assert_nothing_refused()
         self._report(failures)
 
@@ -761,7 +762,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # The run page with its exact command, cases and case evidence, and the definitive
         # evaluation's engine row, layer scorecard and judge: every scroll region it has.
         states = json.loads((FIXTURES / "a11y-states.json").read_text(encoding="utf-8"))
-        route = "/experiments/runs/" + states["runDetail"]["run_id"]
+        route = "/evals/runs/" + states["runDetail"]["run_id"]
         failures: List[str] = []
         for width in WIDTHS:
             for scheme in ("light", "dark"):
@@ -799,7 +800,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             for scheme in ("light", "dark"):
                 self._open(width, scheme)
                 self._install_stubs(revision)
-                self._visit("/configure", scheme)
+                self._visit("/changes", scheme)
                 self._set_label("Draft name", draft)
                 self._click("Load draft")
                 self._wait("__has('Draft configuration is ready.')", "draft configuration did not load", seconds=60.0)
@@ -810,7 +811,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                 self._wait("__has('Review complete. Nothing has been applied.')", "the apply review fixture did not render")
                 self._audit_into(failures, label + " reviewed")
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/configure reviewed"))
+                    failures.extend(self._tab_walk("/changes reviewed"))
                 self._set_label("Confirm the draft to apply", draft)
                 self._click("Apply " + draft)
                 self._wait("__has(%s)" % json.dumps("Applied draft %s." % draft), "the apply result fixture did not render")
@@ -824,13 +825,13 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             for scheme in ("light", "dark"):
                 self._open(width, scheme)
                 self._install_stubs()
-                self._visit("/activity", scheme)
-                label = "/activity @%dpx %s" % (width, scheme)
+                self._visit("/harness/hooks", scheme)
+                label = "/harness/hooks @%dpx %s" % (width, scheme)
                 self._click("Preview rollback")
                 self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
                 self._audit_into(failures, label + " rollback preview")
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/activity rollback preview"))
+                    failures.extend(self._tab_walk("/harness/hooks rollback preview"))
                 self._set_label("Confirm the applied draft to roll back", "tuning")
                 self._click("Roll back tuning")
                 self._wait("__has('citizen sync (pid 1) holds the sync lock') && __has('nothing was changed')",
@@ -861,7 +862,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                     ".filter(node => node.textContent.includes('Rolled back. The doctor checks ran.')).length"), 1, label)
                 self._audit_into(failures, label + " rollback completed")
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/activity rollback completed"))
+                    failures.extend(self._tab_walk("/harness/hooks rollback completed"))
                 self._dismiss_rollback_by_keyboard(label + " rollback completed")
                 self.devtools.evaluate("globalThis.__a11yRollback = ''")
                 self._assert_nothing_refused()
@@ -871,7 +872,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # Filters applied during a rollback win: its refresh must not put the old filters' page back.
         self._open(DESKTOP, "light")
         self._install_stubs()
-        self._visit("/activity", "light")
+        self._visit("/harness/hooks", "light")
         self._click("Preview rollback")
         self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
         self.devtools.evaluate("globalThis.__a11yRollback = 'completed'; globalThis.__a11yHoldRollback = true")
@@ -899,7 +900,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
     def test_clicks_pass_through_the_toast_region_but_not_a_toast(self):
         # The region spans the bottom of the page; only a toast in it takes the pointer.
         self._open(DESKTOP, "light")
-        self._visit("/", "light")
+        self._visit("/home", "light")
         probe = json.loads(self.devtools.evaluate(r"""(() => {
           const region = document.querySelector('.toast-region');
           const toasts = [0, 1].map(() => {

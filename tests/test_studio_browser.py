@@ -276,7 +276,7 @@ class StudioBrowserTests(unittest.TestCase):
         self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/not-a-route"})
         self._wait_for_shell()
         for _ in range(100):
-            if self.devtools.evaluate("location.hash === '#/'"):
+            if self.devtools.evaluate("location.hash === '#/home'"):
                 break
             time.sleep(0.05)
 
@@ -301,11 +301,11 @@ class StudioBrowserTests(unittest.TestCase):
             "violations:globalThis.__studioCspViolations ?? ['listener-missing']"
             "})")
         rendered = json.loads(result)
-        self.assertEqual(before, "#/")
-        self.assertEqual(rendered["hash"], "#/")
-        self.assertEqual(rendered["title"], "Hub · Model Citizen Studio")
+        self.assertEqual(before, "#/home")
+        self.assertEqual(rendered["hash"], "#/home")
+        self.assertEqual(rendered["title"], "Home · Model Citizen Studio")
         self.assertEqual(rendered["heading"], "Your harness at a glance.")
-        self.assertEqual(rendered["active"], "Hub")
+        self.assertEqual(rendered["active"], "Home")
         self.assertEqual(rendered["navLabel"], "Studio")
         self.assertEqual(rendered["focused"], "main-content")
         self.assertEqual(rendered["scheme"], "dark")
@@ -336,20 +336,20 @@ class StudioBrowserTests(unittest.TestCase):
             "background:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor)"
             "})"))
         self.assertEqual(scheme, "light")
-        self.assertEqual(light["canvas"], "rgb(255, 255, 255)")
+        self.assertEqual(light["canvas"], "rgb(248, 249, 250)")
         self.assertGreaterEqual(_contrast_ratio(light["foreground"], light["background"]), 4.5)
 
+        # An old route lands on its regrouped page.
         self.devtools.evaluate("location.hash = '#/reports'")
         for _ in range(100):
             active = self.devtools.evaluate(
                 "document.querySelector('.nav-link[aria-current=page]')?.textContent"
             )
-            if active == "Reports":
+            if active == "Evals":
                 break
             time.sleep(0.05)
-        self.assertEqual(active, "Reports")
-        self.assertEqual(self.devtools.evaluate("document.querySelector('h1')?.textContent"),
-                         "Reports")
+        self.assertEqual(active, "Evals")
+        self.assertEqual(self.devtools.evaluate("location.hash"), "#/evals")
 
         self.devtools.evaluate("location.hash = '#/library'")
         library = None
@@ -361,7 +361,7 @@ class StudioBrowserTests(unittest.TestCase):
                 "filters:new Set(Array.from(document.querySelectorAll('[aria-label^=\"Filter by\"]')).map(node=>node.getAttribute('aria-label'))).size"
                 "})")
             library = json.loads(value)
-            if library["active"] == "Library" and library["modules"] > 0:
+            if library.get("active") == "Sources" and library.get("modules", 0) > 0:
                 break
             time.sleep(0.05)
         self.assertEqual(library["heading"], "Every module, from source to runtime.")

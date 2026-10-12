@@ -143,7 +143,7 @@ export function RunDetailPage() {
     setError("");
     try {
       const run = await rerun(detail.run_id);
-      if (selectedGeneration === generation.current) navigate(`/experiments/runs/${run.run_id}`);
+      if (selectedGeneration === generation.current) navigate(`/evals/runs/${run.run_id}`);
     } catch (caught) {
       if (selectedGeneration === generation.current) {
         setError(caught instanceof Error ? caught.message : "Rerun unavailable.");
@@ -154,7 +154,7 @@ export function RunDetailPage() {
 
   return <Stack gap="xl">
     <div className="page-heading"><Text className="eyebrow">Studio / Experiments / Run</Text><Title order={1}>Run detail</Title>
-      <Text component={NavLink} to="/experiments">Back to experiments</Text></div>
+      <Text component={NavLink} to="/evals">Back to Evals</Text></div>
     {error && <EvidenceState kind="error" title="Run unavailable">{error}</EvidenceState>}
     {!detail && !error && <EvidenceState kind="loading" title="Loading run">Reading indexed evidence.</EvidenceState>}
     {detail && <>
@@ -162,8 +162,8 @@ export function RunDetailPage() {
         <Group justify="space-between"><Title order={2}>{detail.suite_id}</Title><StatusBadge>{detail.status}</StatusBadge></Group>
         <Text>Target: {displayUnknown(detail.target.ref ?? detail.target.kind)} · Commit: {displayUnknown(detail.target.commit)}</Text>
         <Text>Cost: {detail.cost_usd === null ? "Unknown" : `$${detail.cost_usd.toFixed(4)}`} · Duration: {displayUnknown(detail.duration_ms, " ms")}</Text>
-        {detail.rerun_of && <Text>Rerun of <Text component={NavLink} to={`/experiments/runs/${detail.rerun_of}`}>{detail.rerun_of}</Text></Text>}
-        {detail.reruns.items.map((id) => <Text key={id}>Rerun: <Text component={NavLink} to={`/experiments/runs/${id}`}>{id}</Text></Text>)}
+        {detail.rerun_of && <Text>Rerun of <Text component={NavLink} to={`/evals/runs/${detail.rerun_of}`}>{detail.rerun_of}</Text></Text>}
+        {detail.reruns.items.map((id) => <Text key={id}>Rerun: <Text component={NavLink} to={`/evals/runs/${id}`}>{id}</Text></Text>)}
         {detail.reruns.next_cursor && <Button variant="default" onClick={() => void loadMoreLineage(detail.reruns.next_cursor as string)}>Load more reruns</Button>}
         {detail.exact_command && <ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Exact command", tabIndex: 0 }}><Code block>{detail.exact_command}</Code></ScrollArea>}
         <Button disabled={!detail.rerun.available || rerunPending} loading={rerunPending} onClick={() => void startRerun()}>Rerun</Button>
@@ -177,7 +177,7 @@ export function RunDetailPage() {
       </Table></ScrollArea></Paper>
       {caseError && <EvidenceState kind="error" title="Case history unavailable">{caseError}</EvidenceState>}
       {caseHistory && <Paper><Title order={2}>Case history: {caseHistory.case_id}</Title>
-        <Stack gap="xs">{caseHistory.items.map((item) => <Text key={item.run_id} component={NavLink} to={`/experiments/runs/${item.run_id}`}>{item.case?.outcome} · {displayUnknown(item.created_at)} {item.case?.flaky ? "· Flaky" : ""}</Text>)}</Stack>
+        <Stack gap="xs">{caseHistory.items.map((item) => <Text key={item.run_id} component={NavLink} to={`/evals/runs/${item.run_id}`}>{item.case?.outcome} · {displayUnknown(item.created_at)} {item.case?.flaky ? "· Flaky" : ""}</Text>)}</Stack>
         {caseHistory.next_cursor && <Button mt="sm" variant="default" onClick={() => void showCaseHistory(caseHistory.case_id, caseHistory.next_cursor)}>Load more</Button>}
       </Paper>}
       {detail.evaluation && <Paper><Title order={2}>Evaluation contract</Title>
