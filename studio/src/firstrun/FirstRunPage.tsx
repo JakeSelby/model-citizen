@@ -103,8 +103,8 @@ export function DoneSummary({ status, overview }: { status: FirstRunStatus; over
       </Alert>
       <HealthSummary overview={overview} />
       <Group>
-        <Button component={NavLink} to="/">Go to the Hub</Button>
-        <Button component={NavLink} to="/activity" variant="default">Open Activity</Button>
+        <Button component={NavLink} to="/home">Go to Home</Button>
+        <Button component={NavLink} to="/harness/hooks" variant="default">Open Hooks</Button>
       </Group>
     </Stack>
   );
@@ -331,7 +331,7 @@ export function FirstRunPage() {
           <Title order={1}>From this install to an applied setup.</Title>
           <Text c="dimmed" mt="xs">{liveChangeNotice(status)}</Text>
         </div>
-        <Button component={NavLink} size="compact-sm" to="/" variant="subtle">Leave setup</Button>
+        <Button component={NavLink} size="compact-sm" to="/home" variant="subtle">Leave setup</Button>
       </Group>
       <GuideProgress active={step} onSelect={go} status={status} />
       <LiveMessages error={error} message={message} />

@@ -1,24 +1,18 @@
 import {
-  Anchor,
   AppShell,
-  Badge,
   Button,
-  Paper,
-  Stack,
   Text,
-  Title,
   NativeSelect,
   useMantineColorScheme,
 } from "@mantine/core";
 import { type ChangeEvent, type MouseEvent, useEffect, useState } from "react";
-import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
-import { documentTitle, NAVIGATION, pageCommand, pageTitle } from "./navigation";
+import { documentTitle, pageCommand, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
-import { ExperimentsPage } from "./experiments/ExperimentsPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
 import { RuleHealthPage } from "./reports/rules/RuleHealthPage";
@@ -29,31 +23,10 @@ import { FirstRunPage } from "./firstrun/FirstRunPage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
-
-function FoundationPage({ title, description }: { title: string; description: string }) {
-  return (
-    <Stack gap="lg">
-      <div className="page-heading">
-        <Text className="eyebrow">Studio / {title}</Text>
-        <Title order={1}>{title}</Title>
-        <Text c="dimmed" mt="xs">{description}</Text>
-      </div>
-      <Paper className="foundation-panel">
-        <Badge color="gray" variant="light">Preview</Badge>
-        <Title mt="md" order={2}>The interface is available.</Title>
-        <Text c="dimmed" mt="xs">
-          This route is part of the committed Studio bundle. Operational evidence remains unavailable
-          until its versioned core endpoint is implemented.
-        </Text>
-      </Paper>
-    </Stack>
-  );
-}
-
-const pages = {
-  configure: "Inspect the effective selection and make changes inside a named draft.",
-  reports: "Trace health, performance, efficacy, and usage back to immutable evidence.",
-} as const;
+import { EvalsPage } from "./shell/EvalsPage";
+import { LegacyRedirect } from "./shell/LegacyRedirect";
+import { StudioNav } from "./shell/StudioNav";
+import { RebuildingPage } from "./shell/RebuildingPage";
 
 function StudioFrame() {
   const location = useLocation();
@@ -99,24 +72,7 @@ function StudioFrame() {
     >
       <a className="skip-link" href="#main-content" onClick={skipNavigation}>Skip navigation</a>
       <AppShell.Navbar aria-label="Studio" className="studio-navbar">
-        <Anchor className="brand" component={NavLink} to="/" underline="never">
-          Model Citizen <small>Studio</small>
-        </Anchor>
-        <div className="primary-navigation">
-          {NAVIGATION.map((item) => (
-            <Anchor
-              aria-label={item.label}
-              className="nav-link"
-              component={NavLink}
-              end={item.path === "/"}
-              key={item.path}
-              to={item.path}
-              underline="never"
-            >
-              {item.label}
-            </Anchor>
-          ))}
-        </div>
+        <StudioNav />
       </AppShell.Navbar>
       <AppShell.Header className="studio-header">
         <div className="header-title">
@@ -131,31 +87,31 @@ function StudioFrame() {
           <code className="page-command">{command}</code>
           <LiveUpdateControls />
           <NativeSelect aria-label="Color theme" className="theme-picker" size="xs" disabled={!themeReady} value={colorScheme} onChange={changeTheme} data={[{ value: "auto", label: "System theme" }, { value: "light", label: "Light theme" }, { value: "dark", label: "Dark theme" }]} />
-          <Button component={NavLink} size="compact-sm" to="/configure#drafts" variant="default">Drafts</Button>
+          <Button component={NavLink} size="compact-sm" to="/changes#drafts" variant="default">Drafts</Button>
         </div>
       </AppShell.Header>
       <AppShell.Main className="main-shell">
         <div className="main-content" id="main-content" tabIndex={-1}>
           <Text className="visually-hidden" component="span">Current page: {title}</Text>
           <Routes>
-            <Route path="/" element={<><FirstRunEntry /><OverviewPage /></>} />
-            <Route path="/setup" element={<FirstRunPage />} />
-            <Route path="/configure" element={<ConfigurePage />} />
-            <Route path="/library" element={<LibraryPage />} />
-            <Route path="/experiments" element={<ExperimentsPage />} />
-            <Route path="/experiments/runs/:runId" element={<RunDetailPage />} />
-            <Route path="/activity" element={<ActivityPage />} />
-            <Route path="/reports/rules" element={<RuleHealthPage />} />
-            <Route path="/reports/usage" element={<SpendPage />} />
-            <Route path="/reports/trends" element={<TrendsPage />} />
-            {Object.entries(pages).filter(([path]) => path !== "configure").map(([path, description]) => (
-              <Route
-                element={<FoundationPage description={description} title={pageTitle(`/${path}`)} />}
-                key={path}
-                path={`/${path}`}
-              />
-            ))}
-            <Route path="*" element={<Navigate replace to="/" />} />
+            <Route path="/home" element={<><FirstRunEntry /><OverviewPage /></>} />
+            <Route path="/sessions" element={<SpendPage />} />
+            <Route path="/harness/rules" element={<RuleHealthPage />} />
+            {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}
+            <Route path="/harness/stances" element={<RebuildingPage key="stances" page="stances" />} />
+            <Route path="/harness/skills" element={<RebuildingPage key="skills" page="skills" />} />
+            <Route path="/harness/hooks" element={<ActivityPage />} />
+            <Route path="/harness/roles" element={<RebuildingPage key="roles" page="roles" />} />
+            <Route path="/harness/workflows" element={<RebuildingPage key="workflows" page="workflows" />} />
+            <Route path="/harness/sources" element={<LibraryPage />} />
+            <Route path="/routines" element={<RebuildingPage key="routines" page="routines" />} />
+            <Route path="/changes" element={<ConfigurePage />} />
+            <Route path="/evals" element={<EvalsPage />} />
+            <Route path="/evals/runs/:runId" element={<RunDetailPage />} />
+            <Route path="/evals/trends" element={<TrendsPage />} />
+            <Route path="/baseline" element={<FirstRunPage />} />
+            {/* Every old route and any unknown one: see LEGACY_REDIRECTS in navigation.ts. */}
+            <Route path="*" element={<LegacyRedirect />} />
           </Routes>
         </div>
       </AppShell.Main>

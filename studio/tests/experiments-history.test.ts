@@ -10,8 +10,8 @@ test("unknown values stay unknown instead of becoming zero", () => {
   assert.equal(displayUnknown(0, " ms"), "0 ms");
 });
 
-test("run detail stays inside the Experiments navigation context", () => {
-  assert.equal(pageTitle("/experiments/runs/run-id"), "Experiments");
+test("run detail stays inside the Evals navigation context", () => {
+  assert.equal(pageTitle("/evals/runs/run-id"), "Evals");
 });
 
 test("history, detail, case history, evidence and rerun use fixed CSRF routes", async () => {

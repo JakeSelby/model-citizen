@@ -204,7 +204,7 @@ export function LibraryPage() {
         </div>
         <Group gap="sm">
           {payload ? <Text c="dimmed" size="sm">{payload.summary.modules} modules · {payload.summary.roots} roots</Text> : null}
-          <Anchor component={NavLink} size="sm" to="/reports/rules">Rule health</Anchor>
+          <Anchor component={NavLink} size="sm" to="/harness/rules">Rule health</Anchor>
         </Group>
       </Group>
 

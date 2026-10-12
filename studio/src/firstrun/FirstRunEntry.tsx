@@ -11,13 +11,13 @@ export function FirstRunBanner({ status }: { status: FirstRunStatus }) {
   return (
     <Alert className="first-run-banner" color={status.state === "interrupted" ? "yellow" : "blue"} title={copy.title}>
       {copy.body}{" "}
-      <Button component={NavLink} mt="sm" size="compact-md" to="/setup">{copy.action}</Button>
+      <Button component={NavLink} mt="sm" size="compact-md" to="/baseline">{copy.action}</Button>
     </Alert>
   );
 }
 
 export function FirstRunEntryView({ status, opened }: { status: FirstRunStatus; opened: boolean }) {
-  return opened ? <Navigate replace to="/setup" /> : <FirstRunBanner status={status} />;
+  return opened ? <Navigate replace to="/baseline" /> : <FirstRunBanner status={status} />;
 }
 
 /** The Hub's way into setup: a fresh install opens the guide, any unfinished run offers it. */

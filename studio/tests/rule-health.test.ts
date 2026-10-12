@@ -90,7 +90,7 @@ test("a tried draft shows its CLI steps and its draft test, ready to run", () =>
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {}, h(TriedDraft, { result }))));
   assert.ok(html.includes("Nothing live changed."));
   for (const command of result.commands) assert.ok(html.includes(command));
-  assert.ok(html.includes("Open drafts in Configure"));
+  assert.ok(html.includes("Open drafts in Changes"));
   assert.ok(html.includes("Choose tasks, trials and the change worth detecting."), "the draft test renders, ready to run");
 });
 

@@ -113,7 +113,7 @@ export function RunHistoryPanel() {
       {page && <ScrollArea type="auto" viewportProps={{ role: "region", "aria-label": "Run history", tabIndex: 0 }}><Table className="data-table" highlightOnHover>
         <Table.Thead><Table.Tr><Table.Th>Run</Table.Th><Table.Th>Status</Table.Th><Table.Th>Target</Table.Th><Table.Th>Cost</Table.Th><Table.Th>Duration</Table.Th><Table.Th>Date</Table.Th></Table.Tr></Table.Thead>
         <Table.Tbody>{page.items.map((run) => <Table.Tr key={run.run_id}>
-          <Table.Td><Text component={NavLink} to={`/experiments/runs/${run.run_id}`} fw={600}>{run.suite_id}</Text>
+          <Table.Td><Text component={NavLink} to={`/evals/runs/${run.run_id}`} fw={600}>{run.suite_id}</Text>
             {run.flaky_count > 0 && <Badge color="orange" ml="xs">{run.flaky_count} flaky</Badge>}</Table.Td>
           <Table.Td><StatusBadge>{run.status}</StatusBadge></Table.Td>
           <Table.Td>{displayUnknown(run.target.ref ?? run.target.kind)}</Table.Td>

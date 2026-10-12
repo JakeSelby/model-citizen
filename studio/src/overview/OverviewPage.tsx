@@ -19,11 +19,11 @@ import { releaseSummary, systemSummary, type DoctorCheck, type Overview } from "
 import "./overview.css";
 
 export const reportCards = [
-  { label: "System health", measure: "Doctor evidence", detail: "Every check keeps the CLI message and repair command.", href: "/reports#system-health" },
-  { label: "Hook performance", measure: "No timing window", detail: "Invocation counts and latency stay linked to their source window.", href: "/reports#hook-performance" },
-  { label: "Efficacy", measure: "No comparison yet", detail: "Run a paired experiment before judging a draft.", href: "/reports#efficacy" },
-  { label: "Usage", measure: "No local total", detail: "Estimated and unpriced usage are reported separately.", href: "/reports/usage" },
-  { label: "Trends", measure: "By version and date", detail: "Each measure beside the project's proof set, labelled exploratory or pre-registered.", href: "/reports/trends" },
+  { label: "System health", measure: "Doctor evidence", detail: "Every check keeps the CLI message and repair command.", href: "/evals" },
+  { label: "Hook performance", measure: "No timing window", detail: "Invocation counts and latency stay linked to their source window.", href: "/harness/hooks" },
+  { label: "Efficacy", measure: "No comparison yet", detail: "Run a paired experiment before judging a draft.", href: "/evals" },
+  { label: "Usage", measure: "No local total", detail: "Estimated and unpriced usage are reported separately.", href: "/sessions" },
+  { label: "Trends", measure: "By version and date", detail: "Each measure beside the project's proof set, labelled exploratory or pre-registered.", href: "/evals/trends" },
 ] as const;
 
 function ReportRow({ label, measure, detail, href }: (typeof reportCards)[number]) {
@@ -118,13 +118,13 @@ export function DeterministicOverview({ overview, children }: { overview: Overvi
         <List className="drift-list" size="sm">{overview.drift.items.map((item) => <List.Item key={item}>{item}</List.Item>)}</List>
         <Stack align="flex-start" gap="sm">
           <CommandChip command={overview.drift.command} label="Governed repair" />
-          <Button component={NavLink} size="compact-sm" to="/configure#governed-sync" variant="light">Review sync before applying</Button>
+          <Button component={NavLink} size="compact-sm" to="/changes#governed-sync" variant="light">Review sync before applying</Button>
         </Stack>
       </div>}
     </section>
 
     <section aria-labelledby="recent-runs-title" className="hub-section">
-      <Group justify="space-between"><Title id="recent-runs-title" order={2}>Recent runs</Title><Anchor component={NavLink} size="sm" to="/experiments">All experiments</Anchor></Group>
+      <Group justify="space-between"><Title id="recent-runs-title" order={2}>Recent runs</Title><Anchor component={NavLink} size="sm" to="/evals">All evals</Anchor></Group>
       {overview.runs.status === "failed" && <EvidenceState kind="error" title="Runs unavailable">{overview.runs.message}</EvidenceState>}
       {overview.runs.status === "current" && !overview.runs.items.length && <EvidenceState kind="empty" title="No runs yet">Completed and active experiments will appear here.</EvidenceState>}
       {!!overview.runs.items.length && <ul className="run-list">{overview.runs.items.map((run) => <li key={run.run_id}>
@@ -145,7 +145,7 @@ export function OverviewPage() {
   return <Stack gap={0}>
     <Group align="flex-end" className="page-heading" justify="space-between">
       <div><Text className="eyebrow">Studio / Hub</Text><Title order={1}>Your harness at a glance.</Title><Text c="dimmed" size="sm">Installed state, local evidence, and the next useful action.</Text></div>
-      <Button component={NavLink} size="compact-sm" to="/experiments" variant="subtle">Open experiments</Button>
+      <Button component={NavLink} size="compact-sm" to="/evals" variant="subtle">Open Evals</Button>
     </Group>
 
     {overview.isPending && <section className="hub-section"><EvidenceState kind="loading" title="Loading operational evidence">Reading the same local sources as citizen doctor, diff, and catalog.</EvidenceState></section>}
@@ -160,7 +160,7 @@ function OverviewInsights() {
       <Group gap="sm"><Title id="ai-overview-title" order={2}>AI health overview</Title><StatusBadge>Off</StatusBadge></Group>
       <Text className="overview-lead">Enable a read-only assessment when you want one.</Text>
       <Text c="dimmed" size="sm">Studio makes no model calls until you opt in. Provider, model, evidence scope, refresh policy, and daily cap stay visible.</Text>
-      <Group gap="md" mt="sm"><Button component={NavLink} size="compact-sm" to="/configure#ai-overview" variant="light">Review AI settings</Button><Anchor component={NavLink} size="sm" to="/reports">Browse deterministic reports</Anchor></Group>
+      <Group gap="md" mt="sm"><Button component={NavLink} size="compact-sm" to="/changes#ai-overview" variant="light">Review AI settings</Button><Anchor component={NavLink} size="sm" to="/evals">Browse deterministic reports</Anchor></Group>
     </Box>
     <ReportCards />
   </div>;

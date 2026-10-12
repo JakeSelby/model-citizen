@@ -89,7 +89,7 @@ export function TriedDraft({ result }: { result: TryWithoutResult }) {
         ? <Text>{result.message} Test it against its base below, then decide in Configure whether to apply it.</Text>
         : <EvidenceState kind="refused" title={`Draft ${result.draft.name} was created, but the rule is still on in it`}>{result.message}</EvidenceState>}
       {result.commands.map((command, index) => <CommandChip command={command} key={command} label={`CLI step ${index + 1}`} />)}
-      <Anchor component={NavLink} to="/configure#drafts">Open drafts in Configure</Anchor>
+      <Anchor component={NavLink} to="/changes#drafts">Open drafts in Changes</Anchor>
       {switched && <DraftTest draft={result.draft.name} revision={result.draft.revision} />}
     </Stack>
   </Paper>;
