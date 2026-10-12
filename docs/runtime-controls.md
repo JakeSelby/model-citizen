@@ -218,7 +218,7 @@ answer and the fields below are what each point adds, and what its evaluation re
   emits in `adherence.jsonl`, and `usage-log` writes the usage ledger.
 
 The dispatcher also records each prompt and session end, identifiers only, in
-`session-events.jsonl`, which answers whether a fresh-session recommendation was followed when
+`session-events.jsonl`, which answers whether a usage-feed recommendation was followed when
 the observation entry point is not registered ([usage.md](usage.md#adherence-events)).
 
 ## Decision providers

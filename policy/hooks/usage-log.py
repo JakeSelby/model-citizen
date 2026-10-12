@@ -1119,7 +1119,12 @@ def scan(transcript, session_id="", cwd="", prior=None, rescan=False, agents=Non
             mid = message.get("id") if isinstance(message, dict) else None
             if kind == "system":
                 if entry.get("subtype") == "compact_boundary" and not sidechain:
-                    events.append({"kind": "compact", "turn": turn})
+                    # The trigger and size let the compaction detector leave out the reset
+                    # sync projected (`rule-detectors.at_reset_point`).
+                    meta = entry.get("compactMetadata")
+                    meta = meta if isinstance(meta, dict) else {}
+                    events.append({"kind": "compact", "turn": turn, "trigger": meta.get("trigger"),
+                                   "pre_tokens": meta.get("preTokens")})
                 continue
             if kind == "user":
                 blocks = content if isinstance(content, list) else []

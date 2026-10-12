@@ -23,6 +23,7 @@ command text (plan decision 3).
 """
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -491,6 +492,78 @@ def compaction_required(stances):
     return table["switches"].get("compaction") != "compact-allowed"
 
 
+# What `citizen sync` adds to the reset point to make Claude Code's auto-compaction window
+# (`AUTO_COMPACT_RESERVE` in `bin/harness`; a test keeps the two equal), the pair it writes,
+# and how far from the projected point an automatic compaction may fire and still be the reset.
+AUTO_COMPACT_RESERVE = 20000
+CONTEXT_RESET_ENV = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+RESET_TOLERANCE = 0.15
+
+
+def projected_reset_point(env=None):
+    """The context size Claude Code was set to compact at by `citizen sync`, or None.
+
+    It is read from what sync did, never from the selected stance: both variables must be in the
+    sync ownership journal as written, and still hold those values in the Claude Code settings,
+    with no `autoCompactWindow` there to override them. So a session's `HARNESS_STANCE_COST` and a
+    window the user owns change nothing here. Anything unreadable is None.
+    """
+    env = os.environ if env is None else env
+    home = Path(env.get("HARNESS_HOME") or env.get("HOME") or Path.home())
+    settings = Path(env.get("CLAUDE_CONFIG_DIR") or str(home / ".claude")) / "settings.json"
+    journal = home / ".local" / "state" / "agent-harness" / "ownership.json"
+    try:
+        live = json.loads(settings.read_text(encoding="utf-8"))
+        held = json.loads(journal.read_text(encoding="utf-8"))["files"][str(settings)]["keys"]
+        if "autoCompactWindow" in live:
+            return None
+        values = []
+        for name in CONTEXT_RESET_ENV:
+            applied = held[json.dumps(["env", name])]["applied"]
+            if not applied.get("present") or live["env"][name] != applied.get("value"):
+                return None
+            values.append(int(applied["value"]))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    window, percent = values
+    reset = (window - AUTO_COMPACT_RESERVE) * percent // 100
+    return reset if reset > 0 else None
+
+
+def at_reset_point(event, reset_point):
+    """Whether a compaction event is the projected reset: Claude Code's own (`trigger: auto`),
+    with a recorded `pre_tokens` within `RESET_TOLERANCE` of `reset_point`."""
+    size = event.get("pre_tokens")
+    if (reset_point is None or event.get("trigger") != "auto" or not isinstance(size, int)
+            or isinstance(size, bool)):
+        return False
+    return abs(size - reset_point) <= RESET_TOLERANCE * reset_point
+
+
+def compactions_besides_reset(reset_point):
+    """The engine's compaction count less the projected reset: that one is the cost stance
+    working. A manual `/compact`, one far from the point, and one recording no trigger or size
+    still count."""
+    def fn(events, ctx):
+        return [hit(e, tool_use_id=False) for e in events
+                if e.get("kind") == "compact" and not at_reset_point(e, reset_point)]
+    return fn
+
+
+def with_reset_point(registry, reset_point):
+    """A copy of `registry` whose compaction detector leaves out the projected reset; the same
+    registry when there is no point. The live ledger (`run`) and replay
+    (`scripts/replay_detect.py`) both go through here, so their verdicts agree."""
+    compact = registry.get("cache-hygiene/compact")
+    if compact is None or reset_point is None:
+        return registry
+    copy = Registry(list(registry))
+    copy.add(Detector(compact.id, compact.rule, compact.event,
+                      compactions_besides_reset(reset_point), compact.gate,
+                      examples=compact.examples))
+    return copy
+
+
 _GATES = {"cache-hygiene/compact": compaction_required}
 
 # The six the engine ships, re-registered under this file's `Detector` so every entry in the
@@ -577,6 +650,7 @@ def run(events, stances=None, strict=False, errors=None, extra=()):
         if enabled:
             registry.add(Detector(compact.id, compact.rule, compact.event, compact.fn,
                                   examples=compact.examples))
+            registry = with_reset_point(registry, projected_reset_point())
         else:
             registry.remove(compact.id)
     return _run(events, stances, registry=registry, strict=strict, errors=errors)

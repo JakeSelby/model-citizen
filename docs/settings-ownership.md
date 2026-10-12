@@ -42,9 +42,17 @@ changing the template.
   a separate entry: a command put inside one of the harness's entries makes that entry an edit,
   which sync reports and uninstall preserves. Policies decide whether the selected stance
   activates a check.
+- **Context reset pair**: `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW` and
+  `env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, written only while the selected cost variant names a
+  `context_reset_at`: the reset point plus 20,000, and `100`, so Claude Code compacts by itself at
+  about that point. They are owned per variable and written as a pair or not at all. While your
+  settings carry `autoCompactWindow`, or either variable holds a value the harness did not write,
+  sync leaves your value alone and prints one warning; a variant naming no reset point takes back
+  out only what the journal holds. What the reset does: `docs/usage.md`.
 - **Never touched**: `model`, `theme`, `viewMode`, `effortLevel`, `alwaysThinkingEnabled`,
-  `skipDangerousModePermissionPrompt`, `env`, `permissions.deny`, `permissions.ask`, and any
-  key not named here.
+  `skipDangerousModePermissionPrompt`, `env` other than the owned variables (the context reset
+  pair above, and the telemetry and workspace variables `claude/OWNERSHIP.json` lists),
+  `permissions.deny`, `permissions.ask`, and any key not named here.
 
 ## VS Code (user `settings.json`)
 

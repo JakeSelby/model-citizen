@@ -3,6 +3,7 @@
   "extends": "balanced",
   "switches": {
     "turn_feed": "off",
+    "compaction": "clear-at-task-end",
     "context_reset_at": null
   }
 }
