@@ -153,3 +153,16 @@ it touches. Never edit an entry.
   v1.0.0 --pack-digest 6399bd95f99e76c61e448f1c5f99303a1dc4f3a7fea36f3857c5927daf2199b0 --tag
   59520dd339b340a0864d6cef6ae657c49c9b5b2e --reps 5 --run-cap 0.25 --spend-cap 7.80 --raw
   "$MICRO_RAW" --pre-registration benchmarks/preregistrations/2026-10-01-micro-mechanisms.md`
+- 2026-10-05: `--raw` keeps each run's stream-json output, which reports a Stop hook's start and
+  response but never the input the hook received, so the Exploratory item's assumption that the
+  kept streams would yield #1100's native Stop payload was wrong; #1100 recorded it instead from a
+  separate one-turn bare-arm run with a capturing Stop hook.
+- 2026-10-07: `micro-stop-gate`'s pass rate in pack 1.0.0 is not interpretable as task success
+  (#1170). Its prompt forbade editing `tests/test_loader.py` and its check required that file
+  unchanged, yet the rename leaves that test red, so the only edit the stop gate accepts failed
+  the check. The harness arm's 0/5 passes on that task followed from the gate firing, the
+  Primary hypothesis, which this entry does not change; the bare arm's 5/5 passes left the
+  tests red. No figure is recomputed. Evaluator pack 1.2.0 lets the agent update that test and
+  requires the visible tests to pass, and this repository's own manifest of the task does the
+  same. Any re-run of this campaign is registered anew or amended here first, naming the pack
+  version and digest it reads.

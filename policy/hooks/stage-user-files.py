@@ -20,9 +20,14 @@ A file already inside, a missing path and a directory are left alone; the tool r
 error for a path it cannot send. A file past the call's byte or time budget, or one that cannot be
 copied, is left alone with a notice. This hook never denies: on any failure the call runs unchanged.
 
+Each call that stages or keeps a file is one `stage-user-files` row in the decision log:
+`staged`, `kept` or `staged+kept`, with the counts and the bytes copied, and the file names
+(never their paths) as its input.
+
 Test: echo '{"tool_name":"SendUserFile","cwd":"'"$PWD"'","tool_input":{"files":["/etc/hosts"]}}' | python3 stage-user-files.py
 """
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -40,6 +45,19 @@ MAX_BYTES = 64 * 1024 * 1024
 DEADLINE_SECONDS = 4
 KEEP_DAYS = 14
 DIGEST = re.compile(r"[0-9a-f]{16}")
+
+
+def log_decision(answer, text, payload, fields=None):
+    """One `stage-user-files` row in the decision log (`decisions.py`). Never raises."""
+    try:
+        location = Path(os.path.realpath(__file__)).parent / "decisions.py"
+        spec = importlib.util.spec_from_file_location("harness_stage_user_files_decisions", str(location))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        module.record("stage-user-files", answer, text, payload if isinstance(payload, dict) else {},
+                      fields=fields)
+    except Exception:
+        pass
 
 
 def real(path):
@@ -61,6 +79,7 @@ def outbox(root):
 
 
 def stage(source, info, box):
+    """Copy `source` into `box`, or reuse its earlier copy. Returns `(target, bytes copied)`."""
     key = "%s\0%d\0%d\0%d" % (source, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
     folder = box / hashlib.sha256(key.encode("utf-8", "surrogateescape")).hexdigest()[:16]
     target = folder / source.name
@@ -68,7 +87,7 @@ def stage(source, info, box):
         raise OSError("outbox entry is a link: " + folder.name)
     if target.is_file() and target.stat().st_size == info.st_size:
         os.utime(str(folder))
-        return target
+        return target, 0
     folder.mkdir(exist_ok=True)
     handle, partial = tempfile.mkstemp(dir=str(folder), prefix=".", suffix=".part")
     os.close(handle)
@@ -81,7 +100,7 @@ def stage(source, info, box):
         except OSError:
             pass
         raise
-    return target
+    return target, info.st_size
 
 
 def prune(box, now):
@@ -108,7 +127,7 @@ def decide(payload):
         return None
     root, inside = Path(cwd), real(cwd)
     deadline, budget = time.monotonic() + DEADLINE_SECONDS, MAX_BYTES
-    box, sent, staged, kept = None, [], 0, []
+    box, sent, staged, kept, copied = None, [], 0, [], 0
     for entry in files:
         sent.append(entry)
         if not isinstance(entry, str) or not entry.strip():
@@ -126,8 +145,10 @@ def decide(payload):
             if box is None:
                 kept.append(source.name)
                 continue
-            sent[-1] = str(stage(source, info, box))
+            target, wrote = stage(source, info, box)
+            sent[-1] = str(target)
             budget -= info.st_size
+            copied += wrote
             staged += 1
         except (OSError, ValueError):
             kept.append(os.path.basename(entry.rstrip("/")) or entry)
@@ -145,6 +166,10 @@ def decide(payload):
                      % ", ".join(kept))
     if not notes:
         return None
+    answer = "+".join(name for name, count in (("staged", staged), ("kept", len(kept))) if count)
+    log_decision(answer, ", ".join(os.path.basename(str(s)) for s in sent if isinstance(s, str)),
+                 payload, {"staged": staged, "kept": len(kept), "files": len(files),
+                           "bytes_staged": copied})
     result = {"systemMessage": "stage-user-files: " + "; ".join(notes) + "."}
     if staged:
         result["hookSpecificOutput"] = {"hookEventName": "PreToolUse",

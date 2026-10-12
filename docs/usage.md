@@ -559,11 +559,12 @@ says: a ledger it cannot write is skipped in silence.
 The hand-off block is recorded the same way, as `fresh-session-handoff`, so how often a blocked
 session actually ends is a rate of its own.
 
-The response is read from the observation ledger (`observation.jsonl`). A session that ends
-within three prompts of the line followed it, or within two of the block; one that carries on
-past them did not. Until the
-observation entry point is registered in live sessions, that ledger holds no rows, so every
-emission is answered `unknown` with reason `unobserved` once it is a day old. Each session start
+The response is read from the session's prompts and its end. A session that ends within three
+prompts of the line followed it, or within two of the block; one that carries on past them did
+not. Those events come from the observation ledger (`observation.jsonl`) for a session it holds,
+and otherwise from `session-events.jsonl`, where the dispatcher records each prompt and session
+end, identifiers only, whether or not the observation entry point is registered. An emission
+neither can answer is `unknown` once it is a day old, with reason `unobserved`. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
 
 `bin/citizen usage --by adherence` reports two figures per recommendation kind, in two sections
@@ -767,6 +768,8 @@ which is never refused unless `HARNESS_SESSION_CAPS_HEADLESS=enforce` is set. `c
 (`fan-out`, the cost variant's `max_parallel`, or `web-search`, the research rule's per-session
 figure), with `limit` and the `count` before the call. Live subagents are counted from
 `SubagentStart` to `SubagentStop`, and searches by every agent in the session, subagents included.
+A subagent whose stop another hook blocked stays live once its transcript shows the turn that
+followed, until its next stop; while the blocking hook itself runs, it counts as stopped.
 A `Workflow` launch is refused at the fan-out cap, but its script's `agent()` calls are not tool
 calls, so none can be refused once the launch is through, and they count toward the cap only if
 the runtime raises `SubagentStart` for them, which has not been measured. Claude Code only.
@@ -910,7 +913,10 @@ guessed. Override or extend it under `prices` in `config.json` — see
   prefix, drops a context-window suffix and drops a release suffix — a date stamp, a reseller's
   `-v1:0`, an `@date`. So `claude-haiku-4-5`, `anthropic.claude-haiku-4-5-20251001-v1:0` and
   `claude-opus-5[1m]` all reach one family entry. Long context is not a separate rate: Anthropic
-  prices the full 1M-token window at the standard rate for Claude 4.6 and later. Nothing
+  prices the full 1M-token window at the standard rate for Claude 4.6 and later, except Claude
+  Haiku 5.5, whose requests over 100,000 prompt tokens pay a higher rate. Its entry carries that
+  tier as a `long_context` block, and the usage hook records each model's largest prompt, so a
+  Haiku 5.5 figure is priced only when every request in it stayed under the threshold. Nothing
   resolves by prefix: a variant the table does not name is unpriced, not billed at its family's
   rate — `gpt-5.5-pro` is $30/$180 where `gpt-5.5` is $5/$30. To price one, add it to
   [`policy/prices.json`](../policy/prices.json) or override it under `prices` in `config.json`.

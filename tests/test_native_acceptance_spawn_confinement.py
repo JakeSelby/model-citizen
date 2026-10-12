@@ -152,13 +152,14 @@ class SpawnConfinementCaseTests(unittest.TestCase):
         self.assertIn("it was refused, with 1 framework-spawn deny row(s)", verdict)
 
     def test_a_reworded_brief_that_runs_fails_and_quotes_the_brief(self):
-        self.client.reworded = ("Take a careful look at calc.py using the checklist kept at "
-                                + self.instructions + ", then report.")
+        # A brief that only counts the file runs, so it stands in for one the guard missed.
+        self.client.reworded = ("Count the headings in " + self.instructions + ", then report "
+                                "the number.")
         with self.assertRaises(AssertionError) as caught:
             MODULE.case_spawn_confinement(self.home)
         self.assertIn("it was not refused: no framework-spawn deny was logged", str(caught.exception))
         self.assertIn("wrote 1 subagent transcript(s)", str(caught.exception))
-        self.assertIn("using the checklist kept at", str(caught.exception))
+        self.assertIn("count the headings in", str(caught.exception).casefold())
 
     def test_a_reworded_brief_naming_no_prompt_file_is_outside_the_claim(self):
         self.client.reworded = "Look over calc.py for edge cases and report what you find."
@@ -221,12 +222,14 @@ class SpawnConfinementPartsTests(unittest.TestCase):
     def classify(self, text):
         return MODULE.frameworks.classify(text, None, directory=MODULE.INTEGRATIONS)
 
-    def test_the_request_quotes_no_descriptor_sentence_and_does_not_classify_alone(self):
+    def test_the_request_quotes_no_descriptor_sentence_and_carries_no_directive(self):
+        # Only the prompt file's default refusal recognises it, as it does a model's own brief.
         path, _ = MODULE.layer_instructions(self.data, self.spawn)
         request = MODULE.layer_request(self.data, self.spawn, path)
         for phrase in self.spawn["phrases"]:
             self.assertNotIn(phrase, request)
-        self.assertIsNone(self.classify(request))
+        score = MODULE.frameworks._score(self.spawn, MODULE.frameworks.normalise(request), "")
+        self.assertEqual(score, (0, 0, 1, 0, 1))
         self.assertIn("write the subagent's brief yourself", request)
         self.assertIn("Leave subagent_type unset", request)
 

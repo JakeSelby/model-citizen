@@ -8,13 +8,17 @@ output narrowly, the whole run is already in context and every later turn pays f
 it. Trimming it is a computational job.
 
 Behaviour:
-  - Rewrites a command that runs one of MATCHES, after leading environment
-    assignments and `cd ... &&` prefixes are stripped.
+  - Rewrites a command that runs one of MATCHES or the recorded gate run,
+    after leading environment assignments and `cd ... &&` prefixes are
+    stripped.
   - Leaves the command alone when it is already filtered, already pipes to a
     pager, redirects to a file, or watches.
   - Emits `updatedInput` only. It never returns a permission decision, so the
     normal permission flow and any other PreToolUse hook on Bash are untouched.
   - `set -o pipefail` keeps the original exit status; the filter always exits 0.
+  - Passes the session id and the matched runner to the filter, which logs one
+    `filter-output` decision row per filtered run with its bytes and lines in and
+    out (`filter-lines.py`), so the saving is measurable from the log.
 
 Test: echo '{"tool_name":"Bash","tool_input":{"command":"pytest -q"}}' | python3 filter-output.py
 """
@@ -30,10 +34,11 @@ MATCHES = [
     "cargo clippy", "cargo build", "npm test", "npm run test", "pnpm test",
     "yarn test", "go test", "npx tsc", "tsc", "npx vitest run", "npx jest",
 ]
+# Each runner name paired with its pattern; the name is what the log records.
 MATCH_PATTERNS = [
-    re.compile(r"(?<![\w./-])" + r"\s+".join(re.escape(w) for w in m.split()) + r"(?![\w./-])")
+    (m, re.compile(r"(?<![\w./-])" + r"\s+".join(re.escape(w) for w in m.split()) + r"(?![\w./-])"))
     for m in MATCHES
-]
+] + [("harness gate", re.compile(r"(?:^|[\s/])(?:harness|citizen)\s+gate(?![\w-])"))]
 ENV_PREFIX = re.compile(r"""^\s*[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^\s;&|]*)\s+""")
 CD_PREFIX = re.compile(r"""^\s*cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*&&\s*""")
 PAGED = re.compile(r"\|\s*(?:head|tail|grep|less|wc)\b")
@@ -57,13 +62,23 @@ def should_filter(cmd):
         return False
     if PAGED.search(cmd) or WATCH.search(cmd) or REDIRECT_TO_FILE.search(cmd):
         return False
+    return runner(cmd) is not None
+
+
+def runner(cmd):
+    """The longest runner name in MATCH_PATTERNS the command runs, after its prefixes are stripped, or None."""
     stripped = strip_prefixes(cmd)
-    return any(p.search(stripped) for p in MATCH_PATTERNS)
+    found = [m for m, p in MATCH_PATTERNS if p.search(stripped)]
+    return max(found, key=len) if found else None
 
 
-def rewrite(cmd):
+def rewrite(cmd, session=None):
     filt = Path(__file__).resolve().parent / "filter-lines.py"
-    return "set -o pipefail; ( %s ) 2>&1 | python3 %s" % (cmd, shlex.quote(str(filt)))
+    tail = ""
+    if isinstance(session, str) and session:
+        tail = " --session %s --runner %s" % (shlex.quote(session),
+                                              shlex.quote(runner(cmd) or "unknown"))
+    return "set -o pipefail; ( %s ) 2>&1 | python3 %s%s" % (cmd, shlex.quote(str(filt)), tail)
 
 
 def main():
@@ -76,7 +91,7 @@ def main():
         if not isinstance(cmd, str) or not should_filter(cmd):
             return
         updated = dict(tool_input)
-        updated["command"] = rewrite(cmd)
+        updated["command"] = rewrite(cmd, payload.get("session_id"))
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

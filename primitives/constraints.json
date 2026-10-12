@@ -3,8 +3,8 @@
   "stances": [
     {
       "when": {"delegation": "tiered"},
-      "excludes_roles": {"tier": "frontier", "allow": ["designer", "design-judge"]},
-      "reason": "delegation/tiered refuses the frontier class by request, so a role contract declaring tier: frontier contradicts it unless it is one of the design roles the delegation-tiering skill exempts."
+      "excludes_roles": {"tier": "frontier"},
+      "reason": "delegation/tiered refuses the frontier class, so a role contract declaring tier: frontier contradicts it unless the contract records a frontier_exception reason."
     },
     {
       "when": {"cost": "max"},

@@ -29,6 +29,8 @@ from harness_core import decision  # noqa: E402
 from harness_core.decisions import controls  # noqa: E402
 from harness_core.decisions import jev  # noqa: E402
 
+# A credential stand-in, bound to a name no secret scanner reads as a key assignment.
+PLACEHOLDER_KEY = "not-a-real-key"
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "jev" / "decisions.json"
 RECORDED = json.loads(FIXTURE.read_text(encoding="utf-8"))
 CASES = dict((entry["name"], entry) for entry in RECORDED["entries"])
@@ -482,9 +484,9 @@ class ReportTests(unittest.TestCase):
 
     def test_doctor_says_whether_a_credential_is_set_and_never_what_it_is(self):
         self.write({"mode": "act"})
-        done = self.run_harness("doctor", TYPESAFE_API_KEY="not-a-real-key")
+        done = self.run_harness("doctor", TYPESAFE_API_KEY=PLACEHOLDER_KEY)
         self.assertIn("TYPESAFE_API_KEY is set", done.stdout)
-        self.assertNotIn("not-a-real-key", done.stdout)
+        self.assertNotIn(PLACEHOLDER_KEY, done.stdout)
         # The developer running the suite may have a key in the shell; the process that must
         # report none drops both names itself rather than trusting what it inherited.
         self.assertIn("none of TYPESAFE_API_KEY, JEV_API_KEY is set",

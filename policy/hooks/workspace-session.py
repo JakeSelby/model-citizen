@@ -16,7 +16,9 @@ It has its own SessionStart entry, and so its own 10,000-character output cap. A
 `INLINE_LIMIT` characters goes inline; a longer one is written to a bundle file named for the
 workspace and its content under the harness state folder, and only the member list and that path
 are inlined. Silent while `workspaces_dir` is unset or the folder is in no workspace; any failure
-returns nothing, so a session is never blocked. Test:
+returns nothing, so a session is never blocked. Every start is one `workspace-session` row in
+the decision log, its answer how the block went out (`silent`, `ambiguous`, `inline`, `bundle`
+or `list`), with the workspace, the rule that chose it, the members by status and the size. Test:
 
     echo '{"hook_event_name":"SessionStart","cwd":"'"$PWD"'"}' | python3 workspace-session.py
 """
@@ -40,6 +42,8 @@ BUNDLE_DAYS = 7
 BUDGET_SECONDS = 4.0
 
 _started = time.monotonic()
+# What `context` decided, for the decision row `main` writes.
+_FACTS = {}
 
 
 def _load(name, path):
@@ -212,7 +216,9 @@ def context(event, env=None):
     argv = parent_command(env.get("CLAUDE_PID")) if runtime == "claude-code" else []
     given = add_dirs(argv[1:], cwd)
     result = ws_module.resolve(cwd, directory, env=env, add_dirs=given)
+    _FACTS.update(rule=result["rule"])
     if result["rule"] == "ambiguous":
+        _FACTS.update(answer="ambiguous", candidates=len(result["candidates"]))
         return ("This folder is in the workspaces " + ", ".join(result["candidates"])
                 + " and none was attached. Pin one in "
                 + os.path.join(directory, ws_module.OVERRIDES)
@@ -221,6 +227,9 @@ def context(event, env=None):
     if ws is None:
         return None
     statuses = classify(ws_module, result["members"], result["folder"], env, runtime, set(given))
+    _FACTS.update(workspace=ws["name"], native=sum(1 for _, st in statuses if st == "native"),
+                  supplied=sum(1 for _, st in statuses if st == "supplied"),
+                  missing=len(ws.get("missing", [])))
     if not statuses and not ws.get("missing"):
         return None
     head = header(ws, result["folder"], result["rule"], statuses)
@@ -229,7 +238,9 @@ def context(event, env=None):
         head += "\n\n" + grant
     body, paths = instructions(ws_module, [m for m, s in statuses if s == "supplied"])
     whole = head + ("\n\n## Member instructions\n\n" + body if body else "")
+    _FACTS.update(instruction_chars=len(body))
     if len(whole) <= INLINE_LIMIT:
+        _FACTS.update(answer="inline")
         return whole
     path = None
     if not over_budget():
@@ -238,6 +249,7 @@ def context(event, env=None):
                                 "# Workspace " + ws["name"] + " member instructions\n\n" + body + "\n")
         except Exception:
             path = None
+    _FACTS.update(answer="list" if path is None else "bundle")
     if path is None:
         return (head + "\n\nThe supplied members' instructions are too long to show here. Read "
                 "each of these files before you work in its folder:\n"
@@ -248,12 +260,28 @@ def context(event, env=None):
             "answer or take any other action.")
 
 
+def log_start(event, text):
+    """The `workspace-session` row for this start (`decisions.py`). Never raises."""
+    try:
+        module = _load("harness_workspace_decisions", HOOKS / "decisions.py")
+        facts = dict(_FACTS)
+        answer = facts.pop("answer", "context" if text else "silent")
+        facts["context_chars"] = len(text or "")
+        module.record("workspace-session", answer, facts.get("workspace", ""), event,
+                      fields=facts)
+    except Exception:
+        pass
+
+
 def main():
+    event = {}
     try:
         event = json.loads(sys.stdin.read() or "{}")
-        text = context(event if isinstance(event, dict) else {})
+        event = event if isinstance(event, dict) else {}
+        text = context(event)
     except Exception:
         text = None
+    log_start(event, text)
     if text:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                                  "additionalContext": text}}))

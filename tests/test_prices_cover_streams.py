@@ -108,7 +108,8 @@ class CurrentModelsTests(unittest.TestCase):
         for name, expected in (
                 ("claude-fable-5-1", (10.0, 50.0, 0.25, 12.5, 20.0)),
                 ("claude-opus-5-5", (4.0, 20.0, 0.2, 5.0, 8.0)),
-                ("claude-sonnet-5-5", (2.0, 10.0, 0.2, 2.5, 4.0)),
+                ("claude-sonnet-5-5", (2.0, 10.0, 0.1, 2.5, 4.0)),
+                ("claude-haiku-5-5", (0.1, 0.5, 0.01, 0.125, 0.2)),
                 ("claude-haiku-4-5-20251001", (1.0, 5.0, 0.1, 1.25, 2.0))):
             with self.subTest(model=name):
                 rate = pricing.price_for(table, name)
@@ -134,7 +135,7 @@ class UnpricedIsUnknownTests(unittest.TestCase):
         table = pricing.load_prices({})
         result = pricing.priced([self.row("claude-opus-5-5"), self.row("claude-opus-9-9")], table)
         self.assertAlmostEqual(result[0][0], (1000 * 4.0 + 1000 * 20.0) / 1e6)
-        self.assertEqual(result[0][1], "2026-10-03")
+        self.assertEqual(result[0][1], "2026-10-12")
         self.assertEqual(result[1], (None, ""))
 
     def test_a_breakdown_with_one_unpriced_part_is_unknown_not_partial(self):

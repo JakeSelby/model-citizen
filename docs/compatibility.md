@@ -9,9 +9,9 @@ A **qualified** entry requires native evidence for its exact runtime, client and
 **Unqualified** means no complete passing evidence, **planned** means no current integration,
 and **unsupported** means a combination explicitly outside the integration contract.
 
-Claude Code and Codex are this release's integration targets. The v0.14.2 stable floor qualifies
+Claude Code and Codex are this release's integration targets. The v0.15.0 stable floor qualifies
 the Claude Code CLI on macOS and Linux from complete scripted records. The first-live hand
-comparisons tracked by #741 were explicitly deferred to v0.15.0 and remain a catalog limitation. The Codex CLI is
+comparisons tracked by #741 were explicitly deferred to v0.16.0 and remain a catalog limitation until its round records them. The Codex CLI is
 outside that contract until a
 scripted qualification round agrees with a hand-driven one, so the v0.11.1 stable floor remains
 the last one qualifying the Codex CLI on macOS and Linux. The Claude Code and Codex VS Code surfaces, Codex Desktop on macOS and the Claude Code
@@ -38,8 +38,7 @@ a stance entry or on `role_execution` in `adapters/<runtime>/capabilities.json`;
 must be one of the catalog's `required_cases`. Listing cases under a capability that is not
 `qualified`, or claiming `qualified` without them, is a contradiction between the two files:
 `bin/citizen compatibility --release-check` blocks the release and the test suite fails. Today no
-adapter names a case, so every capability cell below reads `unqualified` even though two client
-rows are qualified. `bin/citizen compatibility --json` emits both levels,
+adapter names a case, so every capability cell below reads `unqualified`. `bin/citizen compatibility --json` emits both levels,
 each client row carrying its derived `capabilities`. The capability-by-client layout follows the
 generated matrix in [wshobson/agents' `docs/harnesses.md`](https://github.com/wshobson/agents/blob/main/docs/harnesses.md).
 

@@ -25,15 +25,18 @@ question it exists to ask. Outside a repository steps 3 and 5 do not apply; say 
    write. When filing writes tracked files, such as an issue map or a story file, run it in a new
    worktree off the updated default branch, put what it wrote in its own pull request under the
    repository's pull request rules, and land that with the `land` workflow once checks pass.
-5. **Hand off** with the `handoff` workflow, and only when work in this repository continues past
-   this session. A finished piece of work needs no progress file.
+5. **Hand off** with the `handoff` workflow. Close-out owns it: every `land` run in steps 3 and 4
+   skips its own handoff and task-end step.
 6. **Tell the sessions that depend on this one**, where the client can list and message them: a
    branch one was waiting on, a file one holds open, a conclusion that reverses its premise.
    Sharing a group or a repository is not a dependency; where the client cannot, use the handoff.
 7. **Archive, or stop.** Archive when the invocation already asked for it, provided
-   every pull request step 4 opened has merged; otherwise end on the checklist and wait.
-   Never clear or compact first: archiving ends the session, so both only burn the context you
-   still need. Clearing belongs to carrying on in the same session, the opposite of this workflow.
+   every pull request step 4 opened has merged. Never clear or compact first, since
+   archiving ends the session and both only burn the context you still need. With anything
+   open, end on the checklist and wait. With nothing open and no archive, inside a repository,
+   end with the `handoff` workflow's task-end step, which skips the writes step 5 just ran and
+   only decides the clear. Outside a repository there is no clear and no reseed: say so in one line
+   and stop.
 
-Log the close-out before the archive call, which ends the turn, and report what landed, what you
-filed, whom you told, and what you are leaving open.
+Log the close-out before the archive or clear call, and report what landed, what you filed, whom
+you told, and what you are leaving open.

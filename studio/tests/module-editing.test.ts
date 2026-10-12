@@ -30,7 +30,7 @@ test("module API uses server identities, CSRF, source guards, and one durable sa
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const path = String(input);
     if (path === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }

@@ -77,6 +77,35 @@ in Activity therefore names the program that answered and the helper's signature
 that changes without a change to the helper's source, or an unexpected program, is the sign to
 look for. Containing same-user code is the runtime's sandbox.
 
+### Three layers under a shell command
+
+1. **The sandbox is the boundary.** With `sandbox.enabled` set in the user config (`bin/citizen
+   config set sandbox.enabled true`, then `sync`), Claude Code runs the agent's Bash inside its OS
+   sandbox, and a command can write only to the working tree, the per-user temp directory and the
+   paths `sync` derives: the harness's state directory, the task-worktree root, Claude Code's
+   scratch root and every folder of every workspace in `workspaces_dir`. The block comes from
+   `claude/settings.template.json`, keeps `autoAllowBashIfSandboxed` off so no prompt you get
+   today disappears, and is owned like the telemetry keys: a `sandbox` block you wrote yourself is
+   reported and left alone, and switching the key off restores what was there. It is off until
+   you opt in, and opting out is per user. Without `sandbox.strict`, a command the sandbox blocks
+   can be retried outside it, which `bypassPermissions` runs with no prompt; `sandbox.strict`
+   sets `allowUnsandboxedCommands: false` and `failIfUnavailable: true`, so nothing leaves the
+   boundary and a missing sandbox stops Claude Code at startup. Network egress goes through the
+   sandbox proxy, which prompts for a host not yet allowed. Codex uses its own `sandbox_mode`; the
+   [sandbox skill](../primitives/skills/sandbox/SKILL.md) covers both.
+2. **`grade-bash` is the accident guard**, as above: it asks before a command it knows destroys
+   work, and a rephrased command gets past it.
+3. **Snapshots make a discard recoverable.** Before any command graded 2 or more runs in a git
+   working tree, the hook keeps the tree's uncommitted state, working tree and index, as a
+   `git stash create` commit under `refs/harness/snapshots/<time>`, whatever the answer and the
+   confirmed and approved commands included. Nothing is changed or discarded to take it.
+   `bin/citizen snapshot list` shows them, `snapshot restore [latest|<time>]` applies one to the
+   current worktree and keeps it, and `snapshot prune --days N` deletes older ones; each new
+   snapshot prunes those past fourteen days. A snapshot holds tracked files only: untracked and
+   ignored files are not in it, a clean tree takes none, and it covers the directory the command
+   starts in, not one a `cd` or `git -C` moves to. The same hardened git runs it, filter drivers
+   off, so the bytes kept are the bytes on disk.
+
 The stop gate hashes HEAD, staged and unstaged binary differences, untracked file contents,
 repository identity, and gate definition. Commands share a shell so `cd` and `export` persist.
 A gate that changes the tree, times out, or exhausts its retry budget is unverified, never green.
@@ -90,6 +119,14 @@ subset that fits and keeps `## Gate` for the push. A timeout kills the gate's wh
 A linked git worktree is trusted when its main checkout is. Every timeout, forced release, decline
 and mid-run tree change is logged with its reason and the seconds the gate ran: the decision
 row carries `release_reason` and `elapsed_seconds`, and every row whose gate ran names its `gate_block`.
+
+Every gate run is recorded with its commit, tree, exit code and time: the stop gate's own runs and
+`citizen gate`, which runs the `## Gate` block. Two checks read the record. At Stop, a final
+message claiming the tests or the gate pass is blocked once when the newest run is not green on
+the tree as it is now. Before a push, `grade-bash` asks, at any stance, unless a green `## Gate`
+run is recorded for the commit at HEAD with no tracked changes; a push adding only `docs/`,
+`changelog.d/` or top-level Markdown, a branch deletion and a repository with no gate are exempt.
+Each checked claim and push is a decision row (`check: pass_claim`, or `gate` on the Bash row).
 
 Constrained roles use [isolated CLI workers](role-workers.md), with shared role/stance resolution
 and fixed native tool controls. The harness validates and publishes planner content to a new
@@ -190,6 +227,55 @@ unacknowledged `off` keeps running, and so does every hook when the selection wi
 Codex's adapter dispatches through the same `lifecycle.py` and reads the same id map. There is no
 Codex-only id; an id whose event Codex does not raise, such as `usage-feed`, simply never runs
 there. `bin/citizen catalog` lists each id with kind `hooks`, its source and whether it is core.
+
+## What each hook logs
+
+Every decision a hook makes is one row in the local decision log,
+`~/.local/state/agent-harness/decisions.jsonl` ([usage.md](usage.md#the-decision-log) describes the
+log, [telemetry.md](telemetry.md#retention) its retention and switch). Every row carries `point`,
+`module` (`hooks/<id>`), `session_id`, `ts`, `deterministic_answer`, `input` (capped at 2 KiB) and
+its `input_sha256`, `runtime`, `harness_version`, `profile_fingerprint` and `schema_version`. The
+answer and the fields below are what each point adds, and what its evaluation reads.
+
+- **`grade-bash`**: `ask`, `deny` or `allow` on the command, with `grade`, `confirmed`,
+  `approval`, `timed_out` or `error` where they apply, and a later `ran` or `not_run` outcome row.
+  A sample of allowed commands is written as `allow` rows with `sampled` and `sample_rate`. Each
+  question to a decision provider is a `governance` row.
+- **`allow-readonly-bash`**: one `summary` row per session, written at SessionEnd, rather than a row
+  per allow: `counts` of the answers returned, by kind (`read-only`, `plan-read-only`,
+  `plan-investigation`, `plan-ask`, `plan-tool`), and their `total`. A session that never ended is
+  summarised a day later with `stale: true`.
+- **`filter-output`**: one row per filtered run, written by the filter when the run ends:
+  `filtered`, or `unchanged` when the whole run was kept, with `runner`, `bytes_in`, `bytes_out`,
+  `lines_in` and `lines_out`. The input is the runner's name, never the output.
+- **`tier-agent-spawns`**: every spawn it changes: the band's worker for a routed spawn,
+  `one-rung`, `demoted` or `deny`, with `reroute` (`band`, `bare`, `top-class`, `delegation-off`),
+  `model_requested`, `model`, `subagent_type_requested` and `subagent_type`. Its
+  `delegation-nudge` and `integration-descriptor` rows are written from the dispatcher.
+- **`brief-guard`**: `cap`, `budget` or `cap+budget` for each brief it extends.
+- **`stop-gate`**: `blocked`, `released` or `skipped`, with the gate's result as an outcome row
+  and, when `telemetry.completion_claim` is on, the claim.
+- **`intent-overlap`**: `warn` or `deny` on an edit to a path a live sibling claims.
+- **`neutralize-tool-output`**: every match: `warn`, or `excluded` for output read from the
+  harness's own files, with `tool` and `patterns`. The input is the tool's name.
+- **`validate-plan-card`**: `pass` or `fail` per plan file, with `problems`, `card_lines` and
+  `separator`. The input is the file's name.
+- **`allow-plan-webfetch`**: `allow`, with `host`. The input is the URL without its query.
+- **`stage-user-files`**: `staged`, `kept` or `staged+kept`, with `staged`, `kept`, `files` and
+  `bytes_staged`, the bytes copied, so a reused copy adds none. The input is the file names,
+  never their paths.
+- **`harness-session`**: `context` or `silent` per start, with `sections` (lines from `drift`,
+  `overrides`, `task`, `handoff` and `integrations`) and `context_chars`.
+- **`workspace-session`**: `silent`, `ambiguous`, `inline`, `bundle` or `list` per start, with
+  `rule`, `workspace`, `native`, `supplied`, `missing`, `instruction_chars` and `context_chars`
+  where they were decided.
+- The three remaining ids make no permission or routing decision and write no decision row: the
+  user-approval recorder keeps what the user typed, `usage-feed` records each recommendation it
+  emits in `adherence.jsonl`, and `usage-log` writes the usage ledger.
+
+The dispatcher also records each prompt and session end, identifiers only, in
+`session-events.jsonl`, which answers whether a fresh-session recommendation was followed when
+the observation entry point is not registered ([usage.md](usage.md#adherence-events)).
 
 ## Decision providers
 

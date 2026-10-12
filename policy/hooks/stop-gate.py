@@ -20,6 +20,10 @@ checkout never reset each other's; a session silent for STALE_SECONDS is forgott
 Declinable: once this session has been blocked, a final message carrying a line that opens with
 `Gate cannot pass:` and a reason (see `stated_reason`) releases the turn as unverified, logged as
 `declined`. Any other finish is blocked again while the gate stays red.
+Recorded: every run is written to the gate-run record (`gate-runs.py`) with its commit, tree, exit
+code and time. Checked: a turn the gate lets end whose final message claims the tests or the gate
+pass is blocked once when the newest recorded run is not green on the tree as it is now
+(`check_claim`); the same claim on the same tree then ends the turn, logged as released.
 """
 import hashlib
 import importlib.util
@@ -52,6 +56,35 @@ DECLINE_LINE = re.compile(r"^\s*(?:[-*>]\s+)?(?:\*\*|__)?gate cannot pass(?:\*\*
 
 
 _LOG = []
+_RUNS = []
+
+
+def runs():
+    """The sibling gate-run record, or None. A record that will not load costs only its rows."""
+    if not _RUNS:
+        try:
+            path = Path(__file__).resolve().parent / "gate-runs.py"
+            spec = importlib.util.spec_from_file_location("harness_gate_runs", str(path))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception:
+            module = None
+        _RUNS.append(module)
+    return _RUNS[0]
+
+
+def snapshot(root):
+    module = runs()
+    try:
+        return module.snapshot(root) if module is not None else None
+    except Exception:
+        return None
+
+
+def record_run(snap, heading, code, status=None, elapsed=None):
+    module = runs()
+    if module is not None and snap is not None:
+        module.record(snap, heading, code, "stop-gate", status=status, elapsed=elapsed)
 
 
 def decisions():
@@ -384,6 +417,60 @@ def release(path, session, note, elapsed):
     sys.stderr.write("stop-gate: %s (gate ran %.1fs)\n" % (note, elapsed))
 
 
+def claim_state_path(module, root):
+    return module.state_dir() / "claims" / (hashlib.sha256(root.encode("utf-8")).hexdigest()
+                                            + ".json")
+
+
+def check_claim(payload, root, commands):
+    """A block when the final message claims a pass the gate-run record does not back, else None.
+
+    Backed means the newest recorded run in this checkout passed on the tree as it is now, so
+    nothing was edited since. The final message is read only when it is not backed. The block is
+    one-shot per session and tree: the same claim on an unchanged tree then ends the turn. Each
+    unbacked claim is a decision-log row, blocked or released.
+    """
+    module = runs()
+    if module is None:
+        return None
+    try:
+        digest = module.tree_digest(root)
+        fresh, last = module.fresh_green(root, digest)
+    except Exception:
+        return None
+    if fresh:
+        return None
+    claim = module.claims_pass(final_message(payload))
+    if not claim:
+        return None
+    session = payload.get("session_id") or ""
+    if last is None:
+        why = "no gate run is recorded in this checkout"
+    elif last.get("status") != module.PASSED:
+        why = "the last gate run here was %s (exit %s) at %s" % (
+            last.get("status"), last.get("exit"), module._when(last.get("ts")))
+    else:
+        why = ("the last green gate run, at %s, was on a tree edited since"
+               % module._when(last.get("ts")))
+    fields = {"check": "pass_claim", "last_run": (last or {}).get("status") or "none"}
+    path = claim_state_path(module, root)
+    state = read_state(path)
+    if state.get(session) == digest:
+        fields["release_reason"] = "unbacked pass claim, already blocked once on this tree"
+        log_gate(payload, root, commands, "released", None, fields)
+        return None
+    state = {k: v for k, v in state.items() if isinstance(v, str)}
+    state[session] = digest
+    try:
+        write_state(path, state)
+    except Exception:
+        return None  # a block that cannot be recorded would never release; let the turn end
+    log_gate(payload, root, commands, "blocked", None, fields)
+    return ("Your reply claims a pass (\"%s\"), but %s. Run the gate (`citizen gate`, or let "
+            "this stop gate run on the current tree) and report its result, or say plainly that "
+            "the tests have not run since the last edit. This check blocks once." % (claim, why))
+
+
 def main():
     try:
         payload = json.load(sys.stdin)
@@ -391,26 +478,39 @@ def main():
         return
     if not isinstance(payload, dict):
         return
+    root, commands, settled = gate_stop(payload)
+    if settled or not root or not commands:
+        return
+    why = check_claim(payload, root, commands)
+    if why:
+        print(json.dumps({"decision": "block", "reason": why}))
+
+
+def gate_stop(payload):
+    """Run the stop gate. Returns (root, commands, settled), printing the block when it blocks.
+
+    Settled is True when the red gate already answered the turn, by a block, a decline or the
+    block cap, so no claim check follows it."""
     cwd = payload.get("cwd") or os.getcwd()
     root = git_root(cwd)
     if not root:
-        return
+        return None, [], False
     heading, commands = stop_commands(root)
     if not commands:
-        return
+        return root, [], False
     if not trusted(root, cwd):
         sys.stderr.write("stop-gate: folder not trusted in Claude Code and not listed by "
                          "`citizen trust`; gate skipped. Run `citizen trust .` in this folder to "
                          "let it run the repository's own checks.\n")
         log_gate(payload, root, commands, "skipped", "untrusted")
-        return
+        return root, commands, False
 
     current = tree_hash(root)
     path = state_path(root)
     state = read_state(path)
     if state.get("green_hash") == current:
         log_gate(payload, root, commands, "skipped", "passed")
-        return
+        return root, commands, False
 
     session = payload.get("session_id") or ""
     started = time.monotonic()
@@ -428,19 +528,24 @@ def main():
         release(path, session, note, fields["elapsed_seconds"])
         log_gate(payload, root, commands, answer, outcome, fields)
 
+    snap = snapshot(root)
     try:
         failure = run_gate(root, commands)
     except subprocess.TimeoutExpired:
+        record_run(snap, heading, None, "timeout", ran()["elapsed_seconds"])
         let_go(f"gate ran past {BUDGET_SECONDS}s; letting the turn end", "released", "timeout")
-        return
+        return root, commands, False
     if failure is None:
         if tree_hash(root) != current:
+            record_run(snap, heading, 0, "unverified", ran()["elapsed_seconds"])
             let_go("working tree changed during the gate; result unverified", "released",
                    "unverified")
-            return
+            return root, commands, False
+        record_run(snap, heading, 0, elapsed=ran()["elapsed_seconds"])
         write_state(path, {"green_hash": current, "status": "passed", "sessions": {}})
         log_gate(payload, root, commands, "released", "passed", ran())
-        return
+        return root, commands, False
+    record_run(snap, heading, failure[1], elapsed=ran()["elapsed_seconds"])
 
     now = time.time()
     sessions = live_sessions(read_state(path), now)
@@ -449,17 +554,18 @@ def main():
         why = stated_reason(final_message(payload))
         if why is not None:
             let_go("declined: " + why[:200], "declined", "failed")
-            return
+            return root, commands, True
     blocks = prior + 1
     if blocks >= MAX_BLOCKS:
         let_go(f"released after {MAX_BLOCKS} blocks; gate still red", "released", "failed")
-        return
+        return root, commands, True
     sessions[session] = {"blocks": blocks, "seen": now}
     write_state(path, {"green_hash": None, "status": "failed", "sessions": sessions})
     log_gate(payload, root, commands, "blocked", "failed", ran())
     cmd, code, output = failure
     print(json.dumps({"decision": "block",
                       "reason": reason(gate_file(root), cmd, code, output, heading)}))
+    return root, commands, True
 
 
 if __name__ == "__main__":

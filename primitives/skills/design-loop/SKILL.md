@@ -51,7 +51,7 @@ Prerequisites: a locked target and a working capture command. Get both before ro
    to `.design-loop/target.<ext>` and do not regenerate it mid-loop.
 2. **Establish the capture command** — [references/capture.md](references/capture.md). Verify it
    produces a real screenshot before you start, not after.
-3. **Implement a pass** at the target. When the session runs below the strongest class, hand
+3. **Implement a pass** at the target. When the session runs below the `strong` class, hand
    steps 3 to 5 and 7 to the `designer` agent, which declares that class; give it the workspace,
    the target, the capture command and the last verdict. It never judges; step 6 stays yours.
 4. **Validate it yourself.** It must actually run, load and work. Fix breakage, wrong

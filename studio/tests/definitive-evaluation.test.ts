@@ -143,13 +143,13 @@ test("run detail renders the engine row, the scorecard and the judge as hairline
 
 test("a refused definitive preview leaves nothing to confirm, and a plain token never confirms a definitive launch", () => {
   const plain = { valid: true, errors: [], estimate: { amount_usd: 1, basis: "history", sample_count: 1 },
-    caps: { max_budget_usd: "2", spend_cap_usd: "20" }, confirmation_token: "plain-token", command: "c",
+    caps: { max_budget_usd: "2", spend_cap_usd: "20" }, confirmation_token: "tok-p", command: "c",
     request: { definitive: undefined } } as unknown as ReplayPreview;
-  const definitive = { ...plain, confirmation_token: "definitive-token", request: { definitive: true } } as unknown as ReplayPreview;
+  const definitive = { ...plain, confirmation_token: "tok-d", request: { definitive: true } } as unknown as ReplayPreview;
   let slot: PreviewSlot = { preview: null, generation: 0 };
   slot = previewReducer(slot, { type: "begin", generation: 1 });
   slot = previewReducer(slot, { type: "loaded", generation: 1, value: plain });
-  assert.equal(confirmableToken(slot), "plain-token");
+  assert.equal(confirmableToken(slot), "tok-p");
   assert.equal(launchKind(slot.preview as ReplayPreview), "Plain replay");
   // The definitive preview starts: the plain one and its token are gone at once.
   slot = previewReducer(slot, { type: "begin", generation: 2 });
@@ -163,6 +163,6 @@ test("a refused definitive preview leaves nothing to confirm, and a plain token 
   slot = previewReducer(slot, { type: "begin", generation: 4 });
   assert.equal(confirmableToken(slot), null);
   slot = previewReducer(previewReducer(slot, { type: "loaded", generation: 3, value: plain }), { type: "loaded", generation: 4, value: definitive });
-  assert.equal(confirmableToken(slot), "definitive-token");
+  assert.equal(confirmableToken(slot), "tok-d");
   assert.equal(launchKind(slot.preview as ReplayPreview), "Definitive evaluation");
 });

@@ -26,7 +26,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_roles_name_a_class_and_each_adapter_maps_it(self):
         classes = {p.stem: catalog.frontmatter(p)[0]["tier"] for p in (REPO / "primitives/roles").glob("*.md")}
-        self.assertEqual(classes, {"builder": "strong", "design-judge": "frontier", "designer": "frontier", "gatherer": "strong",
+        self.assertEqual(classes, {"builder": "strong", "design-judge": "strong", "designer": "strong", "gatherer": "strong",
                                    "log-compressor": "standard", "planner": "strong", "reviewer": "strong",
                                    "spec-reviewer": "standard", "worker-a": "standard",
                                    "worker-b": "strong", "worker-c": "strong"})

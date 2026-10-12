@@ -37,7 +37,7 @@ class DirectoryPluginTests(unittest.TestCase):
 
     def test_source_list_is_file_level_and_excludes_unlisted_files(self):
         listed = DIRECTORY_PLUGIN._source_files(REPO)
-        self.assertEqual(len(listed), 47)
+        self.assertEqual(len(listed), 48)
         self.assertNotIn(Path("primitives/skills/not-submitted/SKILL.md"), listed)
 
     def test_source_list_rejects_symlinked_ancestors(self):

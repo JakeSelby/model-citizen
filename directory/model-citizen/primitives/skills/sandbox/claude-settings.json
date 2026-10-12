@@ -1,0 +1,9 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "allowUnsandboxedCommands": false,
+    "network": { "allowedDomains": [], "strictAllowlist": true },
+    "filesystem": { "denyRead": ["~/.ssh", "~/.aws", "~/.config/gh"] }
+  }
+}

@@ -75,7 +75,7 @@ from harness_core import frameworks
 from harness_core import workspaces
 from harness_core import remote_control
 from harness_core import codex_client, keychain, collisions, importer, cache_prefix, rebuilds
-from harness_core import intents, observation, presence
+from harness_core import intents, observation, presence, snapshots
 from harness_core import intervals, soft_estimates
 from harness_core import changelog as changelog_fragments
 from harness_core import retired_names
@@ -804,12 +804,143 @@ def claude_workspace_values(cfg: Dict[str, Any]) -> Dict[Tuple[str, ...], str]:
     return {("env", WORKSPACE_ENV): "1"} if isinstance(value, str) and value.strip() else {}
 
 
+def sandbox_write_paths(cfg: Dict[str, Any]) -> List[str]:
+    """The paths a sandboxed command may write beyond Claude Code's defaults (the working
+    directory, its per-user temp directory and every added directory), resolved at sync time:
+    the harness's state directory, the task-worktree root, Claude Code's scratch root and every
+    folder of every workspace in `workspaces_dir`."""
+    uid = getattr(os, "getuid", None)
+    scratch = Path(os.environ.get("CLAUDE_CODE_TMPDIR") or "/tmp").resolve()
+    found = [state_dir(), worktree_root()] + ([scratch / f"claude-{uid()}"] if uid else [])
+    directory = cfg.get("workspaces_dir")
+    if isinstance(directory, str) and directory.strip():
+        try:
+            for ws in workspaces.workspace_map(str(Path(directory).expanduser()))["workspaces"]:
+                found.extend(Path(member) for member in ws["members"])
+        except (OSError, ValueError, KeyError):
+            pass  # an unreadable workspace folder adds no path; `workspace list` reports it
+    paths: List[str] = []
+    for path in found:
+        text = str(path)
+        if text not in paths:
+            paths.append(text)
+    return paths
+
+
+def claude_sandbox_values(cfg: Dict[str, Any], template: Dict[str, Any]) -> Dict[Tuple[str, ...], Any]:
+    """The `sandbox` block sync writes, while `sandbox.enabled` is true in the user config.
+
+    The template's block, with `filesystem.allowWrite` derived from the workspace
+    (`sandbox_write_paths`). `sandbox.strict` adds `allowUnsandboxedCommands: false` and
+    `failIfUnavailable: true`, so a blocked command cannot be retried outside the boundary and a
+    missing sandbox stops Claude Code at startup instead of running commands unsandboxed."""
+    block = cfg.get("sandbox")
+    if not isinstance(block, dict) or block.get("enabled") is not True:
+        return {}
+    rendered = deepcopy(template.get("sandbox") or {"enabled": True})
+    filesystem = rendered.setdefault("filesystem", {})
+    allow = list(filesystem.get("allowWrite") or [])
+    filesystem["allowWrite"] = allow + [p for p in sandbox_write_paths(cfg) if p not in allow]
+    if block.get("strict") is True:
+        rendered["allowUnsandboxedCommands"] = False
+        rendered["failIfUnavailable"] = True
+    return {("sandbox",): rendered}
+
+
+# Claude Code's documented range for `CLAUDE_CODE_AUTO_COMPACT_WINDOW`.
+AUTO_COMPACT_WINDOW_MIN, AUTO_COMPACT_WINDOW_MAX = 100000, 1000000
+# What auto-compaction holds back below the window before its percentage applies: measured at
+# about 19,300 tokens, so it fires near pct/100 x (window - 19,300). Rounded up to a margin.
+AUTO_COMPACT_RESERVE = 20000
+CONTEXT_RESET_ENV = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+
+
+def claude_context_reset_values(table: Dict[str, Any]) -> Optional[Dict[Tuple[str, ...], str]]:
+    """The settings `env` pair that makes native auto-compaction fire near the cost variant's
+    `context_reset_at`: empty when the variant names no reset point, None when the resolver is
+    missing or fails, since then nobody knows what the variant wants.
+
+    The window is the reset point plus the reserve and the percentage is 100, so the trigger
+    lands at about the reset point itself; the sidecar bounds keep the window inside the
+    documented range, and the clamp is only a guard. A model whose own window is smaller caps
+    the env window: `frugal` on a 200k model fires near 180k, not 200k.
+
+    The value comes from the user's configured cost variant. A project or session cost override
+    (`HARNESS_STANCE_COST`) moves the hand-off block but not the projected compaction, because
+    sync projects user defaults and Claude Code reads settings `env` once at startup.
+    """
+    module = load_posture()
+    if module is None or not isinstance(table, dict) or not isinstance(table.get("switches"), dict):
+        return None
+    try:
+        reset = module.context_reset_at(table)
+    except Exception:
+        return None
+    if reset is None:
+        return {}
+    window = min(max(reset + AUTO_COMPACT_RESERVE, AUTO_COMPACT_WINDOW_MIN), AUTO_COMPACT_WINDOW_MAX)
+    return {("env", CONTEXT_RESET_ENV[0]): str(window), ("env", CONTEXT_RESET_ENV[1]): "100"}
+
+
+def apply_context_reset(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
+                        table: Dict[str, Any], ownership: Dict[str, Any]
+                        ) -> Tuple[List[List[str]], List[str], Dict[Tuple[str, ...], str]]:
+    """Fold the cost variant's reset point into `merged`; returns its owned paths, its warnings
+    and the pair it wrote.
+
+    The two variables are one setting, so they are written together or not at all. Neither is
+    written while the user's settings carry `autoCompactWindow`, which the env pair would
+    override, or while either variable holds a value the harness did not write: a value present
+    with no journal record and unequal to the projection, or one changed since the harness last
+    wrote it. Then any half the harness wrote earlier is taken back out, the user's value is
+    never touched, and one warning line is printed rather than a needs-attention item, since a
+    user's own compaction window is a deliberate choice and not a fault. A `--auto-compact-window`
+    flag or a slash command is invisible to sync and beats settings anyway. When the resolver is
+    missing or fails, whatever the harness wrote stays as it is, with a warning.
+    """
+    block = ownership.get("claude", {}).get("context_reset", {})
+    paths = [["env", key] for key in block.get("env_keys", [])]
+    values = claude_context_reset_values(table)
+    target = claude_dir() / "settings.json"
+    if values is None:
+        if any(held.get(json.dumps(path)) is not None for path in paths):
+            return [], ["the cost resolver is unavailable, so the context reset pair in {} is left "
+                        "as it is".format(target)], {}
+        return [], [], {}
+
+    def foreign(path: List[str]) -> bool:
+        current = reconcile.lookup(live, path)
+        if not current["present"]:
+            return False
+        record = held.get(json.dumps(path))
+        if record is None:
+            return current["value"] != values.get(tuple(path))
+        return current != record.get("applied")
+
+    theirs = [path for path in paths if foreign(path)]
+    clashes = [".".join(path) for path in theirs]
+    if "autoCompactWindow" in live:
+        clashes.insert(0, "autoCompactWindow")
+    warnings: List[str] = []
+    if clashes and values:
+        warnings.append("{} in {} holds a value the harness did not write; the cost stance's "
+                        "context reset point is not projected".format(" and ".join(clashes), target))
+    if clashes:
+        values = {}
+        paths = [path for path in paths if path not in theirs]
+    notices: List[str] = []
+    kept = _apply_owned(merged, live, held, paths, values, "the context reset", notices)
+    return kept, warnings + notices, values
+
+
 def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
                         telemetry: Dict[str, Any], cfg: Dict[str, Any],
-                        ownership: Dict[str, Any]) -> Tuple[List[List[str]], List[str]]:
-    """Fold the runtime's telemetry and workspace settings into `merged`; returns its owned
-    paths and notices. The workspace block (`claude.workspaces` in OWNERSHIP.json) is owned by
-    exactly the same rules as the telemetry block, while `workspaces_dir` is set.
+                        ownership: Dict[str, Any],
+                        template: Optional[Dict[str, Any]] = None) -> Tuple[List[List[str]], List[str]]:
+    """Fold the runtime's telemetry, workspace and sandbox settings into `merged`; returns its
+    owned paths and notices. The workspace block (`claude.workspaces` in OWNERSHIP.json) is owned
+    by exactly the same rules as the telemetry block, while `workspaces_dir` is set, and so is
+    the sandbox block (`claude.sandbox`), while `sandbox.enabled` is true.
 
     Ownership is per variable, never the whole `env` map, because the map is the user's: a
     variable they set is not read, changed or removed, and `held` — the keys `reconcile.Store`
@@ -827,7 +958,8 @@ def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict
                "travels with the ledger export".format(name) for name in omitted]
     claude = ownership.get("claude", {})
     groups = [("native telemetry", claude.get("native_telemetry", {}), telemetry_values),
-              ("workspace support", claude.get("workspaces", {}), claude_workspace_values(cfg))]
+              ("workspace support", claude.get("workspaces", {}), claude_workspace_values(cfg)),
+              ("the sandbox", claude.get("sandbox", {}), claude_sandbox_values(cfg, template or {}))]
     kept: List[List[str]] = []
     for label, block, values in groups:
         paths = ([["env", key] for key in block.get("env_keys", [])]
@@ -1708,16 +1840,31 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
         owned_paths += [["permissions", "allow"], ["permissions", "defaultMode"]]
         hook_paths = [["hooks", event] for event in template.get("hooks", {})]
         owned_paths += hook_paths
-        native_paths, native_notices = apply_native_claude(merged, live, held, telemetry, cfg, ownership)
+        native_paths, native_notices = apply_native_claude(merged, live, held, telemetry, cfg, ownership,
+                                                           template)
         owned_paths += native_paths
         report.extend(native_notices)
+        reset_paths, reset_warnings, reset_values = apply_context_reset(merged, live, held, table,
+                                                                         ownership)
+        owned_paths += reset_paths
+        if reset_values:
+            say("  compact claude-code auto-compaction " + ", ".join(
+                path[-1] + "=" + value for path, value in sorted(reset_values.items())))
+        for line in reset_warnings:
+            say("  warning: " + line)
+        if ["sandbox"] in native_paths:
+            sandbox = merged.get("sandbox")
+            say("  sandbox " + ("claude-code Bash runs in the OS sandbox, writing to the working tree and "
+                                + ", ".join(sandbox.get("filesystem", {}).get("allowWrite", []))
+                                if isinstance(sandbox, dict) and sandbox.get("enabled") is True
+                                else "sandbox.enabled is off; restoring the sandbox setting sync replaced"))
         if "claude-code" in native_runtimes(telemetry):
             attributes, _ = resource_attributes(cfg, telemetry)
             helper = "headers helper" if ("otelHeadersHelper" in merged) else "no headers"
             say(f"  native  claude-code exports its own telemetry to "
                 f"{telemetry.get('endpoint', '')} ({CLAUDE_OTEL_PROTOCOL}, {helper})")
             say(f"          labels {attributes}")
-        elif [p for p in native_paths if p != ["env", WORKSPACE_ENV]]:
+        elif [p for p in native_paths if p not in (["env", WORKSPACE_ENV], ["sandbox"])]:
             say("  native  telemetry.native no longer names claude-code; removing the Claude "
                 "telemetry settings sync added")
         store.json(settings_file, merged, owned_paths, hook_lists=hook_paths)
@@ -4443,7 +4590,7 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 BOOL_KEYS = ["vscode.manage", "claude.manage", "codex.manage", "permissions_bypass_acknowledged",
-             "core_switches_acknowledged", "observation.enabled"]
+             "core_switches_acknowledged", "observation.enabled", "sandbox.enabled", "sandbox.strict"]
 
 
 def coerce_config_value(key: str, value: str) -> Any:
@@ -4880,6 +5027,34 @@ def cmd_keychain(args: argparse.Namespace) -> int:
         raise SystemExit(f"{exc}\nDo not launch a client under this home.")
     print(created if created else "nothing to do: a default keychain is present or this host needs none")
     return 0
+
+
+def cmd_gate(args: argparse.Namespace) -> int:
+    """Run the repository's `## Gate` block and record the run (policy/hooks/gate-runs.py).
+
+    The record is what the Stop-time pass-claim check and the push check read, so a gate run any
+    other way leaves a push asking. Exits with the gate's own code; a green run on a tree that
+    changed while it ran is recorded as unverified and exits 1."""
+    runs = lifecycle.load("gate-runs")
+    start = Path(args.path).expanduser() if args.path else Path.cwd()
+    root = runs.toplevel(start)
+    if root is None:
+        raise SystemExit(f"{start}: not inside a git repository")
+    commands = runs.declared(root)
+    if not commands:
+        raise SystemExit(f"{root}: no `{runs.GATE_HEADING}` block in AGENTS.md or CLAUDE.md")
+    snap = runs.snapshot(root)
+    started = time.monotonic()
+    code = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", "\n".join(commands)],
+                          cwd=root).returncode
+    elapsed = round(time.monotonic() - started, 1)
+    status = "unverified" if code == 0 and runs.tree_digest(root) != snap["tree"] else None
+    row = runs.record(snap, runs.GATE_HEADING, code, "citizen-gate", status=status,
+                      elapsed=elapsed)
+    where = (snap.get("head") or "no commit")[:12] + (" with uncommitted changes" if snap.get("dirty") else "")
+    outcome = status or ("passed" if code == 0 else f"failed, exit {code}")
+    say(f"gate: {outcome} on {where} in {elapsed}s" + ("" if row else " (not recorded)"))
+    return code or (1 if status else 0)
 
 
 def cmd_trust(args: argparse.Namespace) -> int:
@@ -6084,7 +6259,7 @@ def decision_report(days: int, json_output: bool = False, rescan: Optional[str] 
         raise SystemExit("this checkout has no claude/hooks/decisions.py; reinstall or re-clone it")
     path = state_dir() / "decisions.jsonl"
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - max(days, 0) * 86400))
-    rows = [r for r in module.joined(module.read_rows(path)) if (r.get("ts") or "") >= cutoff]
+    rows = [r for r in module.joined(module.read_rows(path, history=True)) if (r.get("ts") or "") >= cutoff]
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for row in rows:
         # A sampled allow is a negative nobody graded, so it groups apart from the judgments at
@@ -7128,7 +7303,7 @@ def cmd_decisions(args: argparse.Namespace) -> int:
     if not 0 < args.dev_share < 1:
         raise SystemExit("--dev-share is a fraction strictly between 0 and 1")
     log = Path(args.log) if args.log else state_dir() / "decisions.jsonl"
-    rows = module.joined(module.read_rows(log))
+    rows = module.joined(module.read_rows(log, history=True))
     out = Path(args.out) if args.out else state_dir() / DEFAULT_EVAL_REPORT
     cfg = load_config()
     try:
@@ -7661,9 +7836,26 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--base", default="origin/main")
     p.set_defaults(func=lambda a: intents.command(a, say))
 
+    p = sub.add_parser("snapshot", help="list, restore or prune the working-tree snapshots taken before grade-2+ commands")
+    snapshot_sub = p.add_subparsers(dest="snapshot_action", required=True)
+    q = snapshot_sub.add_parser("list", help="snapshots in this repository, newest first")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    q = snapshot_sub.add_parser("restore", help="apply a snapshot to this working tree; the snapshot is kept")
+    q.add_argument("name", nargs="?", default="latest", help="latest (default), a time from `list`, or a full ref")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    q = snapshot_sub.add_parser("prune", help="delete snapshots older than --days")
+    q.add_argument("--days", type=int, default=snapshots.KEEP_DAYS,
+                   help=f"age in days past which a snapshot is deleted (default {snapshots.KEEP_DAYS})")
+    q.add_argument("-C", dest="dir", help="a directory in the repository (default: the current one)")
+    p.set_defaults(func=lambda a: snapshots.command(a, say))
+
     p = sub.add_parser("keychain", help="give a disposable HOME its own default keychain before a client is launched under it (macOS)")
     p.add_argument("home")
     p.set_defaults(func=cmd_keychain)
+
+    p = sub.add_parser("gate", help="run the repository's `## Gate` block and record the run for the pass-claim and push checks")
+    p.add_argument("path", nargs="?")
+    p.set_defaults(func=cmd_gate)
 
     p = sub.add_parser("trust", help="let the stop-gate hook run a repository's `## Gate` block (default: the current repo)")
     p.add_argument("path", nargs="?")

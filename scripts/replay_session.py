@@ -11,7 +11,10 @@ the replay containers (`cost_bench.long_session_driver`) and against a fake CLI 
   verdict, so the turn count never changes and runs stay comparable.
 - **Caps.** At most `max_user_turns` turns are sent; each turn's own agent turns are capped by the
   driver at `max_agent_turns_per_user_turn`; and the session stops before a turn once its reported
-  spend reaches the per-session cap. Each turn is given what is left of the cap as its budget.
+  spend reaches the per-session cap. Each turn is given what is left of the cap as its budget
+  (`turn_budget`), and a session given what is left of the whole run's stop ends before a turn
+  whose budget could cross it. The CLI holds a turn to its budget only between API calls, so a
+  turn can still overshoot it by up to one call.
 - **Checkpoints.** After a checkpoint's turn, `checker` scores the tree with the segment's stream:
   every turn since the previous checkpoint, appended in order, and the session's totals as they
   stood before the segment's first turn. A checkpoint never reached is not passed and its metrics
@@ -48,7 +51,10 @@ TURN_CAP_STOP = "error_max_turns"
 # the session, so the turn's own figures are unknown.
 RESUME_LOST = "resume-lost"
 # Why a session stopped before its script ended.
-STOP_CAP, STOP_USER_TURNS, STOP_ERROR = "cap", "max_user_turns", "error"
+STOP_CAP, STOP_USER_TURNS, STOP_ERROR, STOP_SPEND = "cap", "max_user_turns", "error", "spend_cap"
+# The least `--max-budget-usd` a turn is launched with, so a session just short of its cap still
+# gets a budget the CLI can act on; it is why a session's worst case is its cap plus this.
+MIN_TURN_BUDGET_USD = 0.01
 CONTROL = "bare"
 METHOD = "scenario-clustered percentile bootstrap"
 
@@ -60,9 +66,22 @@ def session_cap(scenario, run_cap=None):
     return hint if run_cap is None else min(float(run_cap), hint)
 
 
+def turn_budget(cap, spent):
+    """A turn's `--max-budget-usd`: what is left of the session's cap, at least
+    `MIN_TURN_BUDGET_USD`."""
+    return round(max(cap - spent, MIN_TURN_BUDGET_USD), 6)
+
+
+def session_ceiling(scenario, run_cap=None):
+    """The most one session can spend if each turn holds to its budget: its last turn starts
+    below the cap with `turn_budget`, so it ends below the cap plus `MIN_TURN_BUDGET_USD`."""
+    return round(session_cap(scenario, run_cap) + MIN_TURN_BUDGET_USD, 6)
+
+
 def ceiling_usd(scenarios, reps, arms, run_cap=None, preflight_cap=0.0):
-    """The most a set can report: every session at its cap, and every arm's preflight at its own."""
-    return sum(session_cap(s, run_cap) for s in scenarios) * reps * arms + arms * preflight_cap
+    """The most a set can report while each turn holds to its budget: every session at its
+    `session_ceiling`, and every arm's preflight at its own cap."""
+    return round(sum(session_ceiling(s, run_cap) for s in scenarios) * reps * arms + arms * preflight_cap, 6)
 
 
 def choose_prompt(turn, verdicts):
@@ -212,7 +231,7 @@ def _segment_fields(turns, cumulative):
                 cost_by_tier=dict(sorted(tiers.items())), cumulative_cost_usd=round(cumulative, 6))
 
 
-def run_session(scenario, base, cap, driver, checker, tiers):
+def run_session(scenario, base, cap, driver, checker, tiers, run_left=None):
     """The rows of one session: one per checkpoint in turn order, then the session's own.
 
     `driver(number, prompt, budget, resume)` runs one user turn and returns `{"stdout": ...}` with
@@ -222,8 +241,10 @@ def run_session(scenario, base, cap, driver, checker, tiers):
     returns `(passed, detail)` or `(passed, detail, recorded metrics)`; it is called with a third
     argument, `baseline`, the session totals of the last result before the segment (`ZERO_TOTALS`
     for the first). `base` is copied into every row. Spend that no result reported, a timed-out
-    turn's, counts at what was left of the cap, as does a turn whose resume lost the session
-    (`RESUME_LOST`): its result names another session, or a running total fell (`totals_fell`)."""
+    turn's, counts at its whole budget (`turn_budget`), as does a turn whose resume lost the session
+    (`RESUME_LOST`): its result names another session, or a running total fell (`totals_fell`).
+    `run_left` is what the whole run may still spend when the session starts; a turn whose
+    budget could take the session past it is not sent, and the session stops as `STOP_SPEND`."""
     caps = scenario["caps"]
     order = scenario["checkpoint_order"]
     verdicts, records = {}, {}
@@ -239,26 +260,30 @@ def run_session(scenario, base, cap, driver, checker, tiers):
         if spent >= cap:
             stopped = STOP_CAP
             break
+        budget = turn_budget(cap, spent)
+        if run_left is not None and spent + budget > run_left:
+            stopped, error_kind = STOP_SPEND, STOP_SPEND  # cut by the run, not the arm: no measurement
+            break
         prompt, branch = choose_prompt(turn, verdicts)
         if branch is not None:
             branches.append(dict(branch, turn=number))
-        done = driver(number, prompt, round(cap - spent, 6), number > 1)
+        done = driver(number, prompt, budget, number > 1)
         stdout = done.get("stdout") or ""
         usage = turn_usage(stdout, tiers, latest)
         usages.append(usage)
         segment.append(usage)
         segment_text.append(stdout if stdout.endswith("\n") or not stdout else stdout + "\n")
         if done.get("timeout") or usage["cost_usd"] is None:
-            usage["cost_usd"] = round(cap - spent, 6)
-            spent = cap
+            usage["cost_usd"] = budget
+            spent = round(spent + budget, 6)
             stopped, error_kind = STOP_ERROR, ("timeout" if done.get("timeout") else
                                                "exit %s: no priced result" % done.get("returncode"))
             break
         lost = (session_id is not None and usage["session_id"] not in (None, session_id)) or \
             totals_fell(latest, usage["totals"])
-        if lost:  # never a negative cost: like a timeout, the turn counts at what was left of the cap
-            usage.update(cost_usd=round(cap - spent, 6), tokens={k: None for k in TOKEN_KINDS}, cost_by_tier={})
-            spent = cap
+        if lost:  # never a negative cost: like a timeout, the turn counts at its whole budget
+            usage.update(cost_usd=budget, tokens={k: None for k in TOKEN_KINDS}, cost_by_tier={})
+            spent = round(spent + budget, 6)
             stopped, error_kind = STOP_ERROR, RESUME_LOST
             break
         session_id = session_id or usage["session_id"]
@@ -314,7 +339,7 @@ def run_session(scenario, base, cap, driver, checker, tiers):
     contexts = [c for u in usages for c in u["main_contexts"]]
     totals = _segment_fields(usages, spent)
     passed = sum(1 for r in rows if r["passed"])
-    error = stopped == STOP_ERROR
+    error = stopped in (STOP_ERROR, STOP_SPEND)
     rows.append(dict(base, row_kind=SESSION, checkpoint=None, checkpoint_index=None,
                      **{k: totals[k] for k in TOKEN_KINDS},
                      cost_usd=round(spent, 6), cost_by_tier=totals["cost_by_tier"],

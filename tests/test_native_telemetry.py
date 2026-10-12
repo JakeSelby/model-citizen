@@ -289,7 +289,9 @@ class SyncTests(unittest.TestCase):
         self.configure(block)
 
     def env(self):
-        return (json.loads(self.settings_file.read_text()).get("env") or {})
+        # The cost stance's reset pair has its own owner and tests (test_context_reset_projection).
+        found = json.loads(self.settings_file.read_text()).get("env") or {}
+        return {k: v for k, v in found.items() if k not in harness.CONTEXT_RESET_ENV}
 
     def otel(self):
         return harness.codex_otel_in_config(self.config_toml.read_text()) or {}

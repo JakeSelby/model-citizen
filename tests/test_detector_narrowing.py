@@ -25,7 +25,7 @@ rd = _load("rule_detectors_narrowing", REPO / "claude" / "hooks" / "rule-detecto
 grade = _load("grade_bash_narrowing", REPO / "claude" / "hooks" / "grade-bash.py")
 
 STANCES = {"commits": "conventional-attributed", "voice": "concise"}
-SECRET = "secrets/git-add-secret-file"
+SECRET_RULE = "secrets/git-add-secret-file"
 DENIED = "autonomy/denied-by-grade"
 CLIENT_PREFIX = "PreToolUse:Bash hook error: "
 
@@ -52,13 +52,13 @@ class SshKeyNameTests(unittest.TestCase):
     def test_a_private_key_by_its_default_name_is_a_hit(self):
         for path in ("config/id_rsa", "id_rsa", "keys/id_ed25519", "~/.ssh/id_ed25519"):
             with self.subTest(path=path):
-                self.assertEqual(hits(SECRET, [bash("git add " + path)]), 1)
+                self.assertEqual(hits(SECRET_RULE, [bash("git add " + path)]), 1)
 
     def test_a_name_that_only_holds_the_key_name_is_not(self):
         for path in ("docs/id_rsa-rotation.md", "keys/id_ed25519.pub", "id_rsa.pub",
                      "scripts/rotate_id_rsa.sh", "notes/id_ed25519_howto.txt"):
             with self.subTest(path=path):
-                self.assertEqual(hits(SECRET, [bash("git add " + path)]), 0)
+                self.assertEqual(hits(SECRET_RULE, [bash("git add " + path)]), 0)
 
 
 class GradeDenyTests(unittest.TestCase):

@@ -138,11 +138,11 @@ test("the apply API posts the draft, reviewed revision and typed confirmation wi
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     const path = String(input);
     if (path === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
-    assert.equal((init?.headers as Record<string, string>)["X-Studio-CSRF"], "csrf-test");
+    assert.equal((init?.headers as Record<string, string>)["X-Studio-CSRF"], "csrf-t");
     calls.push({ input: path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
   }) as typeof fetch;

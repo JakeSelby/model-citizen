@@ -58,6 +58,22 @@ endpoint, whatever `export` is set to, and turning export on does not turn this 
 Unlike a ledger row, a decision row holds the text the hook judged — a command, or the head of
 a brief — capped at 2 KiB, which is the one reason to turn it off on a shared machine.
 
+### Retention
+
+```json
+{ "telemetry": { "decision_log_max_bytes": 8388608, "decision_log_keep": 3 } }
+```
+
+The log rotates by size. When a write finds `decisions.jsonl` at `decision_log_max_bytes` (8 MiB
+by default) or past it, the file becomes `decisions.jsonl.1`, each older one moves up a number,
+and the one past `decision_log_keep` (3 by default) is deleted. A rotated file is never
+rewritten, and the reports that read the log (`usage --by decision`, `usage --conflicts` and the
+decision evaluation) read the kept files too. `decision_log_max_bytes: 0` turns rotation off;
+`decision_log_keep: 0` keeps no rotated file. Lowering `decision_log_keep` deletes the files
+numbered past it at the next rotation.
+What each hook writes to the log is listed in
+[runtime-controls.md](runtime-controls.md#what-each-hook-logs).
+
 ## The allowed-command sample
 
 ```json
@@ -186,6 +202,12 @@ in the ledger. One attempt, a two-second timeout, no retry. A collector that is 
 misconfigured costs one line in `~/.local/state/agent-harness/usage.errors.jsonl` — the time, the
 error class, the row count and the endpoint's host — and changes neither the hook's exit status
 nor the session's.
+
+A collector that is not listening at all, a refused or unreachable connection, also opens a
+backoff window in `~/.local/state/agent-harness/export.backoff.json`: a minute after the first
+failure, doubling with each one after it up to six hours. Until it closes, a session end tries
+nothing and writes no error line; the rows stay in the ledger for a [replay](#replay), which is
+never held back. Any answer from the endpoint, even an error status, clears the window.
 
 ## Replay
 

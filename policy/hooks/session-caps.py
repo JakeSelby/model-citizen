@@ -17,6 +17,17 @@ reservation that counts as live until a start consumes it or `RESERVE_TTL` passe
 counted when it is allowed. A subagent's own tool calls carry its parent's `session_id`, so its
 searches count against the parent session.
 
+**A blocked stop.** Another `SubagentStop` hook can block the stop, and the subagent then runs
+on. No hook can see that outcome: matching hooks run in parallel and no event reports a block.
+So every stop is journalled, the one raised after a block (`stop_hook_active`) included, with
+the size of the subagent's transcript at that moment, and before a spawn is decided a stopped
+subagent whose transcript has since gained a turn timestamped after the stop counts as live
+again until its next stop. Claude Code writes the block's reason into that transcript as soon
+as the stop hooks return, so the count runs low only while the blocking hook itself runs. A
+strictly conservative count, live until a stop known to be final, was rejected: only a
+foreground `Agent` return marks a final stop, and subagents run in the background by default,
+so most would count as live until `RUNNING_TTL`.
+
 **Deciding.** A spawn when the live count is already at the cap is denied, and so is a search
 when the session has made as many as the cap allows; the reason names the cap and the count.
 Past 80% of a cap the call goes through with a warning, said on every spawn and once a session
@@ -32,6 +43,7 @@ through with a warning, so a replay measures the arm and not this guard.
 Claude Code only: Codex raises no subagent lifecycle events, so a live count there could not
 fall. A guard that cannot read its state lets the call through; it never denies by accident.
 """
+import datetime
 import importlib.util
 import json
 import math
@@ -61,6 +73,10 @@ HEADLESS_ENTRY = "sdk-cli"
 HEADLESS_VARIABLE = "HARNESS_SESSION_CAPS_HEADLESS"
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,79}\Z")
 MAX_LINE = 4096
+# The chunk a transcript past a stop is read in, so memory stays bounded however large the final
+# response flushed after the stop; a longer line is skipped, and the block's reason comes after it.
+CONTINUED_READ = 256 * 1024
+TRANSCRIPT_TURNS = ("user", "assistant")
 LOCK_WAIT = 2.0
 JOURNAL_TTL = 14 * 86400
 
@@ -178,30 +194,91 @@ def records(path):
     return out
 
 
-def tally(entries, now=None):
+def stamp(value):
+    """A transcript record's ISO-8601 `timestamp` as epoch seconds, or None."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=datetime.timezone.utc)
+    return moment.timestamp()
+
+
+def continued(stop):
+    """Whether the subagent's transcript gained a turn after this journalled stop.
+
+    Only a turn timestamped after the stop counts: the final response a stop can fire ahead of
+    lands in the transcript later, but carries an earlier timestamp. An unreadable transcript
+    reads as no turn, so the guard never holds a slot it cannot account for.
+    """
+    path, size, at = stop.get("path"), stop.get("size"), stop.get("at")
+    if not isinstance(path, str) or not isinstance(at, (int, float)) or isinstance(at, bool):
+        return False
+    try:
+        with open(path, "rb") as handle:
+            end = handle.seek(0, os.SEEK_END)
+            start = size if isinstance(size, int) and not isinstance(size, bool) and size >= 0 \
+                else max(0, end - CONTINUED_READ)
+            if end <= start:
+                return False
+            handle.seek(start)
+            oversized = False
+            while True:
+                raw = handle.readline(CONTINUED_READ)
+                if not raw:
+                    return False
+                if oversized or (len(raw) == CONTINUED_READ and not raw.endswith(b"\n")):
+                    oversized = not raw.endswith(b"\n")
+                    continue
+                try:
+                    record = json.loads(raw.decode("utf-8", "replace"))
+                except ValueError:
+                    continue
+                if not isinstance(record, dict) or record.get("type") not in TRANSCRIPT_TURNS:
+                    continue
+                when = stamp(record.get("timestamp"))
+                if when is not None and when > at:
+                    return True
+    except OSError:
+        return False
+
+
+def tally(entries, now=None, probe=None):
     """`{"live", "running", "reserved", "searches", "warned"}` from a session's journal.
 
     A start consumes the oldest reservation made before it, which is the spawn that caused it
-    when spawns start in order and a harmless undercount for a moment when they do not.
+    when spawns start in order and a harmless undercount for a moment when they do not. With
+    `probe`, `continued` as a spawn passes it, a subagent whose last stop `probe` says was
+    followed by a turn is running again from that stop.
     """
     now = time.time() if now is None else now
-    running, reserved, searches, warned = {}, [], 0, set()
+    running, reserved, searches, warned, stopped = {}, [], 0, set(), {}
     for entry in entries:
         kind, at = entry.get("t"), entry.get("at")
         at = at if isinstance(at, (int, float)) and not isinstance(at, bool) else 0
         if kind == "start" and isinstance(entry.get("id"), str):
             running[entry["id"]] = at
+            stopped.pop(entry["id"], None)
             earlier = [r for r in reserved if r <= at]
             if earlier:
                 reserved.remove(min(earlier))
         elif kind == "stop" and isinstance(entry.get("id"), str):
-            running.pop(entry["id"], None)
+            if running.pop(entry["id"], None) is not None or entry["id"] in stopped:
+                stopped[entry["id"]] = entry
         elif kind == "spawn":
             reserved.append(at)
         elif kind == "search":
             searches += 1
         elif kind == "warned" and isinstance(entry.get("cap"), str):
             warned.add(entry["cap"])
+    if probe is not None:
+        for agent_id, stop in stopped.items():
+            at = stop.get("at")
+            if isinstance(at, (int, float)) and now - at <= RUNNING_TTL and probe(stop):
+                running[agent_id] = at
     live_running = sum(1 for at in running.values() if now - at <= RUNNING_TTL)
     live_reserved = sum(1 for at in reserved if now - at <= RESERVE_TTL)
     return {"live": live_running + live_reserved, "running": live_running,
@@ -290,7 +367,7 @@ def on_spawn(payload, env, path, workflow=False):
     text = tool_input.get("script") or tool_input.get("scriptPath") if workflow else tool_input.get("prompt")
     what = "Workflow launch" if workflow else "spawn"
     with Lock(path.with_suffix(".lock")):
-        counts = tally(records(path))
+        counts = tally(records(path), probe=continued)
         live = counts["live"]
         fields = {"cap": FANOUT, "limit": cap, "count": live, "tool": payload.get("tool_name"),
                   "headless": held}
@@ -356,7 +433,23 @@ def on_subagent(payload, env, path, kind):
     agent_id = payload.get("agent_id")
     if not (isinstance(agent_id, str) and IDENTIFIER.match(agent_id)):
         return {}
-    append(path, {"t": kind, "id": agent_id, "at": time.time()})
+    record = {"t": kind, "id": agent_id, "at": time.time()}
+    if kind == "stop":
+        if payload.get("stop_hook_active"):
+            record["after_block"] = True
+        transcript = payload.get("agent_transcript_path")
+        if isinstance(transcript, str) and transcript and len(transcript) <= MAX_LINE // 2:
+            transcript = os.path.expanduser(transcript)
+            try:
+                record["size"] = os.stat(transcript).st_size
+            except OSError:
+                pass
+            record["path"] = transcript
+    if len(json.dumps(record, ensure_ascii=True)) >= MAX_LINE:
+        # `append` drops a record past MAX_LINE once escaped; the stop matters more than its path.
+        record.pop("path", None)
+        record.pop("size", None)
+    append(path, record)
     if kind == "start":
         prune(env)
     return {}
@@ -371,8 +464,6 @@ def run(payload, env=None):
     if kind == "SubagentStart":
         return on_subagent(payload, env, path, "start")
     if kind == "SubagentStop":
-        if payload.get("stop_hook_active"):
-            return {}
         return on_subagent(payload, env, path, "stop")
     if kind != "PreToolUse":
         return {}

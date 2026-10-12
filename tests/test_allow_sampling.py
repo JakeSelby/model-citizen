@@ -345,7 +345,8 @@ class DispatchTests(unittest.TestCase):
         self.dispatch(*[self.bash(c) for c in SAMPLED])
         self.dispatch({"hook_event_name": "SessionEnd", "session_id": "s-1",
                        "cwd": str(self.home)})
-        rows = self.rows()
+        # The session's read-only count summary is its own point, written at the same end.
+        rows = [r for r in self.rows() if r.get("point") == "grade-bash"]
         self.assertEqual([r["kind"] for r in rows], ["decision", "decision"])
         self.assertEqual([r["outcome"] for r in decisions.joined(rows)], [None, None])
 

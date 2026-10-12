@@ -148,7 +148,7 @@ test("activity fetches through the authenticated CSRF-bound route", async () => 
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ input: String(input), init });
     if (String(input) === "/api/session") {
-      return new Response(JSON.stringify({ authenticated: true, csrf_token: "csrf-one" }), {
+      return new Response(JSON.stringify({ authenticated: true, csrf_token: "csrf-1" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
@@ -168,7 +168,7 @@ test("activity fetches through the authenticated CSRF-bound route", async () => 
   assert.equal(calls[1].input, "/api/activity");
   assert.equal(calls[1].init?.method, "POST");
   assert.deepEqual(calls[1].init?.headers, {
-    "Content-Type": "application/json", "X-Studio-CSRF": "csrf-one",
+    "Content-Type": "application/json", "X-Studio-CSRF": "csrf-1",
   });
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
     ...payload.filters, cursor: "v1:50", limit: 10,

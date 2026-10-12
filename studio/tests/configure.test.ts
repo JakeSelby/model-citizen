@@ -79,7 +79,7 @@ test("mutating API calls acquire a session CSRF token and send same-origin JSON"
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ input: String(input), init });
     if (String(input) === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
@@ -97,7 +97,7 @@ test("mutating API calls acquire a session CSRF token and send same-origin JSON"
   assert.equal(calls[1].init?.credentials, "same-origin");
   assert.deepEqual(calls[1].init?.headers, {
     "Content-Type": "application/json",
-    "X-Studio-CSRF": "csrf-test",
+    "X-Studio-CSRF": "csrf-t",
   });
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
     draft: "draft", changes: { "identity.name": "Operator" },
@@ -110,7 +110,7 @@ test("draft loading normalizes surrounding whitespace before requesting identity
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ input: String(input), init });
     if (String(input) === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }

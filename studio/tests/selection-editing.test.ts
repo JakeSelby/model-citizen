@@ -107,7 +107,7 @@ test("selection preview and save use CSRF-protected same-origin routes", async (
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ input: String(input), init });
     if (String(input) === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
@@ -125,7 +125,7 @@ test("selection preview and save use CSRF-protected same-origin routes", async (
   }
   assert.equal(calls[1].input, "/api/configure/selection/preview");
   assert.equal(calls[3].input, "/api/configure/selection/save");
-  assert.equal((calls[1].init?.headers as Record<string, string>)["X-Studio-CSRF"], "csrf-test");
+  assert.equal((calls[1].init?.headers as Record<string, string>)["X-Studio-CSRF"], "csrf-t");
   assert.deepEqual(JSON.parse(String(calls[3].init?.body)).changes, { mode: "minimal" });
   assert.equal(JSON.parse(String(calls[3].init?.body)).idempotency_key, "stable-key");
 });

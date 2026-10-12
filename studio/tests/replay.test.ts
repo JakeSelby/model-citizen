@@ -86,7 +86,7 @@ test("start sends the exact request with its one-use confirmation", async () => 
     ],
   };
   try {
-    assert.deepEqual(await startReplay(resolved, "confirm-once"), { run_id: "run-1" });
+    assert.deepEqual(await startReplay(resolved, "conf-1"), { run_id: "run-1" });
   } finally {
     globalThis.fetch = original;
   }
@@ -94,7 +94,7 @@ test("start sends the exact request with its one-use confirmation", async () => 
   assert.equal(calls[1].init?.method, "POST");
   assert.equal(new Headers(calls[1].init?.headers).get("X-Studio-CSRF"), "csrf");
   assert.deepEqual(JSON.parse(String(calls[1].init?.body)), {
-    request: resolved, confirmation_token: "confirm-once",
+    request: resolved, confirmation_token: "conf-1",
   });
 });
 

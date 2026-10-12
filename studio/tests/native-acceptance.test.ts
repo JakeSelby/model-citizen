@@ -173,7 +173,7 @@ test("three selected cases flow through preview and confirmed start with same-or
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
     calls.push({ input: String(input), init });
     if (String(input) === "/api/session") {
-      return new Response(JSON.stringify({ csrf_token: "csrf-test" }), {
+      return new Response(JSON.stringify({ csrf_token: "csrf-t" }), {
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
@@ -207,7 +207,7 @@ test("three selected cases flow through preview and confirmed start with same-or
   for (const call of [calls[1], calls[3], calls[5], calls[7]]) {
     assert.equal(call.init?.credentials, "same-origin");
     assert.deepEqual(call.init?.headers, {
-      "Content-Type": "application/json", "X-Studio-CSRF": "csrf-test",
+      "Content-Type": "application/json", "X-Studio-CSRF": "csrf-t",
     });
   }
   assert.deepEqual(JSON.parse(String(calls[3].init?.body)), { selection, spend });

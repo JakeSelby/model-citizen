@@ -92,16 +92,36 @@ def posture_module():
     return _LOADED["posture"]
 
 
-def log_route(payload, tool_input, route):
-    """Record which band an unnamed spawn was routed to. See `decisions.py`; never raises."""
-    if "decisions" not in _LOADED:
-        _LOADED["decisions"] = sibling("decisions")
-    module = _LOADED["decisions"]
-    if module is not None:
+def log_spawn(payload, tool_input, answer, reroute, updated=None):
+    """Record one spawn this hook changed or refused. See `decisions.py`; never raises.
+
+    `answer` is the band a routed spawn went to, as it always was, or the kind of change:
+    `demoted` for a top-class request moved down, `one-rung` for a bare spawn moved below the
+    session, `deny` for delegation off. `reroute` names which rule fired; the row also carries the
+    model and role asked for and the ones the spawn runs with, so every reroute is countable.
+    """
+    try:
+        if "decisions" not in _LOADED:
+            _LOADED["decisions"] = sibling("decisions")
+        module = _LOADED["decisions"]
+        if module is None:
+            return
         prompt = tool_input.get("prompt")
-        module.record("tier-agent-spawns", route["worker"],
-                      prompt if isinstance(prompt, str) else "",
-                      payload if isinstance(payload, dict) else {})
+        after = updated if isinstance(updated, dict) else tool_input
+        fields = {"reroute": reroute,
+                  "model_requested": tool_input.get("model"),
+                  "model": after.get("model"),
+                  "subagent_type_requested": tool_input.get("subagent_type"),
+                  "subagent_type": after.get("subagent_type")}
+        module.record("tier-agent-spawns", answer, prompt if isinstance(prompt, str) else "",
+                      payload if isinstance(payload, dict) else {}, fields=fields)
+    except Exception:
+        pass
+
+
+def log_route(payload, tool_input, route, updated=None):
+    """Record which band an unnamed spawn was routed to."""
+    log_spawn(payload, tool_input, route["worker"], "band", updated)
 
 
 def notice_once(session, key):
@@ -388,6 +408,7 @@ def main():
     posture = posture_module()
     variant = posture.selected("delegation", DEFAULT_STANCE, strict=False) if posture else DEFAULT_STANCE
     if variant == "off":
+        log_spawn(payload, tool_input, "deny", "delegation-off")
         emit({
             "permissionDecision": "deny",
             "permissionDecisionReason": f"Delegation is off; perform the work inline or change the selected stance. ({HOOK})",
@@ -428,13 +449,13 @@ def main():
         if declared == ladder[0]:
             return  # the role declares the top class itself; the request only repeats it
         updated = dict(tool_input, model=declared or ladder[1])
+        log_spawn(payload, tool_input, "demoted", "top-class", updated)
         emit({"updatedInput": updated},
              system_message=f"{HOOK}: {ladder[0]} is reached through a role that declares it, not by request; "
                             f"{kind if named else 'this spawn'} runs on {updated['model']}"
                             + (" · " + notice if notice else ""))
         return
     if route:
-        log_route(payload, tool_input, route)
         updated = dict(tool_input, subagent_type=route["worker"])
         # A request for the top class is not a model this spawn named: it is a request the hook
         # refuses, and refusing it by demoting one rung would let an unnamed spawn beat a band
@@ -459,6 +480,7 @@ def main():
             parts.append(message)
         if top:
             parts.append(f"{ladder[0]} is reached through a role that declares it, not by request")
+        log_route(payload, tool_input, route, updated)
         emit({"updatedInput": updated},
              system_message=(f"{HOOK}: " + " · ".join(parts)) if parts else None)
         return
@@ -471,6 +493,7 @@ def main():
                               + (" · " + notice if notice else "")}))
         return
     updated = dict(tool_input, model=below)
+    log_spawn(payload, tool_input, "one-rung", "bare", updated)
     emit({"updatedInput": updated},
          system_message=f"{HOOK}: {message}" + (" · " + notice if notice else ""))
 

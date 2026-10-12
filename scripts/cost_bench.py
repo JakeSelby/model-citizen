@@ -61,6 +61,7 @@ import unit_economy  # noqa: E402  the unit-by-economy two-by-two: cells, parity
 import replay_session  # noqa: E402  the long-session tier: scripted multi-turn sessions and their rows
 import replay_strata as strata  # noqa: E402  several models in one run, each its own stratum
 import replay_reliability  # noqa: E402  pass^k per task and arm, and the all-rules-at-once rate
+PRICING = replay_pair.load_pricing()  # `policy/hooks/pricing.py`, the one place a rate is read
 
 CHARS_PER_TOKEN = 4.0
 GROWTH_LIMIT = 0.05
@@ -244,11 +245,15 @@ def measure(root=ROOT):
 
 
 def _cache_rates(root):
-    """The models the static figure is priced on: Anthropic ones with both cache rates."""
+    """The models the static figure is priced on: Anthropic ones with both cache rates.
+
+    A model priced by prompt length is left out: the layer's cost on it turns on the size of the
+    whole prompt it sits in, which a count of the layer alone cannot show."""
     table = root / "policy" / "prices.json"
     models = json.loads(table.read_text(encoding="utf-8")).get("models", {}) if table.is_file() else {}
     return {name: row for name, row in sorted(models.items())
-            if name.startswith("claude-") and "cache_write" in row and "cache_read" in row}
+            if name.startswith("claude-") and "cache_write" in row and "cache_read" in row
+            and "long_context" not in row}
 
 
 def price(root, tokens, models=None):
@@ -1085,7 +1090,10 @@ def _stream_diagnostics(messages, streamed):
             continue
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
-                            "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0)})
+                            "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0),
+                            # A field the CLI left out makes the prompt unknown, never smaller.
+                            "prompt": None if any(not isinstance(body["usage"].get(key), int) for key in PREFIX_FIELDS)
+                            else sum(body["usage"][key] for key in PREFIX_FIELDS)})
     # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
     count = lambda value: value if assistant else None
     active = {m.get("parent_tool_use_id") for m in messages
@@ -1189,13 +1197,14 @@ def normalised_cost(cost, first_turns, prices):
     """Reported cost with each thread's first-turn cache reads repriced as cache writes.
 
     Whether a run finds its prefix already cached depends on what ran before it, so run order moves
-    the reported dollars. None when the first turns or a model's rates are unknown: never a guess."""
+    the reported dollars. None when the first turns or a model's rates are unknown: never a guess.
+    A model priced by prompt length takes the tier of the turn's own prompt (`pricing.prompt_rate`)."""
     if not first_turns:
         return None
     extra = 0.0
     for turn in first_turns:
-        rates = _rates(prices, turn["model"])
-        if not rates or "cache_write" not in rates or "cache_read" not in rates:
+        rates = PRICING.prompt_rate(PRICING.usable_rate(_rates(prices, turn["model"])), turn.get("prompt"))
+        if not rates:
             return None
         extra += turn["cache_read"] * (rates["cache_write"] - rates["cache_read"]) / 1e6
     return round(cost + extra, 6)
@@ -1800,7 +1809,7 @@ def run_long_session(task, rep, arm, opts, launch=subprocess.run):
                 t, w, r, opts["arms"]["bare"]["image"], launch, stream=s, baseline=b))
             return scorer(checkpoint, workdir, opts["repo"], path, totals)
 
-        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS)
+        rows = replay_session.run_session(task, base, cap, recording, checker, TIERS, opts.get("run_left"))
         if opts.get("raw"):
             save_stream(opts, task["id"], arm, rep, "".join(t if t.endswith("\n") or not t else t + "\n"
                                                             for t in saved))
@@ -2115,12 +2124,12 @@ def _run_replay(tasks, opts, launch, sink, out, names, stop):
         if seeded else schedule(tasks, opts["reps"], names)
     for position, (task, rep, arm) in enumerate(planned):
         if replay_pack.is_scenario(task):
-            cap = replay_session.session_cap(task, opts["run_cap"])
-            if spent + cap > opts["spend_cap"]:
+            # A session's worst case, not its cap: its last turn's budget may reach past the cap.
+            if spent + replay_session.session_ceiling(task, opts["run_cap"]) > opts["spend_cap"]:
                 stop(STOP_SPEND_CAP)
                 _write_spend_sidecar(out, opts, preflight_spent, spent, True)
                 return rows, True
-            session = run_long_session(task, rep, arm, opts, launch)
+            session = run_long_session(task, rep, arm, dict(opts, run_left=opts["spend_cap"] - spent), launch)
             spent += session[-1]["cost_usd"]
             if ledger is not None:
                 ledger.append(session[-1]["cost_usd"])
@@ -3145,9 +3154,11 @@ def long_session_lines(scenarios, reps, arm_count, run_cap, preflight_cap, sourc
                                              len(scenario["checkpoint_order"]),
                                              caps["max_agent_turns_per_user_turn"],
                                              replay_session.session_cap(scenario, run_cap)))
-    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap and all %d preflight(s) "
-                 "reach %g USD" % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
-                                   arm_count, preflight_cap))
+    lines.append("ceiling, before any spend: %.2f USD if every session reaches its cap plus its last turn's "
+                 "%g USD minimum budget and all %d preflight(s) reach %g USD; an upper bound while each turn "
+                 "holds to its --max-budget-usd, which the CLI checks only between API calls"
+                 % (replay_session.ceiling_usd(scenarios, reps, arm_count, run_cap, preflight_cap),
+                    replay_session.MIN_TURN_BUDGET_USD, arm_count, preflight_cap))
     return lines
 
 

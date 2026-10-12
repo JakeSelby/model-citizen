@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "harness_version": "0.14.2",
+  "harness_version": "0.15.0",
   "release_state": "released",
   "required_cases": [
     "installation",
@@ -72,8 +72,8 @@
       "required_for_release": true,
       "evidence": [
         {
-          "path": "compatibility/evidence/claude-code-cli-macos-0.14.2.json",
-          "sha256": "6b702a7c43ded278eaff6a190e196a6a6b96b302f2ef54fc9d1a9129724f3770"
+          "path": "compatibility/evidence/claude-code-cli-macos-0.15.0.json",
+          "sha256": "1f5100f16c1557646066b0dc2c29182af9ae750d9eafaeec5f3d3e76791bea31"
         }
       ],
       "runtime_version": "2.1.283",
@@ -99,8 +99,8 @@
       "required_for_release": true,
       "evidence": [
         {
-          "path": "compatibility/evidence/claude-code-cli-linux-0.14.2.json",
-          "sha256": "466e25b87316d235e7da300a082569d82fca75587e1e7cd4b4baec90aea7ca94"
+          "path": "compatibility/evidence/claude-code-cli-linux-0.15.0.json",
+          "sha256": "38a96f4f7d0a3eeedcedf07bf0e9e5619e2a5556171bbe1c88512d2a99a9adbe"
         }
       ],
       "runtime_version": "2.1.283",
@@ -201,7 +201,8 @@
     "In the 0.14.0 role-confinement case, confinement was evidenced by the isolated worker's init event exposing only Read, Grep and Glob, by the absence of a write-tool call, and by checking that no requested probe file landed. The case did not independently attempt a filesystem or shell escape outside that exposed tool surface.",
     "In the 0.13.0 and 0.13.1 qualifications a band worker's effort was read from the installed worker definition, not from the subagent's transcript; its model, the budget sentence in its brief, the usage feed and the usage row were observed from the run.",
     "With a token-only login (`CLAUDE_CODE_OAUTH_TOKEN`, as in CI and containers, including the Linux target image), an isolated role worker that a Claude Code session launches cannot authenticate: the client strips the token from its tool subprocesses, and the worker reports that it is not logged in. A client whose confined layers cannot run may then do their work in its own context, unconfined, as the 0.13.0 BMad integration suite observed. Qualification rounds launch their workers from the runner rather than from a client session, so they do not exercise this path. Tracked in #759.",
-    "In the 0.13.0 and 0.13.1 qualifications cost-posture compared each role the cost variant does not change by its content, byte for byte, rather than by its link, so a role replaced by an identical copy would also pass; step 8 asks that every other role keeps its link. Tracked in #742."
+    "In the 0.13.0 and 0.13.1 qualifications cost-posture compared each role the cost variant does not change by its content, byte for byte, rather than by its link, so a role replaced by an identical copy would also pass; step 8 asks that every other role keeps its link. Tracked in #742.",
+    "The v0.15.0 release reran all twelve scripted cases on both required Claude Code CLI targets at the frozen source. It retains v0.14.0's narrower scripted-only claim: #741's independent hand comparisons were moved to v0.16.0 and are not claimed here. On Linux the first full run recorded stance-switch as unverified: the delegation and voice links moved as required, but the client answered the voice comparison prompt with a table under both variants, so the replies could not tell them apart. A second full run at the same source passed all twelve cases and is the linked evidence."
   ],
-  "qualification_source_commit": "040462636205d8edc766775ebe2cc9571ac6b217"
+  "qualification_source_commit": "2bad9ebbf886be60fe6538c1577ea7ba22164494"
 }

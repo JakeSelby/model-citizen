@@ -36,6 +36,10 @@
   "observation": {
     "enabled": false
   },
+  "sandbox": {
+    "enabled": false,
+    "strict": false
+  },
   "governance": {
     "provider": "none",
     "jev": {

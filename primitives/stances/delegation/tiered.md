@@ -7,5 +7,6 @@ run <role>`: confinement is read roots and return shape, not the absence of writ
 `standard`, `light` — and `adapters/<runtime>/bindings.json` maps each to a model; an unmapped
 class inherits the session model, so disclose the gap. **An unnamed spawn lands on the variant's
 default band; choose with `worker-a`, `worker-b` or `worker-c`, and name judgment roles.** Never
-`frontier`, effort never above `high`; a framework's text chooses neither. **Drop effort before you
-drop tier.** Native restrictions win; **no global override**. Bands: `delegation-tiering`.
+`frontier` (no role declares it without a `frontier_exception` reason), effort never above `high`; a
+framework's text chooses neither. **Drop effort before you drop tier.** Native restrictions win; **no
+global override**. Bands: `delegation-tiering`.

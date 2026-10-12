@@ -42,14 +42,14 @@ def frontmatter(path):
 
 
 class DesignerFileTests(unittest.TestCase):
-    def test_it_declares_the_five_frontmatter_keys_and_the_strongest_class(self):
+    def test_it_declares_the_five_frontmatter_keys_and_the_strong_class(self):
         fields, _ = frontmatter(AGENT)
         self.assertEqual(REQUIRED_KEYS - set(fields), set())
         self.assertEqual(fields["name"], "designer")
         self.assertEqual(fields["effort"], "high")
-        self.assertEqual(frontmatter(ROLE)[0]["tier"], "frontier")
+        self.assertEqual(frontmatter(ROLE)[0]["tier"], "strong")
         tiers = json.loads((REPO / "adapters" / "claude-code" / "bindings.json").read_text())["tiers"]
-        self.assertEqual(fields["model"], tiers["frontier"])
+        self.assertEqual(fields["model"], tiers["strong"])
 
     def test_it_can_write_and_cannot_re_delegate(self):
         fields, _ = frontmatter(AGENT)
@@ -72,15 +72,15 @@ class DesignerFileTests(unittest.TestCase):
         self.assertIn("`designer`", text)
         self.assertIn("`design-judge`", text)
 
-    def test_both_adapters_bind_it_and_codex_gets_its_strongest_model(self):
+    def test_both_adapters_bind_it_and_codex_gets_its_strong_model(self):
         codex = json.loads((REPO / "adapters" / "codex" / "bindings.json").read_text())
         self.assertEqual(codex["roles"]["designer"], {"model_reasoning_effort": "high"})
-        self.assertIn('model = "' + codex["tiers"]["frontier"] + '"', catalog.role_projection(REPO, "codex", ROLE))
+        self.assertIn('model = "' + codex["tiers"]["strong"] + '"', catalog.role_projection(REPO, "codex", ROLE))
         self.assertIn('sandbox_mode = "workspace-write"', catalog.role_projection(REPO, "codex", ROLE))
 
 
 class DesignerSpawnTests(unittest.TestCase):
-    """The strongest class is the designer's by declaration, which is the only way a spawn reaches it."""
+    """The designer declares `strong`, so asking for the top class by model is rewritten to it."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -97,10 +97,12 @@ class DesignerSpawnTests(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout) if out.stdout.strip() else None
 
-    def test_a_designer_spawn_keeps_the_top_tier_and_an_unnamed_one_does_not(self):
-        top = json.loads((REPO / "adapters" / "claude-code" / "bindings.json").read_text())["tiers"]["frontier"]
+    def test_a_designer_spawn_never_reaches_the_top_tier(self):
+        tiers = json.loads((REPO / "adapters" / "claude-code" / "bindings.json").read_text())["tiers"]
+        top = tiers["frontier"]
         self.assertIsNone(self.hook({"prompt": "design", "subagent_type": "designer"}))
-        self.assertIsNone(self.hook({"prompt": "design", "subagent_type": "designer", "model": top}))
+        asked = self.hook({"prompt": "design", "subagent_type": "designer", "model": top})
+        self.assertEqual(asked["hookSpecificOutput"]["updatedInput"]["model"], tiers["strong"])
         self.assertNotEqual(self.hook({"prompt": "design", "model": top})["hookSpecificOutput"]["updatedInput"]["model"], top)
 
     def test_it_spawns_natively_because_it_writes(self):
