@@ -485,10 +485,11 @@ The reset itself is Claude Code's own auto-compaction, moved to the cost variant
   `trigger: auto` compaction and writes `.agent-harness/handoffs/auto-<session>-<UTC time>.md` in
   the repository the session works in: the last five prompts of the main thread, the branch and a
   count of the working tree's changes, the open items of the newest TodoWrite list, and the task
-  store's revision. It is the fallback for whatever the hand-off save missed. Prompts pass through
-  the decision log's redaction (the lint's secret shapes) before they are written, and none is
-  written when those shapes cannot be read. The folder carries its own `.gitignore`, so a snapshot
-  is never committed, and each session keeps its newest five. It calls no model and never blocks;
+  store's revision. It is the fallback for whatever the hand-off save missed. Prompts and todos
+  pass through the decision log's redaction (the lint's secret shapes) before they are clipped and
+  written, and neither is written when those shapes cannot be read. The folder carries a
+  `.gitignore` that also ignores itself, so nothing in it is ever committed, and each session keeps
+  its newest five. It calls no model and never blocks;
   a manual `/compact` gets no snapshot. A failure is a line in `pre-compact.errors.jsonl` beside
   the other ledgers.
 - **The reseed.** When a session starts again with source `compact` or `clear`, the session-start
