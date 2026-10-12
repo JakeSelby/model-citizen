@@ -369,6 +369,8 @@ def merge_slot(per_message, old_key, new_key):
     for name in ("day", "model"):
         if slot.get(name) and not target.get(name):
             target[name] = slot[name]
+    if slot.get("prompt_known"):
+        target["prompt_known"] = True
     for name in [field for field, _ in FIELDS] + [field for field, _ in CACHE_TIERS]:
         value = slot.get(name) or 0
         if value > (target.get(name) or 0):
@@ -427,6 +429,9 @@ def record_usage(per_message, key, usage, day="", model=""):
         slot["day"] = day
     if model and not slot.get("model"):
         slot["model"] = model
+    # A record that omits a prompt field leaves the prompt unknown, not smaller; see `prompt_tokens`.
+    if all(not isinstance(usage.get(field), bool) and isinstance(usage.get(field), int) for field in PROMPT_FIELDS):
+        slot["prompt_known"] = True
     for name, field in FIELDS:
         try:
             value = int(usage.get(field) or 0)
@@ -499,6 +504,9 @@ def empty_slice():
     return dict([(name, 0) for name, _ in FIELDS] + [("turns", 0)])
 
 
+# The usage fields a request's prompt is summed over: its input, cache reads and cache writes.
+PROMPT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
 # Every token field a per-model part can carry: the four columns and the two cache-write tiers.
 PART_FIELDS = tuple(name for name, _ in FIELDS) + tuple(name for name, _ in CACHE_TIERS)
 
@@ -522,7 +530,12 @@ def by_model(per_message):
             value = slot.get(field) or 0
             if value:
                 part[field] = part.get(field, 0) + value
-        part["max_prompt"] = max(part["max_prompt"], prompt_tokens(slot))
+        prompt = prompt_tokens(slot)
+        part["max_prompt"] = None if prompt is None or part["max_prompt"] is None \
+            else max(part["max_prompt"], prompt)
+    for part in out.values():
+        if part["max_prompt"] is None:
+            del part["max_prompt"]
     return out
 
 
@@ -531,8 +544,12 @@ def prompt_tokens(slot):
 
     A part records the largest, because a provider can price a request by its prompt length
     (Anthropic does, for Claude Haiku 5.5); `pricing.prompt_rate` reads it. A part whose largest
-    prompt is under the threshold was billed at the base rate throughout.
+    prompt is under the threshold was billed at the base rate throughout. None when no record of the
+    message reported all three fields; a part holding such a message records no `max_prompt`, so a
+    model priced by prompt length leaves it unpriced.
     """
+    if not slot.get("prompt_known"):
+        return None
     return sum(int(slot.get(field) or 0) for field in ("input", "cache_read", "cache_write"))
 
 
