@@ -642,6 +642,7 @@ development_status:
   ah-c109-chore-release-fold-the-0-15-0-changelog: ready-for-dev
   ah-c110-reserve-ids-and-write-story-files-for-the: ready-for-dev
   ah-c111-qualify-and-publish-v0-15-0: ready-for-dev
+  ah-c112-reopen-the-freeze-record-after-v0-15-0: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
