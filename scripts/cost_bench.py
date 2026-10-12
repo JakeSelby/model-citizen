@@ -1087,8 +1087,9 @@ def _stream_diagnostics(messages, streamed):
         seen.add(thread)
         first_turns.append({"model": body.get("model") or "",
                             "cache_read": int(body["usage"].get("cache_read_input_tokens") or 0),
-                            "prompt": sum(int(body["usage"].get(key) or 0) for key in (
-                                "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))})
+                            # A field the CLI left out makes the prompt unknown, never smaller.
+                            "prompt": None if any(not isinstance(body["usage"].get(key), int) for key in PREFIX_FIELDS)
+                            else sum(body["usage"][key] for key in PREFIX_FIELDS)})
     # Output with no assistant message, such as a lone result, cannot show a call: unknown, not 0.
     count = lambda value: value if assistant else None
     active = {m.get("parent_tool_use_id") for m in messages

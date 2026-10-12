@@ -73,7 +73,11 @@ def load_prices(cfg, path=None):
             continue
         name = normalise_model(key)
         merged = dict(table.get(name) or {})
+        tier = merged.get("long_context")
         merged.update(value)
+        # The prompt-length tier merges field by field too, so one overridden rate keeps the rest.
+        if isinstance(tier, dict) and isinstance(value.get("long_context"), dict):
+            merged["long_context"] = dict(tier, **value["long_context"])
         table[name] = merged
     return table
 

@@ -382,7 +382,8 @@ def _token_cost(row, table):
         return None, "cache_write_1h is invalid"
     values["cache_write_1h"] = one_hour
     values["cache_write_5m"] = values["cache_write"] - one_hour
-    rate = PRICING.price_for(table, row.get("model"))
+    # An arm row totals a whole run, so a model priced by prompt length cannot be placed in a tier.
+    rate = PRICING.prompt_rate(PRICING.price_for(table, row.get("model")), None)
     if rate is None:
         return None, "model %r is unpriced" % row.get("model")
     try:

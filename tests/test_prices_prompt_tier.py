@@ -5,10 +5,14 @@ Run: python3 -m unittest tests.test_prices_prompt_tier
 """
 import importlib.util
 import json
+import sys
 import unittest
 
 from test_cost_bench import BENCH
 from test_harness import REPO
+
+sys.path.insert(0, str(REPO / "lib"))
+from harness_core import rebuilds, soft_estimates  # noqa: E402
 
 ABL = BENCH.ablations
 PRICING = BENCH.PRICING
@@ -16,6 +20,9 @@ SHIPPED = json.loads((REPO / "policy" / "prices.json").read_text(encoding="utf-8
 SPEC = importlib.util.spec_from_file_location("layer_scorecard_tier", REPO / "scripts" / "layer_scorecard.py")
 SCORECARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SCORECARD)
+BUNDLE_SPEC = importlib.util.spec_from_file_location("evidence_bundle_tier", REPO / "scripts" / "evidence_bundle.py")
+BUNDLE = importlib.util.module_from_spec(BUNDLE_SPEC)
+BUNDLE_SPEC.loader.exec_module(BUNDLE)
 
 # Read from https://platform.claude.com/docs/en/about-claude/pricing on 2026-10-12 (USD per
 # million tokens). Cache hits on Opus 5.5 and Sonnet 5.5 are 0.05x base input, on Fable 5.1
@@ -109,6 +116,17 @@ class RowCost(unittest.TestCase):
     def test_a_haiku_row_without_a_breakdown_is_unpriced(self):
         flat = dict(TOKENS, kind="session", runtime="claude-code", model="claude-haiku-5-5")
         self.assertIsNone(PRICING.row_cost(flat, self.table))
+        self.assertIsNotNone(PRICING.row_cost(dict(flat, model="claude-sonnet-5-5"), self.table))
+
+    def test_an_override_of_one_tier_rate_keeps_the_rest_of_the_tier(self):
+        table = PRICING.load_prices({"prices": {"claude-haiku-5-5": {"long_context": {"input": 0.6}}}},
+                                    REPO / "policy" / "prices.json")
+        tier = PRICING.price_for(table, "claude-haiku-5-5")["long_context"]
+        self.assertEqual((tier["input"], tier["output"], tier["over_prompt_tokens"]), (0.6, 2.5, 100000))
+
+    def test_an_override_of_a_base_rate_keeps_the_tier(self):
+        table = PRICING.load_prices({"prices": {"claude-haiku-5-5": {"input": 0.2}}}, REPO / "policy" / "prices.json")
+        self.assertIsNone(PRICING.row_cost(row({"claude-haiku-5-5": part(max_prompt=150000)}), table))
 
     def test_sonnet_5_5_cache_reads_are_charged_at_ten_cents(self):
         cost = PRICING.row_cost(row({"claude-sonnet-5-5": part(input=0, output=0)}), self.table)
@@ -143,6 +161,39 @@ class ReadersApplyTheTier(unittest.TestCase):
         cells = SCORECARD.prefix({"entries": ["instructions/global"]}, rows, static, table)
         self.assertIsNone(cells["claude-haiku-5-5"]["usd_session_start"])
         self.assertIsNotNone(cells["claude-sonnet-5-5"]["usd_session_start"])
+
+
+    def call(self, **tokens):
+        base = {"prompt": 1, "model": "claude-haiku-5-5", "input": 1000, "output": 500, "cache_read": 0,
+                "cache_write": 0, "cache_write_1h": None, "cache_write_5m": None, "rewritten": None, "cause": None}
+        return dict(base, **tokens)
+
+    def test_a_rebuild_call_takes_its_own_prompts_tier(self):
+        table = PRICING.load_prices({}, REPO / "policy" / "prices.json")
+        long = self.call(cache_read=150000)
+        self.assertAlmostEqual(rebuilds._call_cost(long, table, PRICING), (1000 * 0.5 + 150000 * 0.05 + 500 * 2.5) / 1e6)
+        short = self.call(cache_read=50000)
+        self.assertAlmostEqual(rebuilds._call_cost(short, table, PRICING), (1000 * 0.1 + 50000 * 0.01 + 500 * 0.5) / 1e6)
+        self.assertAlmostEqual(rebuilds._break_cost(self.call(cache_write=120000), 120000, table, PRICING),
+                               120000 * (0.625 - 0.05) / 1e6)
+
+    def test_a_soft_estimate_prices_each_call_at_its_own_tier(self):
+        table = PRICING.load_prices({}, REPO / "policy" / "prices.json")
+        calls = [self.call(prompt=1), self.call(prompt=2, cache_read=150000)]
+        result = soft_estimates.reprice(calls, 1, table, PRICING, lambda value: 0)
+        self.assertEqual(result["status"], "priced")
+        self.assertAlmostEqual(result["actual"], (1000 * 0.5 + 150000 * 0.05 + 500 * 2.5) / 1e6)
+        # The counterfactual first call writes its whole 151,000-token prompt: still the long tier.
+        self.assertAlmostEqual(result["counterfactual"], (1000 * 0.5 + 150000 * 0.625 + 500 * 2.5) / 1e6)
+
+    def test_an_evidence_bundle_arm_row_on_a_tiered_model_is_unpriced(self):
+        table = PRICING.load_prices({}, REPO / "policy" / "prices.json")
+        arm = {"input_tokens": 10, "output_tokens": 10, "cache_read_input_tokens": 10,
+               "cache_creation_input_tokens": 10}
+        cost, why = BUNDLE._token_cost(dict(arm, model="claude-haiku-5-5"), table)
+        self.assertIsNone(cost)
+        self.assertIn("unpriced", why)
+        self.assertIsNotNone(BUNDLE._token_cost(dict(arm, model="claude-sonnet-5-5"), table)[0])
 
 
 if __name__ == "__main__":

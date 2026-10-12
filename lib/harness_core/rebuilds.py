@@ -291,13 +291,19 @@ def _scope():
                          "unpriced_breaks": 0})}
 
 
+def _call_rate(call, table, pricing):
+    """The rate one call was billed at: a call is one request, so it takes its own prompt's tier."""
+    prompt = call["input"] + call["cache_read"] + call["cache_write"]
+    return pricing.prompt_rate(pricing.price_for(table, call["model"]), prompt)
+
+
 def _call_cost(call, table, pricing):
-    rate = pricing.price_for(table, call["model"])
+    rate = _call_rate(call, table, pricing)
     return None if rate is None else pricing.tokens_cost(call, rate)
 
 
 def _break_cost(call, rewritten, table, pricing):
-    rate = pricing.price_for(table, call["model"])
+    rate = _call_rate(call, table, pricing)
     if rate is None:
         return None
     writes = call["cache_write"]
