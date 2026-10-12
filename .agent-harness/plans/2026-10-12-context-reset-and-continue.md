@@ -3,7 +3,8 @@
 > Past the cost stance's threshold, Claude Code's own auto-compaction fires at the harness's number
 > instead of near 1M, and the harness reseeds the fresh context from the task store, so the agent
 > carries on in the same turn without a new session. An eval suite proves it does that without
-> losing state, and it ships in v0.15.0.
+> losing state, and it ships in v0.16.0.
+> **Changed this round.** Moved from v0.15.0 to v0.16.0 so v0.15.0 releases without it.
 > Effort: about 6 PRs · Risk: medium (compaction quality) · Blast radius: every Claude Code session
 
 ## At a glance
@@ -35,7 +36,7 @@
 
 1. **[Spike the native mechanics](#step-1--spike-the-native-mechanics)** — one container, `claude -p`, window 100k at 40%.
    *Exit:* the transcript shows auto-compaction near 40k, PreCompact input, SessionStart `compact` context injected, and the turn continuing.
-2. **[File the epic and stories on v0.15.0](#step-2--file-the-epic-and-stories)** — absorbs #749, supersedes #751.
+2. **[File the epic and stories on v0.16.0](#step-2--file-the-epic-and-stories)** — absorbs #749, supersedes #751.
    *Exit:* `bmad_issue_sync.py audit` and `sprint-status --check` clean; #751 closed as superseded.
 3. **[Project the reset point](#step-3--project-the-reset-point)** — sidecars gain `context_reset_at`; sync writes it into settings `env`.
    *Exit:* sync in a temp home writes 400k for `balanced`, 200k for `frugal`, nothing for `max` and `off`; tests green.
@@ -48,7 +49,7 @@
 7. **[Rules, detector, docs, copy](#step-7--rules-detector-docs-copy)** — cost stance, cache-hygiene, detector, `docs/`, `product.json`, changelog, migration entry.
    *Exit:* full Gate green; landing-copy check passes.
 8. **[Eval suite](#step-8--eval-suite)** — a native acceptance case plus a pre-registered long-session scenario, reset arm against no-reset arm.
-   *Exit:* the acceptance case passes on both CLI targets; the eval meets its floor before the v0.15.0 tag.
+   *Exit:* the acceptance case passes on both CLI targets; the eval meets its floor before the v0.16.0 tag.
 
 ## Decisions for the reviewer
 
@@ -64,14 +65,14 @@
 *Recommend* yes: the next task starts small and reseeded. Desktop asks you to approve each clear unless auto or bypass mode is on.
 *Alternative* refresh the handoff only (#749 as written), and the context resets at the threshold.
 
-**4. Does the behavioural eval block the v0.15.0 tag?**
+**4. Does the behavioural eval block the v0.16.0 tag?**
 *Recommend* yes, with a $100 spend cap: the release would otherwise ship an unproven change to every session.
 *Alternative* the acceptance case blocks the tag and the eval reports afterwards.
 
 ## Risks
 
 - The compaction summary loses state the handoff missed: the fallback snapshot covers it, and the eval's re-asked and redone checks catch it. If the floor fails, ship with the reset off by default.
-- The v0.15.0 candidate is in flight (#1286): this lands before the freeze, and the release session is told the freeze moves.
+- The v0.16.0 candidate must carry the migration entry: step 7 adds it when that candidate opens.
 - Two sessions share one checkout's task store: the reseed takes only this session's own save, else progress.md only.
 
 ---
@@ -93,8 +94,8 @@ Sources: hooks reference, PreCompact and SessionStart sections, https://code.cla
 
 ## Step 2 — File the epic and stories
 
-- New epic on v0.15.0: "Sessions reset their own context and keep working". Stories: steps 3 to 8 (6 stories) plus the spike.
-- Move #749 under it on v0.15.0 and rewrite its acceptance to step 6. Close #751 as superseded by the step 8 eval, and leave #745, #747 and #750 on v0.18.0.
+- New epic on v0.16.0: "Sessions reset their own context and keep working". Stories: steps 3 to 8 (6 stories) plus the spike.
+- Move #749 under it on v0.16.0 and rewrite its acceptance to step 6. Close #751 as superseded by the step 8 eval, and leave #745, #747 and #750 on v0.18.0.
 - `bmad new` misses its reservation on list lag; follow with `reserve --issue N`, and link sub-issues through the API before merge (memory: bmad-new-reserve-lag). The filing PR needs its own delivery chore (memory: filing-pr-needs-delivery-chore).
 
 ## Step 3 — Project the reset point
@@ -134,7 +135,7 @@ Sources: hooks reference, PreCompact and SessionStart sections, https://code.cla
 - `primitives/stances/cost/balanced.md` and `frugal.md`: replace "write the handoff, then start a fresh session" with the reset behaviour, and drop "a task ends with `/clear`" in favour of step 6. Each stays within its line budget.
 - `primitives/rules/cache-hygiene.md`: harness-triggered compaction is the stance working. The `cache-hygiene/compact` detector in `policy/hooks/rule-detectors.py` exempts `trigger: auto` compactions at the projected reset point and still counts manual `/compact`. Update `tests/test_rule_detectors.py` and the golden.
 - `docs/preferences.md` "When a session should hand off" becomes "When a session resets", and `docs/usage.md` documents the block, the snapshot and the reseed.
-- `product.json`: a capability line. Add a changelog fragment. Add a `compatibility/migration.json` entry for the PreCompact hook and the env projection; that file is in the candidate PR #1286, so coordinate through the release session.
+- `product.json`: a capability line. Add a changelog fragment. Add a `compatibility/migration.json` entry for the PreCompact hook and the env projection; it goes into the v0.16.0 candidate.
 
 ## Step 8 — Eval suite
 
