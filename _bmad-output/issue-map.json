@@ -5,7 +5,7 @@
   "generated_at": "2026-09-22",
   "next_ids": {
     "bug": 186,
-    "chore": 108,
+    "chore": 109,
     "decision": 15,
     "epic": 28,
     "spike": 20,
@@ -9381,6 +9381,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B184.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C108",
+      "github_number": 1282,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1282",
+      "title": "chore(release): release v0.15.0",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C108.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
