@@ -41,7 +41,11 @@
       "_comment": "The template's sandbox block, written only while sandbox.enabled is true in the user config, with filesystem.allowWrite derived from the workspace at sync time; owned by the native_telemetry rules, so a sandbox block the user wrote is reported and left alone, and turning the key off restores what the key held before.",
       "settings_keys": ["sandbox"]
     },
-    "never_touch": ["model", "theme", "viewMode", "effortLevel", "alwaysThinkingEnabled", "skipDangerousModePermissionPrompt", "env except native_telemetry.env_keys and workspaces.env_keys", "otelHeadersHelper unless telemetry.native is true", "sandbox unless sandbox.enabled is true","permissions.deny", "permissions.ask", "autoUpdatesChannel", "remoteControlAtStartup", "agentPushNotifEnabled"]
+    "context_reset": {
+      "_comment": "The cost stance's context_reset_at as Claude Code's auto-compaction trigger, written only while the selected cost variant names one; owned per variable and written as a pair or not at all. autoCompactWindow in settings, or a value the harness did not write in either variable, leaves the user's value alone with one warning; a variant naming no reset point takes back out only what the reconciliation journal holds, and an unavailable cost resolver leaves the pair as it is.",
+      "env_keys": ["CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"]
+    },
+    "never_touch": ["model", "theme", "viewMode", "effortLevel", "alwaysThinkingEnabled", "skipDangerousModePermissionPrompt", "env except native_telemetry.env_keys, workspaces.env_keys and context_reset.env_keys", "otelHeadersHelper unless telemetry.native is true", "sandbox unless sandbox.enabled is true","permissions.deny", "permissions.ask", "autoUpdatesChannel", "remoteControlAtStartup", "agentPushNotifEnabled"]
   },
   "vscode": {
     "owned_keys": ["claudeCode.focusView", "claudeCode.preferredLocation", "claudeCode.hideOnboarding"],

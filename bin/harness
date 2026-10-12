@@ -807,6 +807,92 @@ def claude_sandbox_values(cfg: Dict[str, Any], template: Dict[str, Any]) -> Dict
     return {("sandbox",): rendered}
 
 
+# Claude Code's documented range for `CLAUDE_CODE_AUTO_COMPACT_WINDOW`.
+AUTO_COMPACT_WINDOW_MIN, AUTO_COMPACT_WINDOW_MAX = 100000, 1000000
+# What auto-compaction holds back below the window before its percentage applies: measured at
+# about 19,300 tokens, so it fires near pct/100 x (window - 19,300). Rounded up to a margin.
+AUTO_COMPACT_RESERVE = 20000
+CONTEXT_RESET_ENV = ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE")
+
+
+def claude_context_reset_values(table: Dict[str, Any]) -> Optional[Dict[Tuple[str, ...], str]]:
+    """The settings `env` pair that makes native auto-compaction fire near the cost variant's
+    `context_reset_at`: empty when the variant names no reset point, None when the resolver is
+    missing or fails, since then nobody knows what the variant wants.
+
+    The window is the reset point plus the reserve and the percentage is 100, so the trigger
+    lands at about the reset point itself; the sidecar bounds keep the window inside the
+    documented range, and the clamp is only a guard. A model whose own window is smaller caps
+    the env window: `frugal` on a 200k model fires near 180k, not 200k.
+
+    The value comes from the user's configured cost variant. A project or session cost override
+    (`HARNESS_STANCE_COST`) moves the hand-off block but not the projected compaction, because
+    sync projects user defaults and Claude Code reads settings `env` once at startup.
+    """
+    module = load_posture()
+    if module is None or not isinstance(table, dict) or not isinstance(table.get("switches"), dict):
+        return None
+    try:
+        reset = module.context_reset_at(table)
+    except Exception:
+        return None
+    if reset is None:
+        return {}
+    window = min(max(reset + AUTO_COMPACT_RESERVE, AUTO_COMPACT_WINDOW_MIN), AUTO_COMPACT_WINDOW_MAX)
+    return {("env", CONTEXT_RESET_ENV[0]): str(window), ("env", CONTEXT_RESET_ENV[1]): "100"}
+
+
+def apply_context_reset(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
+                        table: Dict[str, Any], ownership: Dict[str, Any]
+                        ) -> Tuple[List[List[str]], List[str], Dict[Tuple[str, ...], str]]:
+    """Fold the cost variant's reset point into `merged`; returns its owned paths, its warnings
+    and the pair it wrote.
+
+    The two variables are one setting, so they are written together or not at all. Neither is
+    written while the user's settings carry `autoCompactWindow`, which the env pair would
+    override, or while either variable holds a value the harness did not write: a value present
+    with no journal record and unequal to the projection, or one changed since the harness last
+    wrote it. Then any half the harness wrote earlier is taken back out, the user's value is
+    never touched, and one warning line is printed rather than a needs-attention item, since a
+    user's own compaction window is a deliberate choice and not a fault. A `--auto-compact-window`
+    flag or a slash command is invisible to sync and beats settings anyway. When the resolver is
+    missing or fails, whatever the harness wrote stays as it is, with a warning.
+    """
+    block = ownership.get("claude", {}).get("context_reset", {})
+    paths = [["env", key] for key in block.get("env_keys", [])]
+    values = claude_context_reset_values(table)
+    target = claude_dir() / "settings.json"
+    if values is None:
+        if any(held.get(json.dumps(path)) is not None for path in paths):
+            return [], ["the cost resolver is unavailable, so the context reset pair in {} is left "
+                        "as it is".format(target)], {}
+        return [], [], {}
+
+    def foreign(path: List[str]) -> bool:
+        current = reconcile.lookup(live, path)
+        if not current["present"]:
+            return False
+        record = held.get(json.dumps(path))
+        if record is None:
+            return current["value"] != values.get(tuple(path))
+        return current != record.get("applied")
+
+    theirs = [path for path in paths if foreign(path)]
+    clashes = [".".join(path) for path in theirs]
+    if "autoCompactWindow" in live:
+        clashes.insert(0, "autoCompactWindow")
+    warnings: List[str] = []
+    if clashes and values:
+        warnings.append("{} in {} holds a value the harness did not write; the cost stance's "
+                        "context reset point is not projected".format(" and ".join(clashes), target))
+    if clashes:
+        values = {}
+        paths = [path for path in paths if path not in theirs]
+    notices: List[str] = []
+    kept = _apply_owned(merged, live, held, paths, values, "the context reset", notices)
+    return kept, warnings + notices, values
+
+
 def apply_native_claude(merged: Dict[str, Any], live: Dict[str, Any], held: Dict[str, Any],
                         telemetry: Dict[str, Any], cfg: Dict[str, Any],
                         ownership: Dict[str, Any],
@@ -1675,6 +1761,14 @@ def _cmd_sync_unlocked(args: argparse.Namespace) -> int:
                                                            template)
         owned_paths += native_paths
         report.extend(native_notices)
+        reset_paths, reset_warnings, reset_values = apply_context_reset(merged, live, held, table,
+                                                                         ownership)
+        owned_paths += reset_paths
+        if reset_values:
+            say("  compact claude-code auto-compaction " + ", ".join(
+                path[-1] + "=" + value for path, value in sorted(reset_values.items())))
+        for line in reset_warnings:
+            say("  warning: " + line)
         if ["sandbox"] in native_paths:
             sandbox = merged.get("sandbox")
             say("  sandbox " + ("claude-code Bash runs in the OS sandbox, writing to the working tree and "

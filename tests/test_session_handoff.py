@@ -59,9 +59,10 @@ class Handoff(Fixture):
 
 class ShippedThresholds(Handoff):
     def test_each_variant_carries_its_soft_and_hard_threshold(self):
-        # The soft threshold is where the curve leaves its floor; the hard one is the posture's.
+        # The soft threshold is where the curve leaves its floor; the hard one is nine tenths of
+        # the posture's context reset point.
         module = load_feed()
-        for name, soft, hard in (("balanced", [160000], 400000), ("frugal", [160000], 200000),
+        for name, soft, hard in (("balanced", [160000], 360000), ("frugal", [160000], 180000),
                                  ("max", [], None)):
             self.variant(name)
             table = module.settings(self.env())[0]
@@ -175,7 +176,7 @@ class StopBlock(Handoff):
         self.hard(at=200000)
         self.grow("m1", 210000)
         self.assertEqual(self.stop_answer()["decision"], "block")
-        self.hard(at=400000)
+        self.hard(at=400000, extends="max")  # under balanced's reset point it would not stand
         self.grow("m2", 310000)
         self.assertIsNone(self.stop_answer())
         self.assertIsNone(self.state()["handed_off"])
