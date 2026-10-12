@@ -310,7 +310,6 @@ development_status:
   ah-e018-cut-cache-rebuild-spend-in-long-interactive: in-progress
   ah-c067-reserve-ids-and-write-story-files-for-the-cache: done
   ah-s227-harness-usage-by-rebuild-attribute-cache: done
-  ah-s228-refresh-the-handoff-at-task-boundaries-in-land: ready-for-dev
   ah-s229-cold-resume-guard-hold-one-prompt-after-a-long: ready-for-dev
   ah-sp010-spike-does-a-userpromptsubmit-block-hold-the: ready-for-dev
   ah-sp011-spike-one-week-trial-of-an-earlier-auto-compact: ready-for-dev
@@ -434,6 +433,15 @@ development_status:
   ah-s347-protect-the-record-block-agent-writes-to: backlog
   ah-s349-long-session-tier-simulated-deep-coding-and: done
   ah-sp019-outcome-arm-on-a-pinned-subset-of-a-public-task: backlog
+
+  ah-e028-sessions-reset-their-own-context-and-keep: in-progress
+  ah-s228-refresh-the-handoff-at-task-boundaries-in-land: ready-for-dev
+  ah-s363-project-the-cost-stance-s-context-reset-point: ready-for-dev
+  ah-s364-hand-off-before-the-context-reset-with-a-lowered: ready-for-dev
+  ah-s365-reseed-the-session-s-context-from-its-own: ready-for-dev
+  ah-s366-rules-detector-docs-and-copy-for-sessions-that: ready-for-dev
+  ah-s367-eval-suite-proving-sessions-reset-their-context: ready-for-dev
+  ah-sp020-spike-native-auto-compaction-at-a-lowered-window: ready-for-dev
 
   # Items with no epic
   ah-b001-plan-mode-prompts-for-read-only-work-it-can-t: done
@@ -632,6 +640,7 @@ development_status:
   ah-c107-file-the-studio-follow-up-stories-decided-on: ready-for-dev
   ah-c108-chore-release-release-v0-15-0: ready-for-dev
   ah-c109-chore-release-fold-the-0-15-0-changelog: ready-for-dev
+  ah-c110-reserve-ids-and-write-story-files-for-the: ready-for-dev
   ah-c111-qualify-and-publish-v0-15-0: ready-for-dev
   ah-c112-reopen-the-freeze-record-after-v0-15-0: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
