@@ -443,6 +443,27 @@ development_status:
   ah-s367-eval-suite-proving-sessions-reset-their-context: ready-for-dev
   ah-sp020-spike-native-auto-compaction-at-a-lowered-window: ready-for-dev
 
+  ah-e029-organize-the-studio-around-the-user-s-questions: in-progress
+  ah-s368-ia-shell-new-nav-old-route-redirects-and-the: ready-for-dev
+  ah-s369-setting-periods-api-periods-py-and-api-harness: ready-for-dev
+  ah-s370-two-tab-harness-frame-efficacy-and-settings: ready-for-dev
+  ah-s371-rules-page: ready-for-dev
+  ah-s372-hooks-page-with-liveness: ready-for-dev
+  ah-s373-stances-page: ready-for-dev
+  ah-s374-roles-and-workflows-pages: ready-for-dev
+  ah-s375-sources-page-with-source-labels: ready-for-dev
+  ah-s376-transcript-index-per-call-context-and-cost-reset: ready-for-dev
+  ah-s377-sessions-page: ready-for-dev
+  ah-s378-skills-page-loaded-versus-invoked: ready-for-dev
+  ah-s379-changes-inbox-draft-list-and-rollback-history: ready-for-dev
+  ah-s380-home-daily-digest-and-attention-queue: ready-for-dev
+  ah-s381-evals-page: ready-for-dev
+  ah-s382-baseline-start-from-what-you-have: ready-for-dev
+  ah-s383-routines-launchd-scheduler-definitions-run: ready-for-dev
+  ah-s384-retire-the-old-studio-pages-and-ship-the: ready-for-dev
+  ah-sp021-spike-derive-setting-periods-from-usage-rows: ready-for-dev
+  ah-t041-run-five-ia-sessions-with-solo-and-small-team: ready-for-dev
+
   # Items with no epic
   ah-b001-plan-mode-prompts-for-read-only-work-it-can-t: done
   ah-b002-fix-rules-the-always-loaded-delegation: done
@@ -644,6 +665,7 @@ development_status:
   ah-c110-reserve-ids-and-write-story-files-for-the: ready-for-dev
   ah-c111-qualify-and-publish-v0-15-0: ready-for-dev
   ah-c112-reopen-the-freeze-record-after-v0-15-0: ready-for-dev
+  ah-c113-file-the-studio-redesign-epic-spike-and-stories: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done
