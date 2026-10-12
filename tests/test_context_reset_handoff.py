@@ -158,15 +158,15 @@ class Snapshot(Repository):
         # Deterministic: the same inputs at the same moment write the same file.
         self.assertEqual(self.hook.snapshot(self.payload(), now=NOW).read_text(), text)
         # Never committed: the folder's own ignore file covers the snapshot and its temporary.
-        self.assertEqual((target.parent / ".gitignore").read_text(), "auto-*\n.auto-*\n")
-        for name in (target.name, "." + target.name + ".tmp"):
+        self.assertEqual((target.parent / ".gitignore").read_text(), "auto-*\n.auto-*\n.gitignore\n")
+        for name in (target.name, "." + target.name + ".tmp", ".gitignore"):
             done = subprocess.run(["git", "-C", str(self.repo), "check-ignore", "-q",
                                    ".agent-harness/handoffs/" + name])
             self.assertEqual(done.returncode, 0, name)
         listed = subprocess.run(["git", "-C", str(self.repo), "status", "--porcelain",
                                  "--untracked-files=all"], capture_output=True, text=True).stdout
         self.assertNotIn("auto-", listed)
-        self.assertIn(".agent-harness/handoffs/.gitignore", listed)
+        self.assertNotIn(".agent-harness/handoffs/", listed)
 
     def test_a_secret_shaped_prompt_is_redacted(self):
         # Assembled at run time so no secret shape is written into a committed file.

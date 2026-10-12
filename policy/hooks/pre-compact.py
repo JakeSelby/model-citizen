@@ -7,10 +7,10 @@ be saved before the reset; this is the fallback for whatever that save missed. O
 whose `trigger` is `auto` it writes `.agent-harness/handoffs/auto-<session>-<UTC time>.md` in the
 repository the session's `cwd` belongs to: the last five prompts of the main thread, the branch
 and a count of the working tree's changes, the open items of the newest TodoWrite list, and the
-task store's revision. A manual `/compact` is the user's own and gets none. Prompts pass through
-the decision log's redaction (`decisions.redact`, the lint's secret shapes) before they are
-written, and none is written when those shapes cannot be read. The folder carries its own
-`.gitignore`, so a snapshot is never committed.
+task store's revision. A manual `/compact` is the user's own and gets none. Prompts and todos
+pass through the decision log's redaction (`decisions.redact`, the lint's secret shapes) before
+they are clipped and written, and neither is written when those shapes cannot be read. The folder
+carries a `.gitignore` that also ignores itself, so nothing it holds is ever committed.
 
 The lifecycle kills the hook at ten seconds, so every read is bounded: the transcript's last
 `TAIL_BYTES` only, with tool results and images skipped before any parse, and one `git status`
@@ -48,7 +48,7 @@ SKIP_MARKERS = (b'"tool_result"', b'"type":"image"', b'"type": "image"')
 # Entries of the user role that are not something the user typed.
 NOT_TYPED = ("<command-", "<local-command-", "[Request interrupted", "Stop hook feedback")
 SLASH_COMMAND = re.compile(r"^/[A-Za-z][\w:.-]*(\s|$)")
-IGNORE = "auto-*\n.auto-*\n"
+IGNORE = "auto-*\n.auto-*\n.gitignore\n"
 HOOKS = Path(os.path.realpath(__file__)).parent
 _REDACTION = []
 
@@ -78,7 +78,8 @@ def git_status(root):
     """`git status --porcelain=v1 -b` in `root`, or None when it fails or runs past GIT_TIMEOUT."""
     try:
         done = subprocess.run(["git", "-C", str(root), "status", "--porcelain=v1", "-b"],
-                              capture_output=True, text=True, timeout=GIT_TIMEOUT)
+                              capture_output=True, text=True, timeout=GIT_TIMEOUT,
+                              env=dict(os.environ, GIT_OPTIONAL_LOCKS="0"))
     except (OSError, subprocess.SubprocessError):
         return None
     return done.stdout if done.returncode == 0 else None
@@ -137,6 +138,11 @@ def prompt_text(entry):
     text = " ".join(text.split())
     if text.startswith(NOT_TYPED) or SLASH_COMMAND.match(text):
         return ""
+    return text
+
+
+def clip(text):
+    """`text` cut to PROMPT_CHARS, applied after redaction so a cut never splits a secret."""
     return text if len(text) <= PROMPT_CHARS else text[:PROMPT_CHARS - 1] + "…"
 
 
@@ -255,13 +261,15 @@ def task_line(root, session_id):
     return line
 
 
-def redacted(prompts):
-    """`prompts` through the decision log's redaction, or None when it cannot be applied."""
+def redacted(prompts, items):
+    """`(prompts, items)` through the decision log's redaction and then clipped, or
+    `(None, None)` when it cannot be applied: nothing typed is written unredacted."""
     found = redaction()
     if found is None:
-        return None
+        return None, None
     redact, shapes = found
-    return [redact(text, shapes) for text in prompts]
+    return ([clip(redact(text, shapes)) for text in prompts],
+            [(status, clip(redact(text, shapes))) for status, text in items])
 
 
 def render(session_id, stamp, branch, tree, task, prompts, items):
@@ -277,7 +285,10 @@ def render(session_id, stamp, branch, tree, task, prompts, items):
         lines += ["{}. {}".format(number, text)
                   for number, text in enumerate(prompts, 1)] or ["None."]
     lines += ["", "## Open todo items", ""]
-    lines += ["- [{}] {}".format(status, text) for status, text in items] or ["None."]
+    if items is None:
+        lines.append("Left out: the secret patterns to redact them with could not be read.")
+    else:
+        lines += ["- [{}] {}".format(status, text) for status, text in items] or ["None."]
     return "\n".join(lines) + "\n"
 
 
@@ -312,7 +323,7 @@ def snapshot(payload, now=None):
         prompts, todos = read_transcript(transcript)
     branch, tree = tree_summary(root)
     text = render(session_id, moment.strftime("%Y-%m-%dT%H:%M:%SZ"), branch, tree,
-                  task_line(root, session_id), redacted(prompts), open_items(todos))
+                  task_line(root, session_id), *redacted(prompts, open_items(todos)))
     state = root / ".agent-harness"
     directory = state / "handoffs"
     if state.is_symlink() or directory.is_symlink():
