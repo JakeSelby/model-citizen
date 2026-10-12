@@ -458,7 +458,8 @@ def prefix(item, harness_rows, static, table):
             tokens, source = fallback, "benchmarks/static.json" if fallback is not None else "unknown"
         turns = [r["turns"] for r in rows if isinstance(r.get("turns"), (int, float))]
         mean_turns = _mean(turns)
-        rate = PRICING.price_for(table, model) if model else None
+        # A model priced by prompt length is unpriced here: the layer alone cannot show its prompt.
+        rate = PRICING.prompt_rate(PRICING.price_for(table, model), None) if model else None
         cell = {"tokens": tokens, "source": source, "mean_turns": _r(mean_turns, 3)}
         if rate and tokens is not None:
             start = tokens * rate["cache_write"] / 1e6

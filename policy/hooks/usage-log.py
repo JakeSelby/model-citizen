@@ -517,12 +517,23 @@ def by_model(per_message):
         name = slot.get("model") or ""
         if not name:
             return {}
-        part = out.setdefault(name, dict((field, 0) for field, _ in FIELDS))
+        part = out.setdefault(name, dict([(field, 0) for field, _ in FIELDS] + [("max_prompt", 0)]))
         for field in PART_FIELDS:
             value = slot.get(field) or 0
             if value:
                 part[field] = part.get(field, 0) + value
+        part["max_prompt"] = max(part["max_prompt"], prompt_tokens(slot))
     return out
+
+
+def prompt_tokens(slot):
+    """One request's prompt size: every input token it sent, cache reads and writes included.
+
+    A part records the largest, because a provider can price a request by its prompt length
+    (Anthropic does, for Claude Haiku 5.5); `pricing.prompt_rate` reads it. A part whose largest
+    prompt is under the threshold was billed at the base rate throughout.
+    """
+    return sum(int(slot.get(field) or 0) for field in ("input", "cache_read", "cache_write"))
 
 
 def models_agree(parts, totals):

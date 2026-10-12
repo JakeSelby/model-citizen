@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 187,
+    "bug": 188,
     "chore": 113,
     "decision": 15,
     "epic": 29,
@@ -9550,6 +9550,19 @@
       "type": "chore",
       "native_type": "Task",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-C112.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B187",
+      "github_number": 1307,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1307",
+      "title": "fix(pricing): Sonnet 5.5 cache-read rate and missing Haiku 5.5 entry",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B187.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

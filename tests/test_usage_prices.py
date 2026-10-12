@@ -310,6 +310,18 @@ class BreakdownTests(unittest.TestCase):
                                                 {"input": 99, "output": 2,
                                                  "cache_read": 0, "cache_write": 0}))
 
+    def test_each_part_records_its_largest_prompt_cache_included(self):
+        per_message = {"m1": {"input": 10, "output": 2, "cache_read": 90000, "cache_write": 5,
+                              "model": "test-model", "day": ""},
+                       "m2": {"input": 20, "output": 2, "cache_read": 1000, "cache_write": 0,
+                              "model": "test-model", "day": ""},
+                       "m3": {"input": 7, "output": 2, "cache_read": 0, "cache_write": 0,
+                              "model": "test-model-mini", "day": ""}}
+        parts = usage_log.by_model(per_message)
+        self.assertEqual(parts["test-model"]["max_prompt"], 90015)
+        self.assertEqual(parts["test-model-mini"]["max_prompt"], 7)
+        self.assertTrue(usage_log.models_agree(parts, usage_log.summed(per_message)))
+
     def test_a_record_naming_no_model_drops_the_whole_map(self):
         per_message = {"m1": {"input": 1, "output": 2, "cache_read": 0, "cache_write": 0,
                               "model": "test-model", "day": ""},

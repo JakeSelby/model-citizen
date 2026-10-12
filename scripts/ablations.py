@@ -52,6 +52,7 @@ import equivalence  # noqa: E402  the interval-inside-bounds verdict and margin 
 import oracle_metrics  # noqa: E402  behaviour scores' paired intervals
 import replay_pair  # noqa: E402  the schema-1 pair, its loader and its surface parity
 import replay_stats  # noqa: E402  the per-arm comparison and the minimum detectable effect
+PRICING = replay_pair.load_pricing()  # `policy/hooks/pricing.py`, the one place a rate is read
 
 SCHEMA = 2
 PAIR_SCHEMA = replay_pair.SCHEMA
@@ -712,8 +713,15 @@ def sweep_plan(manifest):
 
 
 def turn_cost(rates, envelope):
-    """One turn's ceiling in USD: each token class of the envelope at its per-million rate."""
-    return sum(envelope[key] * rates[key] for key in TURN_TOKENS) / 1e6
+    """One turn's ceiling in USD: each token class of the envelope at its per-million rate.
+
+    A model priced by prompt length is charged at the tier the envelope's own prompt falls in,
+    through `pricing.prompt_rate`; ValueError when the rates cannot be read."""
+    prompt = sum(int(envelope[key]) for key in ("input", "cache_read", "cache_write"))
+    rate = PRICING.prompt_rate(PRICING.usable_rate(rates), prompt)
+    if rate is None:
+        raise ValueError("the price entry cannot be read")
+    return sum(envelope[key] * rate[key] for key in TURN_TOKENS) / 1e6
 
 
 def price_plan(plan, model, rates, envelope, task_turns, scenario_caps, run_cap=RUN_CAP_USD, reps=1):

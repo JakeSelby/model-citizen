@@ -603,7 +603,10 @@ def _verify_loaded(bundle, git):
                 dated = False
             else:
                 dated = True
-            if rate is None or any(not math.isfinite(value) or value < 0 for value in rate.values()) \
+            # A prompt-length tier is a nested rate of its own and is checked the same way.
+            values = [] if rate is None else [v for v in rate.values() if not isinstance(v, dict)] \
+                + list((rate.get("long_context") or {}).values())
+            if rate is None or any(not math.isfinite(value) or value < 0 for value in values) \
                     or not dated or not isinstance(entry.get("source"), str) or not entry["source"]:
                 _error(errors, 4, "price entry %s is incomplete or non-finite" % model)
     if not isinstance(audits, dict):
