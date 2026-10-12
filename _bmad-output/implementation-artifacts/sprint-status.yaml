@@ -569,6 +569,7 @@ development_status:
   ah-b183-fix-benchmarks-micro-stop-gate-fails-the-only: ready-for-dev
   ah-b184-fix-confinement-refuse-a-framework-brief-that: ready-for-dev
   ah-b185-test-tier-routing-a-frugal-tiering-arm-beside: ready-for-dev
+  ah-b186-fix-benchmarks-the-replay-pair-check-refuses-an: ready-for-dev
   ah-c001-refactor-rules-cap-always-loaded-context-at-200: done
   ah-c002-docs-positioning-line-comparison-rows-and: done
   ah-c003-docs-no-prerequisites-no-platform-statement-and: done
@@ -638,7 +639,9 @@ development_status:
   ah-c106-sync-the-bmad-tracker-refresh-the-map-then-apply: ready-for-dev
   ah-c107-file-the-studio-follow-up-stories-decided-on: ready-for-dev
   ah-c108-chore-release-release-v0-15-0: ready-for-dev
+  ah-c109-chore-release-fold-the-0-15-0-changelog: ready-for-dev
   ah-c110-reserve-ids-and-write-story-files-for-the: ready-for-dev
+  ah-c111-qualify-and-publish-v0-15-0: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done
   ah-d004-decide-whether-repeated-agent-pairs-get-an: done

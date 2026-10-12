@@ -4,8 +4,8 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 186,
-    "chore": 111,
+    "bug": 187,
+    "chore": 112,
     "decision": 15,
     "epic": 29,
     "spike": 21,
@@ -9400,6 +9400,32 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C109",
+      "github_number": 1285,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1285",
+      "title": "chore(release): fold the 0.15.0 changelog",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C109.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B186",
+      "github_number": 1287,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1287",
+      "title": "fix(benchmarks): the replay pair check refuses an arm whose sync leaves an empty skills or agents directory",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B186.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C110",
       "github_number": 1289,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1289",
@@ -9500,6 +9526,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-S367.md",
       "parent_bmad_id": "AH-E028",
       "parent_github_number": 1290,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-C111",
+      "github_number": 1299,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1299",
+      "title": "Qualify and publish v0.15.0",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C111.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
       "lifecycle": "active",
       "provenance": "authored"
     }
