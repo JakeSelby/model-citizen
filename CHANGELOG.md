@@ -49,7 +49,7 @@ All notable changes to this project are documented here. The format follows
   of the other tier. The contamination control still refuses its same-repository tasks, so it runs
   once they have independent provenance. (#512)
 
-- - Add one stance-owned delegation nudge after a tiered session reads three distinct files. (#513)
+- Add one stance-owned delegation nudge after a tiered session reads three distinct files. (#513)
 
 - `citizen usage --surface` lists every instruction source a session loads, grouped by owner (harness
   modules, your own files, the project, plugins, MCP servers, hooks and the CLI itself), each with a
