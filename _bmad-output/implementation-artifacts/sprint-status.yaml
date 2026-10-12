@@ -637,6 +637,7 @@ development_status:
   ah-c105-reserve-the-record-protection-story-s-id-and: done
   ah-c106-sync-the-bmad-tracker-refresh-the-map-then-apply: ready-for-dev
   ah-c107-file-the-studio-follow-up-stories-decided-on: ready-for-dev
+  ah-c108-chore-release-release-v0-15-0: ready-for-dev
   ah-c110-reserve-ids-and-write-story-files-for-the: ready-for-dev
   ah-d001-docs-bmad-decide-the-builder-routing-follow-up: done
   ah-d003-decide-whether-the-credential-probe-names-the: done

@@ -1,6 +1,6 @@
 {
   "name": "model-citizen",
-  "version": "0.14.2",
+  "version": "0.15.0",
   "description": "Skills, subagent roles, slash commands and an output style from the Model Citizen checkout, installable on their own.",
   "author": { "name": "Jake Selby", "url": "https://github.com/JakeSelby" },
   "license": "MIT",

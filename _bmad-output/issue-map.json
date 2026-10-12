@@ -9387,6 +9387,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-C108",
+      "github_number": 1282,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1282",
+      "title": "chore(release): release v0.15.0",
+      "type": "chore",
+      "native_type": "Task",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-C108.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-C110",
       "github_number": 1289,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1289",
