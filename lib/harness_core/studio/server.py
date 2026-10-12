@@ -32,6 +32,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                targets)
 from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
+from . import periods
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -42,8 +43,10 @@ CONTROL_HEALTH = "/__studio/control/health"
 CONTROL_STOP = "/__studio/control/stop"
 CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
 BOOTSTRAP = "/__studio/bootstrap"
+# "page-read": a read the Harness pages issue as GET with a query string, which no `citizen`
+# command answers yet.
 PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health",
-                               "sse", "ui-preferences"))
+                               "sse", "ui-preferences", "page-read"))
 STATIC_ASSET = re.compile(
     r"^/assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?P<extension>css|js)$"
 )
@@ -172,6 +175,8 @@ class Route:
     parity_exemption: Optional[str]
     request_media_type: Optional[str] = None
     cli_command: Optional[Tuple[str, ...]] = None
+    # The only query parameters the route accepts; every other route refuses a query string.
+    query: Tuple[str, ...] = ()
 
 
 class RouteRegistry:
@@ -337,10 +342,10 @@ class Handler(BaseHTTPRequestHandler):
             self._error(403, "request_refused")
             return
         parsed = urllib.parse.urlsplit(self.path)
-        if parsed.query or parsed.fragment:
+        route = ROUTES.resolve(self.command, parsed.path)
+        if parsed.fragment or (parsed.query and (route is None or not route.query)):
             self._error(404, "not_found")
             return
-        route = ROUTES.resolve(self.command, parsed.path)
         is_control = parsed.path.startswith("/__studio/control/")
         is_bootstrap = parsed.path == BOOTSTRAP
         if not is_control and not is_bootstrap:
@@ -379,6 +384,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._error(400, "request_refused")
                 return
             self.request_json = value
+        if route.query:
+            query = _query(parsed.query, route.query)
+            if query is None:
+                self._error(400, "invalid_request")
+                return
+            self.request_query = query
         route.handler(self, route)
 
     def do_HEAD(self):
@@ -502,6 +513,35 @@ def _required_request(handler: Handler, names: Iterable[str]) -> Optional[Dict[s
         handler._error(400, "invalid_request")
         return None
     return payload
+
+
+def _query(text: str, allowed: Tuple[str, ...]) -> Optional[Dict[str, str]]:
+    """A query string's parameters, or None when one is unnamed, repeated or malformed."""
+    try:
+        pairs = urllib.parse.parse_qsl(text, keep_blank_values=True, strict_parsing=bool(text),
+                                       max_num_fields=len(allowed))
+    except ValueError:
+        return None
+    names = [name for name, _value in pairs]
+    if len(set(names)) != len(names) or set(names) - set(allowed):
+        return None
+    return dict(pairs)
+
+
+def _harness_periods(handler: Handler, route: Route) -> None:
+    query = getattr(handler, "request_query", {})
+    days = query.get("days", "30")
+    if (not query.get("surface") or not (days.isascii() and days.isdigit())
+            or not 1 <= int(days) <= periods.MAX_DAYS):
+        handler._error(400, "invalid_request")
+        return
+    try:
+        payload = periods.efficacy_rows(query["surface"], days=int(days))
+    except periods.UnknownSurface:
+        handler._error(400, "unknown_surface")
+        return
+    (HARNESS_PERIODS_NOTED if "note" in payload else route.response_schema).validate(payload)
+    handler._json(200, payload)
 
 
 def _configure_schema(handler: Handler, route: Route) -> None:
@@ -2339,6 +2379,9 @@ RULE_HEALTH = ResponseSchema("json-object", (("schema_version", "integer"),
                                               ("commands", "object"),
                                               ("findings", "array"),
                                               ("rows", "array")))
+HARNESS_PERIODS = ResponseSchema("json-object", (("surface", "string"), ("rows", "array")))
+HARNESS_PERIODS_NOTED = ResponseSchema("json-object", (("surface", "string"), ("rows", "array"),
+                                                       ("note", "string")))
 TRENDS = ResponseSchema("json-object", (("schema_version", "integer"),
                                          ("generated_at", "string"), ("ratio_note", "string"),
                                          ("measures", "array"), ("lines", "array"),
@@ -2566,6 +2609,8 @@ ROUTES = RouteRegistry((
           ("citizen", "draft", "try-without", "{rule}", "--json")),
     Route("POST", "/api/reports/trends", "application/json", TRENDS, _trends, None,
           "application/json", trends.CLI_COMMAND),
+    Route("GET", "/api/harness/periods", "application/json", HARNESS_PERIODS,
+          _harness_periods, "page-read", query=("surface", "days")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

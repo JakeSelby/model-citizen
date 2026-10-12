@@ -352,6 +352,17 @@ precision floor is marked unreliable. **Try without it** opens a draft with the 
 and its test ready to run; from the CLI it is `citizen draft try-without rules.NAME`. What each detector looks for is in
 [rule telemetry](usage.md#rule-telemetry).
 
+## Setting periods
+
+Each Harness page's Efficacy rows come from `GET /api/harness/periods?surface=NAME&days=N`
+(`days` defaults to 30): one row per item per setting period, with the setting, its dates and
+its usage figures. A period that started under seven days ago is still measuring. A period starts
+at a completed apply from the Studio's Changes flow, a commit of `config.json` when that file is
+tracked in git, or a clean change in the setting your usage rows were stamped with; a profile
+fingerprint change alone starts none. A surface with no change in the window answers one period
+per item and a `note` saying so. An unknown surface is a 400. Stances and Sources are served
+today; no `citizen` command prints this yet.
+
 ## Spend and usage
 
 The local usage ledger as `citizen usage --json` prints it, for the same window, so the two never
