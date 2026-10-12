@@ -552,9 +552,12 @@ HARNESS_WRITES = ("home:.claude/settings.json", "home:.claude/CLAUDE.personal.md
 # Writes the harness's only while they hold nothing: a lock file carrying bytes is not the sync's.
 EMPTY_WRITES = ("home:.local/state/agent-harness/sync.lock",)
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
-# Directories the sync makes even when it leaves them empty: Claude Code's plans directory, which
-# the harness ignores globally. Any other directory is the harness's only as the parent of a write.
-HARNESS_DIRS = ("home:.claude/plans",)
+# Directories the sync makes even when it leaves them empty: every one `bin/harness sync` creates
+# under the Claude home before it links anything, so an arm whose selection switches off every
+# skill or role still holds them. Any other directory is the harness's only as the parent of a write.
+HARNESS_DIRS = ("home:.claude/rules", "home:.claude/rules/harness-stances", "home:.claude/skills",
+                "home:.claude/agents", "home:.claude/hooks", "home:.claude/output-styles",
+                "home:.claude/plans")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
 NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION)
 # The image user's configuration, and the file a sync copies there when it finds none.

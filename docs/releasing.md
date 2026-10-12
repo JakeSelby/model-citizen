@@ -68,8 +68,9 @@ untouched; do not move or replace either tag.
    until `--home-confirmed` says its configuration home was compared against a hand run.
    For v0.14.0 only, the owner approved qualifying the Claude Code CLI on macOS and Linux from
    complete scripted records while deferring the independent hand comparisons to v0.15.0; the
-   catalog records the resulting case-specific limitations. This exception applies to no other
-   release, runtime or client surface.
+   catalog records the resulting case-specific limitations. The owner extended the same deferral
+   through v0.14.1, v0.14.2 and v0.15.0, and on 2026-10-12 moved the comparisons to v0.16.0. This
+   exception applies to no other runtime or client surface.
    The scripted cases are executed at the `standard` capability class and their observations are
    assessed at `strong`; both classes are recorded in the evidence record and in the round
    record, and a round whose cheap executor would be the only reader of its own evidence is
@@ -227,10 +228,8 @@ again.
 
 ## Release status
 
-The 0.15.0 candidate requires fresh native qualification for Claude Code CLI on macOS and
-Linux; until each carries evidence for this source, the preflight blocks publication. 0.14.2, the
-current release, qualifies those two targets from complete scripted records; #741's independent
-hand comparisons were explicitly deferred to v0.15.0 and remain a catalog limitation until its
+The 0.15.0 release qualifies Claude Code CLI on macOS and Linux from complete scripted
+records; #741's independent hand comparisons were explicitly deferred to v0.16.0 and remain a catalog limitation until its
 round records them. Codex CLI is not in its
 contract: it is admitted once a scripted qualification round agrees with a hand-driven one, so
 0.11.1 remains the last release qualifying it. The VS Code surfaces and Codex Desktop are unqualified previews. The architecture-viewer
