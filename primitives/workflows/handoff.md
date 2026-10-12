@@ -30,7 +30,6 @@ Note to carry over: {{arguments}}
 3. **Promote anything durable** (a fix that generalizes, a trap, a working command) as a dated
    bullet of a sentence or two in `docs/solutions/<yyyy-mm-dd>-<slug>.md` under the repository root,
    or `.agent-harness/` when there is no repository; nothing durable, no file.
-
 4. **Task end, from `/land` or `/close-out` step 7.** Skip it in a `/land` run by `/close-out`, from
    any step. Skip it too in a plain `/handoff` and in `/close-out` step 5. Run steps 1 and 2 unless
    `/close-out` step 5 just ran them, then clear only if all hold: a Claude desktop session
