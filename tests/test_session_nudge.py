@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""The feed's fresh-session nudge: one line when the session's context passes a posture threshold.
+"""The feed's context-size nudge: one line when the session's context passes a posture threshold.
 
 The turn line reports what a turn produced. What a long session costs is mostly the context every
 further turn re-reads, and nothing in the feed showed that. These tests hold the three things the
@@ -16,7 +16,7 @@ from pathlib import Path
 from test_usage_feed import Fixture, append, assistant, load_feed, prompt, write
 
 REPO = Path(__file__).resolve().parent.parent
-NUDGE = "fresh-session threshold"
+NUDGE = "past the nudge point of"
 
 
 def load_posture():
@@ -42,8 +42,10 @@ def response(mid, output, context, cached=None):
 
 class SessionNudgeTests(Fixture):
     def nudged(self, thresholds=(100000, 200000)):
+        # No reset point, so the line reads the same whatever the base variant projects.
         self.variant("nudged", {"schema_version": 1, "extends": "balanced",
-                                "switches": {"session_nudge_at": list(thresholds)}})
+                                "switches": {"session_nudge_at": list(thresholds),
+                                             "context_reset_at": None}})
 
     def nudges(self, lines):
         return [line for line in lines if NUDGE in line]
@@ -59,9 +61,9 @@ class SessionNudgeTests(Fixture):
         self.nudged()
         append(self.transcript, [response("m1", 400, 120000)])
         self.assertEqual(self.nudges(self.submit()),
-                         ["usage-feed: session context 120,000 tokens, past the fresh-session "
-                          "threshold of 100,000 — finish the task, write the handoff, start a "
-                          "fresh session"])
+                         ["usage-feed: session context 120,000 tokens, past the nudge point of "
+                          "100,000; it resets automatically, so keep the task store and "
+                          "progress.md current"])
 
     def test_a_session_that_stays_above_the_threshold_is_not_told_again(self):
         # The expensive mistake this line prevents is made once per session, so saying it every
@@ -81,7 +83,7 @@ class SessionNudgeTests(Fixture):
         append(self.transcript, [response("m2", 500, 240000)])
         said = self.nudges(self.submit())
         self.assertEqual(len(said), 1)
-        self.assertIn("threshold of 200,000", said[0])
+        self.assertIn("nudge point of 200,000", said[0])
         self.assertEqual(self.state()["said_nudge"], [100000, 200000])
 
     def test_a_context_past_two_thresholds_at_once_is_one_line_naming_the_larger(self):
@@ -89,7 +91,7 @@ class SessionNudgeTests(Fixture):
         append(self.transcript, [response("m1", 400, 260000)])
         said = self.nudges(self.submit())
         self.assertEqual(len(said), 1)
-        self.assertIn("threshold of 200,000", said[0])
+        self.assertIn("nudge point of 200,000", said[0])
         self.assertEqual(self.state()["said_nudge"], [100000, 200000])
         append(self.transcript, [response("m2", 500, 280000)])
         self.assertEqual(self.nudges(self.submit()), [])
@@ -194,7 +196,7 @@ class SessionNudgeTests(Fixture):
         module = load_feed()
         state = dict(module.new_state(), context=250000, said_nudge=[200000])
         line = module.session_line(state, [100000, 200000])
-        self.assertIn("threshold of 100,000", line)
+        self.assertIn("nudge point of 100,000", line)
         self.assertEqual(state["said_nudge"], [200000, 100000])
 
     def test_a_token_figure_no_integer_can_hold_does_not_silence_the_feed(self):

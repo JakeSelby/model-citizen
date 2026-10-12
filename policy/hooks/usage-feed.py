@@ -55,14 +55,15 @@ No budget, threshold, model name or role name lives here: every number comes fro
 table, every switch from `switches.turn_feed`, `switches.nudge_at`, `switches.session_nudge_at`,
 `switches.session_handoff_at`, `switches.context_cost_curve` and `switches.max_parallel`.
 A variant that sets none of them feeds nothing. Any failure at all emits nothing and exits 0,
-and no line the feed emits is ever a decision. The fresh-session nudge is a recommendation, so
+and no line the feed emits is ever a decision. The context-size nudge is a recommendation, so
 saying it also records an adherence event, which `adherence.py` later answers.
 
 One answer is not a line: past `session_handoff_at`, the `Stop` that ends a turn is blocked once
-with the hand-off instruction, because on a 1M-token window sessions went on past the soft line
-for a median of six more turns at a rising price per call. It is a single block per crossing — the
-next stop is released whatever the turn did — it is recorded as an adherence event, and it is off
-in a headless run (`claude -p`, an SDK) unless `HARNESS_HANDOFF_BLOCK=on` enables it there.
+with the hand-off instruction: save the task store and progress before the context resets by
+itself (`switches.context_reset_at`, named when the posture sets it), then carry on. It is a
+single block per crossing — the next stop is released whatever the turn did — it is recorded as
+the `context-reset-handoff` adherence event, and it is off in a headless run (`claude -p`, an SDK)
+unless `HARNESS_HANDOFF_BLOCK=on` enables it there.
 """
 import errno
 import hashlib
@@ -1387,18 +1388,39 @@ def session_line(state, thresholds, table=None):
     said.extend(fresh)
     # The largest of the ones newly crossed, which is not the largest passed: a threshold
     # already said is not news, and naming it would read as a line repeating itself.
-    return (PREFIX + "session context " + plural(size, "token") + ", past the fresh-session "
-            "threshold of " + "{:,}".format(fresh[-1]) + costs(table, size)
-            + " — finish the task, write the handoff, start a fresh session")
+    return (PREFIX + "session context " + plural(size, "token") + ", past the nudge point of "
+            + "{:,}".format(fresh[-1]) + costs(table, size) + "; it resets automatically"
+            + resets(table) + ", so keep the task store and progress.md current")
+
+
+def reset_at(table):
+    """`switches.context_reset_at`, where the context resets automatically, or None.
+
+    A posture that does not project the reset point leaves it out, and the block's text then
+    names no number for it.
+    """
+    value = _switch(table, "context_reset_at")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def resets(table):
+    """` at about 400,000`, the reset point the posture projects, or nothing without one."""
+    reset = reset_at(table)
+    return (" at about " + "{:,}".format(reset)) if reset is not None else ""
 
 
 def handoff_reason(size, threshold, table):
-    """The one block's text: what was crossed, what it costs, and the two things to do now."""
-    return (PREFIX + "session context " + plural(size, "token") + ", past the hard fresh-session "
-            "threshold of " + "{:,}".format(threshold) + costs(table, size) + ". Before this "
-            "turn ends, write the handoff (the state, the next step, the open decisions), then "
-            "tell the user to start a fresh session from it. This stop is blocked once; the next "
-            "one is released whatever this turn does.")
+    """The one block's text: what was crossed, where the reset comes, and what to save first.
+
+    The context resets by itself, so the block asks for the task state to be saved before it and
+    for the work to go on; it never asks the user to start another session.
+    """
+    return (PREFIX + "session context " + plural(size, "token") + ", past the hand-off point of "
+            + "{:,}".format(threshold) + "; it resets automatically" + resets(table)
+            + costs(table, size)
+            + ". Before this turn ends, save the task store (`harness task save`) and "
+            "progress.md: the state, the next step, the open decisions. Then carry on with the "
+            "work. This stop is blocked once; the next one is released whatever this turn does.")
 
 
 def record_adherence(recommendation, session_id, turn, env):
@@ -1692,7 +1714,7 @@ def on_prompt(payload, env):
         nudge = session_line(state, session_nudges(table), table)
         if nudge:
             lines.append(nudge)
-            record_adherence("fresh-session", payload.get("session_id"), state["turns"], env)
+            record_adherence("context-reset-nudge", payload.get("session_id"), state["turns"], env)
         note = width_line(running_now(state), width)
         if note:
             lines.append(note)
@@ -1732,8 +1754,8 @@ def on_stop(payload, env):
     threshold is never blocked again. A context that falls back under it, as a compaction does,
     re-arms it, and so does a switch to a posture with another threshold. A stop that cannot
     save the marker is released, since nothing would stop the next one blocking again. The
-    block is answered in the adherence log, where a session end within the window counts as
-    followed.
+    block is answered in the adherence log, where a task-store save before the next compaction
+    or session end counts as followed.
     """
     table, mode, _, _ = settings(env)
     threshold = handoff_at(table)
@@ -1764,7 +1786,7 @@ def on_stop(payload, env):
         if not save_state(state_file, state):
             return None
         turn = state["turns"]
-    record_adherence("fresh-session-handoff", payload.get("session_id"), turn, env)
+    record_adherence("context-reset-handoff", payload.get("session_id"), turn, env)
     return handoff_reason(size, threshold, table)
 
 

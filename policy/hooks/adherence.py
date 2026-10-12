@@ -25,15 +25,17 @@ count of the session's prompts, and the response looks at the session's observat
 its `turn`-th `UserPromptSubmit`, or after the last one stamped no later than the emission when
 that is further on. Followed: one of the recommendation's `follow` events arrives
 before the window of `window` further prompts has passed. Not followed: the session's prompt
-`turn + window + 1` arrives first. Unknown: neither can be read yet. An emission is answered
+`turn + window + 1` arrives first, or one of its `close` events does. A kind with no `window`
+is closed by its `close` events alone. Unknown: neither can be read yet. An emission is answered
 `unknown` for good only once it is `UNKNOWN_AFTER` old, with `reason` saying why:
 `unobserved` when no row covers its turn, and `window_open` otherwise. The lifecycle's session
 start calls `settle`, so a live session writes each answer once it is due.
 
 The observation entry point is an opt-in (`observation.enabled`), and with it off nothing
 writes `observation.jsonl`, which left every emission `unobserved`. So the dispatcher also
-records the two events a response reads, each prompt and each session end, in
-`session-events.jsonl` beside it (`note_event`), in the observation row's shape. A session the
+records the events a response reads, each prompt, compaction and session end, in
+`session-events.jsonl` beside it (`note_event`), in the observation row's shape, and
+`harness task save` records each save there as `TaskSave`. A session the
 observation ledger holds from its start is read from that ledger alone and any other session
 from this file (`observed_rows`), so a session is never counted twice when both are written.
 
@@ -89,13 +91,35 @@ KINDS = {
     # "Finish the task, write the handoff, start a fresh session": finishing and the handoff are
     # a turn or two each, so the session has three more prompts to end. `/clear` and an exit
     # both raise SessionEnd; a compaction does not, and continuing compacted is not following.
+    # The feed no longer says this, since the context resets by itself; the kind stays so the
+    # rows already written, and the saving `soft_estimates` prices for them, keep their reading.
     "fresh-session": {"module": "hooks/usage-feed", "window": 3, "follow": ("SessionEnd",)},
-    # The stop blocked past the hard threshold: the handoff is written in the turn the block
-    # extends, so the session has two more prompts to end before it counts as not followed.
+    # "It resets automatically, so keep the task store and progress.md current": followed by a
+    # `harness task save` within three prompts, the same room the fresh-session advice had.
+    "context-reset-nudge": {"module": "hooks/usage-feed", "window": 3, "follow": ("TaskSave",)},
+    # The stop blocked at the hand-off point, before the context resets by itself: followed when
+    # `harness task save` records a save for the session (`TaskSave`, noted by the CLI) after the
+    # block and before the next compaction or session end, whichever comes first; either of
+    # those first is not followed. No prompt count closes it, since the reset can be many turns
+    # off, so a session left before either reads `unknown` once `UNKNOWN_AFTER` has passed. The
+    # rows are stamped to the second, so a save in the same second as the block counts as after.
     # A headless run can stop before any prompt is counted, so its emission may be turn 0.
+    "context-reset-handoff": {"module": "hooks/usage-feed", "window": None,
+                              "follow": ("TaskSave",), "close": ("PreCompact", "SessionEnd"),
+                              "first_turn": 0},
+}
+# A recommendation's earlier name → its current one. Rows already in the ledger keep the name they
+# were written with and are counted under the current one (`rates`); an emission still unanswered
+# is judged by the rule it was emitted under, kept in `RETIRED`, which nothing emits any more.
+RENAMED = {"fresh-session-handoff": "context-reset-handoff"}
+RETIRED = {
+    # The block that told the user to start a fresh session: a session end within two prompts.
     "fresh-session-handoff": {"module": "hooks/usage-feed", "window": 2,
                               "follow": ("SessionEnd",), "first_turn": 0},
 }
+# Events no hook raises, so the observation ledger never holds them: the events file is their
+# only record, and `observed_rows` reads them from it for every session.
+NOTED_ONLY = ("TaskSave",)
 
 _POSTURE = []
 
@@ -212,11 +236,22 @@ def rotate(target, env=None, now=None):
         raise
 
 
+def spec_for(recommendation):
+    """The rule an emission is judged by: its kind's, or a retired name's own, else None."""
+    return KINDS.get(recommendation) or RETIRED.get(recommendation)
+
+
+def current_name(recommendation):
+    """The name a recommendation is counted under now, folding a renamed one into its successor."""
+    return RENAMED.get(recommendation, recommendation)
+
+
 def noted():
-    """The events `note_event` keeps: a prompt, and every event a recommendation counts as acting."""
+    """The events `note_event` keeps: a prompt, and every event a recommendation reads."""
     names = {PROMPT}
-    for spec in KINDS.values():
+    for spec in list(KINDS.values()) + list(RETIRED.values()):
         names.update(spec["follow"])
+        names.update(spec.get("close", ()))
     return names
 
 
@@ -267,11 +302,33 @@ def observed_rows(env=None):
         events = (carried_rows(read_carried(env)) + read_rows(str(target) + ".1")
                   + read_rows(target))
     started = set(row.get("session_id") for row in observed if row.get("event") == "SessionStart")
-    noted = set(row.get("session_id") for row in events)
+    noted = set(row.get("session_id") for row in events if row.get("event") not in NOTED_ONLY)
     covered = set(row.get("session_id") for row in observed
                   if row.get("session_id") in started or row.get("session_id") not in noted)
-    return ([row for row in observed if row.get("session_id") in covered]
-            + [row for row in events if row.get("session_id") not in covered])
+    out = [row for row in observed if row.get("session_id") in covered]
+    for row in events:
+        if row.get("session_id") in covered and row.get("event") in NOTED_ONLY:
+            place(out, row)
+    return out + [row for row in events if row.get("session_id") not in covered]
+
+
+def place(rows, row):
+    """Insert `row` after the last of its session's rows stamped no later than it, else first.
+
+    A covered session's rows come from the observation ledger, which never holds a `NOTED_ONLY`
+    event, so one is put among them by its time. An unreadable stamp goes after them all.
+    """
+    session, moment = row.get("session_id"), parse_ts(row.get("ts"))
+    own = [position for position, item in enumerate(rows) if item.get("session_id") == session]
+    if not own:
+        rows.append(row)
+        return
+    index = own[0]
+    for position in own:
+        stamped = parse_ts(rows[position].get("ts"))
+        if moment is None or (stamped is not None and stamped <= moment):
+            index = position + 1
+    rows.insert(index, row)
 
 
 def now_ts(now=None):
@@ -322,7 +379,10 @@ def _append(row, target):
 
 
 def emission(recommendation, session_id, turn, now=None):
-    """The `emitted` row for one recommendation, or None for a kind or an id this cannot record."""
+    """The `emitted` row for one recommendation, or None for a kind or an id this cannot record.
+
+    Only a current kind is emitted; a retired name is read, never written.
+    """
     spec = KINDS.get(recommendation)
     if spec is None or not isinstance(session_id, str) or not session_id:
         return None
@@ -390,12 +450,13 @@ def respond(row, observed):
     `observed` is the observation ledger's rows in file order; only `event`, `session_id` and
     `ts` are read. `turns_after` counts the prompts seen after the emitting one, capped at the window.
     """
-    spec = KINDS.get(row.get("recommendation"))
+    spec = spec_for(row.get("recommendation"))
     turn, session = row.get("turn"), row.get("session_id")
     if spec is None or not whole(turn) or turn < spec.get("first_turn", 1) \
             or not isinstance(session, str):
         return "unknown", "unrecognised", 0
     turn = max(turn, prompts_by(row.get("ts"), session, observed))
+    window, emitted_at = spec["window"], parse_ts(row.get("ts"))
     prompts, seen = 0, False
     for item in observed:
         if item.get("session_id") != session:
@@ -404,10 +465,20 @@ def respond(row, observed):
         event = item.get("event")
         if event == PROMPT:
             prompts += 1
-            if prompts > turn + spec["window"]:
-                return "not_followed", PROMPT, spec["window"]
-        elif prompts >= turn and event in spec["follow"]:
+            if window is not None and prompts > turn + window:
+                return "not_followed", PROMPT, window
+            continue
+        if prompts < turn:
+            continue
+        # The emitting prompt's own turn can hold events from before the emission: those are
+        # not answers to it. A stamp either side cannot read is taken as after.
+        stamped = parse_ts(item.get("ts"))
+        if emitted_at is not None and stamped is not None and stamped < emitted_at:
+            continue
+        if event in spec["follow"]:
             return "followed", event, prompts - turn
+        if event in spec.get("close", ()):
+            return "not_followed", event, prompts - turn
     if prompts < turn or not seen:
         return "unknown", "unobserved", 0
     return "unknown", "window_open", prompts - turn
@@ -511,7 +582,7 @@ def _settle(env, now):
             emitted_at = parse_ts(row.get("ts"))
             if emitted_at is not None and now - emitted_at < UNKNOWN_AFTER:
                 continue
-        spec = KINDS.get(row.get("recommendation")) or {}
+        spec = spec_for(row.get("recommendation")) or {}
         answer = {"kind": "response", "adherence_id": ident,
                   "recommendation": row.get("recommendation"), "module": row.get("module"),
                   "session_id": row.get("session_id"), "turn": row.get("turn"),
@@ -529,13 +600,14 @@ def rates(rows):
 
     `rate` is followed over followed plus not followed, and None while neither has happened: an
     unknown is neither, and counting it as either would invent an answer the ledger never gave.
+    A renamed recommendation's rows are counted under its current name (`RENAMED`).
     """
     answered = responses(rows)
     out = {}
     for row in rows:
         if row.get("kind") != "emitted" or not isinstance(row.get("adherence_id"), str):
             continue
-        entry = out.setdefault(row.get("recommendation"), dict(
+        entry = out.setdefault(current_name(row.get("recommendation")), dict(
             {"emitted": 0, "pending": 0, "rate": None}, **{name: 0 for name in OUTCOMES}))
         entry["emitted"] += 1
         answer = answered.get(row["adherence_id"])

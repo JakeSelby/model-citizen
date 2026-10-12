@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""The hard fresh-session threshold: a Stop past it is blocked once with the hand-off instruction.
+"""The hand-off point: a Stop past it is blocked once with the instruction to save before the reset.
 
 On a 1M-token window a soft line at the context size where the per-call cost curve leaves its floor
 was not enough on its own (#1197), so each cost variant names a soft and a hard threshold and a
@@ -85,10 +85,22 @@ class SoftLine(Handoff):
     def test_the_soft_line_names_the_threshold_and_the_cost_multiple(self):
         self.grow("m1", 172000)
         said = [line for line in self.submit() if NUDGE in line]
-        self.assertEqual(said, ["usage-feed: session context 172,000 tokens, past the "
-                                "fresh-session threshold of 160,000, where a call costs about "
-                                "1.3× one under 160,000 — finish the task, write the handoff, "
-                                "start a fresh session"])
+        # The shipped variant may name its reset point; test_the_soft_line_names_the_reset_point
+        # holds that wording.
+        self.assertEqual(len(said), 1)
+        self.assertTrue(said[0].startswith(
+            "usage-feed: session context 172,000 tokens, past the nudge point of 160,000, where a "
+            "call costs about 1.3× one under 160,000; it resets automatically"), said[0])
+        self.assertTrue(said[0].endswith(", so keep the task store and progress.md current"))
+        self.assertNotIn("fresh session", said[0])
+
+    def test_the_soft_line_names_the_reset_point_when_the_posture_projects_one(self):
+        table = {"switches": {"context_reset_at": 400000,
+                              "context_cost_curve": [[160000, 1.3]]}}
+        line = load_feed().session_line({"context": 172000}, [160000], table)
+        self.assertTrue(line.endswith("1.3× one under 160,000; it resets automatically at about "
+                                      "400,000, so keep the task store and progress.md current"),
+                        line)
 
 
 class StopBlock(Handoff):
@@ -103,10 +115,39 @@ class StopBlock(Handoff):
         self.grow("m1", 310000)
         answer = self.stop_answer()
         self.assertEqual(answer["decision"], "block")
-        self.assertIn("past the hard fresh-session threshold of 300,000", answer["reason"])
+        self.assertIn("past the hand-off point of 300,000; it resets automatically",
+                      answer["reason"])
         self.assertIn("1.7× one under 160,000", answer["reason"])
-        self.assertIn("write the handoff", answer["reason"])
-        self.assertIn("start a fresh session", answer["reason"])
+        self.assertIn("save the task store (`harness task save`) and progress.md: the state, "
+                      "the next step, the open decisions. Then carry on with the work.",
+                      answer["reason"])
+        self.assertIn("This stop is blocked once; the next one is released", answer["reason"])
+        # The reset is automatic: nothing tells the user to start another session.
+        self.assertNotIn("fresh session", answer["reason"])
+        self.assertNotIn("start a", answer["reason"])
+
+    def test_the_block_names_the_reset_point_when_the_posture_projects_one(self):
+        # The resolved table's `context_reset_at`; read directly, since the sidecar schema that
+        # carries it is the posture's to validate.
+        table = {"switches": {"session_handoff_at": 300000, "context_reset_at": 333333,
+                              "context_cost_curve": [[160000, 1.0], [300000, 1.7]]}}
+        reason = load_feed().handoff_reason(310000, 300000, table)
+        self.assertIn("past the hand-off point of 300,000; it resets automatically at about "
+                      "333,333, where a call costs about 1.7× one under 160,000. Before", reason)
+        for unusable in (0, -1, True, "333333", 1.5):
+            with self.subTest(unusable=unusable):
+                table["switches"]["context_reset_at"] = unusable
+                self.assertNotIn("at about", load_feed().handoff_reason(310000, 300000, table))
+
+    def test_without_a_reset_point_the_block_names_no_number_for_it(self):
+        # Explicitly none, so a base variant that projects one is not inherited.
+        self.variant("handed", {"schema_version": 1, "extends": "balanced",
+                                "switches": {"session_handoff_at": 300000,
+                                             "context_reset_at": None}})
+        self.grow("m1", 310000)
+        reason = self.stop_answer()["reason"]
+        self.assertIn("it resets automatically, where a call costs", reason)
+        self.assertNotIn("at about", reason)
 
     def test_the_next_stop_is_released_whatever_the_turn_did(self):
         # Never a trap: the block is spent, so the next stop ends the turn even when the context
@@ -205,7 +246,7 @@ class Logged(Handoff):
         rows = self.emitted()
         self.assertEqual([(r["recommendation"], r["module"], r["session_id"], r["turn"])
                           for r in rows],
-                         [("fresh-session-handoff", "hooks/usage-feed", self.SESSION, 1)])
+                         [("context-reset-handoff", "hooks/usage-feed", self.SESSION, 1)])
 
     def test_a_block_before_any_prompt_is_recorded_and_answerable(self):
         # A headless stop can block before a prompt is counted; its emission is turn 0.
@@ -218,16 +259,18 @@ class Logged(Handoff):
         def observed(*events):
             return [{"event": event, "session_id": self.SESSION, "runtime": "claude-code",
                      "ts": "t"} for event in events]
-        self.assertEqual(adherence.respond(rows[0], observed("Stop", "Stop", "SessionEnd")),
-                         ("followed", "SessionEnd", 0))
-        prompt = "UserPromptSubmit"
-        self.assertEqual(adherence.respond(rows[0], observed("Stop", prompt, prompt, prompt)),
-                         ("not_followed", prompt, 2))
+        self.assertEqual(adherence.respond(rows[0], observed("Stop", "TaskSave", "PreCompact")),
+                         ("followed", "TaskSave", 0))
         self.assertEqual(adherence.respond(rows[0], []), ("unknown", "unobserved", 0))
         # Every other recommendation still starts at the first prompt.
         self.assertIsNone(adherence.emission("fresh-session", self.SESSION, 0))
 
-    def test_a_session_end_inside_the_window_reads_as_followed(self):
+    def test_the_old_name_is_read_but_never_emitted(self):
+        adherence = load_adherence()
+        self.assertIsNone(adherence.emission("fresh-session-handoff", self.SESSION, 1))
+        self.assertNotIn("fresh-session-handoff", adherence.KINDS)
+
+    def test_an_old_row_is_judged_by_its_own_rule_and_counted_under_the_new_name(self):
         adherence = load_adherence()
         row = {"kind": "emitted", "adherence_id": "h1", "recommendation": "fresh-session-handoff",
                "module": "hooks/usage-feed", "session_id": "s-1", "turn": 1,
@@ -243,6 +286,83 @@ class Logged(Handoff):
         self.assertEqual(adherence.respond(row, observed(prompt, "Stop", "Stop", prompt, prompt,
                                                          prompt, "SessionEnd")),
                          ("not_followed", prompt, 2))
+        rows = [row, {"kind": "response", "adherence_id": "h1", "outcome": "followed"},
+                dict(row, adherence_id="h2", recommendation="context-reset-handoff")]
+        rates = adherence.rates(rows)
+        self.assertEqual(sorted(rates), ["context-reset-handoff"])
+        self.assertEqual((rates["context-reset-handoff"]["emitted"],
+                          rates["context-reset-handoff"]["followed"],
+                          rates["context-reset-handoff"]["pending"]), (2, 1, 1))
+
+
+class SavedBeforeTheReset(unittest.TestCase):
+    """`context-reset-handoff` is followed by a task save between the block and the reset."""
+
+    T0 = 1790000000.0
+
+    def setUp(self):
+        self.adherence = load_adherence()
+        self.row = {"kind": "emitted", "adherence_id": "c1",
+                    "recommendation": "context-reset-handoff", "module": "hooks/usage-feed",
+                    "session_id": "s-1", "turn": 1, "ts": self.adherence.now_ts(self.T0),
+                    "profile_fingerprint": "p", "schema_version": 1}
+
+    def observed(self, *events):
+        out = []
+        for event in events:
+            name, offset = event if isinstance(event, tuple) else (event, 1)
+            out.append({"event": name, "session_id": "s-1", "runtime": "claude-code",
+                        "ts": self.adherence.now_ts(self.T0 + offset)})
+        return out
+
+    def test_a_save_before_the_compaction_is_followed(self):
+        prompt = "UserPromptSubmit"
+        self.assertEqual(self.adherence.respond(self.row, self.observed(
+            prompt, "Stop", prompt, "TaskSave", "PreCompact")), ("followed", "TaskSave", 1))
+
+    def test_a_compaction_or_session_end_first_is_not_followed(self):
+        prompt = "UserPromptSubmit"
+        for close in ("PreCompact", "SessionEnd"):
+            with self.subTest(close=close):
+                self.assertEqual(self.adherence.respond(self.row, self.observed(
+                    prompt, "Stop", close, "TaskSave")), ("not_followed", close, 0))
+
+    def test_prompts_alone_never_close_it(self):
+        prompt = "UserPromptSubmit"
+        self.assertEqual(self.adherence.respond(self.row, self.observed(*[prompt] * 9)),
+                         ("unknown", "window_open", 8))
+
+    def test_a_save_stamped_before_the_block_is_not_an_answer(self):
+        prompt = "UserPromptSubmit"
+        self.assertEqual(self.adherence.respond(self.row, self.observed(
+            (prompt, -5), ("TaskSave", -2), "Stop", "SessionEnd")),
+            ("not_followed", "SessionEnd", 0))
+
+    def test_the_events_noted_include_the_save_and_the_compaction(self):
+        self.assertTrue({"TaskSave", "PreCompact", "SessionEnd"} <= self.adherence.noted())
+
+    def test_a_save_reaches_a_session_the_observation_ledger_covers(self):
+        # The observation ledger holds every hook event but never a save, which only the events
+        # file records; it is placed among the ledger's rows by its time.
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            env = {"HARNESS_HOME": temp}
+            state = self.adherence.state_dir(env)
+            state.mkdir(parents=True)
+            stamp = self.adherence.now_ts
+            ledger = [{"event": "SessionStart", "session_id": "s-1", "ts": stamp(self.T0 - 9)},
+                      {"event": "UserPromptSubmit", "session_id": "s-1", "ts": stamp(self.T0 - 1)},
+                      {"event": "PreCompact", "session_id": "s-1", "ts": stamp(self.T0 + 30)}]
+            with open(str(self.adherence.observation_path(env)), "w") as handle:
+                handle.write("".join(json.dumps(row) + "\n" for row in ledger))
+            self.adherence.note_event("UserPromptSubmit", "s-1", "claude-code", env,
+                                      now=self.T0 - 1)
+            self.adherence.note_event("TaskSave", "s-1", "claude-code", env, now=self.T0 + 10)
+            observed = self.adherence.observed_rows(env)
+            self.assertEqual([r["event"] for r in observed],
+                             ["SessionStart", "UserPromptSubmit", "TaskSave", "PreCompact"])
+            self.assertEqual(self.adherence.respond(self.row, observed),
+                             ("followed", "TaskSave", 0))
 
 
 class Validation(unittest.TestCase):
