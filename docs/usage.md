@@ -435,8 +435,8 @@ never named a second time, and the session total is never below the sum of the f
 
 A prompt also carries one line about the session itself when its context has grown past a size
 the posture calls a full session: `usage-feed: session context 170,000 tokens, past the nudge
-point of 160,000; it resets automatically at about 400,000, so keep the task store and progress.md
-current`. It never asks for a new session.
+point of 160,000, where a call costs about 1.3× one under 160,000; it resets automatically at about
+400,000, so keep the task store and progress.md current`. It never asks for a new session.
 The size is the newest response's input tokens plus the prefix it read from the cache and the
 prefix it wrote into it, which is what every further turn re-reads and what a long session mostly
 costs; the turn line shows none of that.
@@ -1146,7 +1146,7 @@ do backfill.
 | `secrets/git-add-secret-file` | secrets | `git add` of a path whose name says it holds a credential |
 | `research/search-over-cap` | research-and-verification | the web search that takes the session past the per-session cap |
 | `cache-hygiene/model-switch` | cache-hygiene | a model change mid-session, which rebuilds the cached prefix |
-| `cache-hygiene/compact` | cache-hygiene | each compaction boundary in the transcript, except under a `cost` variant that allows compaction (`max`), and except the projected reset: a `trigger: auto` boundary whose recorded size is within 15% of the reset point, exempted only while `citizen sync`'s ownership journal records writing the auto-compaction pair and Claude Code's settings still hold it with no `autoCompactWindow` of your own. The selected stance, a session override included, plays no part in that exemption, and replay (`scripts/replay_detect.py`) applies the same one when given the run's reset point. A manual `/compact`, one far from the point and one recording no trigger or size still count |
+| `cache-hygiene/compact` | cache-hygiene | each compaction boundary in the transcript, except under a `cost` variant that allows compaction (`max`), and except the projected reset: a `trigger: auto` boundary whose recorded size is within 15% of the reset point, exempted only while `citizen sync`'s ownership journal records writing the auto-compaction pair and Claude Code's settings still hold it with no `autoCompactWindow` of your own. The selected stance, a session override included, plays no part in that exemption, and replay (`scripts/replay_detect.py`) applies the same one when given the run's reset point, which its callers do not pass yet. A manual `/compact`, one far from the point and one recording no trigger or size still count |
 | `voice/banned-opener` | voice-and-format | a final message opening with a phrase the output style bans, or closing with one |
 | `voice/second-table` | voice-and-format | two or more table blocks in one final message |
 | `voice/scaffold-leak` | voice-and-format | under the `concise` voice, a final message wearing a reply template's section labels |

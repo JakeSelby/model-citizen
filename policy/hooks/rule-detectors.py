@@ -553,7 +553,8 @@ def compactions_besides_reset(reset_point):
 def with_reset_point(registry, reset_point):
     """A copy of `registry` whose compaction detector leaves out the projected reset; the same
     registry when there is no point. The live ledger (`run`) and replay
-    (`scripts/replay_detect.py`) both go through here, so their verdicts agree."""
+    (`scripts/replay_detect.py`) both go through here, so given the same point their verdicts agree;
+    replay is not yet handed one, so it still counts the reset as a miss."""
     compact = registry.get("cache-hygiene/compact")
     if compact is None or reset_point is None:
         return registry

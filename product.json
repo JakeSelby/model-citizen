@@ -91,7 +91,7 @@
       "features": [
         {
           "name": "Cost postures",
-          "line": "Pick frugal, balanced or max, or your own: one table sets model, effort and budget per role. Long sessions reset their own context and carry on from their handoff.",
+          "line": "Pick frugal, balanced or max, or your own: one table sets model, effort and budget per role. Long Claude Code sessions under frugal or balanced reset their own context and carry on from their handoff.",
           "doc": "primitives/stances/cost"
         },
         {

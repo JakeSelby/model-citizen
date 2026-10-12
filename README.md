@@ -68,7 +68,7 @@ Sync keeps a journal of what it changed and refuses to overwrite what it does no
 
 A hard cap cuts an agent off after it has already spent the tokens. I'd rather tell it what things cost and let it pace itself.
 
-- [Cost postures](primitives/stances/cost): Pick frugal, balanced or max, or your own: one table sets model, effort and budget per role. Long sessions reset their own context and carry on from their handoff.
+- [Cost postures](primitives/stances/cost): Pick frugal, balanced or max, or your own: one table sets model, effort and budget per role. Long Claude Code sessions under frugal or balanced reset their own context and carry on from their handoff.
 - [Model tiering](primitives/stances/delegation): Roles ask for a capability class, one of frontier, strong, standard and light, not a model name. Gathering files doesn't run on the model that reviews your code.
 - [Band workers](claude/agents/worker-a.md): A spawn that names no role gets a right-sized worker instead of your most expensive model.
 - [A budget in every brief](claude/hooks/brief-guard.py): Each subagent is told its expected tokens and tool calls. Finish if you're close, otherwise return what you have.

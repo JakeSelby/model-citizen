@@ -213,8 +213,8 @@ to reset by hand with a fresh session rather than compact, unless the selected `
 allows compaction; the variant's `compaction` switch is what decides. Under `max`
 (`compact-allowed`) any compaction is the stance working, so the `cache-hygiene/compact` detector
 counts none there. Under `balanced` and `frugal` (`auto-at-reset`) the runtime's own compaction at
-the projected reset point is the stance working too, and the detector decides that from what
-actually ran, not from the selected stance. It leaves a compaction out only when all of these
+the projected reset point is the stance working too, and the detector decides that from the
+settings and journal as they stand when it scans, not from the selected stance. It leaves a compaction out only when all of these
 hold: `citizen sync` wrote the auto-compaction pair, as its ownership journal records, and
 Claude Code's settings still hold those values with no `autoCompactWindow` of your own; the
 transcript records the compaction as `trigger: auto`; and its recorded size before compacting is
