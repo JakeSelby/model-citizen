@@ -43,7 +43,18 @@ All four of (a) to (d) hold. If (d) fails, compaction does not continue headless
 
 ## Result
 
-Not yet run.
+Run on 2026-10-12, exploratory, on the maintainer's Mac in the `model-citizen-arm-bare` image (Claude Code 2.1.280, model `claude-sonnet-5`), headless `claude -p` with an empty profile. The settings `env` held `CLAUDE_CODE_AUTO_COMPACT_WINDOW=100000` and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70`, with logging-only PreCompact and SessionStart hooks. The task was a twenty-item checklist, each item reading a file of about 4,000 tokens.
+
+- **(a) Compaction fires, and settings `env` is honoured:** yes. It fired six times, at 56,353 to 57,924 tokens, each falling to 2,801 to 4,197. The trigger is about the percentage of the window less a reserve of roughly 19,000 tokens (0.70 × (100,000 − 19,300) ≈ 56,500), not the percentage of the window. The projection has to account for that reserve.
+- **(b) PreCompact receives `trigger: auto`:** yes, all six times. Its input keys: `custom_instructions`, `cwd`, `hook_event_name`, `prompt_id`, `session_id`, `transcript_path`, `trigger`.
+- **(c) SessionStart fires with `source: compact`, and its `additionalContext` reaches the model:** yes, six times. The model wrote the reseed marker to its output file.
+- **(d) The agent finishes in the same invocation:** yes. All twenty items were written once each, with no duplicates and no skips, and the run ended `DONE` after 48 turns at $1.70.
+
+Exit criterion met. Three failure modes seen in the earlier attempts belong in the eval:
+
+- Claude Code stops a run with "Autocompact is thrashing" when the context refills to the limit within three turns of a compaction three times in a row. This happened with files of about 17,000 tokens against a 40,000 point.
+- Once, the compaction turn treated its own summary instruction as an injected instruction, and the run then ended on a model refusal.
+- A fixture of random code words drew a model refusal before any compaction, so eval fixtures use plain prose.
 
 ## Decision
 
