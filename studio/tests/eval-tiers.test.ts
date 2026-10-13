@@ -66,7 +66,7 @@ function cellText(html: string, key: string): string | undefined {
 }
 
 test("every hook shows each recorded call's verdict under every variant, as the engine expanded it", () => {
-  assert.equal(hookResult.rows.length * hookResult.calls.length * hookResult.variants.length, 13376);
+  assert.equal(hookResult.rows.length * hookResult.calls.length * hookResult.variants.length, 14080);
   for (const row of hookResult.rows) {
     const html = renderToStaticMarkup(h(MantineProvider, {}, h(EvalResultView, { result: hookRun(), initialRow: row })));
     for (const line of hookResult.grid[row]) {
