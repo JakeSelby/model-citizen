@@ -127,7 +127,8 @@ function Field({ field, value, error, disabled, onChange }: FieldProps) {
   );
 }
 
-export function ConfigurePage() {
+/** The draft settings editor. `embedded` is its place inside Changes, under that page's own title. */
+export function ConfigurePage({ embedded = false }: { embedded?: boolean } = {}) {
   const queryClient = useQueryClient();
   const [schema, setSchema] = useState<ConfigureSchema | null>(null);
   const [draft, setDraft] = useState("");
@@ -269,8 +270,9 @@ export function ConfigurePage() {
     <Stack gap="xl">
       <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
-          <Text className="eyebrow">Studio / Configure</Text>
-          <Title order={1}>See what is in force. Change it in a draft.</Title>
+          {embedded
+            ? <Title id="configure-embedded-title" order={2}>Edit a draft's settings</Title>
+            : <><Text className="eyebrow">Studio / Configure</Text><Title order={1}>See what is in force. Change it in a draft.</Title></>}
           <Text c="dimmed" mt="xs">Trace every selected value to its layer, then preview and validate changes before a checkpoint is written.</Text>
         </div>
         <Badge color={status === "ready" ? "teal" : status === "error" ? "red" : "gray"} variant="light">{status}</Badge>

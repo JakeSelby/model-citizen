@@ -84,8 +84,9 @@ than merged, and an interrupted save is recovered: completed when its commit exi
 undone.
 
 ```sh
-citizen draft create NAME [--base installed|vX.Y.Z]
-citizen draft list           # drafts, and whether the installed version has moved since
+citizen draft create NAME [--base installed|vX.Y.Z] [--source PAGE]
+citizen draft list           # drafts, open, tested, applied or rolled back, and installed drift
+citizen draft history        # every apply and rollback, newest first
 citizen draft diff NAME      # source and private configuration changes
 citizen draft rebase NAME    # onto the installed revision; stops at a Git conflict
 citizen draft discard NAME   # refuses a dirty or conflicted draft
@@ -166,7 +167,8 @@ citizen draft recover [--draft NAME]        # restore after an interrupted apply
 citizen draft recover --abandon             # close it and keep what it wrote
 ```
 
-In the Studio, roll back from the apply's entry in Activity. An interrupted apply or rollback shows
+In the Studio, the Changes page lists every draft with its status and the history of applies
+and rollbacks; roll back from a draft there or from the apply's entry in Activity. An interrupted apply or rollback shows
 an alert in the apply panel offering the same two recover choices.
 
 ## First run

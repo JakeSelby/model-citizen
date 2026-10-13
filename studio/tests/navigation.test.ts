@@ -83,7 +83,7 @@ test("each page carries the CLI command of the page it re-homes", () => {
   assert.equal(pageCommand("/harness/rules"), "citizen usage --rules");
   assert.equal(pageCommand("/harness/hooks"), "citizen activity");
   assert.equal(pageCommand("/harness/sources"), "citizen catalog --library");
-  assert.equal(pageCommand("/changes"), "citizen selection");
+  assert.equal(pageCommand("/changes"), "citizen draft list");
   assert.equal(pageCommand("/evals"), "citizen runs history");
   assert.equal(pageCommand("/evals/trends"), "citizen reports trends");
   assert.equal(pageCommand("/baseline"), "citizen draft first-run");

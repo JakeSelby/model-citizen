@@ -59,7 +59,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["/harness/roles", "citizen usage --by role"],
   ["/harness/workflows", "citizen usage --by role"],
   ["/harness/sources", "citizen catalog --library"],
-  ["/changes", "citizen selection"],
+  ["/changes", "citizen draft list"],
   ["/evals/trends", "citizen reports trends"],
   ["/evals", "citizen runs history"],
   ["/baseline", "citizen draft first-run"],

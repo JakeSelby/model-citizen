@@ -22,8 +22,9 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen evidence verify BUNDLE [--json]
     citizen intent  claim PATH... | release | check [PATH...] | list [--all] | sweep
     citizen intent  merge [clean|conflicted] [--base REF]
-    citizen draft create NAME [--base installed|TAG] [--json]
+    citizen draft create NAME [--base installed|TAG] [--source PAGE] [--json]
     citizen draft list|diff|rebase|discard [NAME] [--json]
+    citizen draft history [--json]
     citizen draft first-run [NAME] [--json]
     citizen draft settings schema|read|preview|save [OPTIONS] [--json]
     citizen draft selection read|preview|save [OPTIONS] [--json]
@@ -98,6 +99,7 @@ from harness_core.studio import free_suites as studio_free_suites
 from harness_core.studio import rule_health as studio_rule_health
 from harness_core.studio import module_library as studio_module_library
 from harness_core.studio import rollback as studio_rollback
+from harness_core.studio import changes as studio_changes
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -4201,6 +4203,16 @@ def cmd_draft(args: argparse.Namespace) -> int:
     # Draft configuration and managed roots are relative to the installed checkout that owns
     # this CLI, not the shared Git common directory behind a linked worktree.
     repo = REPO.resolve()
+    if args.action == "history":
+        # `GET /api/changes/history`: the apply journal, newest first.
+        history = studio_changes.history(home())
+        if args.json:
+            say(json.dumps(history, sort_keys=True))
+            return 0
+        for entry in history["entries"]:
+            say("%s\t%s\t%s\t%s\t%s" % (entry["ts"], entry["kind"], entry["status"],
+                                        entry["draft"], entry["apply_id"]))
+        return 0
     if args.action == "first-run" and args.start:
         # `POST /api/first-run/start`: create the first-run draft, or resume the one there.
         return _studio_route_cli(args, "/api/first-run/start", {"draft": args.name})
@@ -4377,10 +4389,11 @@ def cmd_draft(args: argparse.Namespace) -> int:
         elif args.action == "create":
             result: Any = studio.drafts.create(
                 repo, args.name, args.base, config_path(),
-                _draft_create_worktree, _draft_remove_worktree,
+                _draft_create_worktree, _draft_remove_worktree, source=args.source,
             )
         elif args.action == "list":
-            result = {"drafts": studio.drafts.list_drafts(repo)}
+            # `GET /api/changes/drafts`: each draft with its status in the Changes inbox.
+            result = studio_changes.inbox(repo, home(), state_dir() / "studio")
         elif args.action == "diff":
             result = studio.drafts.diff(repo, args.name)
         elif args.action == "rebase":
@@ -7929,11 +7942,19 @@ def build_parser() -> argparse.ArgumentParser:
     create = draft_sub.add_parser("create", help="create a managed draft from the installed version or a release tag")
     create.add_argument("name")
     create.add_argument("--base", default="installed", help="installed or an exact v* release tag")
+    create.add_argument("--source", default="",
+                        help="the Studio page the draft is for, shown in the Changes inbox")
     create.add_argument("--json", action="store_true")
     create.set_defaults(func=cmd_draft)
-    listing = draft_sub.add_parser("list", help="list managed drafts and installed-version drift")
+    listing = draft_sub.add_parser(
+        "list", help="list managed drafts, installed-version drift, and whether each is open, "
+                     "tested, applied or rolled back")
     listing.add_argument("--json", action="store_true")
     listing.set_defaults(func=cmd_draft)
+    history_parser = draft_sub.add_parser(
+        "history", help="list every apply and rollback the apply journal holds, newest first")
+    history_parser.add_argument("--json", action="store_true")
+    history_parser.set_defaults(func=cmd_draft)
     first_run = draft_sub.add_parser(
         "first-run", help="show where the guided first run stands and the commands that reproduce it")
     first_run.add_argument("name", nargs="?", default=studio_first_run.DRAFT)
