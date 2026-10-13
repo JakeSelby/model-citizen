@@ -103,7 +103,8 @@ export function ActivityTimeline({ payload, focus = "", onChanged, onRollback }:
   </Stack>;
 }
 
-export function ActivityPage() {
+/** `embedded` renders the heading as an h2 for a page that already owns the h1. */
+export function ActivityPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [filters, setFilters] = useState<ActivityFilters>(EMPTY_FILTERS);
   const [draftFilters, setDraftFilters] = useState<ActivityFilters>(EMPTY_FILTERS);
   const [payload, setPayload] = useState<ActivityPayload | null>(null);
@@ -216,7 +217,7 @@ export function ActivityPage() {
       <Group align="flex-end" className="page-heading" justify="space-between">
         <div>
           <Text className="eyebrow">Studio / Activity</Text>
-          <Title order={1} ref={heading} tabIndex={-1}>What the harness decided and changed.</Title>
+          <Title order={embedded ? 2 : 1} ref={heading} tabIndex={-1}>What the harness decided and changed.</Title>
           <Text c="dimmed" mt="xs">Trace guardrails, governed Studio actions, and ownership evidence without rewriting history.</Text>
         </div>
         {payload ? <Text c="dimmed" size="sm">{payload.entries.length} loaded</Text> : null}

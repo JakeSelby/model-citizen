@@ -15,7 +15,6 @@ import { LibraryPage } from "./library/LibraryPage";
 import { SourcesPage } from "./pages/harness/SourcesPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
-import { ActivityPage } from "./activity/ActivityPage";
 import { RulesPage } from "./pages/harness/RulesPage";
 import { HooksPage } from "./pages/harness/HooksPage";
 import { TrendsPage } from "./reports/trends/TrendsPage";

@@ -193,6 +193,6 @@ export function HooksPage() {
     {tab === "settings" && <DraftLoader loaded={draft?.draft ?? ""} onLoad={(name) => void openDraft(name)} error={draftError} loading={draftLoading} />}
     {/* The Activity timeline keeps Studio changes, their rollback and the `?apply=` links into
         them until that flow has a page of its own. */}
-    {(tab === "efficacy" || focusedEntry(location.search)) && <ActivityPage />}
+    {(tab === "efficacy" || focusedEntry(location.search)) && <ActivityPage embedded />}
   </Stack>;
 }

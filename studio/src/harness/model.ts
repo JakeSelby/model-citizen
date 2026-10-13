@@ -78,9 +78,19 @@ export function measuringText(row: PeriodRow): string {
     : `measuring, ${row.window_days}-day window`;
 }
 
-export function metricText(value: number | string | undefined): string {
+/** A metric ending in `_share` or `_rate` is a 0 to 1 fraction. */
+export function isShareMetric(key: string): boolean {
+  return /_(share|rate)$/.test(key);
+}
+
+/** A share or rate reads as a percentage with one decimal; any other number gets separators. */
+export function metricText(value: number | string | undefined, key = ""): string {
   if (value === undefined) return "not measured";
-  return typeof value === "number" ? value.toLocaleString("en-US") : value;
+  if (typeof value !== "number") return value;
+  if (isShareMetric(key)) {
+    return `${(value * 100).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+  }
+  return value.toLocaleString("en-US");
 }
 
 /** Metric columns in first-seen order when a page names none. */
