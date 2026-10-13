@@ -363,7 +363,8 @@ at a completed apply from the Studio's Changes flow, a commit of `config.json` w
 tracked in git, or a clean change in the setting your usage rows were stamped with; a profile
 fingerprint change alone starts none. A surface with no change in the window answers one period
 per item and a `note` saying so. An unknown surface is a 400. Stances and Sources are served
-today; no `citizen` command prints this yet.
+today. `citizen harness periods --surface NAME [--days N] --json` prints the same answer, and
+exits 2 with the route's error code on a refusal.
 
 ## Spend and usage
 

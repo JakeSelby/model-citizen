@@ -50,6 +50,10 @@ TERMINAL = ("completed", "recovered")
 NOTE = ("No setting change was recorded for these items in this window, so each shows one "
         "period. Settings changed through the Studio's Changes flow start new periods.")
 
+# The command that prints `GET /api/harness/periods`; `answer` serves both.
+CLI_COMMAND = ("citizen", "harness", "periods", "--surface", "{surface}", "--days", "{days}",
+               "--json")
+
 Observation = Tuple[dt.datetime, str, str]  # (time, value, profile stream)
 
 
@@ -468,6 +472,20 @@ def efficacy_rows(surface: str, unit: Optional[str] = None, *, days: int = 30,
     if not any(row["attributable"] for row in rows):
         response["note"] = NOTE
     return response
+
+
+def answer(surface: Optional[str], days: Optional[str] = None, *,
+           home: Optional[Path] = None) -> Tuple[int, Dict[str, Any]]:
+    """The route's status and body for its query text: `efficacy_rows`, or a 400 naming
+    `invalid_request` (no surface, `days` not 1 to `MAX_DAYS`) or `unknown_surface`."""
+    days = "30" if days is None else days
+    if (not surface or not (days.isascii() and days.isdigit())
+            or not 1 <= int(days) <= MAX_DAYS):
+        return 400, {"error": "invalid_request"}
+    try:
+        return 200, efficacy_rows(surface, days=int(days), home=home)
+    except UnknownSurface:
+        return 400, {"error": "unknown_surface"}
 
 
 def usage_metrics(rows: Sequence[Mapping[str, Any]], _unit: str = "",

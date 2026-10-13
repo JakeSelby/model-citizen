@@ -132,6 +132,12 @@ def call_route(repo_root: Path, state_directory: Path, method: str, path: str,
     try:
         handler = _Handler(server, request or {})
         try:
+            if route.query:
+                # A GET route's query string arrives as the request's fields.
+                if set(request or {}) - set(route.query):
+                    return 400, {"error": "invalid_request"}
+                handler.request_query = {name: str(value)
+                                         for name, value in (request or {}).items()}
             route.handler(handler, route)
         finally:
             handler.close()
