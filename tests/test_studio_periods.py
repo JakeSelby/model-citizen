@@ -161,8 +161,7 @@ class PeriodsModuleTests(unittest.TestCase):
                         + [usage_row(days_ago(n), version="0.15.0") for n in (8, 1)])
         answer = self.answer("sources")
         self.assertEqual([(r["item_id"], r["setting_label"], r["status"]) for r in answer["rows"]],
-                         [("harness_version", "0.14.2", "measured"),
-                          ("harness_version", "0.15.0", "measured")])
+                         [("core", "0.14.2", "measured"), ("core", "0.15.0", "measured")])
 
     def test_rescanned_rows_are_not_read_as_the_session_profile(self):
         rows = [usage_row(days_ago(n), voice="answer-card") for n in (20, 10)]
