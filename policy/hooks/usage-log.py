@@ -1833,7 +1833,7 @@ MODEL_USAGE_FIELDS = (("input", "inputTokens"), ("output", "outputTokens"),
 def worker_parts(usage, envelope):
     """A worker run's tokens per full model id, or {} when the run did not report them.
 
-    A worker is launched by a CLI alias such as `opus`, and the alias names no price: it resolves
+    A worker is launched by a CLI model alias, and the alias names no price: it resolves
     to whatever the client's current model is, so the same alias has run two releases in one
     month. The run's result envelope names the full id each model ran as, and the Claude Code
     adapter copies that map into the status record. A run recorded before it did is read from the

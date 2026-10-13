@@ -72,7 +72,7 @@ def usage(work, run_dir):
     it reports no tool-call count, which the record therefore leaves unknown.
 
     `by_model` is the envelope's `modelUsage`, keyed by the full id each model ran as. The worker
-    is launched by alias (`opus`), which resolves to whatever the client's current model is, so
+    is launched by a model alias, which resolves to whatever the client's current model is, so
     only this map can price the run; the usage sweep reads it, see `worker_parts` there.
     """
     try:
