@@ -3,7 +3,8 @@
 
 Each test drives the shipped bundle through the served Studio of a fixture checkout, as a user
 would: open the Studio, follow the first-run guide, tune a draft and plan its test, run the free
-suites, compare two finished replays, and apply a draft and roll it back. Every test ends by
+suites, compare two finished replays, and apply a draft and roll it back; then each rebuilt
+Harness page's Efficacy and Settings tabs, and Changes listing a draft (#1320). Every test ends by
 proving the tab requested nothing outside the Studio's loopback origin and no model client ran;
 :class:`SealTests` proves each seal fails when it is breached. The fixture and its seals are
 described in ``studio_e2e_support``; the module runs only with ``STUDIO_E2E=1``, which
@@ -21,15 +22,56 @@ import unittest
 from unittest import mock
 
 import studio_e2e_support as support
-from harness_core.studio import drafts, replay, runs, state_root
+from harness_core.studio import drafts, periods, replay, runs, state_root
 
 FIRST_RUN_DRAFT = "first-run"
 FOREIGN = "http://127.0.0.1:1"
 SWITCHED_RULE = "cache-hygiene"
 
 
+# Each rebuilt Harness page: its title and the CLI command its header shows.
+HARNESS_PAGES = {
+    "rules": ("Rules", "citizen usage --rules"),
+    "stances": ("Stances", "citizen stances"),
+    "hooks": ("Hooks", "citizen activity"),
+    "roles": ("Roles", "citizen usage --by role"),
+    "workflows": ("Workflows", "citizen usage --by role"),
+    "sources": ("Sources", "citizen catalog --library"),
+}
+# The note an Efficacy tab shows when no setting change split any item's period.
+ONE_PERIOD = "No setting change was recorded for these items in this window"
+
+
+def _selected_tab(title: str) -> str:
+    """The name of the selected tab in ``title``'s tab list."""
+    return ("document.querySelector('[role=tablist][aria-label=%s] [role=tab][aria-selected=true]')"
+            "?.querySelector('p')?.textContent" % json.dumps(title + " views"))
+
+
+def _tablist(title: str) -> str:
+    """A Harness page is ready once its Efficacy and Settings tab list is mounted."""
+    return "document.querySelector('[role=tablist][aria-label=%s]') !== null" % json.dumps(
+        title + " views")
+
+
 def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def seed_delegated_usage(home) -> None:
+    """Usage rows for one builder spawn and one Workflow-tool run, two days old, in ``home``.
+
+    A fresh home has none, and Roles and Workflows list an item only once the usage ledger saw
+    it run. The rows are the surface tests' own.
+    """
+    from test_studio_surface_roles import agent_row
+    from test_studio_surface_workflows import workflow_row
+
+    when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=2)
+    rows = [agent_row(when), workflow_row(when, "wf_e2e"), workflow_row(when, "wf_e2e")]
+    ledger = periods.state_dir(home) / "usage.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
 
 
 def seed_finished_replays(home, checkout):
@@ -113,6 +155,9 @@ class StudioEndToEndFlows(support.StudioE2E):
     def prepare_home(self):
         if self._testMethodName == "test_compare_two_finished_replays_from_the_compare_panel":
             self.run_ids = seed_finished_replays(self.home, self.checkout.root)
+        if self._testMethodName in ("test_roles_page_reads_efficacy_and_settings",
+                                    "test_workflows_page_reads_efficacy_and_settings"):
+            seed_delegated_usage(self.home)
 
     def test_open_the_studio_and_reach_every_area(self):
         """Flow 1: the launcher's session opens Home, and every page of the nav renders."""
@@ -127,9 +172,10 @@ class StudioEndToEndFlows(support.StudioE2E):
         self.wait("location.hash === '#/home'", "the Studio did not open on Home")
         areas = (("#/sessions", "Sessions", "document.querySelector('h1') !== null"),
                  ("#/harness/rules", "Rules", "document.querySelector('h1') !== null"),
-                 ("#/harness/stances", "Stances", "__has('being rebuilt in story #1325')"),
+                 ("#/harness/stances", "Stances", _tablist("Stances")),
                  ("#/harness/hooks", "Hooks", "document.querySelector('h1') !== null"),
-                 ("#/harness/sources", "Sources",
+                 ("#/harness/sources", "Sources", _tablist("Sources")),
+                 ("#/harness/sources/modules", "Sources",
                   "document.querySelectorAll('.library-module').length > 0"),
                  ("#/routines", "Routines", "__has('being rebuilt in story #1335')"),
                  ("#/changes", "Changes", "document.querySelector('input') !== null"),
@@ -169,6 +215,63 @@ class StudioEndToEndFlows(support.StudioE2E):
                           "%s did not redirect to %s" % (old, new))
                 self.wait("document.querySelector('.nav-link[aria-current=page]')?.textContent === %s"
                           % json.dumps(label), "%s did not mark %s current" % (new, label))
+
+    def harness_page_flow(self, surface: str) -> None:
+        """#1320: a rebuilt Harness page opens on Efficacy, shows its CLI command in the header,
+        and moves to Settings through ``?tab=settings`` and back through its Efficacy tab."""
+        title, command = HARNESS_PAGES[surface]
+        route = "#/harness/" + surface
+        self.open(route)
+        self.wait("document.querySelector('.nav-link[aria-current=page]')?.textContent === %s"
+                  % json.dumps(title), title + " was not the current area")
+        self.wait("document.querySelector('header code')?.textContent === %s" % json.dumps(command),
+                  "the header did not show " + command)
+        self.wait("%s === 'Efficacy'" % _selected_tab(title), title + " did not open on Efficacy")
+        self.wait("document.querySelector('table[aria-label=%s]') !== null || __has(%s)"
+                  % (json.dumps(title + ": efficacy by setting period"), json.dumps(ONE_PERIOD)),
+                  title + " showed neither its Efficacy table nor the one-period note", seconds=60)
+
+        self.js("location.hash = %s" % json.dumps(route + "?tab=settings"))
+        self.wait("%s === 'Settings'" % _selected_tab(title), "?tab=settings did not select Settings")
+        self.wait("document.querySelector('table[aria-label=%s]') !== null"
+                  % json.dumps(title + ": settings"), title + " Settings table did not render",
+                  seconds=60)
+        self.assertEqual(self.js("document.querySelector('header code')?.textContent"), command)
+
+        self.js("[...document.querySelectorAll('[role=tab]')]"
+                ".find(tab => tab.textContent.startsWith('Efficacy')).click()")
+        self.wait("location.hash === %s" % json.dumps(route), "the Efficacy tab kept ?tab=settings")
+        self.wait("%s === 'Efficacy'" % _selected_tab(title), "the Efficacy tab was not selected")
+
+    def test_rules_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("rules")
+
+    def test_stances_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("stances")
+
+    def test_hooks_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("hooks")
+
+    def test_roles_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("roles")
+
+    def test_workflows_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("workflows")
+
+    def test_sources_page_reads_efficacy_and_settings(self):
+        self.harness_page_flow("sources")
+
+    def test_changes_lists_a_waiting_draft(self):
+        """#1320: Changes lists a draft made from the CLI under Waiting for you."""
+        draft = self.create_draft("e2e-list-")
+        self.open("#/changes")
+        self.wait("document.querySelector('header code')?.textContent === 'citizen draft list'",
+                  "the header did not show citizen draft list")
+        waiting = "document.querySelector('section[aria-labelledby=changes-waiting]')"
+        self.wait("[...(%s?.querySelectorAll('h3') ?? [])].some(h => h.textContent === %s)"
+                  % (waiting, json.dumps(draft)), "Changes did not list " + draft, seconds=60)
+        self.assertTrue(self.js("%s.querySelector('h2').textContent.startsWith('Waiting for you (')"
+                                % waiting))
 
     def test_first_run_guide_goes_from_health_to_an_applied_setup(self):
         """Flow 6 (#997): health, draft, identity, preferences, the free check, then apply."""
