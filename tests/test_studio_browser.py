@@ -351,8 +351,24 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(active, "Evals")
         self.assertEqual(self.devtools.evaluate("location.hash"), "#/evals")
 
-        # The old Library route lands on Sources; its module browser is one level down.
-        self.devtools.evaluate("location.hash = '#/library'")
+        # The old Library route lands on the module browser, its query kept.
+        self.devtools.evaluate("location.hash = '#/library?path=rules/a.md'")
+        moved = None
+        for _ in range(100):
+            moved = json.loads(self.devtools.evaluate("JSON.stringify({"
+                "active:document.querySelector('.nav-link[aria-current=page]')?.textContent,"
+                "hash:location.hash,"
+                "heading:document.querySelector('h1')?.textContent"
+                "})"))
+            if moved.get("active") == "Sources" and (moved.get("heading") or "").startswith("Every module"):
+                break
+            time.sleep(0.05)
+        self.assertEqual(moved["active"], "Sources")
+        self.assertEqual(moved["hash"], "#/harness/sources/modules?path=rules/a.md")
+        self.assertEqual(moved["heading"], "Every module, from source to runtime.")
+
+        # Sources itself links one level down to the module browser.
+        self.devtools.evaluate("location.hash = '#/harness/sources'")
         sources = None
         for _ in range(100):
             sources = json.loads(self.devtools.evaluate("JSON.stringify({"

@@ -75,7 +75,7 @@ export const LEGACY_REDIRECTS: ReadonlyArray<readonly [string, string]> = [
   ["/", HOME_PATH],
   ["/setup", "/baseline"],
   ["/configure", "/changes"],
-  ["/library", "/harness/sources"],
+  ["/library", "/harness/sources/modules"],
   ["/experiments", "/evals"],
   ["/experiments/runs/:runId", "/evals/runs/:runId"],
   ["/activity", "/harness/hooks"],
@@ -103,4 +103,10 @@ export function legacyTarget(pathname: string): string | null {
     if (hit) return to.split("/").map((part) => params[part] ?? part).join("/");
   }
   return null;
+}
+
+// Where an old or unknown location lands: its new path, with the query and fragment carried over so
+// a deep link such as `/library?path=<module>` still opens the module.
+export function legacyLocation({ pathname, search, hash }: { pathname: string; search: string; hash: string }) {
+  return { pathname: legacyTarget(pathname) ?? HOME_PATH, search, hash };
 }

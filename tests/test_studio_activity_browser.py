@@ -39,7 +39,7 @@ class StudioActivityBrowserTests(unittest.TestCase):
         self.assertIn("<script>globalThis.activityInjected = true</script>",
                       self.devtools.evaluate("document.querySelector('.code-view').textContent"))
         href = self.devtools.evaluate("document.querySelector('.activity-row a').getAttribute('href')")
-        self.assertTrue(href.endswith("/library?path=policy/hooks/grade-bash.py"), href)
+        self.assertTrue(href.endswith("/harness/sources/modules?path=policy/hooks/grade-bash.py"), href)
 
         self.devtools.evaluate(
             "[...document.querySelectorAll('button')].find(node => node.textContent.includes('Load older')).click()")

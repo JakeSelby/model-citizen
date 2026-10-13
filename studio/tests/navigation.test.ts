@@ -10,6 +10,7 @@ import {
   documentTitle,
   FOOT_NAVIGATION,
   LEGACY_REDIRECTS,
+  legacyLocation,
   legacyTarget,
   NAVIGATION,
   NAVIGATION_GROUPS,
@@ -57,7 +58,7 @@ test("every old route redirects to its page in the new nav", () => {
     "/": "/home",
     "/setup": "/baseline",
     "/configure": "/changes",
-    "/library": "/harness/sources",
+    "/library": "/harness/sources/modules",
     "/experiments": "/evals",
     "/experiments/runs/run-7": "/evals/runs/run-7",
     "/activity": "/harness/hooks",
@@ -69,12 +70,19 @@ test("every old route redirects to its page in the new nav", () => {
   for (const [from, to] of Object.entries(expected)) assert.equal(legacyTarget(from), to, from);
   assert.equal(LEGACY_REDIRECTS.length, Object.keys(expected).length);
   // Every target is a page the Studio routes.
-  const routed = [...NAVIGATION.map((item) => item.path), "/evals/trends", "/evals/runs/run-7"];
+  const routed = [...NAVIGATION.map((item) => item.path), "/harness/sources/modules", "/evals/trends", "/evals/runs/run-7"];
   for (const to of Object.values(expected)) assert.ok(routed.includes(to), to);
   // New routes, unknown routes and an empty run id are not old routes.
   assert.equal(legacyTarget("/home"), null);
   assert.equal(legacyTarget("/not-a-route"), null);
   assert.equal(legacyTarget("/experiments/runs/"), null);
+});
+
+test("an old module deep link keeps its query and lands on the module browser", () => {
+  assert.deepEqual(legacyLocation({ pathname: "/library", search: "?path=rules/a.md&line=3", hash: "" }),
+    { pathname: "/harness/sources/modules", search: "?path=rules/a.md&line=3", hash: "" });
+  assert.deepEqual(legacyLocation({ pathname: "/not-a-route", search: "?x=1", hash: "#top" }),
+    { pathname: "/home", search: "?x=1", hash: "#top" });
 });
 
 test("each page carries the CLI command of the page it re-homes", () => {

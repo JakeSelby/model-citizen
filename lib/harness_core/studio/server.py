@@ -1300,7 +1300,7 @@ def _link_lint_findings(server: Server, progress: Dict[str, object]) -> None:
         if candidate not in sources:
             finding["library_href"] = None
             continue
-        finding["library_href"] = "/library?path=%s&line=%d" % (
+        finding["library_href"] = "/harness/sources/modules?path=%s&line=%d" % (
             urllib.parse.quote(finding["path"], safe="/"), finding["line"])
 
 

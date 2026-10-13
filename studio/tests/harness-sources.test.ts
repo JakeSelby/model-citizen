@@ -68,11 +68,11 @@ test("Efficacy renders one row per source per harness-version period", () => {
   assert.ok(html.includes(TEAM_NOTE.split(".")[0]), "the Team label is explained, never guessed");
 });
 
-test("the module browser stays reachable and the old Library route lands here", () => {
+test("the module browser stays reachable and the old Library route lands on it", () => {
   const html = render("/harness/sources", { surface: "sources", rows: ROWS });
   assert.ok(html.includes(`href="${MODULES_PATH}"`));
   assert.ok(html.includes("Open the module browser"));
-  assert.equal(legacyTarget("/library"), "/harness/sources");
+  assert.equal(legacyTarget("/library"), MODULES_PATH);
 });
 
 test("an unattributable answer shows the API's note and no invented split", () => {

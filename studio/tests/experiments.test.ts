@@ -31,7 +31,7 @@ test("discovery scopes list all, module, class and individual tests", () => {
 test("SSE data preserves semantic progress, traceback and lint links", () => {
   const update = { run: { status: "failed" }, progress: { completed: 1, eligible: 1,
     cases: [{ id: "test_a.C.test_one", status: "failed", detail: "Traceback" }],
-    lint_findings: [{ path: "rules/a.md", line: 3, library_href: "/library?path=rules/a.md&line=3" }] } };
+    lint_findings: [{ path: "rules/a.md", line: 3, library_href: "/harness/sources/modules?path=rules/a.md&line=3" }] } };
   assert.deepEqual(parseEventStream(`event: run\ndata: ${JSON.stringify(update)}\n\n`)[0], update);
   assert.equal(terminal("failed"), true);
   assert.equal(terminal("running"), false);

@@ -74,7 +74,7 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(entry["grade"], "unknown")
         self.assertEqual(entry["repository"], "")
         self.assertEqual(entry["command"], "<script>globalThis.bad = true</script>")
-        self.assertEqual(entry["evidence_href"], "/library?path=policy/hooks/grade-bash.py")
+        self.assertEqual(entry["evidence_href"], "/harness/sources/modules?path=policy/hooks/grade-bash.py")
         self.assertEqual(result["command"], "citizen activity --json --limit 25")
         self.assertEqual(self.query(repository="agent-harness")["entries"], [])
 
@@ -129,7 +129,7 @@ class ActivityTests(unittest.TestCase):
                          "")
         self.assertEqual(by_id["decision:decision-000001"]["hook"], "hooks/intent-overlap")
         self.assertEqual(by_id["decision:decision-000001"]["evidence_href"],
-                         "/library?path=policy/hooks/intent-overlap.py")
+                         "/harness/sources/modules?path=policy/hooks/intent-overlap.py")
         self.assertEqual(by_id["decision:decision-000003"]["hook"], "")
         self.assertEqual(by_id["decision:decision-000003"]["evidence_href"], "")
         self.assertEqual(by_id["decision:decision-000004"]["hook"], "")

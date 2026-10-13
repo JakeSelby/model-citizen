@@ -196,7 +196,7 @@ class StudioEndToEndFlows(support.StudioE2E):
         redirects = (("#/", "#/home", "Home"),
                      ("#/setup", "#/baseline", "Baseline"),
                      ("#/configure", "#/changes", "Changes"),
-                     ("#/library?path=rules/a.md", "#/harness/sources?path=rules/a.md", "Sources"),
+                     ("#/library?path=rules/a.md", "#/harness/sources/modules?path=rules/a.md", "Sources"),
                      ("#/experiments", "#/evals", "Evals"),
                      ("#/experiments/runs/no-such-run", "#/evals/runs/no-such-run", "Evals"),
                      ("#/activity", "#/harness/hooks", "Hooks"),
@@ -215,6 +215,13 @@ class StudioEndToEndFlows(support.StudioE2E):
                           "%s did not redirect to %s" % (old, new))
                 self.wait("document.querySelector('.nav-link[aria-current=page]')?.textContent === %s"
                           % json.dumps(label), "%s did not mark %s current" % (new, label))
+                if old.startswith("#/library"):
+                    # The old module deep link still opens the module browser on that module.
+                    self.wait("document.querySelector('h1')?.textContent === "
+                              "'Every module, from source to runtime.'",
+                              old + " did not open the module browser")
+                    self.wait("document.querySelector('input[aria-label=\"Search modules\"]')?.value"
+                              " === 'rules/a.md'", old + " did not focus its module")
 
     def harness_page_flow(self, surface: str) -> None:
         """#1320: a rebuilt Harness page opens on Efficacy, shows its CLI command in the header,

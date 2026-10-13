@@ -175,7 +175,7 @@ class FreeSuiteTests(unittest.TestCase):
                                return_value=inventory):
             studio_security.server._link_lint_findings(studio, progress)
         self.assertEqual(progress["lint_findings"][0]["library_href"],
-                         "/library?path=primitives/rules/secrets.md&line=4")
+                         "/harness/sources/modules?path=primitives/rules/secrets.md&line=4")
         self.assertIsNone(progress["lint_findings"][1]["library_href"])
 
     def test_lint_link_inventory_refreshes_when_modules_change(self):
@@ -192,7 +192,7 @@ class FreeSuiteTests(unittest.TestCase):
             studio_security.server._link_lint_findings(studio, second)
         self.assertIsNone(first["lint_findings"][0]["library_href"])
         self.assertEqual(second["lint_findings"][0]["library_href"],
-                         "/library?path=primitives/rules/secrets.md&line=4")
+                         "/harness/sources/modules?path=primitives/rules/secrets.md&line=4")
         self.assertEqual(inventory.call_count, 2)
 
     def test_abandoned_run_progress_is_ttl_and_lru_bounded(self):

@@ -136,7 +136,7 @@ def _library_href(module: str) -> str:
     if not module.startswith("hooks/"):
         return ""
     source = "policy/" + module + ".py"
-    return "/library?path=" + urllib.parse.quote(source, safe="/")
+    return "/harness/sources/modules?path=" + urllib.parse.quote(source, safe="/")
 
 
 def _decision_state(answer: str) -> str:

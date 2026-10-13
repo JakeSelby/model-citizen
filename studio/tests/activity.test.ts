@@ -35,7 +35,7 @@ const payload: ActivityPage = {
       command: "<script>globalThis.activityInjected = true</script>",
       draft: "",
       files: [],
-      evidence_href: "/library?path=policy/hooks/grade-bash.py",
+      evidence_href: "/harness/sources/modules?path=policy/hooks/grade-bash.py",
       evidence_label: "Open hooks/grade-bash in Library",
     },
     {
@@ -73,7 +73,7 @@ test("activity renders command text as data with immutable provenance links", ()
     h(ActivityTimeline, { payload, onRollback: () => undefined }))));
   assert.match(html, /&lt;script&gt;globalThis\.activityInjected = true&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>globalThis\.activityInjected/);
-  assert.match(html, /href="\/library\?path=policy\/hooks\/grade-bash\.py"/);
+  assert.match(html, /href="\/harness\/sources\/modules\?path=policy\/hooks\/grade-bash\.py"/);
   assert.match(html, /session-one/);
   assert.match(html, /guard-change/);
   assert.match(html, /primitives\/rules\/guard\.md/);
