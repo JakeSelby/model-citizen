@@ -41,7 +41,7 @@ type InboxProps = {
 
 function DraftCard({ draft, selected, onSelect }: { draft: ChangesDraft; selected: boolean; onSelect: (name: string) => void }) {
   return (
-    <Paper className="change-card" data-draft={draft.name} data-status={draft.status} p="md" radius="md" withBorder>
+    <Paper className="change-card" data-draft={draft.name} data-status={draft.status} p="md" radius="md">
       <Group align="flex-start" justify="space-between" wrap="wrap">
         <div>
           <Title order={3} size="h4">{draft.name}</Title>
@@ -124,7 +124,7 @@ export function ChangeHistory({ entries, status, error, undo, onUndo }: HistoryP
 function DraftDetail({ draft, onChanged, onRollback }: { draft: ChangesDraft; onChanged: () => void; onRollback: (notice: RollbackNotice) => void }) {
   const target = rollbackTarget(draft);
   return (
-    <Paper aria-labelledby="change-detail-title" className="settings-section" component="section" p="lg" radius="md" withBorder>
+    <Paper aria-labelledby="change-detail-title" className="settings-section" component="section" p="lg" radius="md">
       <Group justify="space-between" wrap="wrap">
         <Title id="change-detail-title" order={2} size="h3">{draft.name}</Title>
         <StatusBadge tone={statusTone(draft.status)}>{statusLabel(draft.status)}</StatusBadge>
@@ -181,7 +181,7 @@ export function ChangesPage() {
         <CommandChip command="citizen draft list --json" label="List from the CLI" />
       </Group>
 
-      <Paper aria-labelledby="changes-new-title" component="section" p="md" radius="md" withBorder>
+      <Paper aria-labelledby="changes-new-title" component="section" p="md" radius="md">
         <Title id="changes-new-title" mb="xs" order={2} size="h4">Open or start a draft</Title>
         <DraftPicker onChange={select} value={selected} />
       </Paper>

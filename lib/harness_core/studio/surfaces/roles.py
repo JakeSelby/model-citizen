@@ -125,9 +125,9 @@ def role_name(row: Mapping[str, Any]) -> str:
 
 
 def _bindings(root: Path) -> Dict[str, Any]:
-    path = root / "adapters" / "claude-code" / "bindings.json"
+    # Through the catalog's loader: the runtime travels as an argument, never as a path segment.
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data, _ = catalog.adapter_tiers(root, "claude-code")
     except (OSError, ValueError):
         return {}
     roles = data.get("roles") if isinstance(data, dict) else None

@@ -17,7 +17,7 @@ class StudioLibraryBrowserTests(unittest.TestCase):
 
     def test_grouped_modules_expand_from_keyboard_and_fit_narrow_screens(self):
         self._open()
-        self.devtools.evaluate("location.hash = '#/library'")
+        self.devtools.evaluate("location.hash = '#/harness/sources/modules'")
         self._wait("document.querySelector('.library-module-summary') !== null", "Library did not load")
         self.assertFalse(self.devtools.evaluate("[...document.querySelectorAll('.library-module')].some(item => item.open)"))
         self.assertEqual(self.devtools.evaluate("document.querySelectorAll('.library-module-root').length"), 0)
@@ -33,7 +33,7 @@ class StudioLibraryBrowserTests(unittest.TestCase):
         self._wait("!document.querySelector('.library-module').open", "Module did not collapse")
         self.assertFalse(self.devtools.evaluate(
             "document.querySelector('.library-module').dataset.sourcePath.startsWith('/')"))
-        self.devtools.evaluate("(() => { const sourcePath = document.querySelector('.library-module').dataset.sourcePath; location.hash = '#/library?path=' + encodeURIComponent(sourcePath) + '&line=1'; })()")
+        self.devtools.evaluate("(() => { const sourcePath = document.querySelector('.library-module').dataset.sourcePath; location.hash = '#/harness/sources/modules?path=' + encodeURIComponent(sourcePath) + '&line=1'; })()")
         self._wait("document.querySelector('.library-source-line.focused') !== null",
                    "Library file-line link did not focus its source")
         self.assertTrue(self.devtools.evaluate("document.querySelector('.library-module').open"))

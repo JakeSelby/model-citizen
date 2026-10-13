@@ -90,16 +90,29 @@ class ModuleEditorBrowserTests(unittest.TestCase):
               input.dispatchEvent(new Event('input', {bubbles: true}));
             };
         """ + instrumentation})
-        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
+        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/changes"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
-        self._wait("document.querySelector('input') !== null", "Configure did not render")
+        self._wait_for_draft_loader()
         self.devtools.evaluate("__setDraft(%s)" % json.dumps(self.draft))
+        self._click_load_draft()
+        self._wait("document.body.textContent.includes('Choose a draft-owned rule')",
+                   "module list did not load")
+
+    def _wait_for_draft_loader(self):
+        # Changes renders its own draft picker first; the settings editor's loader is further down.
+        self._wait("[...document.querySelectorAll('label')]"
+                   ".some(item => item.textContent.trim().startsWith('Draft name'))",
+                   "the draft settings editor did not render on Changes")
+
+    def _click_load_draft(self):
+        # Load draft stays disabled until the schema is read and a name is typed.
+        self._wait("[...document.querySelectorAll('button')]"
+                   ".some(b => b.textContent === 'Load draft' && !b.disabled)",
+                   "draft load did not enable")
         self.devtools.evaluate(
             "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
         )
-        self._wait("document.body.textContent.includes('Choose a draft-owned rule')",
-                   "module list did not load")
 
     def _select(self, name):
         self.devtools.evaluate("""
@@ -150,10 +163,10 @@ class ModuleEditorBrowserTests(unittest.TestCase):
         self.devtools.call("Emulation.setDeviceMetricsOverride", {
             "width": 320, "height": 900, "deviceScaleFactor": 1, "mobile": False,
         })
-        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
+        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/changes"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
-        self._wait("document.querySelector('input') !== null", "Configure did not render")
+        self._wait_for_draft_loader()
         self.devtools.evaluate("""
             (() => {
               const label = [...document.querySelectorAll('label')]
@@ -164,9 +177,7 @@ class ModuleEditorBrowserTests(unittest.TestCase):
               input.dispatchEvent(new Event('input', {bubbles: true}));
             })()
         """ % json.dumps(self.draft))
-        self.devtools.evaluate(
-            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-        )
+        self._click_load_draft()
         self._wait("document.body.textContent.includes('Choose a draft-owned rule')",
                    "module list did not load")
         self.devtools.evaluate("""
@@ -1040,14 +1051,12 @@ class ModuleEditorBrowserTests(unittest.TestCase):
               return response;
             };
         """})
-        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
+        self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/changes"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
-        self._wait("document.querySelector('input') !== null", "Configure did not render")
+        self._wait_for_draft_loader()
         self.devtools.evaluate("__setDraft(%s)" % json.dumps(self.draft))
-        self.devtools.evaluate(
-            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-        )
+        self._click_load_draft()
         self._wait("globalThis.__inventoryHeld === true", "initial inventory was not held")
         self.devtools.evaluate("__setDraft(%s)" % json.dumps(other))
         self.devtools.evaluate(

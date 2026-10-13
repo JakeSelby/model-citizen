@@ -34,7 +34,7 @@ export async function readSourcesDraft(requested: string): Promise<LoadedDraft> 
 }
 
 export function ModuleBrowserLink() {
-  return <Paper withBorder p="md" radius="md" component="section" aria-labelledby="sources-modules-title">
+  return <Paper p="md" radius="md" component="section" aria-labelledby="sources-modules-title">
     <Group justify="space-between" wrap="wrap" gap="sm">
       <div>
         <Title order={2} size="h4" id="sources-modules-title">Modules in each source</Title>
