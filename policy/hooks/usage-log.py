@@ -1805,7 +1805,7 @@ def worker_rows(cutoff=0.0):
                "started": stamp(record.get("started_at")) or ended, "ended": ended}
         for name, _ in FIELDS:
             row[name] = usage.get(name)
-        parts = worker_parts(usage.get("by_model"), path.parent / "stdout.log") \
+        parts = worker_parts(usage, path.parent / "stdout.log") \
             if row["runtime"] == "claude-code" else {}
         if parts:
             # The breakdown is the whole bill: the envelope's own totals leave out a helper model's
@@ -1830,24 +1830,34 @@ MODEL_USAGE_FIELDS = (("input", "inputTokens"), ("output", "outputTokens"),
                       ("cache_write", "cacheCreationInputTokens"))
 
 
-def worker_parts(model_usage, envelope):
+def worker_parts(usage, envelope):
     """A worker run's tokens per full model id, or {} when the run did not report them.
 
     A worker is launched by a CLI alias such as `opus`, and the alias names no price: it resolves
     to whatever the client's current model is, so the same alias has run two releases in one
     month. The run's result envelope names the full id each model ran as, and the Claude Code
     adapter copies that map into the status record. A run recorded before it did is read from the
-    envelope still saved beside the record. A map with a part that cannot be read is dropped
-    whole, leaving the row unpriced rather than priced at the parts that could be.
+    envelope still saved beside the record.
+
+    The map carries no TTL split of the cache writes, and a `-p` run writes at the 1-hour rate.
+    The envelope's own totals do carry it, for the model the run was launched as, so the split is
+    given to the one part whose writes it adds up to. A map with a part that cannot be read, or
+    with writes the split cannot be placed on, is dropped whole, leaving the row unpriced rather
+    than priced short.
     """
+    model_usage = usage.get("by_model")
+    tiers = dict((name, usage.get(name)) for name, _ in CACHE_TIERS)
     if not isinstance(model_usage, dict):
         try:
             data = json.loads(envelope.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
-        model_usage = data.get("modelUsage") if isinstance(data, dict) else None
-        if not isinstance(model_usage, dict):
+        if not isinstance(data, dict) or not isinstance(data.get("modelUsage"), dict):
             return {}
+        model_usage = data["modelUsage"]
+        totals = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        split = totals.get("cache_creation") if isinstance(totals.get("cache_creation"), dict) else {}
+        tiers = dict((name, split.get(key)) for name, key in CACHE_TIERS)
     parts = {}
     for name, counts in model_usage.items():
         if not isinstance(name, str) or not name or not isinstance(counts, dict):
@@ -1859,6 +1869,13 @@ def worker_parts(model_usage, envelope):
                 return {}
             part[field] = max(value, 0)
         parts[name] = part
+    writers = [name for name, part in parts.items() if part["cache_write"]]
+    if writers:
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in tiers.values()):
+            return {}
+        if len(writers) != 1 or parts[writers[0]]["cache_write"] != sum(tiers.values()):
+            return {}
+        parts[writers[0]].update(tiers)
     return parts
 
 

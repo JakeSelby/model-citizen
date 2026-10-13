@@ -438,9 +438,10 @@ class WorkerAliasTests(unittest.TestCase):
 
     @staticmethod
     def priced(model, input, output, cache_read, cache_write):
+        """At the 1-hour write rate: every write a `claude -p` worker makes is a 1-hour one."""
         rate = PRICES["models"][model]
         return (input * rate["input"] + output * rate["output"] + cache_read * rate["cache_read"]
-                + cache_write * rate["cache_write"]) / 1_000_000
+                + cache_write * rate["cache_write_1h"]) / 1_000_000
 
     def test_the_alias_alone_names_no_price(self):
         """The defect: the row the sweep wrote before it read the run's own model map."""
@@ -452,7 +453,8 @@ class WorkerAliasTests(unittest.TestCase):
     def test_a_recorded_model_map_prices_the_row_at_the_full_id(self):
         counts = (44, 25258, 1388542, 96951)
         row = self.worker(usage={"input": 44, "output": 25258, "cache_read": 1388542,
-                                 "cache_write": 96951,
+                                 "cache_write": 96951, "cache_write_5m": 0,
+                                 "cache_write_1h": 96951,
                                  "by_model": {"claude-opus-5-5": self.model_usage(*counts)}})
         self.assertEqual(row["model"], "claude-opus-5-5")
         self.assertAlmostEqual(harness.row_cost(row, PRICES["models"]),
@@ -462,7 +464,11 @@ class WorkerAliasTests(unittest.TestCase):
         """The alias moved between releases in one month, so only the run's own envelope says
         which one it ran; a helper model beside it is priced at its own rate, not the alias's."""
         opus, haiku = (28, 20535, 590429, 77673), (1832, 17, 0, 0)
-        envelope = {"type": "result", "usage": {"input_tokens": 28, "output_tokens": 20535},
+        envelope = {"type": "result",
+                    "usage": {"input_tokens": 28, "output_tokens": 20535,
+                              "cache_creation_input_tokens": 77673,
+                              "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                                 "ephemeral_1h_input_tokens": 77673}},
                     "modelUsage": {"claude-haiku-4-5-20251001": self.model_usage(*haiku),
                                    "claude-opus-5": self.model_usage(*opus)}}
         row = self.worker(usage={"input": 28, "output": 20535, "cache_read": 590429,
@@ -489,11 +495,29 @@ class WorkerAliasTests(unittest.TestCase):
             {"type": "result", "modelUsage": models,
              "usage": {"input_tokens": 44, "output_tokens": 25258,
                        "cache_read_input_tokens": 1388542,
-                       "cache_creation_input_tokens": 96951}}), encoding="utf-8")
+                       "cache_creation_input_tokens": 96951,
+                       "cache_creation": {"ephemeral_5m_input_tokens": 0,
+                                          "ephemeral_1h_input_tokens": 96951}}}),
+            encoding="utf-8")
         usage = adapter.usage(self.run_dir, self.run_dir)
         self.assertEqual(usage["by_model"], models)
+        self.assertEqual((usage["cache_write_5m"], usage["cache_write_1h"]), (0, 96951))
         (self.run_dir / "stdout.log").unlink()
         self.assertEqual(self.worker(usage=usage)["model"], "claude-opus-5-5")
+
+    def test_writes_with_no_ttl_split_leave_the_row_unpriced_rather_than_short(self):
+        """Charging a 1-hour write at the 5-minute rate understates it by over a third."""
+        row = self.worker(usage={"input": 1, "output": 2, "cache_read": 3, "cache_write": 4,
+                                 "by_model": {"claude-opus-5-5": self.model_usage(1, 2, 3, 4)}})
+        self.assertNotIn("by_model", row)
+        self.assertIsNone(harness.row_cost(row, PRICES["models"]))
+
+    def test_a_split_that_matches_no_one_model_leaves_the_row_unpriced(self):
+        both = {"claude-opus-5-5": self.model_usage(1, 2, 3, 4),
+                "claude-haiku-4-5": self.model_usage(1, 2, 3, 4)}
+        row = self.worker(usage={"input": 2, "output": 4, "cache_read": 6, "cache_write": 8,
+                                 "cache_write_5m": 0, "cache_write_1h": 8, "by_model": both})
+        self.assertNotIn("by_model", row)
 
     def test_a_codex_worker_keeps_the_id_it_already_records(self):
         row = self.worker(usage={"input": 9, "output": 250, "cache_read": 4},

@@ -86,6 +86,14 @@ def usage(work, run_dir):
               "cache_read": "cache_read_input_tokens", "cache_write": "cache_creation_input_tokens"}
     out = {name: int(counts[key]) for name, key in fields.items()
            if isinstance(counts.get(key), int)}
+    # The TTL split of the cache writes, which `modelUsage` does not carry. A `-p` run writes at
+    # the 1-hour rate, so pricing every write at the 5-minute one would understate the run.
+    split = counts.get("cache_creation")
+    if isinstance(split, dict):
+        for name, key in (("cache_write_5m", "ephemeral_5m_input_tokens"),
+                          ("cache_write_1h", "ephemeral_1h_input_tokens")):
+            if isinstance(split.get(key), int):
+                out[name] = split[key]
     models = envelope.get("modelUsage")
     if isinstance(models, dict) and models:
         out["by_model"] = models
