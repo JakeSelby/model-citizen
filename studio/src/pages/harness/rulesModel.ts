@@ -68,7 +68,7 @@ export function ruleSettingRows(selection: SelectionReport, health: RuleHealth, 
 }
 
 /**
- * Settings saves go through "Try without it": each rule switched off becomes its own draft, made
+ * With no draft picked, Settings saves go through "Try without it": each rule switched off becomes its own draft, made
  * by the existing route. Results made before a failure are kept, so no draft goes unreported.
  */
 export async function draftRuleChanges(
@@ -87,4 +87,11 @@ export async function draftRuleChanges(
     }
   }
   return { results, error: null };
+}
+
+/** Switch edits as the selection save route records them in a picked draft: `{"rules.voice": "off"}`. */
+export function ruleSelectionChanges(changes: DraftChange[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const change of changes) if (change.field === "on" && (change.to === "on" || change.to === "off")) out[`rules.${change.item_id}`] = change.to;
+  return out;
 }

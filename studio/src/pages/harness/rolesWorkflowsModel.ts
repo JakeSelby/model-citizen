@@ -1,7 +1,7 @@
 // The Roles and Workflows pages' columns and their Settings rows. Settings are read from the
 // module library (`GET /api/library`): a role's class from its definition, its model and effort
 // from the Claude Code projection of its adapter binding, and each module's on/off switch.
-// Only the switch has a draft route; class, model and effort are shown read-only.
+// Only the switch is saved to a draft; class, model and effort are shown read-only.
 
 import type { LibraryModule, LibraryPayload } from "../../library/model";
 import type { DraftChange, MetricColumn, SettingField, SettingRow } from "../../harness/model";
@@ -130,7 +130,3 @@ export function selectionChanges(kind: "roles" | "workflows", changes: DraftChan
   }
   return out;
 }
-
-export type DraftHandoff = { surface: "roles" | "workflows"; selection: Record<string, string> };
-
-export const CHANGES_PATH = "/changes#drafts";

@@ -142,7 +142,7 @@ export function settingRows(rows: PeriodRow[], draft: DraftState | null, choices
     const control = switches.get(row.item_id);
     const hasMode = choices.points.includes(row.item_id);
     const mode = !hasMode ? NO_MODE
-      : modes[row.item_id] ?? (typeof fallback === "string" && fallback ? fallback : draft ? "off" : "load a draft");
+      : modes[row.item_id] ?? (typeof fallback === "string" && fallback ? fallback : draft ? "off" : "pick a draft");
     const options: Record<string, string[]> = {};
     if (draft && control) options.enabled = ["on", "off"];
     if (draft && hasMode && choices.modes.length) options.mode = choices.modes;

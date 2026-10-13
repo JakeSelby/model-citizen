@@ -1,6 +1,5 @@
-import { Badge, Box, Button, Code, Group, Stack, Table, Text, TextInput, Title } from "@mantine/core";
+import { Badge, Box, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 
 import { ActivityPage } from "../../activity/ActivityPage";
@@ -12,6 +11,7 @@ import { loadDraft, loadDraftSelection, loadSchema, saveDraft, saveDraftSelectio
 import { usePeriods } from "../../harness/api";
 import { HarnessPage, type SettingsState } from "../../harness/HarnessPage";
 import { parseTab, type DraftChange, type PeriodRow } from "../../harness/model";
+import { useLoadedDraft } from "../../harness/selectedDraft";
 import {
   HOOK_FIELDS, HOOK_METRICS, MODES_PATH, SAFETY_OUTCOMES, SURFACE, livenessColor, livenessCounts,
   modeChoices, nextModes, safetyLabel, settingRows, splitChanges, worstFirst,
@@ -51,7 +51,7 @@ export async function saveHookChanges(state: DraftState, changes: DraftChange[],
   return revision;
 }
 
-async function readDraft(draft: string): Promise<DraftState> {
+export async function readHookDraft(draft: string): Promise<DraftState> {
   const [selection, config] = await Promise.all([loadDraftSelection(draft), loadDraft(draft)]);
   if (selection.status !== "ready") throw new Error(selection.message);
   if (config.status !== "ready") throw new Error(config.message);
@@ -122,25 +122,6 @@ export function SafetyLog({ entries }: { entries: ActivityEntry[] }) {
   </Stack>;
 }
 
-function DraftLoader({ loaded, onLoad, error, loading }: {
-  loaded: string; onLoad: (draft: string) => void; error: string; loading: boolean;
-}) {
-  const [name, setName] = useState(loaded);
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (name.trim()) onLoad(name.trim());
-  }
-  return <Box component="form" onSubmit={submit} aria-label="Edit hooks in a draft">
-    <Group align="flex-end" gap="sm" wrap="wrap">
-      <TextInput label="Draft" description="Settings edits are saved into an existing managed draft, never the installed configuration."
-        placeholder="Draft name" value={name} onChange={(event) => setName(event.currentTarget.value)} />
-      <Button type="submit" variant="default" loading={loading} disabled={!name.trim()}>Load draft</Button>
-    </Group>
-    {loaded && <Text size="sm" mt="xs">Editing draft <Code>{loaded}</Code>.</Text>}
-    {error && <Text size="sm" c="red" mt="xs" role="alert">{error}</Text>}
-  </Box>;
-}
-
 /** The Hooks page: liveness and figures per hook, the Safety log, and per-hook settings. */
 export function HooksPage() {
   const [searchParams] = useSearchParams();
@@ -149,9 +130,7 @@ export function HooksPage() {
   const periods = usePeriods(SURFACE);
   const schema = useQuery({ queryKey: ["configure-schema"], queryFn: loadSchema, staleTime: 300_000 });
   const safety = useQuery({ ...safetyQuery, enabled: tab === "efficacy" });
-  const [draft, setDraft] = useState<DraftState | null>(null);
-  const [draftError, setDraftError] = useState("");
-  const [draftLoading, setDraftLoading] = useState(false);
+  const { draft, loading: draftLoading, error: draftError, reload } = useLoadedDraft(readHookDraft);
   const rows = periods.data?.rows ?? [];
   const choices = modeChoices(schema.data ?? null);
 
@@ -161,36 +140,23 @@ export function HooksPage() {
       ? { state: "error", message: periods.error.message }
       : { state: "ready", rows: settingRows(rows, draft, choices) };
 
-  async function openDraft(name: string) {
-    setDraftLoading(true);
-    setDraftError("");
-    try {
-      setDraft(await readDraft(name));
-    } catch (error) {
-      setDraft(null);
-      setDraftError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setDraftLoading(false);
-    }
-  }
-
-  async function onDraft(changes: DraftChange[]) {
-    if (!draft) throw new Error("Load a draft before sending changes.");
+  async function onDraft(changes: DraftChange[], name: string) {
+    if (!draft || draft.draft !== name) throw new Error("Wait for the draft to load before saving.");
     await saveHookChanges(draft, changes);
-    setDraft(await readDraft(draft.draft));
+    await reload();
   }
 
   return <Stack gap="lg">
     <HarnessPage surface={SURFACE} title="Hooks" itemNoun="Hook"
       question="Guardrails that run outside the model: which are firing, failing or silent."
-      metrics={HOOK_METRICS} fields={HOOK_FIELDS} settings={settings} onDraft={onDraft} />
+      metrics={HOOK_METRICS} fields={HOOK_FIELDS} settings={settings} onDraft={onDraft}
+      draftLoading={draftLoading} draftError={draftError} />
     {tab === "efficacy" && <LivenessSummary rows={rows} />}
     {tab === "efficacy" && (safety.isPending
       ? <EvidenceState kind="loading" title="Reading the Safety log">Blocked and warned actions from the decision log.</EvidenceState>
       : safety.isError
         ? <EvidenceState kind="error" title="The Safety log could not be read">{safety.error.message}</EvidenceState>
         : <SafetyLog entries={safety.data} />)}
-    {tab === "settings" && <DraftLoader loaded={draft?.draft ?? ""} onLoad={(name) => void openDraft(name)} error={draftError} loading={draftLoading} />}
     {/* The Activity timeline keeps Studio changes, their rollback and the `?apply=` links into
         them until that flow has a page of its own. */}
     {(tab === "efficacy" || focusedEntry(location.search)) && <ActivityPage embedded />}

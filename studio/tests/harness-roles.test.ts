@@ -9,11 +9,11 @@ import { MemoryRouter } from "react-router-dom";
 import { periodsQuery } from "../src/harness/api.ts";
 import { HarnessFrame } from "../src/harness/HarnessPage.tsx";
 import type { DraftChange, HarnessTab, PeriodsResponse } from "../src/harness/model.ts";
-import { draftHandoff, LIBRARY_QUERY_KEY } from "../src/pages/harness/librarySettings.ts";
+import { LIBRARY_QUERY_KEY, saveLibrarySwitches } from "../src/pages/harness/librarySettings.ts";
 import { LIBRARY } from "./fixtures/harness-library.ts";
 import { ROLES_CONTENT, RolesPage } from "../src/pages/harness/RolesPage.tsx";
 import {
-  BUILT_IN_ROW, CHANGES_PATH, headerField, roleSettings, selectionChanges,
+  BUILT_IN_ROW, headerField, roleSettings, selectionChanges,
 } from "../src/pages/harness/rolesWorkflowsModel.ts";
 
 // Hand-typed in the shape `GET /api/harness/periods?surface=roles` answers with.
@@ -107,7 +107,7 @@ test("Settings shows each role's class, model and effort read-only and its switc
   assert.ok(html.includes("Set by the runtime"));
 });
 
-test("saving a switch calls onDraft, which hands a selection change to Changes", () => {
+test("saving a switch calls onDraft, which saves a selection change into the picked draft", async () => {
   const rows = roleSettings(LIBRARY);
   const drafts: DraftChange[][] = [];
   const tree = HarnessFrame({
@@ -126,9 +126,9 @@ test("saving a switch calls onDraft, which hands a selection change to Changes",
   const expected: DraftChange[] = [{ item_id: "builder", field: "enabled", from: "on", to: "off" }];
   assert.deepEqual(drafts, [expected]);
 
-  const visits: Array<[string, unknown]> = [];
-  draftHandoff("roles", expected, (to, options) => visits.push([to, options]));
-  assert.deepEqual(visits, [[CHANGES_PATH, { state: { harnessDraft: { surface: "roles", selection: { "roles.builder": "off" } } } }]]);
+  const saves: Array<[string, Record<string, string>]> = [];
+  await saveLibrarySwitches("roles", expected, "try-roles", async (draft, changes) => { saves.push([draft, changes]); });
+  assert.deepEqual(saves, [["try-roles", { "roles.builder": "off" }]]);
   assert.deepEqual(selectionChanges("roles", [{ item_id: "builder", field: "tier", from: "strong", to: "light" }]), {},
     "a read-only field never becomes a selection change");
 });

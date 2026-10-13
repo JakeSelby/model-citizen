@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement as h, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { Button, MantineProvider, TextInput } from "@mantine/core";
+import { Button, MantineProvider } from "@mantine/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 
@@ -11,7 +11,7 @@ import { periodsQuery } from "../src/harness/api.ts";
 import { HarnessFrame } from "../src/harness/HarnessPage.tsx";
 import type { DraftChange, PeriodRow, PeriodsResponse } from "../src/harness/model.ts";
 import { SettingsTable } from "../src/harness/SettingsTable.tsx";
-import { DraftPicker, StancesPage, STANCES_QUESTION, stanceSettings } from "../src/pages/harness/StancesPage.tsx";
+import { StancesPage, STANCES_QUESTION, stanceSettings } from "../src/pages/harness/StancesPage.tsx";
 import {
   lastChanges, saveStanceDraft, selectionChanges, settingRowsFromControls, settingRowsFromPeriods,
   stanceLabel, STANCE_FIELDS, STANCE_METRICS,
@@ -98,8 +98,8 @@ test("Settings shows each stance's variant read-only until a draft is loaded", (
   assert.equal(rows[1].last_change_note, "variant · measuring, day 4 of 7");
   const html = render("/harness/stances?tab=settings", { surface: "stances", rows: ROWS });
   assert.ok(html.includes("Stances: settings"));
-  assert.ok(html.includes("Change a variant in a draft"));
-  assert.ok(html.includes("read-only until you load an existing draft"));
+  assert.ok(html.includes("Save into draft"));
+  assert.ok(html.includes("Pick or create a draft"));
   assert.ok(!html.includes('aria-label="Variant: Voice"'), "no select before a draft");
 });
 
@@ -164,19 +164,9 @@ test("the draft save goes through selection editing as stances.<name> changes", 
   );
 });
 
-test("the draft picker loads the named draft", () => {
-  const loads: string[] = [];
-  const typed: string[] = [];
-  const tree = DraftPicker({ value: "d1", loaded: null, busy: false, error: "", onChange: (v) => typed.push(v), onLoad: () => loads.push("load") });
-  const button = elements(tree).find((element) => element.type === Button);
-  const input = elements(tree).find((element) => element.type === TextInput);
-  assert.ok(button && input);
-  assert.equal(button.props.children, "Load draft");
-  (button.props.onClick as () => void)();
-  (input.props.onChange as (event: { currentTarget: { value: string } }) => void)({ currentTarget: { value: "d2" } });
-  assert.deepEqual([loads, typed], [["load"], ["d2"]]);
-  const html = renderToStaticMarkup(h(MantineProvider, {}, h(DraftPicker, {
-    value: "nope", loaded: null, busy: false, error: "draft not found", onChange: () => undefined, onLoad: () => undefined,
-  })));
-  assert.ok(html.includes("draft not found"));
+test("the Settings tab picks its draft in the frame and keeps the selection in the URL", () => {
+  const html = render("/harness/stances?tab=settings&draft=d1", { surface: "stances", rows: ROWS });
+  assert.ok(html.includes("Save into draft"));
+  assert.ok(!html.includes("Draft name"), "the typed draft field is gone");
+  assert.match(html, /Edits save into draft <code[^>]*>d1<\/code>/);
 });

@@ -10,7 +10,8 @@ import type { RuleHealth, TryWithoutResult } from "../../reports/rules/model";
 import { TriedDraft } from "../../reports/rules/RuleHealthPage";
 import { loadSelection } from "../../selection/api";
 import type { SelectionReport } from "../../selection/model";
-import { draftRuleChanges, HITS_NOTE, RULE_FIELDS, RULE_METRICS, RULES_SURFACE, ruleSettingRows } from "./rulesModel";
+import { saveSelectionToDraft } from "../../harness/selectedDraft";
+import { draftRuleChanges, ruleSelectionChanges, HITS_NOTE, RULE_FIELDS, RULE_METRICS, RULES_SURFACE, ruleSettingRows } from "./rulesModel";
 
 export const ruleHealthQuery = {
   queryKey: ["rule-health"] as const,
@@ -53,7 +54,9 @@ export function RulesPage() {
   const periods = usePeriods(RULES_SURFACE);
   const [tried, setTried] = useState<TryWithoutResult[]>([]);
 
-  async function onDraft(changes: DraftChange[]) {
+  async function onDraft(changes: DraftChange[], draft: string) {
+    setTried([]);
+    if (draft) return saveSelectionToDraft(draft, ruleSelectionChanges(changes));
     const { results, error } = await draftRuleChanges(changes, tryWithout);
     setTried(results);
     if (error) throw new Error(error);
@@ -63,7 +66,7 @@ export function RulesPage() {
     <HarnessPage surface={RULES_SURFACE} title="Rules"
       question="Guidance the model reads every session, measured against the setting that was in effect."
       itemNoun="Rule" metrics={RULE_METRICS} fields={RULE_FIELDS}
-      settings={ruleSettingsState(selection, health, periods.data?.rows)} onDraft={onDraft} />
+      settings={ruleSettingsState(selection, health, periods.data?.rows)} onDraft={onDraft} draftOptional />
     <TriedDrafts results={tried} />
     <Text size="sm" c="dimmed">{HITS_NOTE}</Text>
   </Stack>;

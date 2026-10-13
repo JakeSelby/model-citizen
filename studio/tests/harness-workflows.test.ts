@@ -9,8 +9,8 @@ import { MemoryRouter } from "react-router-dom";
 import { periodsQuery } from "../src/harness/api.ts";
 import { SettingsTable } from "../src/harness/SettingsTable.tsx";
 import type { DraftChange, PeriodsResponse } from "../src/harness/model.ts";
-import { draftHandoff, LIBRARY_QUERY_KEY } from "../src/pages/harness/librarySettings.ts";
-import { WORKFLOW_FIELDS, WORKFLOW_TOOL_ROW, CHANGES_PATH, workflowSettings } from "../src/pages/harness/rolesWorkflowsModel.ts";
+import { LIBRARY_QUERY_KEY, saveLibrarySwitches } from "../src/pages/harness/librarySettings.ts";
+import { WORKFLOW_FIELDS, WORKFLOW_TOOL_ROW, workflowSettings } from "../src/pages/harness/rolesWorkflowsModel.ts";
 import { WorkflowsPage } from "../src/pages/harness/WorkflowsPage.tsx";
 import { LIBRARY } from "./fixtures/harness-library.ts";
 
@@ -80,7 +80,7 @@ test("Settings lists each workflow with its source read-only and its switch edit
   assert.ok(!html.includes('aria-label="Enabled: Workflow tool runs"'), "the runtime's switch is not ours to draft");
 });
 
-test("saving a switch calls onDraft and hands the selection change to Changes", () => {
+test("saving a switch calls onDraft and saves the selection change into the picked draft", async () => {
   const rows = workflowSettings(LIBRARY);
   const drafts: DraftChange[][] = [];
   const table = SettingsTable({
@@ -91,7 +91,7 @@ test("saving a switch calls onDraft and hands the selection change to Changes", 
   assert.ok(send);
   (send.props.onClick as () => void)();
   assert.deepEqual(drafts, [[{ item_id: "build", field: "enabled", from: "on", to: "off" }]]);
-  const visits: Array<[string, unknown]> = [];
-  draftHandoff("workflows", drafts[0], (to, options) => visits.push([to, options]));
-  assert.deepEqual(visits, [[CHANGES_PATH, { state: { harnessDraft: { surface: "workflows", selection: { "workflows.build": "off" } } } }]]);
+  const saves: Array<[string, Record<string, string>]> = [];
+  await saveLibrarySwitches("workflows", drafts[0], "try-flows", async (draft, changes) => { saves.push([draft, changes]); });
+  assert.deepEqual(saves, [["try-flows", { "workflows.build": "off" }]]);
 });

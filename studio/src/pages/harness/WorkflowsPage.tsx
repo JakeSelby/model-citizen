@@ -1,5 +1,5 @@
 import { HarnessPage } from "../../harness/HarnessPage";
-import { useDraftHandoff, useLibrarySettings } from "./librarySettings";
+import { saveLibrarySwitches, useLibrarySettings } from "./librarySettings";
 import { WORKFLOW_FIELDS, WORKFLOW_METRICS, workflowSettings } from "./rolesWorkflowsModel";
 
 export const WORKFLOWS_CONTENT = {
@@ -12,6 +12,6 @@ export const WORKFLOWS_CONTENT = {
 
 export function WorkflowsPage() {
   const settings = useLibrarySettings(workflowSettings);
-  const onDraft = useDraftHandoff("workflows");
-  return <HarnessPage surface="workflows" {...WORKFLOWS_CONTENT} settings={settings} onDraft={onDraft} />;
+  return <HarnessPage surface="workflows" {...WORKFLOWS_CONTENT} settings={settings}
+    onDraft={(changes, draft) => saveLibrarySwitches("workflows", changes, draft)} />;
 }
