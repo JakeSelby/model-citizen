@@ -70,6 +70,10 @@ def usage(work, run_dir):
 
     `--no-session-persistence` leaves no transcript to read, so the envelope is the only source;
     it reports no tool-call count, which the record therefore leaves unknown.
+
+    `by_model` is the envelope's `modelUsage`, keyed by the full id each model ran as. The worker
+    is launched by alias (`opus`), which resolves to whatever the client's current model is, so
+    only this map can price the run; the usage sweep reads it, see `worker_parts` there.
     """
     try:
         envelope = json.loads((run_dir / "stdout.log").read_text())
@@ -80,8 +84,12 @@ def usage(work, run_dir):
         return {}
     fields = {"input": "input_tokens", "output": "output_tokens",
               "cache_read": "cache_read_input_tokens", "cache_write": "cache_creation_input_tokens"}
-    return {name: int(counts[key]) for name, key in fields.items()
-            if isinstance(counts.get(key), int)}
+    out = {name: int(counts[key]) for name, key in fields.items()
+           if isinstance(counts.get(key), int)}
+    models = envelope.get("modelUsage")
+    if isinstance(models, dict) and models:
+        out["by_model"] = models
+    return out
 
 
 def result(work, run_dir):
