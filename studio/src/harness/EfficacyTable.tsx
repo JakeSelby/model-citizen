@@ -13,7 +13,8 @@ export function EfficacyTable({ caption, rows, columns, itemHeading = "Item" }: 
   columns: MetricColumn[];
   itemHeading?: string;
 }) {
-  return <Table.ScrollContainer minWidth={640}>
+  return <Table.ScrollContainer minWidth={640}
+    scrollAreaProps={{ viewportProps: { role: "region", "aria-label": caption, tabIndex: 0 } }}>
     <Table verticalSpacing="sm" aria-label={caption}>
       <Table.Caption>{caption}</Table.Caption>
       <Table.Thead>
@@ -41,7 +42,7 @@ export function EfficacyTable({ caption, rows, columns, itemHeading = "Item" }: 
               {role && <Text size="sm" fw={600}>{role}</Text>}
               <Text size="sm" c={role ? "dimmed" : undefined}>{periodText(row.period)}</Text>
             </Table.Td>
-            {columns.map((column) => <Table.Td key={column.key}>{metricText(row.metrics[column.key])}</Table.Td>)}
+            {columns.map((column) => <Table.Td key={column.key}>{metricText(row.metrics[column.key], column.key)}</Table.Td>)}
             <Table.Td>
               {measuring
                 ? <Stack gap={4} align="flex-start">

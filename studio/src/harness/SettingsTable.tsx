@@ -29,7 +29,8 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
       Edits here become a draft in Changes. Nothing applies until you approve it there, and from
       that day Efficacy measures the item under its new setting for seven days.
     </Alert>
-    <Table.ScrollContainer minWidth={640}>
+    <Table.ScrollContainer minWidth={640}
+      scrollAreaProps={{ viewportProps: { role: "region", "aria-label": caption, tabIndex: 0 } }}>
       <Table verticalSpacing="sm" aria-label={caption}>
         <Table.Caption>{caption}</Table.Caption>
         <Table.Thead>

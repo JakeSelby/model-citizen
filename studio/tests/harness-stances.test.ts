@@ -73,7 +73,7 @@ test("Efficacy renders one row per stance per variant period with the usage colu
   assert.equal((html.match(/data-period="/g) ?? []).length, 3);
   const voice = /<tbody[^>]*data-item="voice"[^>]*>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? "";
   assert.ok(voice.indexOf("answer-card") < voice.indexOf("concise"), "the earlier variant sits above");
-  assert.ok(voice.includes("7,400") && voice.includes("0.75"));
+  assert.ok(voice.includes("7,400") && voice.includes("75.0%"));
   assert.ok(voice.includes("measuring, day 4 of 7"));
   assert.ok(html.includes('href="/evals?surface=stances&amp;item=voice"'));
   assert.ok(!html.includes("Change a variant in a draft"), "the draft picker is Settings-only");
