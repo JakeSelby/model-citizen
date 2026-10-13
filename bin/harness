@@ -41,6 +41,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen bmad    check|apply [REPO] [--force]   (alias for `integration ... bmad`)
     citizen remote-control install [--dry-run] | status | uninstall
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
+    citizen harness periods --surface NAME [--days N] [--json]
     citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
@@ -100,6 +101,7 @@ from harness_core.studio import rule_health as studio_rule_health
 from harness_core.studio import module_library as studio_module_library
 from harness_core.studio import rollback as studio_rollback
 from harness_core.studio import changes as studio_changes
+from harness_core.studio import periods as studio_periods
 from harness_core import decision as decisions_provider
 # The opt-in block for a provider that leaves the machine. Importing the controls does not
 # import the provider: nothing that reaches the network is loaded unless a config names it.
@@ -7575,6 +7577,23 @@ def cmd_reports(args: argparse.Namespace) -> int:
     return _studio_route_cli(args, "/api/reports/trends", {})
 
 
+def cmd_harness_periods(args: argparse.Namespace) -> int:
+    """`GET /api/harness/periods`: each item's setting periods with their usage figures."""
+    status, result = studio_periods.answer(args.surface, args.days, home=home())
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif status != 200:
+        print("citizen harness periods: %s" % result["error"], file=sys.stderr)
+    else:
+        for row in result["rows"]:
+            print("%s\t%s\t%s\t%s\t%s" % (row["item_id"], row["setting_label"],
+                                          row["period"]["start"], row["period"]["end"] or "-",
+                                          row["status"]))
+        if "note" in result:
+            print(result["note"])
+    return 0 if status == 200 else 2
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8155,6 +8174,18 @@ def build_parser() -> argparse.ArgumentParser:
         "trends", help="benchmark cost lines, static context and the proof set over time")
     trends_parser.add_argument("--json", action="store_true")
     trends_parser.set_defaults(func=cmd_reports)
+
+    p = sub.add_parser("harness", help="print what the Studio's Harness pages show")
+    harness_sub = p.add_subparsers(dest="harness_action", required=True)
+    periods_parser = harness_sub.add_parser(
+        "periods", help="each item's setting periods on one surface, with their usage figures")
+    periods_parser.add_argument("--surface", required=True,
+                                help="the Harness page's surface, such as stances or sources")
+    periods_parser.add_argument("--days", default=None,
+                                help="the window in days, 1 to %d (default 30)"
+                                % studio_periods.MAX_DAYS)
+    periods_parser.add_argument("--json", action="store_true")
+    periods_parser.set_defaults(func=cmd_harness_periods)
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

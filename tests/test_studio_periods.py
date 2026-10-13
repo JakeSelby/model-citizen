@@ -267,7 +267,9 @@ class PeriodsRouteTests(studio_security.StudioSecurityFixture):
 
     def test_the_route_is_registered_read_only_with_its_query(self):
         route = {(r.method, r.path): r for r in server.ROUTES.entries}[("GET", ROUTE)]
-        self.assertEqual((route.query, route.parity_exemption), (("surface", "days"), "page-read"))
+        self.assertEqual((route.query, route.parity_exemption), (("surface", "days"), None))
+        self.assertEqual(route.cli_command, periods.CLI_COMMAND)
+        self.assertNotIn("page-read", server.PARITY_EXEMPTIONS)
         self.assertIsNone(route.request_media_type)
 
 

@@ -32,6 +32,8 @@ FORM = {"model": "claude-test", "repetitions": 1, "tasks": ["one"], "max_budget_
         "spend_cap_usd": "2", "pack": {"name": "absent", "digest": "0" * 64}}
 # The HTML report shows the same artifact `citizen runs evidence` prints; no JSON to compare.
 NOT_JSON = {("GET", server.PLUGIN_EVAL_REPORT_PATH)}
+# A surface with no setting change in the window answers with a `note`, under its own schema.
+NOTED = {("GET", "/api/harness/periods"): server.HARNESS_PERIODS_NOTED}
 
 
 def cases(draft, revision, files):
@@ -100,6 +102,10 @@ def cases(draft, revision, files):
             ["draft", "create", d + "-cli", "--source", "stances"],
             {"draft": d + "-route", "source": "stances"}, "same"),
         ("GET", "/api/changes/history"): (["draft", "history"], None, "same"),
+        # A GET route's query string is the request; its values arrive as text.
+        ("GET", "/api/harness/periods"): (
+            ["harness", "periods", "--surface", "stances", "--days", "30"],
+            {"surface": "stances", "days": "30"}, "same"),
         ("GET", "/api/library"): (["catalog", "--library"], None, "same"),
         ("POST", "/api/activity"): (["activity"], {}, "same"),
         # The Studio wraps the command's own document in an envelope naming it and its basis.
@@ -245,7 +251,10 @@ class ShapeParityTests(unittest.TestCase):
                     continue
                 self.assertNotIn("error", set(printed) - set(sent), printed)
                 self.assertEqual(sorted(printed), sorted(sent))
-                server.ROUTES.resolve(method, path).response_schema.validate(printed)
+                schema = server.ROUTES.resolve(method, path).response_schema
+                if "note" in printed and (method, path) in NOTED:
+                    schema = NOTED[(method, path)]
+                schema.validate(printed)
 
 
 if __name__ == "__main__":

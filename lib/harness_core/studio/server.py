@@ -43,10 +43,8 @@ CONTROL_HEALTH = "/__studio/control/health"
 CONTROL_STOP = "/__studio/control/stop"
 CONTROL_BOOTSTRAP = "/__studio/control/bootstrap"
 BOOTSTRAP = "/__studio/bootstrap"
-# "page-read": a read the Harness pages issue as GET with a query string, which no `citizen`
-# command answers yet.
 PARITY_EXEMPTIONS = frozenset(("transport", "bootstrap", "static", "authenticated-health",
-                               "sse", "ui-preferences", "page-read"))
+                               "sse", "ui-preferences"))
 STATIC_ASSET = re.compile(
     r"^/assets/[A-Za-z0-9_-]+-[A-Za-z0-9_-]{8}\.(?P<extension>css|js)$"
 )
@@ -530,15 +528,9 @@ def _query(text: str, allowed: Tuple[str, ...]) -> Optional[Dict[str, str]]:
 
 def _harness_periods(handler: Handler, route: Route) -> None:
     query = getattr(handler, "request_query", {})
-    days = query.get("days", "30")
-    if (not query.get("surface") or not (days.isascii() and days.isdigit())
-            or not 1 <= int(days) <= periods.MAX_DAYS):
-        handler._error(400, "invalid_request")
-        return
-    try:
-        payload = periods.efficacy_rows(query["surface"], days=int(days))
-    except periods.UnknownSurface:
-        handler._error(400, "unknown_surface")
+    status, payload = periods.answer(query.get("surface"), query.get("days"))
+    if status != 200:
+        handler._error(status, payload["error"])
         return
     (HARNESS_PERIODS_NOTED if "note" in payload else route.response_schema).validate(payload)
     handler._json(200, payload)
@@ -2683,7 +2675,7 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/reports/trends", "application/json", TRENDS, _trends, None,
           "application/json", trends.CLI_COMMAND),
     Route("GET", "/api/harness/periods", "application/json", HARNESS_PERIODS,
-          _harness_periods, "page-read", query=("surface", "days")),
+          _harness_periods, None, cli_command=periods.CLI_COMMAND, query=("surface", "days")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),
