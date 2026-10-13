@@ -15,7 +15,7 @@ import { LibraryPage } from "./library/LibraryPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
-import { RuleHealthPage } from "./reports/rules/RuleHealthPage";
+import { RulesPage } from "./pages/harness/RulesPage";
 import { TrendsPage } from "./reports/trends/TrendsPage";
 import { SpendPage } from "./spend/SpendPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
@@ -96,7 +96,7 @@ function StudioFrame() {
           <Routes>
             <Route path="/home" element={<><FirstRunEntry /><OverviewPage /></>} />
             <Route path="/sessions" element={<SpendPage />} />
-            <Route path="/harness/rules" element={<RuleHealthPage />} />
+            <Route path="/harness/rules" element={<RulesPage />} />
             {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}
             <Route path="/harness/stances" element={<RebuildingPage key="stances" page="stances" />} />
             <Route path="/harness/skills" element={<RebuildingPage key="skills" page="skills" />} />
