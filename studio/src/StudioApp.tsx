@@ -12,6 +12,7 @@ import { documentTitle, pageCommand, pageTitle } from "./navigation";
 import { ConfigurePage } from "./configure/ConfigurePage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
+import { SourcesPage } from "./pages/harness/SourcesPage";
 import { OverviewPage } from "./overview/OverviewPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { ActivityPage } from "./activity/ActivityPage";
@@ -103,7 +104,8 @@ function StudioFrame() {
             <Route path="/harness/hooks" element={<ActivityPage />} />
             <Route path="/harness/roles" element={<RebuildingPage key="roles" page="roles" />} />
             <Route path="/harness/workflows" element={<RebuildingPage key="workflows" page="workflows" />} />
-            <Route path="/harness/sources" element={<LibraryPage />} />
+            <Route path="/harness/sources" element={<SourcesPage />} />
+            <Route path="/harness/sources/modules" element={<LibraryPage />} />
             <Route path="/routines" element={<RebuildingPage key="routines" page="routines" />} />
             <Route path="/changes" element={<ConfigurePage />} />
             <Route path="/evals" element={<EvalsPage />} />
