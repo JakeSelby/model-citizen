@@ -29,6 +29,8 @@ import { LegacyRedirect } from "./shell/LegacyRedirect";
 import { StudioNav } from "./shell/StudioNav";
 import { RebuildingPage } from "./shell/RebuildingPage";
 import { StancesPage } from "./pages/harness/StancesPage";
+import { RolesPage } from "./pages/harness/RolesPage";
+import { WorkflowsPage } from "./pages/harness/WorkflowsPage";
 
 function StudioFrame() {
   const location = useLocation();
@@ -103,8 +105,8 @@ function StudioFrame() {
             <Route path="/harness/stances" element={<StancesPage />} />
             <Route path="/harness/skills" element={<RebuildingPage key="skills" page="skills" />} />
             <Route path="/harness/hooks" element={<ActivityPage />} />
-            <Route path="/harness/roles" element={<RebuildingPage key="roles" page="roles" />} />
-            <Route path="/harness/workflows" element={<RebuildingPage key="workflows" page="workflows" />} />
+            <Route path="/harness/roles" element={<RolesPage />} />
+            <Route path="/harness/workflows" element={<WorkflowsPage />} />
             <Route path="/harness/sources" element={<SourcesPage />} />
             <Route path="/harness/sources/modules" element={<LibraryPage />} />
             <Route path="/routines" element={<RebuildingPage key="routines" page="routines" />} />
