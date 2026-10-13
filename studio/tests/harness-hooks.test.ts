@@ -156,7 +156,7 @@ test("Settings shows each hook's switch and mode, read-only until a draft is loa
   assert.deepEqual(choices.points, ["grade-bash", "stop-gate", "evasion-deny"]);
   const bare = settingRows(ROWS, null, choices);
   assert.deepEqual(bare.map((item) => item.item_id), ["grade-bash", "stop-gate", "steer-polling", "usage-log"], "built-in points have no settings");
-  assert.deepEqual(bare[0].values, { enabled: "on", mode: "load a draft" });
+  assert.deepEqual(bare[0].values, { enabled: "on", mode: "pick a draft" });
   assert.equal(bare[2].values.mode, NO_MODE, "a hook with no decision mode is labelled, not editable");
   assert.ok(bare.every((item) => item.options === undefined));
 
@@ -169,8 +169,9 @@ test("Settings shows each hook's switch and mode, read-only until a draft is loa
 
   const html = render("/harness/hooks?tab=settings", seeded());
   assert.ok(html.includes("Hooks: settings"));
-  assert.ok(html.includes("Decision mode") && html.includes("load a draft") && html.includes(NO_MODE));
-  assert.match(html, /aria-label="Edit hooks in a draft"/);
+  assert.ok(html.includes("Decision mode") && html.includes("pick a draft") && html.includes(NO_MODE));
+  assert.match(html, /aria-label="Hooks: draft to save into"/);
+  assert.ok(html.includes("Save into draft") && html.includes("Pick or create a draft"));
   assert.ok(!html.includes("Safety log"), "the Safety log belongs to Efficacy");
 });
 

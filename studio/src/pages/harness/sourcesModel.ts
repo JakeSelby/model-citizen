@@ -24,7 +24,7 @@ export const READ_ONLY = {
   "Third-party": "read-only: plugins are enabled in Claude Code",
 } as const;
 
-export const PERSONAL_EDITING = "load a draft to switch it off";
+export const PERSONAL_EDITING = "pick a draft to switch it off";
 
 const PERSONAL = "personal:";
 

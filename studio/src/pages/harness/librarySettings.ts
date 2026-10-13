@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
 
 import type { DraftChange, SettingRow } from "../../harness/model";
 import type { SettingsState } from "../../harness/HarnessPage";
 import { loadLibrary } from "../../library/api";
 import type { LibraryPayload } from "../../library/model";
-import { CHANGES_PATH, selectionChanges, type DraftHandoff } from "./rolesWorkflowsModel";
+import { saveSelectionToDraft } from "../../harness/selectedDraft";
+import { selectionChanges } from "./rolesWorkflowsModel";
 
 export const LIBRARY_QUERY_KEY = ["harness-library"] as const;
 
@@ -18,16 +18,12 @@ export function useLibrarySettings(derive: (library: LibraryPayload) => SettingR
 }
 
 /**
- * Hands switch edits to Changes, where a named draft records them; nothing is written here. The
- * selection travels in the navigation state as `<kind>.<unit>` changes.
+ * Save switch edits into the selected draft as `<kind>.<unit>` selection changes, through the
+ * same selection save route the Stances page uses.
  */
-export function draftHandoff(surface: DraftHandoff["surface"], changes: DraftChange[],
-  navigate: (to: string, options: { state: { harnessDraft: DraftHandoff } }) => unknown): void {
-  const handoff: DraftHandoff = { surface, selection: selectionChanges(surface, changes) };
-  void navigate(CHANGES_PATH, { state: { harnessDraft: handoff } });
-}
-
-export function useDraftHandoff(surface: DraftHandoff["surface"]): (changes: DraftChange[]) => void {
-  const navigate = useNavigate();
-  return (changes) => draftHandoff(surface, changes, navigate);
+export async function saveLibrarySwitches(
+  kind: "roles" | "workflows", changes: DraftChange[], draft: string,
+  save: (draft: string, changes: Record<string, string>) => Promise<void> = saveSelectionToDraft,
+): Promise<void> {
+  await save(draft, selectionChanges(kind, changes));
 }

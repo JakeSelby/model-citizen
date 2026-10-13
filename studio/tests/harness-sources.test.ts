@@ -86,7 +86,7 @@ test("Settings shows each source's root and enabled state, read-only where no ro
   const rows = settingRowsFromPeriods(ROWS);
   assert.deepEqual(rows.map((row) => [row.item_id, row.item_detail, row.values.source, row.values.on, row.values.editing, row.options]), [
     ["core", "/opt/mc/primitives", "Core", "on", READ_ONLY.Core, undefined],
-    [`personal:${ROOT}`, ROOT, "Personal", "on", "load a draft to switch it off", undefined],
+    [`personal:${ROOT}`, ROOT, "Personal", "on", "pick a draft to switch it off", undefined],
     ["third-party:bmad-method@bmad", "/c/bmad", "Third-party", "on", READ_ONLY["Third-party"], undefined],
   ]);
   assert.equal(rows[0].last_changed, "2026-10-09T12:00:00Z");
@@ -94,8 +94,9 @@ test("Settings shows each source's root and enabled state, read-only where no ro
   assert.equal(rows[1].last_changed, null);
   const html = render("/harness/sources?tab=settings", { surface: "sources", rows: ROWS });
   assert.ok(html.includes("Sources: settings"));
-  assert.ok(html.includes("Draft name"));
-  assert.ok(html.includes("read-only until you load an existing draft"));
+  assert.ok(html.includes("Save into draft"));
+  assert.ok(!html.includes("Draft name"), "the frame's picker replaces the typed field");
+  assert.ok(html.includes("Pick or create a draft"));
   assert.ok(html.includes(READ_ONLY.Core));
   assert.ok(!html.includes('aria-label="On: Personal: my-primitives"'), "no select before a draft");
 });
