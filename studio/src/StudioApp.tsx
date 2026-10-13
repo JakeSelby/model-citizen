@@ -9,7 +9,7 @@ import { type ChangeEvent, type MouseEvent, useEffect, useState } from "react";
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { documentTitle, pageCommand, pageTitle } from "./navigation";
-import { ConfigurePage } from "./configure/ConfigurePage";
+import { ChangesPage } from "./changes/ChangesPage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { SourcesPage } from "./pages/harness/SourcesPage";
@@ -111,7 +111,7 @@ function StudioFrame() {
             <Route path="/harness/sources" element={<SourcesPage />} />
             <Route path="/harness/sources/modules" element={<LibraryPage />} />
             <Route path="/routines" element={<RebuildingPage key="routines" page="routines" />} />
-            <Route path="/changes" element={<ConfigurePage />} />
+            <Route path="/changes" element={<ChangesPage />} />
             <Route path="/evals" element={<EvalsPage />} />
             <Route path="/evals/runs/:runId" element={<RunDetailPage />} />
             <Route path="/evals/trends" element={<TrendsPage />} />

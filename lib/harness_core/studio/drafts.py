@@ -26,6 +26,8 @@ from .module_evaluator import bounded_text
 SCHEMA_VERSION = 1
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TAG = re.compile(r"^v[0-9][A-Za-z0-9._-]*$")
+# The Studio page a draft was started from, shown in the Changes inbox; empty when unknown.
+SOURCE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 STATE_DIR = "agent-harness-draft"
 
 
@@ -232,10 +234,13 @@ def create(
     config_path: Path,
     create_worktree: Callable[[Path, str, str, str], Path],
     cleanup_worktree: Callable[[Path, Path, str, str], None],
+    source: str = "",
 ) -> Dict[str, Any]:
     """Create a draft through the caller's managed-worktree primitive."""
     if not NAME.fullmatch(name):
         raise DraftError("invalid-name", "draft name must use only letters, numbers, dots, underscores, and hyphens")
+    if source and not SOURCE.fullmatch(source):
+        raise DraftError("invalid-source", "a draft's source must be a lowercase Studio page name")
     config = config_path.read_bytes() if config_path.is_file() else None
     base_ref, base_revision = resolve_base(repo, base)
     worktree_name = "draft-" + name
@@ -263,6 +268,8 @@ def create(
             "config_present": config is not None,
             "idempotency": {},
         }
+        if source:
+            state["source"] = source
         _atomic_json(paths["state"], state)
         _snapshot(paths, base_revision, config)
         return describe(repo, worktree, state)
@@ -357,6 +364,7 @@ def describe(repo: Path, worktree: Path, state: Optional[Dict[str, Any]] = None)
         "rebase_conflicted": _rebase_in_progress(worktree),
         "state_matches_checkout": actual == state["revision"],
         "created_at": state["created_at"],
+        "source": str(state.get("source") or ""),
     }
 
 

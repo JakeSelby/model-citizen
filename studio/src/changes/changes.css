@@ -1,0 +1,19 @@
+/* A draft's steps: reached ones in the primary ink, the current one bold. */
+.change-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--studio-space-2) var(--studio-space-4);
+  margin: var(--studio-space-3) 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--studio-text-sm);
+  color: var(--studio-ink-secondary);
+}
+
+.change-steps li[data-reached] {
+  color: var(--studio-primary);
+}
+
+.change-steps li[aria-current="step"] {
+  font-weight: 650;
+}

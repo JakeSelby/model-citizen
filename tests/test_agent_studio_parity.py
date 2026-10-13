@@ -94,6 +94,12 @@ def cases(draft, revision, files):
         ("POST", "/api/configure/apply/rollback"): (
             ["draft", "rollback", APPLY_ID, "--draft", d], {"apply_id": APPLY_ID, "confirm": d},
             "same"),
+        ("GET", "/api/changes/drafts"): (["draft", "list"], None, "same"),
+        # Each side creates its own draft, so neither refuses the other's; both are discarded.
+        ("POST", "/api/changes/drafts/create"): (
+            ["draft", "create", d + "-cli", "--source", "stances"],
+            {"draft": d + "-route", "source": "stances"}, "same"),
+        ("GET", "/api/changes/history"): (["draft", "history"], None, "same"),
         ("GET", "/api/library"): (["catalog", "--library"], None, "same"),
         ("POST", "/api/activity"): (["activity"], {}, "same"),
         # The Studio wraps the command's own document in an envelope naming it and its basis.
@@ -179,6 +185,8 @@ class ShapeParityTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         try:
+            for created in (cls.draft + "-cli", cls.draft + "-route"):
+                draft_support.discard_draft(unittest.TestCase(), created, cls.env, missing_ok=True)
             draft_support.discard_draft(unittest.TestCase(), cls.draft, cls.env)
         finally:
             cls.temporary.cleanup()

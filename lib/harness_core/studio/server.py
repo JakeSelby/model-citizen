@@ -32,7 +32,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                targets)
 from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
-from . import periods
+from . import changes, periods
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -1999,7 +1999,7 @@ def _first_run_error(handler: Handler, exc: "first_run.FirstRunError") -> None:
 CREATE_TIMEOUT = 120
 
 
-def _run_draft_create(repo_root: Path, draft: str) -> str:
+def _run_draft_create(repo_root: Path, draft: str, source: str = "") -> str:
     """Run `citizen draft create` itself, so the draft is the CLI's managed worktree.
 
     The CLI runs in its own session, so a timeout stops its git children with it and the
@@ -2007,6 +2007,8 @@ def _run_draft_create(repo_root: Path, draft: str) -> str:
     """
     environment = _child_environment()
     command = _cli_entry(repo_root) + ["draft", "create", draft, "--json"]
+    if source:
+        command += ["--source", source]
     try:
         child = subprocess.Popen(command, cwd=str(repo_root), env=environment, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -2091,6 +2093,57 @@ def _trends(handler: Handler, route: Route) -> None:
     except run_store.RunStoreError as exc:
         collected = trends.unavailable("the run index could not be read: %s" % exc)
     payload = trends.report(handler.server.repo_root, collected)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _changes_drafts(handler: Handler, route: Route) -> None:
+    payload = changes.inbox(handler.server.repo_root, draft_apply.home_dir(), handler.server.store.path)
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _changes_history(handler: Handler, route: Route) -> None:
+    payload = changes.history(draft_apply.home_dir())
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _changes_create(handler: Handler, route: Route) -> None:
+    """`citizen draft create NAME --source PAGE`, so the draft is the CLI's managed worktree."""
+    request = _required_request(handler, ("draft", "source"))
+    if request is None:
+        return
+    name, source = request["draft"], request["source"]
+    if not isinstance(name, str) or not drafts.NAME.fullmatch(name) or not isinstance(source, str) \
+            or (source and not drafts.SOURCE.fullmatch(source)):
+        handler._error(400, "invalid_request")
+        return
+    repo_root = handler.server.repo_root
+
+    def create() -> str:
+        try:
+            drafts.find(repo_root, name)
+            return "draft-exists"
+        except drafts.DraftError as exc:
+            if exc.code != "not-found":
+                return exc.code
+        failure = _run_draft_create(repo_root, name, source)
+        if failure:
+            # A create killed partway leaves a branch with no draft state; never one that holds work.
+            first_run.clear_partial(repo_root, name)
+        return failure
+
+    failure = handler.server.mutations.call(create)
+    if failure:
+        handler._error(409, failure)
+        return
+    try:
+        worktree, _state = drafts.find(repo_root, name)
+        payload = drafts.describe(repo_root, worktree)
+    except drafts.DraftError as exc:
+        handler._error(409, exc.code)
+        return
     route.response_schema.validate(payload)
     handler._json(200, payload)
 
@@ -2443,6 +2496,20 @@ DRAFT_TEST_VERDICTS = ResponseSchema("json-object", (("schema_version", "integer
                                                        ("checkpoints", "array"),
                                                        ("registrations", "array"),
                                                        ("unreadable_records", "integer")))
+CHANGES_DRAFTS = ResponseSchema("json-object", (("schema_version", "integer"), ("drafts", "array")))
+CHANGES_HISTORY = ResponseSchema("json-object", (("schema_version", "integer"), ("entries", "array")))
+DRAFT_DESCRIBED = ResponseSchema("json-object", (("draft_id", "string"), ("name", "string"),
+                                                  ("path", "string"), ("branch", "string"),
+                                                  ("base", "string"), ("base_revision", "string"),
+                                                  ("revision", "string"),
+                                                  ("actual_revision", "string"),
+                                                  ("installed_revision", "string"),
+                                                  ("behind_by", "integer-or-null"),
+                                                  ("behind_installed", "boolean"),
+                                                  ("can_rebase", "boolean"),
+                                                  ("rebase_conflicted", "boolean"),
+                                                  ("state_matches_checkout", "boolean"),
+                                                  ("created_at", "string"), ("source", "string")))
 ROUTES = RouteRegistry((
     Route("GET", "/", "text/html; charset=utf-8", HTML, _static, "static"),
     Route("HEAD", "/", "text/html; charset=utf-8", HTML, _static, "static"),
@@ -2511,6 +2578,12 @@ ROUTES = RouteRegistry((
           _draft_rollback_preview, None, "application/json", draft_rollback.CLI_COMMANDS["preview"]),
     Route("POST", "/api/configure/apply/rollback", "application/json", APPLY_RESULT,
           _draft_rollback, None, "application/json", draft_rollback.CLI_COMMANDS["rollback"]),
+    Route("GET", "/api/changes/drafts", "application/json", CHANGES_DRAFTS,
+          _changes_drafts, None, cli_command=changes.CLI_COMMANDS["list"]),
+    Route("POST", "/api/changes/drafts/create", "application/json", DRAFT_DESCRIBED,
+          _changes_create, None, "application/json", changes.CLI_COMMANDS["create"]),
+    Route("GET", "/api/changes/history", "application/json", CHANGES_HISTORY,
+          _changes_history, None, cli_command=changes.CLI_COMMANDS["history"]),
     Route("GET", "/api/library", "application/json", LIBRARY,
           _library, None, cli_command=("citizen", "catalog", "--library", "--json")),
     Route("POST", "/api/activity", "application/json", ACTIVITY,
