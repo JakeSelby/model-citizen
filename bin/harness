@@ -43,6 +43,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
     citizen harness periods --surface NAME [--days N] [--json]
     citizen harness hook NAME [--days N] [--json]
+    citizen harness skills [--days N] [--json]
     citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
@@ -7614,6 +7615,27 @@ def cmd_harness_hook(args: argparse.Namespace) -> int:
     return 0 if status == 200 else 2
 
 
+# Phase B — Skills
+def cmd_harness_skills(args: argparse.Namespace) -> int:
+    """`GET /api/harness/skills`: per skill, the sessions that loaded and invoked it."""
+    from harness_core.studio.surfaces import skills as skill_surface
+    status, result = skill_surface.answer(args.days, home=home())
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif status != 200:
+        print("citizen harness skills: %s" % result["error"], file=sys.stderr)
+    else:
+        if result["indexing"]:
+            print("still indexing: %d transcripts pending" % result["pending"])
+        for row in result["skills"]:
+            print("%s\t%d loaded\t%d invoked\t%d calls\t%s" % (
+                row["skill"], row["loaded_sessions"], row["invoked_sessions"],
+                row["invocations"], row["use"]))
+        print(result["basis"])
+    return 0 if status == 200 else 2
+# End Phase B — Skills
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8215,6 +8237,15 @@ def build_parser() -> argparse.ArgumentParser:
                              % studio_periods.MAX_DAYS)
     hook_parser.add_argument("--json", action="store_true")
     hook_parser.set_defaults(func=cmd_harness_hook)
+    # Phase B — Skills
+    skills_parser = harness_sub.add_parser(
+        "skills", help="per skill, the sessions that loaded it and the sessions that invoked it")
+    skills_parser.add_argument("--days", default=None,
+                               help="the window in days, 1 to %d (default 30)"
+                               % studio_periods.MAX_DAYS)
+    skills_parser.add_argument("--json", action="store_true")
+    skills_parser.set_defaults(func=cmd_harness_skills)
+    # End Phase B — Skills
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

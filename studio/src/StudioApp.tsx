@@ -30,6 +30,7 @@ import { LegacyRedirect } from "./shell/LegacyRedirect";
 import { StudioNav } from "./shell/StudioNav";
 import { RebuildingPage } from "./shell/RebuildingPage";
 import { StancesPage } from "./pages/harness/StancesPage";
+import { SkillsPage } from "./pages/harness/SkillsPage";
 import { RolesPage } from "./pages/harness/RolesPage";
 import { WorkflowsPage } from "./pages/harness/WorkflowsPage";
 
@@ -104,7 +105,7 @@ function StudioFrame() {
             <Route path="/harness/rules" element={<RulesPage />} />
             {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}
             <Route path="/harness/stances" element={<StancesPage />} />
-            <Route path="/harness/skills" element={<RebuildingPage key="skills" page="skills" />} />
+            <Route path="/harness/skills" element={<SkillsPage />} />
             <Route path="/harness/hooks" element={<HooksPage />} />
             <Route path="/harness/hooks/:hook" element={<HookDetailPage />} />
             <Route path="/harness/roles" element={<RolesPage />} />
