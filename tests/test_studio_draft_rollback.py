@@ -161,7 +161,7 @@ class RollbackTests(unittest.TestCase):
             rolled = by_kind["rollback"]
             self.assertEqual((rolled["title"], rolled["draft"], rolled["outcome"], rolled["actor"]),
                              ("Apply rolled back", name, "completed", "citizen"))
-            self.assertEqual(rolled["evidence_href"], "/activity?apply=" + apply_id)
+            self.assertEqual(rolled["evidence_href"], "/harness/hooks?tab=log&apply=" + apply_id)
             self.assertEqual((by_kind["apply"]["apply_id"], by_kind["apply"]["rollback_target"]),
                              (apply_id, apply_id))
             self.assertEqual(rolled["rollback_target"], result["apply_id"])
@@ -318,7 +318,7 @@ class RollbackTests(unittest.TestCase):
             undone = entries[0]
             self.assertEqual((undone["kind"], undone["title"], undone["outcome"], undone["rollback_target"]),
                              ("rollback", "Rollback undone", "recovered", ""))
-            self.assertEqual(undone["evidence_href"], "/activity?apply=" + apply_id)
+            self.assertEqual(undone["evidence_href"], "/harness/hooks?tab=log&apply=" + apply_id)
 
     def test_an_edit_during_the_dry_run_sync_is_kept_or_refused_by_name(self):
         with self.home() as home:
@@ -648,7 +648,7 @@ class ActivityLinkTests(unittest.TestCase):
     def test_a_rollback_links_only_a_well_formed_apply_id(self):
         linked = self.entry({"draft": "d", "reverses": "a" * 32, "outcome": "completed"})
         self.assertEqual(linked["title"], "Apply rolled back")
-        self.assertEqual(linked["evidence_href"], "/activity?apply=" + "a" * 32)
+        self.assertEqual(linked["evidence_href"], "/harness/hooks?tab=log&apply=" + "a" * 32)
         self.assertEqual(linked["evidence_label"], "Open the change this rolled back")
         for reverses in ("../../library", "A" * 32, None, 7):
             unlinked = self.entry({"draft": "d", "reverses": reverses})

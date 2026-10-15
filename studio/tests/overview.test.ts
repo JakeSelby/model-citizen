@@ -7,7 +7,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { loadOverview } from "../src/overview/api.ts";
 import { attentionCount, releaseSummary, systemSummary, type Overview } from "../src/overview/model.ts";
-import { DeterministicOverview } from "../src/overview/OverviewPage.tsx";
+import { SystemSummary } from "../src/overview/SystemSummary.tsx";
 
 const fixture: Overview = {
   schema_version: 1,
@@ -38,25 +38,19 @@ test("failed drift stays unknown instead of rendering a green healthy summary", 
   };
   assert.deepEqual(systemSummary(failed), { label: "Drift unknown", tone: "danger" });
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(DeterministicOverview, { overview: failed }))));
+    h(SystemSummary, { overview: failed }))));
   assert.match(html, /Drift unknown/);
-  assert.match(html, /Drift unavailable/);
-  assert.doesNotMatch(html, /No detected drift/);
+  assert.match(html, /<dt>Projection drift<\/dt><dd class="strip-value" data-tone="danger">Unavailable<\/dd>/);
+  assert.doesNotMatch(html, /In sync/);
 });
 
-test("operational cards show exact fixes, governed sync, updates, and empty runs", () => {
+test("the installed summary names an available update and never offers to install it", () => {
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(DeterministicOverview, { overview: fixture }))));
+    h(SystemSummary, { overview: fixture }))));
   assert.match(html, /Version 1\.3\.0 is available/);
   assert.match(html, /Read changelog/);
-  assert.match(html, /plugin missing/);
-  assert.match(html, /bin\/harness install/);
-  assert.match(html, /\/plugin install model-citizen@market/);
-  assert.match(html, /Review sync before applying/);
-  assert.match(html, /No runs yet/);
-  assert.match(html, /<details class="doctor-repair"><summary>Show 2 repair commands/);
-  assert.ok(html.indexOf("diagnostic-secondary") < html.indexOf("Projection drift"));
-  assert.ok(html.indexOf("Projection drift") < html.indexOf("Recent runs"));
+  assert.match(html, /Updates are never installed automatically/);
+  assert.match(html, /1 changed/);
   assert.doesNotMatch(html, /Update now|Run sync/);
 });
 
@@ -73,15 +67,6 @@ test("overview loads from the authenticated same-origin route", async () => {
     globalThis.fetch = original;
   }
   assert.deepEqual(calls, [{ input: "/api/overview", init: { credentials: "same-origin" } }]);
-});
-
-test("attention checks precede collapsed informational diagnostics", () => {
-  const overview = { ...fixture, doctor: { ...fixture.doctor, checks: [...fixture.doctor.checks].reverse() } };
-  const html = renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(DeterministicOverview, { overview }))));
-  assert.ok(html.indexOf("plugin missing") < html.indexOf("identity: set"));
-  assert.match(html, /<details class="doctor-information"><summary>1 informational check<\/summary>/);
-  assert.doesNotMatch(html, /<details[^>]*open/);
 });
 
 test("overview route errors are explicit", async () => {

@@ -20,7 +20,7 @@ export function FirstRunEntryView({ status, opened }: { status: FirstRunStatus; 
   return opened ? <Navigate replace to="/baseline" /> : <FirstRunBanner status={status} />;
 }
 
-/** The Hub's way into setup: a fresh install opens the guide, any unfinished run offers it. */
+/** Home's way into setup: a fresh install opens the guide, any unfinished run offers it. */
 export function FirstRunEntry() {
   const [entry, setEntry] = useState<{ status: FirstRunStatus; opened: boolean } | null>(null);
   useEffect(() => {

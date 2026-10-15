@@ -27,7 +27,7 @@ never a credential. State lives under `~/.local/state/agent-harness/studio/`.
 
 The Studio routes pages after a `#`: the server serves the page only at `/`, so a page's address
 is the Studio's URL, which ends in `/`, followed by `#/` and the page path, such as
-`/#/reports/rules`. An address without the `#`, such as `/reports/rules`, answers 404 `not_found`
+`/#/harness/rules`. An address without the `#`, such as `/harness/rules`, answers 404 `not_found`
 even when signed in.
 
 Which browsers and platforms are supported, and the release evidence behind that, is in
@@ -53,24 +53,59 @@ random `*.localhost` host name, unique to the running instance.
 
 ## The pages
 
-- **Hub** (`/#/`): the installed version, a newer release on `stable` with its changelog link, each
-  failing `citizen doctor` check with the doctor's own repair command, projection drift from
-  `citizen diff`, and recent runs. It updates and syncs nothing by itself: a drift fix goes through
-  a reviewed `citizen sync --dry-run` first. Its cards link to the usage and trends reports.
-- **Configure** (`/#/configure`): the effective selection, each value with the layer that set it and
-  the values it overrode, as `citizen selection` reports it. Changes are made in a draft, below.
-- **Library** (`/#/library`): every module with its root, manifest, state, the layer that switched it
-  on or off, the files it projects to for Claude Code and Codex, and its token cost from the static
-  context figure. A module whose name collides with a core module is flagged, and a fork shows the
-  core module it came from. It reads the same catalog as `citizen catalog`.
-- **Experiments** (`/#/experiments`): suites to run, run history and the comparison of two runs;
-  a run's detail is at `/#/experiments/runs/RUN_ID`.
-- **Activity** (`/#/activity`): hook decisions and governed changes, newest first, paged, with their
-  session, repository, hook and source. It is the same query as `citizen activity`. An apply's entry
-  is where it is rolled back.
-- **Reports**: rule health (`/#/reports/rules`), spend and usage (`/#/reports/usage`) and trends
-  (`/#/reports/trends`). The Reports tab itself is still a placeholder; reach the reports from the
-  Hub's cards, the Library, or their addresses.
+The nav groups the pages by the question each answers. The header names the page's `citizen`
+command, the command its evidence comes from, so every page can be repeated in a terminal.
+
+- **Home** (`/#/home`, `citizen home`): your last day in sessions, and what needs you first. Each
+  item in the queue carries one action. A drift fix goes through a reviewed `citizen sync --dry-run`
+  on Changes first; Home updates and syncs nothing by itself. On a fresh install it offers the
+  guided first run.
+- **Sessions** (`/#/sessions`, `citizen sessions list`): what each session cost and how much context
+  it carried, against your context stance, with the top sessions, context per call, and each
+  auto-trim, compaction and harness reseed. A session's detail is at `/#/sessions/SESSION`. Costs
+  come from the local [usage ledger](usage.md).
+- **Harness**: seven pages, one per part of the harness. Each opens on **Efficacy**, its rows
+  stamped with the setting in effect at the time (see [Setting periods](#setting-periods)), and
+  has a **Settings** tab whose edits go into a draft, never live.
+  - **Rules** (`/#/harness/rules`, `citizen usage --rules`): guidance the model reads every
+    session, measured against the setting that was in effect, with [rule health](#rule-health).
+  - **Stances** (`/#/harness/stances`, `citizen stances`): one variant per stance, and its
+    efficacy against the variant that was in effect.
+  - **Skills** (`/#/harness/skills`, `citizen harness skills`): which skills each session loaded,
+    and which it actually invoked.
+  - **Hooks** (`/#/harness/hooks`, `citizen activity`): guardrails that run outside the model,
+    which are firing, failing or silent. A hook's detail is at `/#/harness/hooks/HOOK`. Its third
+    tab, `?tab=log`, is the log: blocked, asked and warned actions worst first, then hook
+    decisions and governed changes newest first, as `citizen activity` queries them. An apply's
+    entry there is where it is rolled back.
+  - **Roles** (`/#/harness/roles`, `citizen usage --by role`): which roles spawned, at what tier
+    and effort, what they cost, and how often they ran past their budget.
+  - **Workflows** (`/#/harness/workflows`, `citizen usage --by role`): how many workflow runs there
+    were, how many agents each started, and what they cost.
+  - **Sources** (`/#/harness/sources`, `citizen catalog --library`): where everything that loads
+    comes from, against the harness version in effect. Its module browser,
+    `/#/harness/sources/modules`, lists every module with its root, manifest, state, the layer that
+    switched it on or off, the files it projects for Claude Code and Codex, and its token cost. A
+    module whose name collides with a core module is flagged, and a fork shows its core original.
+- **Routines** (`/#/routines`, `citizen studio routine list`): checks that run on a schedule on this
+  Mac, and how their last runs went. A routine reads and never changes your setup. Two ship: the
+  daily rule adherence audit, which reads new transcripts with the rule detectors and makes no
+  model call, and the hourly hook liveness check. `citizen studio routine install NAME` and
+  `citizen studio routine remove NAME` add and remove a routine's per-user launchd agent, and
+  `citizen studio routine run NAME` runs one now.
+- **Changes** (`/#/changes`, `citizen draft list`): every draft, waiting or applied, with the
+  history of applies and rollbacks, the draft editor, review, apply and roll back. Nothing applies
+  until you approve it. See [Drafts](#drafts).
+- **Evals** (`/#/evals`, `citizen runs history`): three tabs. **Experiments** runs suites and keeps
+  their history (see [Runs](#runs)); a run's detail is at `/#/evals/runs/RUN_ID`. **Before and
+  after** shows what each setting change did, period against period. **Runtime qualification**
+  lists the native qualification records the compatibility catalog validates. [Trends](#trends)
+  are at `/#/evals/trends` (`citizen reports trends`).
+- **Baseline** (`/#/baseline`, `citizen baseline show`), pinned to the foot of the nav: what you
+  have now and the baselines you recorded. See [Baseline](#baseline).
+
+An old address from before this layout, such as `/#/library` or `/#/reports/rules`, still opens its
+page, keeping its query. Any other unknown address opens Home.
 
 Pages refresh within two seconds of a change made from the CLI, an agent or an editor. The header
 can pause updates; resuming shows how many changes arrived meanwhile.
@@ -92,7 +127,7 @@ citizen draft rebase NAME    # onto the installed revision; stops at a Git confl
 citizen draft discard NAME   # refuses a dirty or conflicted draft
 ```
 
-In Configure, pick a draft with **Drafts** in the header, then change it:
+On Changes, pick a draft with **Drafts** in the header, then change it in the draft editor:
 
 - **Mode, stance variants and switches.** Each change is previewed by running `citizen config set`
   in a throwaway home, with the before and after selection, stance text and context budget. A
@@ -120,8 +155,8 @@ citizen draft module save NAME MODULE --base-revision REV --source-digest DIGEST
 Add your own module from a template, or fork a core module into your personal root. With no
 personal root, the draft offers to create one and registers it in `primitive_roots`. The new
 module's manifest and the whole selection are checked before the checkpoint exists. A fork switches
-the core original off in the draft; when an update later changes the original, the fork's Library
-page shows the upstream diff.
+the core original off in the draft; when an update later changes the original, the fork's entry in
+the module browser shows the upstream diff.
 
 ```sh
 citizen draft module templates NAME             # personal root, templates, forkable modules
@@ -140,7 +175,7 @@ rule can be refused with lint's own finding.
 `citizen lint` and strict resolution run in the draft, the context-budget delta, and the exact
 commands an apply runs. Apply then runs those commands under the sync and configuration locks: it
 fast-forwards your personal root, sets each changed key with `citizen config set`, runs
-`citizen sync`, then the doctor checks, whose result shows on the Hub.
+`citizen sync`, then the doctor checks, whose result shows on Home and Baseline.
 
 ```sh
 citizen draft review NAME
@@ -167,13 +202,14 @@ citizen draft recover [--draft NAME]        # restore after an interrupted apply
 citizen draft recover --abandon             # close it and keep what it wrote
 ```
 
-In the Studio, the Changes page lists every draft with its status and the history of applies
-and rollbacks; roll back from a draft there or from the apply's entry in Activity. An interrupted apply or rollback shows
-an alert in the apply panel offering the same two recover choices.
+In the Studio, the Changes page lists every draft with its status and the history of applies and
+rollbacks; roll back from a draft there or from the apply's entry in the Hooks log. An interrupted
+apply or rollback shows an alert in the apply panel offering the same two recover choices.
 
 ## First run
 
-On a fresh install the Hub offers **Set up Model Citizen** (`/#/setup`), which walks one draft named
+On a fresh install Home offers **Set up Model Citizen**, which opens the guide on Baseline
+(`/#/baseline?guide=first-run`). It walks one draft named
 `first-run` to an applied, doctor-checked harness: check the install, start a draft, say who you
 are, pick a stance for each dimension, run a free check (`citizen lint`), review and apply, and
 confirm the doctor checks. Leaving halfway changes nothing live, and the draft is kept, so setup
@@ -197,9 +233,9 @@ has drifted.
 
 ### Free suites
 
-Experiments lists the free local suites with the exact command for each: `lint`, `unit-tests`
-(all of them, or one module, class or test), `lifecycle-acceptance`, `static-context` and
-`detector-corpus`. From the CLI:
+The Experiments tab of Evals lists the free local suites with the exact command for each: `lint`,
+`unit-tests` (all of them, or one module, class or test), `lifecycle-acceptance`, `static-context`
+and `detector-corpus`. From the CLI:
 
 ```sh
 citizen runs catalog
@@ -284,10 +320,10 @@ retries one failed case into a fresh log.
 
 ### History and detail
 
-Experiments keeps a filterable history (suite, target, status, date, cost and duration), each
-run's detail with its cases, lineage, exact command and bounded logs, and a rerun that reuses the
-original target and parameters and links back to it. A test with different outcomes in two runs at
-one commit is marked flaky in both runs and in its own history.
+The Experiments tab keeps a filterable history (suite, target, status, date, cost and duration),
+each run's detail with its cases, lineage, exact command and bounded logs, and a rerun that reuses
+the original target and parameters and links back to it. A test with different outcomes in two runs
+at one commit is marked flaky in both runs and in its own history.
 
 ```sh
 citizen runs history [--suite S] [--target T] [--status S] [--created-from D] [--created-to D]
@@ -300,7 +336,7 @@ citizen runs reindex         # rebuild history from the durable result files
 
 ## Test a draft
 
-**Test this draft** in Configure runs a live replay whose first target is the commit the draft was
+**Test this draft** on Changes runs a live replay whose first target is the commit the draft was
 based on and whose second is the draft's checkpoint, so both run as one pair on the same tasks,
 model, trials, evaluator pack and caps. Before the run it says when the trial count is too low to
 detect the stated effect, and offers the number needed. The verdict is the comparison below, kept
@@ -340,18 +376,21 @@ point estimate.
 
 ## Trends
 
-Each benchmark series plotted by version, with its change notes and the intervals its engine
-stored, beside the project's proof set and its `citizen evidence verify` status. Ratios are
-compared across days, never dollars. History appears after `citizen runs reindex`; with none
-indexed, the page says so. `citizen reports trends --json` prints the same report.
+At `/#/evals/trends`, linked from Evals: each benchmark series plotted by version, with its change
+notes and the intervals its engine stored, beside the project's proof set and its
+`citizen evidence verify` status. Ratios are compared across days, never dollars. History appears
+after `citizen runs reindex`; with none indexed, the page says so. `citizen reports trends --json`
+prints the same report.
 
 ## Rule health
 
-Every loaded rule with the status and reason `citizen usage --rules` gives it (measured, dark or
-unmeasured), its detector hits over 7, 30 and 90 days, and its context cost. Hits come from your
-own sessions, so they are labelled exploratory, and an adherence figure from a detector under its
-precision floor is marked unreliable. **Try without it** opens a draft with the rule switched off
-and its test ready to run; from the CLI it is `citizen draft try-without rules.NAME`. What each detector looks for is in
+The Rules page reads the same rule-health report as `citizen usage --rules`. Its Efficacy tab shows
+each rule per setting period: sessions, detector hits, where it fired, detector precision and
+context tokens. Its Settings tab shows whether the rule is on, the layer that set it and its context
+cost. Hits come from your own sessions, so they are labelled exploratory and shown as fired, never
+as followed. With no draft picked, switching a rule off in Settings goes through **Try without it**:
+a draft with that rule switched off and its test ready to run. From the CLI it is
+`citizen draft try-without rules.NAME`. What each detector looks for is in
 [rule telemetry](usage.md#rule-telemetry).
 
 ## Setting periods
@@ -362,16 +401,9 @@ its usage figures. A period that started under seven days ago is still measuring
 at a completed apply from the Studio's Changes flow, a commit of `config.json` when that file is
 tracked in git, or a clean change in the setting your usage rows were stamped with; a profile
 fingerprint change alone starts none. A surface with no change in the window answers one period
-per item and a `note` saying so. An unknown surface is a 400. Stances and Sources are served
-today. `citizen harness periods --surface NAME [--days N] --json` prints the same answer, and
+per item and a `note` saying so. An unknown surface is a 400; all seven Harness pages are served.
+`citizen harness periods --surface NAME [--days N] --json` prints the same answer, and
 exits 2 with the route's error code on a refusal.
-
-## Spend and usage
-
-The local usage ledger as `citizen usage --json` prints it, for the same window, so the two never
-disagree. Every dollar figure carries its list-price label and pricing date, and a Studio run,
-having no session, is grouped under its run id. The ledger itself is described in
-[usage telemetry](usage.md).
 
 ## From the CLI
 
@@ -393,7 +425,7 @@ refusal is reported, never worked around.
 
 Baseline (`/#/baseline`) starts from what you have rather than a preset. **What you have now**
 shows the installed version, doctor checks, projection drift and release line, from
-`GET /api/overview` as the Hub read them. Below it are the stances,
+`GET /api/overview`. Below it are the stances,
 rule switches, settings and enabled third-party plugins in effect now, read from `config.json` and
 Claude Code's `enabledPlugins`, and the baselines recorded so far. **Record baseline** appends one
 row, holding the redacted config and the plugins it saw, to `baselines.jsonl` in the Studio state

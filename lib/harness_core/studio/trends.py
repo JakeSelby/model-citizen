@@ -74,11 +74,11 @@ STATIC_MEASURE = {"id": "static_tokens", "label": "Static context, estimated tok
 NOT_TRACKED = (
     {"measure": "Detector precision",
      "reason": "No engine keeps detector precision by version or date; Rule health shows the "
-               "current labelled-corpus reading.", "where": "/reports/rules"},
+               "current labelled-corpus reading.", "where": "/harness/rules"},
     {"measure": "Rule adherence",
      "reason": "No engine keeps rule adherence by version or date beyond each benchmark row's "
                "delegation tally, shown on its point; Rule health shows the current reading.",
-     "where": "/reports/rules"},
+     "where": "/harness/rules"},
 )
 NO_CLAIM = "The project publishes no measured claim: product.json binds no evidence card."
 

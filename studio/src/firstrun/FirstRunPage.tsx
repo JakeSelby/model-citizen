@@ -340,7 +340,7 @@ export function FirstRunPage() {
         <Title className="first-run-heading" order={2} ref={heading} tabIndex={-1}>{label}</Title>
         {step === "health" && (
           <Stack gap="md" mt="md">
-            <Text c="dimmed" size="sm">The runtimes and links the doctor found. Afterwards, Hub shows health, Configure holds drafts, Library lists modules, Experiments runs suites, Reports traces evidence and Activity records decisions.</Text>
+            <Text c="dimmed" size="sm">The runtimes and links the doctor found. Afterwards, Home shows what needs attention, Changes holds drafts, Sources lists modules, Evals runs suites and Hooks records decisions.</Text>
             <HealthSummary overview={overview} />
             <CommandChip command="citizen doctor" label="The same check from the CLI" />
             <Group><Button onClick={() => go(nextStep("health"))}>Continue</Button></Group>

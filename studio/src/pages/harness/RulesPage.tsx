@@ -7,7 +7,7 @@ import { HarnessPage, type SettingsState } from "../../harness/HarnessPage";
 import type { DraftChange, PeriodRow } from "../../harness/model";
 import { loadRuleHealth, tryWithout } from "../../reports/rules/api";
 import type { RuleHealth, TryWithoutResult } from "../../reports/rules/model";
-import { TriedDraft } from "../../reports/rules/RuleHealthPage";
+import { TriedDraft } from "../../reports/rules/TriedDraft";
 import { loadSelection } from "../../selection/api";
 import type { SelectionReport } from "../../selection/model";
 import { saveSelectionToDraft } from "../../harness/selectedDraft";

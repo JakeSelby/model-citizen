@@ -6,9 +6,9 @@ import {
   useMantineColorScheme,
 } from "@mantine/core";
 import { type ChangeEvent, type MouseEvent, useEffect, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
-import { documentTitle, pageCommand, pageTitle } from "./navigation";
+import { documentTitle, fallbackLocation, pageCommand, pageTitle } from "./navigation";
 import { ChangesPage } from "./changes/ChangesPage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
@@ -27,14 +27,17 @@ import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
 import { EvalsPage } from "./evals/EvalsPage";
-import { LegacyRedirect } from "./shell/LegacyRedirect";
 import { StudioNav } from "./shell/StudioNav";
-import { RebuildingPage } from "./shell/RebuildingPage";
 import { RoutinesPage } from "./routines/RoutinesPage";
 import { StancesPage } from "./pages/harness/StancesPage";
 import { SkillsPage } from "./pages/harness/SkillsPage";
 import { RolesPage } from "./pages/harness/RolesPage";
 import { WorkflowsPage } from "./pages/harness/WorkflowsPage";
+
+/** Sends an old bookmarked path to its page, and any unknown one Home, keeping query and fragment. */
+function OldPathFallback() {
+  return <Navigate replace to={fallbackLocation(useLocation())} />;
+}
 
 function StudioFrame() {
   const location = useLocation();
@@ -106,7 +109,6 @@ function StudioFrame() {
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/sessions/:session" element={<SessionDetailPage />} />
             <Route path="/harness/rules" element={<RulesPage />} />
-            {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}
             <Route path="/harness/stances" element={<StancesPage />} />
             <Route path="/harness/skills" element={<SkillsPage />} />
             <Route path="/harness/hooks" element={<HooksPage />} />
@@ -121,8 +123,8 @@ function StudioFrame() {
             <Route path="/evals/runs/:runId" element={<RunDetailPage />} />
             <Route path="/evals/trends" element={<TrendsPage />} />
             <Route path="/baseline" element={<BaselinePage />} />
-            {/* Every old route and any unknown one: see LEGACY_REDIRECTS in navigation.ts. */}
-            <Route path="*" element={<LegacyRedirect />} />
+            {/* Old bookmarks and unknown routes: see OLD_PATHS in navigation.ts. */}
+            <Route path="*" element={<OldPathFallback />} />
           </Routes>
         </div>
       </AppShell.Main>

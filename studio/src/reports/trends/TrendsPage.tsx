@@ -177,7 +177,7 @@ export function TrendsPage() {
   return <Stack gap="xl">
     <Group align="flex-end" className="page-heading" justify="space-between">
       <div>
-        <Text className="eyebrow">Studio / Reports / Trends</Text>
+        <Text className="eyebrow">Studio / Evals / Trends</Text>
         <Title order={1}>Each measure across versions, beside the proof set.</Title>
         <Text c="dimmed" mt="xs">Ratios, pass rates and the static figure by version and date, each as its engine stored it, with the proof set as citizen evidence verify reports it.</Text>
       </div>

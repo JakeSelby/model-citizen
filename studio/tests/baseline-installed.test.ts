@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 import { BaselineView } from "../src/baseline/BaselinePage.tsx";
 import type { BaselineResponse } from "../src/baseline/model.ts";
 import type { Overview } from "../src/overview/model.ts";
-import { DeterministicOverview, SystemSummary } from "../src/overview/OverviewPage.tsx";
+import { SystemSummary } from "../src/overview/SystemSummary.tsx";
 
 // Hand-typed in the shapes `GET /api/baseline` and `GET /api/overview` answer with; no generator exists.
 const DATA: BaselineResponse = {
@@ -37,7 +37,7 @@ const view = (installed?: ReactElement) => h(BaselineView, {
   data: DATA, label: "", onLabel: () => {}, onRecord: () => {}, installed,
 });
 
-test("Baseline shows Hub's installed-system summary under What you have now", () => {
+test("Baseline shows the installed-system summary under What you have now", () => {
   const html = render(view(h(SystemSummary, { overview: OVERVIEW })));
   assert.match(html, /What you have now/);
   assert.match(html, /class="system-summary"/);
@@ -48,11 +48,4 @@ test("Baseline shows Hub's installed-system summary under What you have now", ()
 
 test("Baseline without an installed summary renders no empty section", () => {
   assert.doesNotMatch(render(view()), /What you have now/);
-});
-
-test("the Hub still renders the same summary it shares with Baseline", () => {
-  const hub = render(h(DeterministicOverview, { overview: OVERVIEW }));
-  const shared = render(h(SystemSummary, { overview: OVERVIEW }));
-  const section = shared.slice(shared.indexOf("<section"), shared.lastIndexOf("</section>") + "</section>".length);
-  assert.ok(hub.includes(section));
 });

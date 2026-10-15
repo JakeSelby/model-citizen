@@ -15,7 +15,7 @@ import {
   draftRoots, READ_ONLY, rootsAfter, saveSourcesDraft, settingRowsFromDraft, settingRowsFromPeriods, shortPath,
   SOURCES_FIELDS, SOURCES_QUESTION, TEAM_NOTE,
 } from "../src/pages/harness/sourcesModel.ts";
-import { legacyTarget } from "../src/navigation.ts";
+import { OLD_PATHS } from "../src/navigation.ts";
 
 // Hand-typed in the shape `/api/harness/periods?surface=sources` answers with, mirroring the
 // provider test's 0.14.2 to 0.15.0 split.
@@ -72,7 +72,7 @@ test("the module browser stays reachable and the old Library route lands on it",
   const html = render("/harness/sources", { surface: "sources", rows: ROWS });
   assert.ok(html.includes(`href="${MODULES_PATH}"`));
   assert.ok(html.includes("Open the module browser"));
-  assert.equal(legacyTarget("/library"), MODULES_PATH);
+  assert.equal(OLD_PATHS["/library"], MODULES_PATH);
 });
 
 test("an unattributable answer shows the API's note and no invented split", () => {

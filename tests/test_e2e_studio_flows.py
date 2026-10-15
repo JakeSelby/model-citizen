@@ -190,23 +190,24 @@ class StudioEndToEndFlows(support.StudioE2E):
                           % json.dumps(label), label + " was not the current area")
                 self.wait(ready, route + " did not render", seconds=60)
                 self.assertEqual(self.js("location.hash"), route)
-        # Hub's installed-system summary lives on Baseline, under "What you have now".
+        # The installed-system summary lives on Baseline, under "What you have now".
         self.assertIn("Installed system", self.js("document.querySelector('main').textContent"))
 
-    def test_every_old_route_redirects_to_its_new_page(self):
-        """#1320: each route of the old nav lands on its regrouped page, query and run id kept."""
+    def test_old_bookmarks_land_on_their_new_page(self):
+        """#1336: each old top-level path still in bookmarks lands on its page, query kept; a
+        retired deep path or an unknown route lands on Home."""
         self.open("#/home")
         redirects = (("#/", "#/home", "Home"),
                      ("#/setup", "#/baseline", "Baseline"),
                      ("#/configure", "#/changes", "Changes"),
                      ("#/library?path=rules/a.md", "#/harness/sources/modules?path=rules/a.md", "Sources"),
                      ("#/experiments", "#/evals", "Evals"),
-                     ("#/experiments/runs/no-such-run", "#/evals/runs/no-such-run", "Evals"),
                      ("#/activity", "#/harness/hooks?tab=log", "Hooks"),
                      ("#/reports", "#/evals", "Evals"),
                      ("#/reports/rules", "#/harness/rules", "Rules"),
                      ("#/reports/usage", "#/sessions", "Sessions"),
                      ("#/reports/trends", "#/evals/trends", "Evals"),
+                     ("#/experiments/runs/no-such-run", "#/home", "Home"),
                      ("#/not-a-route", "#/home", "Home"))
         for old, new, label in redirects:
             with self.subTest(route=old):

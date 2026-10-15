@@ -6,9 +6,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MantineProvider } from "@mantine/core";
 import { MemoryRouter } from "react-router-dom";
 
-import { RuleHealthReport, TriedDraft } from "../src/reports/rules/RuleHealthPage.tsx";
+import { TriedDraft } from "../src/reports/rules/TriedDraft.tsx";
 import {
-  effectText, hitLine, lastFiredText, reliability, sortRows, summaryLine, tokensText, tryStatusLine, tryWithoutErrorMessage, windowText,
+  effectText, hitLine, lastFiredText, reliability, sortRows, summaryLine, tokensText, tryStatusLine, tryWithoutErrorMessage,
+  unavailableSources, windowText,
   type RuleHealth, type RuleRow, type TryWithoutResult,
 } from "../src/reports/rules/model.ts";
 
@@ -22,18 +23,7 @@ function row(name: string): RuleRow {
   return found;
 }
 
-function render(health: RuleHealth): string {
-  return renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {},
-    h(RuleHealthReport, { health, onTry: () => undefined, trying: null }))));
-}
-
-test("every rule shows the status and reason the engine reported", () => {
-  const html = render(fixture);
-  for (const item of fixture.rows) {
-    assert.ok(html.includes(`>${item.state}<`), item.rule);
-    if (item.reason) assert.ok(html.includes(item.reason.replace(/'/g, "&#x27;")), item.reason);
-  }
-  assert.ok(html.includes(`rules: ${summaryLine(fixture)}`));
+test("the summary line counts each coverage state the engine reported", () => {
   assert.equal(summaryLine(fixture), "3 measured, 1 dark, 1 unmeasured (60% measured)");
 });
 
@@ -42,8 +32,6 @@ test("a detector under the precision floor marks the rule's hit figures unreliab
   const check = reliability(voice.hits);
   const reason = "voice/banned-opener is below the engine&#x27;s 0.90 floor (precision 0.95, recall 0.60)";
   assert.deepEqual(check, { label: "unreliable", tone: "danger", reason: reason.replace("&#x27;", "'") });
-  const html = render(fixture);
-  assert.ok(html.includes(`Hit figures unreliable: ${reason}`));
   assert.equal(reliability(row("secrets").hits)?.label, "precision at or above floor");
 });
 
@@ -55,9 +43,6 @@ test("hit figures are the engine's counts, labelled exploratory, never inverted 
     "voice/banned-opener: fired in 6 of 40 sessions (15%), 9 hits");
   assert.equal(lastFiredText(voice.hits), "within 7 days");
   assert.equal(voice.hits.label, "exploratory");
-  const html = render(fixture);
-  assert.ok(html.includes(fixture.exploratory_note.replace(/'/g, "&#x27;")));
-  assert.ok(!/\bfollowed in\b/.test(html));
 });
 
 test("a rule with no evidence says not measured with its reason, never zero", () => {
@@ -70,12 +55,7 @@ test("a rule with no evidence says not measured with its reason, never zero", ()
   assert.equal(effectText(row("secrets").effect), "cost -4.0% [-9.0%, 1.0%], n 6, inconclusive (arm no-secrets)");
 });
 
-test("Try without it is offered on a switched-on rule and explained elsewhere", () => {
-  const html = render(fixture);
-  assert.ok(html.includes('aria-label="Try without it: conciseness"'));
-  assert.ok(html.includes('aria-label="Try without it: secrets"'), "a measured rule is offered too");
-  assert.ok(!html.includes('aria-label="Try without it: working-style"'));
-  assert.ok(html.includes(row("autonomy").try_without.reason));
+test("dark rules sort first, and a refused switch-off says why", () => {
   assert.equal(sortRows(fixture.rows)[0].rule, "conciseness");
   assert.match(tryWithoutErrorMessage("rule-not-switchable"), /not switched on/);
 });
@@ -134,14 +114,9 @@ test("the live status is one line naming the draft", () => {
   assert.equal(tryStatusLine(null, "refused"), "No draft was made. refused");
 });
 
-test("the page names the directory the statuses were read from", () => {
-  assert.ok(render(fixture).includes(`<code>${fixture.working_directory}</code>`));
-});
-
 test("an unreadable source is named and its column reads not measured", () => {
   const partial = JSON.parse(JSON.stringify(fixture)) as RuleHealth;
   partial.status = "partial";
   partial.sources.cost = { status: "unavailable", message: "citizen scorecard timed out" };
-  const html = render(partial);
-  assert.ok(html.includes("cost: citizen scorecard timed out"));
+  assert.ok(unavailableSources(partial).includes("cost: citizen scorecard timed out"));
 });

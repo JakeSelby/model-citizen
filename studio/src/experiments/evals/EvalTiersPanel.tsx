@@ -139,7 +139,7 @@ export function EvalTiersPanel({ catalog }: { catalog: EvalCatalog }) {
               <Button disabled={!raw.startsWith("/")} variant="light" onClick={() => startFree("rule-detection", raw)}>Detect offline</Button>
             </Group>}
             {tier.id === "micro-tier" && <PaidTierForm catalog={catalog} suite="micro-tier" onStarted={setRunId} />}
-            {tier.id === "unit-eval" && <Text size="sm">Start a unit eval from a rule's page in the Library: "Test this rule".</Text>}
+            {tier.id === "unit-eval" && <Text size="sm">Start a unit eval from a rule's page in the module browser under Sources: "Test this rule".</Text>}
           </Stack>
         </Paper>)}
         {error && <Alert color="red" title="Refused">{error}</Alert>}

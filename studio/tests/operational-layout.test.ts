@@ -8,7 +8,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import { NAVIGATION, pageCommand } from "../src/navigation.ts";
 import type { Overview } from "../src/overview/model.ts";
-import { DeterministicOverview, ReportCards, reportCards } from "../src/overview/OverviewPage.tsx";
+import { SystemSummary } from "../src/overview/SystemSummary.tsx";
 
 const overview: Overview = {
   schema_version: 1,
@@ -48,8 +48,8 @@ test("every page names the CLI command its evidence comes from", () => {
   for (const { path } of NAVIGATION) assert.match(pageCommand(path), /^citizen [a-z]/);
 });
 
-test("the Hub opens on one number strip, not a card", () => {
-  const html = render(h(DeterministicOverview, { overview }));
+test("the installed summary is one number strip, not a card", () => {
+  const html = render(h(SystemSummary, { overview }));
   assert.doesNotMatch(html, /mantine-(Card|Paper)-root/);
   const strip = html.match(/<dl class="number-strip">(.*?)<\/dl>/)?.[1] ?? "";
   const items = [...strip.matchAll(/<div class="strip-item"><dt[^>]*>([^<]*)<\/dt><dd class="strip-value"[^>]*>([^<]*)<\/dd>/g)]
@@ -63,32 +63,9 @@ test("the Hub opens on one number strip, not a card", () => {
   assert.match(strip, /<dd class="strip-value" data-tone="warning">2<\/dd><dd class="strip-note">Needs attention · 3 checks<\/dd>/);
   // The capped run list is never counted into a number.
   assert.doesNotMatch(strip, /Recent runs/);
-  const failed = render(h(DeterministicOverview, { overview: { ...overview,
+  const failed = render(h(SystemSummary, { overview: { ...overview,
     doctor: { status: "failed", message: "Doctor checks are unavailable.", checks: [] } } }));
   assert.match(failed, /<dt>Doctor checks<\/dt><dd class="strip-value" data-tone="danger">Unavailable<\/dd>/);
-});
-
-test("the Hub lists doctor checks and runs as compact rows with their ids and status", () => {
-  const html = render(h(DeterministicOverview, { overview }));
-  assert.equal((html.match(/<li class="doctor-row">/g) ?? []).length, 3);
-  assert.match(html, /checkout not trusted/);
-  const runs = html.match(/<ul class="run-list">(.*?)<\/ul>/)?.[1] ?? "";
-  assert.match(runs, /<code class="run-id">r-0193<\/code>.*live-replay.*data-tone="success">succeeded/);
-  // A running status takes the neutral dot: teal is the accent, never a status.
-  assert.match(runs, /<code class="run-id">r-0194<\/code>.*data-tone="neutral">running/);
-  assert.doesNotMatch(runs, /data-tone="info"/);
-  assert.match(runs, /<code class="run-id">r-0191<\/code>.*hook-matrix.*data-tone="danger">failed/);
-});
-
-test("report links are rows that keep every label, measure and detail", () => {
-  const html = render(h(ReportCards));
-  assert.doesNotMatch(html, /mantine-Card-root/);
-  assert.equal((html.match(/class="report-row"/g) ?? []).length, reportCards.length);
-  for (const card of reportCards) {
-    assert.ok(html.includes(`href="${card.href.replace(/&/g, "&amp;")}"`), card.href);
-    assert.ok(html.includes(`<span class="report-label">${card.label}</span>`), card.label);
-    assert.ok(html.includes(card.measure), card.measure);
-  }
 });
 
 test("the theme names Inter and JetBrains Mono first and bundles no font file", () => {

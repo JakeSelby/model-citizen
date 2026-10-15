@@ -8,7 +8,7 @@ import { Link, useLocation } from "react-router-dom";
 import { EvidenceState } from "../components/StudioKit";
 import { FirstRunPage } from "../firstrun/FirstRunPage";
 import { loadOverview } from "../overview/api";
-import { SystemSummary } from "../overview/OverviewPage";
+import { SystemSummary } from "../overview/SystemSummary";
 import "../harness/harness.css";
 import { baselineQuery, recordBaseline } from "./api";
 import {
@@ -193,7 +193,7 @@ export function BaselinePage() {
     recording={record.isPending} error={record.error?.message ?? ""} installed={<InstalledSystem />} />;
 }
 
-/** Hub's installed-system summary, read from the same overview the Hub reads. */
+/** The installed-system summary, read from the overview route. */
 function InstalledSystem() {
   const overview = useQuery({ queryKey: ["overview"], queryFn: loadOverview });
   if (overview.isPending) return <EvidenceState kind="loading" title="Reading the installed harness">The same local sources as citizen doctor, diff and catalog.</EvidenceState>;

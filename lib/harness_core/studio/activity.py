@@ -260,7 +260,7 @@ def _event_entry(row: Dict[str, object]) -> Optional[Dict[str, object]]:
         "command": detail.get("command") if isinstance(detail.get("command"), str) else "",
         "draft": draft,
         "files": files,
-        "evidence_href": "/activity?apply=" + urllib.parse.quote(str(reverses), safe="")
+        "evidence_href": "/harness/hooks?tab=log&apply=" + urllib.parse.quote(str(reverses), safe="")
         if linked else "",
         "evidence_label": "Open the change this rolled back" if linked else "",
         "apply_id": apply_id,
