@@ -697,7 +697,7 @@ HOME = ResponseSchema("json-object", (
 
 def _home(handler: Handler, route: Route) -> None:
     from . import home as studio_home
-    payload = studio_home.report(draft_apply.home_dir())
+    payload = studio_home.report(draft_apply.home_dir(), wait=False)
     route.response_schema.validate(payload)
     handler._json(200, payload)
 # End Phase B — Home.

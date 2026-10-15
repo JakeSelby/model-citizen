@@ -8,7 +8,7 @@ import { Link, useLocation } from "react-router-dom";
 import { CommandChip, EvidenceState } from "../components/StudioKit";
 import "../harness/harness.css";
 import { homeQuery, type AttentionItem, type Digest, type Drift, type HomeReport, type Queue } from "./api";
-import { digestFigures, failedSources, SEVERITY_COLORS, SEVERITY_LABELS, shownItems, SOURCE_LABELS } from "./model";
+import { digestFigures, failedSources, pendingSources, SEVERITY_COLORS, SEVERITY_LABELS, shownItems, SOURCE_LABELS } from "./model";
 import "./home.css";
 
 export function DigestStrip({ digest }: { digest: Digest }) {
@@ -57,12 +57,17 @@ function QueueRow({ item }: { item: AttentionItem }) {
 export function AttentionQueue({ queue }: { queue: Queue }) {
   const items = shownItems(queue.items);
   const failed = failedSources(queue.sources);
+  const checking = pendingSources(queue.sources);
   return <Stack gap="xs" component="section" aria-labelledby="home-queue-title">
     <Group justify="space-between" align="baseline">
       <Title id="home-queue-title" order={2} size="h4">Needs you</Title>
       {queue.total > items.length && <Text size="xs" c="dimmed">The first {items.length} of {queue.total}, most pressing first</Text>}
     </Group>
-    {items.length === 0
+    {items.length === 0 && checking.length > 0
+      ? <EvidenceState kind="loading" title={`Still checking ${checking.join(", ")}`}>
+        Nothing needs you so far. Their items appear here when the read finishes.
+      </EvidenceState>
+      : items.length === 0
       ? <EvidenceState kind="empty" title="Nothing needs you">
         No rule or hook has gone silent, no draft is waiting, no session ran past your context lines and nothing drifted.
       </EvidenceState>
@@ -78,6 +83,9 @@ export function AttentionQueue({ queue }: { queue: Queue }) {
           <Table.Tbody>{items.map((item) => <QueueRow key={item.id} item={item} />)}</Table.Tbody>
         </Table>
       </Box>}
+    {items.length > 0 && checking.length > 0 && <Text size="sm" c="dimmed" role="status">
+      Still checking {checking.join(", ")}; {checking.length === 1 ? "its items" : "their items"} will join the queue when the read finishes.
+    </Text>}
     {failed.length > 0 && <Text size="sm" c="dimmed" role="status">
       Could not read {failed.join(", ")}; the queue may be missing {failed.length === 1 ? "its items" : "their items"}.
     </Text>}
@@ -85,14 +93,16 @@ export function AttentionQueue({ queue }: { queue: Queue }) {
 }
 
 export function DriftSection({ drift }: { drift: Drift }) {
-  const label = drift.status === "drift" ? "Drifted" : drift.status === "current" ? "Current" : "Unavailable";
-  const color = drift.status === "drift" ? "yellow" : drift.status === "current" ? "gray" : "red";
+  const label = drift.status === "drift" ? "Drifted" : drift.status === "current" ? "Current"
+    : drift.status === "pending" ? "Still checking" : "Unavailable";
+  const color = drift.status === "drift" ? "yellow" : drift.status === "current" || drift.status === "pending" ? "gray" : "red";
   return <Stack gap="xs" component="section" id="drift" aria-labelledby="home-drift-title">
     <Group gap="sm">
       <Title id="home-drift-title" order={2} size="h4">Projection drift</Title>
       <Badge variant="outline" color={color} tt="none">{label}</Badge>
     </Group>
     {drift.status === "failed" && <EvidenceState kind="error" title="Drift could not be read">{drift.message ?? "The overview did not answer."}</EvidenceState>}
+    {drift.status === "pending" && <Text size="sm" c="dimmed" role="status">The doctor is still comparing the projected files with the selection.</Text>}
     {drift.status === "current" && <Text size="sm" c="dimmed">The projected files match the selection.</Text>}
     {drift.status === "drift" && <>
       <List size="sm" className="home-drift-list">{drift.items.map((line) => <List.Item key={line}>{line}</List.Item>)}</List>
@@ -123,7 +133,7 @@ export function HomePage() {
       <Text c="dimmed" size="sm">Your last day in sessions, and what needs you first.</Text>
     </div>
     {home.isPending && <EvidenceState kind="loading" title="Reading your sessions, rules, hooks and drafts">
-      The first read runs the rule-health engines and can take up to a minute.
+      Usually under a second; slower checks follow on the page.
     </EvidenceState>}
     {home.isError && <EvidenceState kind="error" title="Home could not be read"
       action={<Button onClick={() => { void home.refetch(); }} size="compact-sm" variant="default">Try again</Button>}>

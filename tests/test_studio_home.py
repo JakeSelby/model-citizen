@@ -300,7 +300,7 @@ class HomeRouteTests(studio_security.StudioSecurityFixture):
         self.cookie_value = self.cookie(headers)
 
     def get(self, path, cookie=True, host=None):
-        # The first Home read runs the rule-health engines, longer than the fixture's timeout.
+        # The route never waits on rule health or the doctor; the timeout only bounds a slow machine.
         connection = http.client.HTTPConnection("127.0.0.1", self.started["port"], timeout=180)
         headers = {"Host": self.record["host"] if host is None else host}
         if cookie:

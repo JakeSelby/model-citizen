@@ -12,7 +12,10 @@ export type AttentionItem = {
   action: { label: string; href: string };
 };
 
-export type Queue = { items: AttentionItem[]; total: number; sources: Record<string, "ok" | "error"> };
+/** "pending": the source's slow read is still warming on the server; its items come later. */
+export type SourceState = "ok" | "pending" | "error";
+
+export type Queue = { items: AttentionItem[]; total: number; sources: Record<string, SourceState> };
 
 export type ReadyDigest = {
   status: "ready";
@@ -36,7 +39,7 @@ export type ReadyDigest = {
 export type Digest = ReadyDigest | { status: "unavailable"; message: string };
 
 export type Drift = {
-  status: "current" | "drift" | "failed";
+  status: "current" | "drift" | "failed" | "pending";
   items: string[];
   command?: string;
   message?: string | null;
@@ -63,8 +66,18 @@ export async function loadHome(signal?: AbortSignal): Promise<HomeReport> {
   return body;
 }
 
+/** The server answers at once and warms slow reads behind it, so Home asks again until they land. */
+export function stillChecking(report: HomeReport | undefined): boolean {
+  if (!report) return false;
+  return report.drift.status === "pending" || Object.values(report.queue.sources).includes("pending")
+    || (report.digest.status === "ready" && report.digest.indexing);
+}
+
+export const CHECK_AGAIN_MS = 3_000;
+
 export const homeQuery = {
   queryKey: ["home"] as const,
   queryFn: ({ signal }: { signal?: AbortSignal }) => loadHome(signal),
   staleTime: 30_000,
+  refetchInterval: (query: { state: { data?: HomeReport } }) => stillChecking(query.state.data) ? CHECK_AGAIN_MS : false,
 };

@@ -13,7 +13,8 @@ An item is a dict:
 
 The queue orders by severity, then newest first, then id, and keeps `limit`. A source that raises
 or returns something malformed is dropped and reported as "error" in `sources`; one bad source
-never costs Home the rest.
+never costs Home the rest. A source whose slow read is still warming raises `Pending` and is
+reported as "pending": its items arrive on a later read.
 """
 from __future__ import annotations
 
@@ -26,6 +27,10 @@ from typing import Any, Callable, Dict, List, Mapping, Optional
 LIMIT = 5
 SEVERITIES = ("high", "medium", "low")
 FIELDS = ("id", "source", "kind", "severity", "title", "detail", "at", "action")
+
+class Pending(Exception):
+    """A source's data is still being read in the background; it has no answer yet."""
+
 
 _REGISTRY: Dict[str, Callable[[Path], List[Dict[str, Any]]]] = {}
 _LOADED = False
@@ -83,7 +88,7 @@ def valid(item: Any, source: str) -> Optional[Dict[str, Any]]:
 
 
 def queue(home: Path, *, limit: int = LIMIT) -> Dict[str, Any]:
-    """`{"items": [...] (at most limit), "total": int, "sources": {name: "ok" | "error"}}`."""
+    """`{"items": [...] (at most limit), "total": int, "sources": {name: "ok" | "pending" | "error"}}`."""
     _load_sources()
     items: List[Dict[str, Any]] = []
     status: Dict[str, str] = {}
@@ -95,6 +100,9 @@ def queue(home: Path, *, limit: int = LIMIT) -> Dict[str, Any]:
             checked = [valid(item, name) for item in found]
             if any(item is None for item in checked):
                 raise ValueError("a source returned a malformed item")
+        except Pending:
+            status[name] = "pending"
+            continue
         except Exception:
             status[name] = "error"
             continue

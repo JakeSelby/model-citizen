@@ -48,8 +48,17 @@ export function digestFigures(digest: ReadyDigest): { label: string; value: stri
   ];
 }
 
+function named(sources: Record<string, string>, wanted: string): string[] {
+  return Object.entries(sources).filter(([, state]) => state === wanted)
+    .map(([name]) => SOURCE_LABELS[name] ?? name).sort();
+}
+
 /** Sources that could not be read, named for the line under the queue. */
 export function failedSources(sources: Record<string, string>): string[] {
-  return Object.entries(sources).filter(([, state]) => state !== "ok")
-    .map(([name]) => SOURCE_LABELS[name] ?? name).sort();
+  return named(sources, "error");
+}
+
+/** Sources whose slow read is still running, named for the "still checking" line. */
+export function pendingSources(sources: Record<string, string>): string[] {
+  return named(sources, "pending");
 }
