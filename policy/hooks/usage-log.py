@@ -1825,6 +1825,10 @@ def worker_rows(cutoff=0.0):
                 row["model"] = next(iter(parts))
             elif len(matches) == 1:
                 row["model"] = matches[0]
+        elif row["runtime"] == "claude-code":
+            # The launch model is what was asked for, not what ran, and the envelope's totals leave
+            # out a helper model and the cache-write split: priced at it, the row would read short.
+            row["model"] = ""
         rows.append(row)
     return rows
 

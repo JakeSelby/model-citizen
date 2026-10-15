@@ -447,7 +447,13 @@ class WorkerAliasTests(unittest.TestCase):
         """The defect: the row the sweep wrote before it read the run's own model map."""
         row = self.worker(usage={"input": 44, "output": 25258, "cache_read": 1388542,
                                  "cache_write": 96951})
-        self.assertEqual(row["model"], "opus")
+        self.assertIsNone(harness.row_cost(row, PRICES["models"]))
+
+    def test_a_full_launch_id_with_no_model_map_is_not_priced_from_the_totals(self):
+        """The totals miss a helper model's tokens and the cache-write split, so they read short."""
+        row = self.worker(usage={"input": 44, "output": 25258, "cache_read": 1388542,
+                                 "cache_write": 96951}, model="claude-opus-5-5")
+        self.assertNotIn("by_model", row)
         self.assertIsNone(harness.row_cost(row, PRICES["models"]))
 
     def test_a_recorded_model_map_prices_the_row_at_the_full_id(self):
