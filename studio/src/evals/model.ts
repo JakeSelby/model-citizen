@@ -36,7 +36,9 @@ export type BeforeAfter = ObservationalLabel & {
 
 export type ContextSummary = { calls: number; median_context: number | null; mean_context: number | null; over_warn_share: number | null };
 export type AutoTrim = ObservationalLabel & {
-  schema_version: number; days: number; context_warn: number; state: "ready" | "empty" | "unavailable"; reason: string | null;
+  schema_version: number; days: number; context_warn: number; state: "ready" | "indexing" | "empty" | "unavailable"; reason: string | null;
+  /** True while the transcript index is still reading; a `ready` reading then covers only the transcripts read so far. */
+  indexing: boolean; pending: number;
   sessions_with_reset: number; sessions_without_reset: number; before: ContextSummary; after: ContextSummary;
   median_change: number | null;
   sessions: Array<{ session_id: string; reset_at: string; before: ContextSummary; after: ContextSummary }>;

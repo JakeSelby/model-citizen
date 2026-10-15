@@ -53,7 +53,8 @@ CLI_COMMANDS = {
 }
 
 ContextCall = Dict[str, Any]  # {"session_id", "ts", "context_tokens", "after_reset"}
-ContextReader = Callable[[Path, int, Optional[dt.datetime]], Optional[List[ContextCall]]]
+ContextReading = Dict[str, Any]  # {"calls": [ContextCall], "indexing": bool, "pending": int}
+ContextReader = Callable[[Path, int, Optional[dt.datetime]], Optional[ContextReading]]
 
 
 def observational() -> Dict[str, str]:
@@ -211,9 +212,11 @@ def before_after(home: Path, *, days: int = DEFAULT_DAYS, now: Optional[dt.datet
 # --- auto-trim ------------------------------------------------------------------------------
 
 def _context_calls(home: Path, days: int,
-                   now: Optional[dt.datetime] = None) -> Optional[List[ContextCall]]:
-    """Main-thread calls as `{session_id, ts, context_tokens, after_reset}`, from the transcript
-    index's `calls(home, *, days, now)`; None when that module is not installed.
+                   now: Optional[dt.datetime] = None) -> Optional[ContextReading]:
+    """Main-thread calls as `{session_id, ts, context_tokens, after_reset}` with the index's
+    `indexing` and `pending`, from the transcript index's non-blocking `snapshot(home, *, days,
+    now)`; None when that module is not installed. The snapshot answers from its cache at once
+    and warms the rest in the background, so a request never waits on a cold index.
 
     A call is after the reset once its session has seen its first `compact` or `reseed` event:
     the index marks the first call after each event, and everything later in that session
@@ -223,18 +226,21 @@ def _context_calls(home: Path, days: int,
         from . import transcripts  # type: ignore[attr-defined]
     except ImportError:
         return None
-    rows = sorted(transcripts.calls(home, days=days, now=now),
+    snap = transcripts.snapshot(home, days=days, now=now)
+    rows = sorted((call for session in snap.get("sessions") or []
+                   for call in session.get("calls") or [] if not call.get("sidechain")),
                   key=lambda r: (str(r.get("session_id")), str(r.get("ts"))))
     out: List[ContextCall] = []
     reset: Dict[str, bool] = {}
     for row in rows:
-        session = str(row.get("session_id"))
+        session_id = str(row.get("session_id"))
         if row.get("event") in RESET_EVENTS:
-            reset[session] = True
-        out.append({"session_id": session, "ts": row.get("ts"),
+            reset[session_id] = True
+        out.append({"session_id": session_id, "ts": row.get("ts"),
                     "context_tokens": int(row.get("context_tokens") or 0),
-                    "after_reset": reset.get(session, False)})
-    return out
+                    "after_reset": reset.get(session_id, False)})
+    return {"calls": out, "indexing": bool(snap.get("indexing")),
+            "pending": int(snap.get("pending") or 0)}
 
 
 def _summary(values: Sequence[int]) -> Dict[str, Any]:
@@ -248,18 +254,23 @@ def _summary(values: Sequence[int]) -> Dict[str, Any]:
 def auto_trim(home: Path, *, days: int = DEFAULT_DAYS, now: Optional[dt.datetime] = None,
               reader: Optional[ContextReader] = None) -> Dict[str, Any]:
     """Context per call before and after each session's first reset, over sessions that had
-    one. `state` is `ready`, `empty` (no session reset in the window) or `unavailable` (no
-    transcript index installed)."""
+    one. `state` is `ready`, `indexing` (the index is still reading transcripts and no session
+    read so far reset), `empty` (fully indexed, no session reset in the window) or
+    `unavailable` (no transcript index installed). While the index is still reading, `ready`
+    covers the transcripts read so far: `indexing` is true and `reason` says so."""
     base = dict(observational(), schema_version=SCHEMA_VERSION, days=days,
                 context_warn=CONTEXT_WARN)
-    calls = (reader or _context_calls)(Path(home), days, now)
-    if calls is None:
+    reading = (reader or _context_calls)(Path(home), days, now)
+    if reading is None:
         return dict(base, state="unavailable",
                     reason="The transcript index is not installed in this Studio yet.",
+                    indexing=False, pending=0,
                     sessions_with_reset=0, sessions_without_reset=0,
                     before=_summary([]), after=_summary([]), median_change=None, sessions=[])
+    indexing = bool(reading.get("indexing"))
+    pending = int(reading.get("pending") or 0)
     grouped: Dict[str, List[ContextCall]] = {}
-    for call in calls:
+    for call in reading.get("calls") or []:
         grouped.setdefault(str(call["session_id"]), []).append(call)
     before: List[int] = []
     after: List[int] = []
@@ -281,8 +292,15 @@ def auto_trim(home: Path, *, days: int = DEFAULT_DAYS, now: Optional[dt.datetime
     summary_before, summary_after = _summary(before), _summary(after)
     change = (summary_after["median_context"] - summary_before["median_context"]
               if sessions else None)
-    return dict(base, state="ready" if sessions else "empty",
-                reason=None if sessions else "No session in this window reset its context.",
+    if indexing:
+        state = "ready" if sessions else "indexing"
+        reason: Optional[str] = (
+            "Still indexing %d transcript%s; this reading covers the ones read so far."
+            % (pending, "" if pending == 1 else "s"))
+    else:
+        state = "ready" if sessions else "empty"
+        reason = None if sessions else "No session in this window reset its context."
+    return dict(base, state=state, reason=reason, indexing=indexing, pending=pending,
                 sessions_with_reset=len(sessions), sessions_without_reset=without,
                 before=summary_before, after=summary_after, median_change=change,
                 sessions=sessions[:SESSION_LIMIT])

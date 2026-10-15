@@ -72,7 +72,7 @@ const BEFORE_AFTER: BeforeAfter = {
 
 const SUMMARY = { calls: 3, median_context: 200_000, mean_context: 200_000, over_warn_share: 0.667 };
 const AUTO_TRIM: AutoTrim = {
-  ...LABEL, schema_version: 1, days: 30, context_warn: 160_000, state: "ready", reason: null,
+  ...LABEL, schema_version: 1, days: 30, context_warn: 160_000, state: "ready", reason: null, indexing: false, pending: 0,
   sessions_with_reset: 1, sessions_without_reset: 2, before: SUMMARY,
   after: { calls: 2, median_context: 50_000, mean_context: 50_000, over_warn_share: 0 }, median_change: -150_000,
   sessions: [{ session_id: "s1", reset_at: "2026-10-10T00:00:03Z", before: SUMMARY, after: SUMMARY }],
@@ -167,6 +167,24 @@ test("the auto-trim reading carries the observational label and is never called 
   assert.ok(text(unavailable).includes("transcript index is not installed"));
   assert.ok(text(unavailable).includes(OBSERVATIONAL_BADGE));
   assert.doesNotMatch(text(unavailable), /evidence/i);
+});
+
+test("a still-indexing auto-trim reading says so in a status and keeps the observational label", () => {
+  const reason = "Still indexing 4 transcripts; this reading covers the ones read so far.";
+  const cold = wrap(h(AutoTrimView, { data: { ...AUTO_TRIM, state: "indexing", indexing: true, pending: 4, reason,
+    sessions_with_reset: 0, sessions: [], median_change: null } }));
+  assert.match(cold, /data-state="indexing"/);
+  assert.match(cold, /role="status"[^>]*data-indexing="true"[^>]*>Still indexing 4 transcripts/);
+  assert.ok(text(cold).includes(OBSERVATIONAL_BADGE) && text(cold).includes(NOTE));
+  assert.ok(!text(cold).includes("Before the reset"), "no table before a reset session is read");
+  assert.doesNotMatch(text(cold), /evidence/i);
+  const partial = wrap(h(AutoTrimView, { data: { ...AUTO_TRIM, indexing: true, pending: 1,
+    reason: "Still indexing 1 transcript; this reading covers the ones read so far." } }));
+  assert.match(partial, /data-state="ready"/);
+  assert.match(partial, /role="status"[^>]*data-indexing="true"[^>]*>Still indexing 1 transcript;/);
+  assert.ok(text(partial).includes("Before the reset") && text(partial).includes(OBSERVATIONAL_BADGE));
+  assert.doesNotMatch(text(partial), /evidence/i);
+  assert.doesNotMatch(wrap(h(AutoTrimView, { data: AUTO_TRIM })), /data-indexing/);
 });
 
 test("the page has one level-one heading and keeps pre-registered results apart from observational ones", () => {
