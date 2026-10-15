@@ -555,6 +555,37 @@ def _harness_hook(handler: Handler, route: Route) -> None:
 # End Orchestrator.
 
 
+# Phase B — Sessions: cost per turn and context per call (AH-S377, #1329).
+SESSIONS_LIST = ResponseSchema("json-object", (
+    ("window_days", "integer"), ("indexing", "boolean"), ("pending", "integer"),
+    ("lines", "object"), ("basis", "string"), ("summary", "object"), ("histogram", "array"),
+    ("sessions", "array"), ("events", "array")))
+SESSIONS_SHOW = ResponseSchema("json-object", (
+    ("session", "object"), ("lines", "object"), ("basis", "string"), ("calls", "array"),
+    ("turns", "array"), ("events", "array")))
+
+
+def _sessions_list(handler: Handler, route: Route) -> None:
+    from . import sessions as studio_sessions
+    status, payload = studio_sessions.answer_list(getattr(handler, "request_query", {}).get("days"))
+    if status != 200:
+        handler._error(status, payload["error"])
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _sessions_show(handler: Handler, route: Route) -> None:
+    from . import sessions as studio_sessions
+    status, payload = studio_sessions.answer_show(getattr(handler, "request_query", {}).get("id"))
+    if status != 200:
+        handler._error(status, payload["error"])
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+# End Phase B — Sessions.
+
+
 def _configure_schema(handler: Handler, route: Route) -> None:
     payload = settings.descriptor(handler.server.repo_root)
     route.response_schema.validate(payload)
@@ -2699,6 +2730,12 @@ ROUTES = RouteRegistry((
     Route("GET", "/api/harness/hook", "application/json", HARNESS_HOOK, _harness_hook, None,
           cli_command=("citizen", "harness", "hook", "{name}", "--days", "{days}", "--json"),
           query=("name", "days")),
+    # Phase B — Sessions
+    Route("GET", "/api/sessions", "application/json", SESSIONS_LIST, _sessions_list, None,
+          cli_command=("citizen", "sessions", "list", "--days", "{days}", "--json"),
+          query=("days",)),
+    Route("GET", "/api/sessions/session", "application/json", SESSIONS_SHOW, _sessions_show,
+          None, cli_command=("citizen", "sessions", "show", "{id}", "--json"), query=("id",)),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

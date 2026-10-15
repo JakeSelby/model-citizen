@@ -565,5 +565,52 @@ class HookDetailFlow(support.StudioE2E):
         self.assertEqual(status, 404)
 
 
+# Phase B — Sessions: the Sessions page and one session (AH-S377, #1329).
+class SessionsFlow(support.StudioE2E):
+    """Sessions lists a seeded transcript by cost; its page draws context per call with a reset."""
+
+    SESSION = "e2e-sessions-busy"
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def prepare_home(self):
+        import test_studio_sessions as fixture
+        from test_studio_transcripts import NOW
+
+        shift = datetime.datetime.now(datetime.timezone.utc) - NOW
+        lines = []
+        for entry in fixture.busy_session():
+            moved = periods.parse_ts(entry["timestamp"]) + shift
+            lines.append(json.dumps(dict(entry, timestamp=moved.strftime("%Y-%m-%dT%H:%M:%S.000Z"))))
+        project = self.home / ".claude" / "projects" / "-e2e-proj"
+        project.mkdir(parents=True, exist_ok=True)
+        (project / (self.SESSION + ".jsonl")).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_open_a_session_from_the_sessions_page(self):
+        self.open("#/sessions")
+        link = "document.querySelector('a[href=\"#/sessions/%s\"]')" % self.SESSION
+        self.wait(link + " !== null", "Sessions listed no link to the seeded session", seconds=60)
+        main = self.js("document.querySelector('main').textContent")
+        self.assertIn("Observed in your transcripts", main)
+        self.assertIn("Top sessions", main)
+        self.js(link + ".click()")
+        self.wait("location.hash === '#/sessions/%s'" % self.SESSION, "the link did not open the session")
+        chart = "document.querySelector('section[aria-label=\"Context per call\"] svg')"
+        self.wait(chart + " !== null", "the session page drew no context chart", seconds=60)
+        self.assertEqual(self.js(chart + ".querySelectorAll('[data-call]').length"), 3)
+        self.assertEqual(self.js(chart + ".querySelector('[data-event]')?.dataset.event"), "reseed")
+        self.assertEqual(self.js("[...%s.querySelectorAll('[data-line]')].map(l => l.dataset.line)" % chart),
+                         ["warn", "limit"])
+        status, listed = self.api("GET", "/api/sessions?days=30")
+        self.assertEqual((status, listed["sessions"][0]["session_id"]), (200, self.SESSION))
+        status, _missing = self.api("GET", "/api/sessions/session?id=no-such-session")
+        self.assertEqual(status, 404)
+# End Phase B — Sessions.
+
+
 if __name__ == "__main__":
     unittest.main()

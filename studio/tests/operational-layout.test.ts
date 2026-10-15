@@ -42,7 +42,7 @@ test("every page names the CLI command its evidence comes from", () => {
   assert.equal(pageCommand("/harness/hooks"), "citizen activity");
   assert.equal(pageCommand("/evals/trends"), "citizen reports trends");
   assert.equal(pageCommand("/harness/rules"), "citizen usage --rules");
-  assert.equal(pageCommand("/sessions"), "citizen usage");
+  assert.equal(pageCommand("/sessions"), "citizen sessions list");
   // A route that only shares a prefix does not borrow its neighbour's command.
   assert.equal(pageCommand("/evalsx"), "citizen doctor");
   for (const { path } of NAVIGATION) assert.match(pageCommand(path), /^citizen [a-z]/);

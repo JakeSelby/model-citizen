@@ -19,7 +19,8 @@ import { RulesPage } from "./pages/harness/RulesPage";
 import { HooksPage } from "./pages/harness/HooksPage";
 import { HookDetailPage } from "./pages/harness/HookDetailPage";
 import { TrendsPage } from "./reports/trends/TrendsPage";
-import { SpendPage } from "./spend/SpendPage";
+import { SessionsPage } from "./pages/sessions/SessionsPage";
+import { SessionDetailPage } from "./pages/sessions/SessionDetailPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
 import { FirstRunPage } from "./firstrun/FirstRunPage";
 import { version } from "../package.json";
@@ -100,7 +101,8 @@ function StudioFrame() {
           <Text className="visually-hidden" component="span">Current page: {title}</Text>
           <Routes>
             <Route path="/home" element={<><FirstRunEntry /><OverviewPage /></>} />
-            <Route path="/sessions" element={<SpendPage />} />
+            <Route path="/sessions" element={<SessionsPage />} />
+            <Route path="/sessions/:session" element={<SessionDetailPage />} />
             <Route path="/harness/rules" element={<RulesPage />} />
             {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}
             <Route path="/harness/stances" element={<StancesPage />} />

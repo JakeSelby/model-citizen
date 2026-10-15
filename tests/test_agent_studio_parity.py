@@ -110,6 +110,11 @@ def cases(draft, revision, files):
         ("GET", "/api/harness/hook"): (
             ["harness", "hook", "grade-bash", "--days", "30"],
             {"name": "grade-bash", "days": "30"}, "same"),
+        # Phase B — Sessions
+        ("GET", "/api/sessions"): (
+            ["sessions", "list", "--days", "30"], {"days": "30"}, "same"),
+        ("GET", "/api/sessions/session"): (
+            ["sessions", "show", "absent-session"], {"id": "absent-session"}, "refused"),
         ("GET", "/api/library"): (["catalog", "--library"], None, "same"),
         ("POST", "/api/activity"): (["activity"], {}, "same"),
         # The Studio wraps the command's own document in an envelope naming it and its basis.

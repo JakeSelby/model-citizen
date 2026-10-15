@@ -51,7 +51,7 @@ export function documentTitle(pathname: string): string {
 // Longer paths come first, so a sub-page keeps its own command.
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["/home", "citizen doctor"],
-  ["/sessions", "citizen usage"],
+  ["/sessions", "citizen sessions list"],
   ["/harness/rules", "citizen usage --rules"],
   ["/harness/stances", "citizen stances"],
   ["/harness/skills", "citizen catalog"],

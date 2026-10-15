@@ -43,6 +43,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
     citizen harness periods --surface NAME [--days N] [--json]
     citizen harness hook NAME [--days N] [--json]
+    citizen sessions list [--days N] [--json] | show ID [--json]
     citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
@@ -7614,6 +7615,42 @@ def cmd_harness_hook(args: argparse.Namespace) -> int:
     return 0 if status == 200 else 2
 
 
+# Phase B — Sessions
+def cmd_sessions(args: argparse.Namespace) -> int:
+    """`GET /api/sessions` and `/api/sessions/session`: what the Studio's Sessions page shows,
+    observed in this home's transcripts."""
+    from harness_core.studio import sessions as studio_sessions
+    if args.sessions_action == "list":
+        status, result = studio_sessions.answer_list(args.days, home=home())
+    else:
+        status, result = studio_sessions.answer_show(args.id, home=home())
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif status != 200:
+        print("citizen sessions %s: %s" % (args.sessions_action, result["error"]), file=sys.stderr)
+    elif args.sessions_action == "list":
+        summary = result["summary"]
+        print("%d sessions, %d calls in %d days; median context %d; %d past %d, %d past %d%s" % (
+            summary["sessions"], summary["calls"], result["window_days"],
+            summary["median_context"], summary["over_warn"], result["lines"]["warn"],
+            summary["over_limit"], result["lines"]["limit"],
+            "; still indexing %d transcripts" % result["pending"] if result["indexing"] else ""))
+        for row in result["sessions"]:
+            print("%s\t%s\t%s calls\tpeak %d\t%s" % (
+                row["session_id"], row["repository"], row["calls"], row["max_context"],
+                "-" if row["cost"] is None else "$%.2f" % row["cost"]))
+    else:
+        row = result["session"]
+        print("%s\t%s\t%s calls\tpeak %d\tmedian %d" % (
+            row["session_id"], row["repository"], row["calls"], row["max_context"],
+            row["median_context"]))
+        for call in result["calls"]:
+            print("%s\t%s\t%d%s" % (call["index"], call["ts"], call["context_tokens"],
+                                    "\t" + call["event"] if call["event"] else ""))
+    return 0 if status == 200 else 2
+# End Phase B — Sessions
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8215,6 +8252,24 @@ def build_parser() -> argparse.ArgumentParser:
                              % studio_periods.MAX_DAYS)
     hook_parser.add_argument("--json", action="store_true")
     hook_parser.set_defaults(func=cmd_harness_hook)
+
+    # Phase B — Sessions
+    p = sub.add_parser("sessions", help="print what the Studio's Sessions page shows: context "
+                       "per call and cost per turn, observed in your transcripts")
+    sessions_sub = p.add_subparsers(dest="sessions_action", required=True)
+    sessions_list = sessions_sub.add_parser(
+        "list", help="the window's context per call, cost per turn, resets and sessions by cost")
+    sessions_list.add_argument("--days", default=None,
+                               help="the window in days, 1 to %d (default 30)"
+                               % studio_periods.MAX_DAYS)
+    sessions_list.add_argument("--json", action="store_true")
+    sessions_list.set_defaults(func=cmd_sessions)
+    sessions_show = sessions_sub.add_parser(
+        "show", help="one session's context per call, turns and resets")
+    sessions_show.add_argument("id", help="the session id, the transcript's file name")
+    sessions_show.add_argument("--json", action="store_true")
+    sessions_show.set_defaults(func=cmd_sessions)
+    # End Phase B — Sessions
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")
