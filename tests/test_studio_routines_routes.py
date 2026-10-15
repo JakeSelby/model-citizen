@@ -155,5 +155,46 @@ class RoutinePresenceTests(unittest.TestCase):
         self.assertTrue(routines.plist_path(self.home, "hook-liveness").is_file())
 
 
+class ForeignHomeTests(unittest.TestCase):
+    """A home that is not this account's own never reaches the real `launchctl` through the
+    route, even when a person would confirm: it is refused before anyone is asked."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(os.path.realpath(temporary.name)) / "home"
+        self.home.mkdir()
+        self.launchctl = FakeLaunchctl()
+        real_run = subprocess.run
+        self.spawned = []
+
+        def tripwire(argv, *args, **kwargs):
+            if "launchctl" in str(argv[0] if isinstance(argv, (list, tuple)) else argv):
+                self.spawned.append(argv)
+                raise AssertionError("the real launchctl was spawned")
+            return real_run(argv, *args, **kwargs)
+
+        for patch in (mock.patch.dict(os.environ, {"HOME": str(self.home),
+                                                   "HARNESS_HOME": str(self.home)}),
+                      mock.patch.object(routines, "run_launchctl", self.launchctl),
+                      mock.patch.object(subprocess, "run", tripwire),
+                      mock.patch.object(presence, "record")):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_install_and_remove_are_refused_before_presence_and_launchctl(self):
+        for path in (INSTALL, REMOVE):
+            with self.subTest(path=path), \
+                    mock.patch.object(presence, "confirm", return_value=True) as asked:
+                status, document = headless.call_route(
+                    REPO, self.home / ".local" / "state" / "agent-harness" / "studio", "POST", path,
+                    {"name": "hook-liveness", "confirm": "hook-liveness"})
+                self.assertEqual((status, document.get("error")), (409, "launchd_refused"), document)
+                asked.assert_not_called()
+        self.assertEqual(self.launchctl.calls, [])
+        self.assertEqual(self.spawned, [])
+        self.assertFalse(routines.agents_dir(self.home).exists())
+
+
 if __name__ == "__main__":
     unittest.main()
