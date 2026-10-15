@@ -80,7 +80,7 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
               return <Table.Tr key={row.item_id} data-item={row.item_id} data-draft={drafted || undefined}
                 bg={drafted ? "var(--mantine-color-yellow-light)" : undefined}>
                 <Table.Th scope="row" fw={400} className="harness-sticky">
-                  <Text size="sm" fw={600} className="harness-name" title={row.item_label}>{row.item_label}</Text>
+                  <Text size="sm" fw={600} className="harness-name" title={row.item_label} data-words={/\s/.test(row.item_label) || undefined}>{row.item_label}</Text>
                   {row.item_detail && <Text size="xs" c="dimmed" lineClamp={2} className="harness-detail"
                     title={row.item_detail_title ?? row.item_detail}>{row.item_detail}</Text>}
                 </Table.Th>

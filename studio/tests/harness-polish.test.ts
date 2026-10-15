@@ -43,8 +43,14 @@ function settings(overrides: Record<string, unknown> = {}): string {
   }));
 }
 
-test("a name never wraps, so an id never breaks at a hyphen", () => {
+test("an id never wraps, so it never breaks at a hyphen; a name of several words may on a phone", () => {
   assert.match(rule(".harness-table .harness-name"), /white-space: nowrap/);
+  const phone = CSS.slice(CSS.indexOf("@media (max-width: 48em)"));
+  assert.match(phone, /\.harness-name\[data-words\] \{ min-width: min\(9rem, 40vw\); white-space: normal; \}/);
+  const html = settings();
+  assert.match(html, /title="Decisions and plans" data-words="true"/);
+  const efficacy = wrap(h(EfficacyTable, { caption: "Rules", rows: [ROW], columns: [] }));
+  assert.doesNotMatch(efficacy, /data-words/, "an id is one word");
 });
 
 test("both tables put the name in a capped block in the sticky column", () => {
@@ -55,12 +61,16 @@ test("both tables put the name in a capped block in the sticky column", () => {
   assert.match(html, /class="[^"]*harness-detail[^"]*"[^>]*title="primitives\/rules\/decisions-and-plans.md"/, "a truncated path keeps its whole text as a title");
   const phone = CSS.slice(CSS.indexOf("@media (max-width: 48em)"));
   assert.match(phone, /\.harness-name \{ max-width: \d+vw; overflow: hidden; text-overflow: ellipsis; \}/, "a phone caps the sticky column");
-  assert.match(phone, /\.harness-item \{ width: auto; \}/, "the desktop share of the width does not hold on a phone");
+  assert.match(phone, /\.harness-sticky \{ width: 1%; \}/, "the desktop share of the width does not hold on a phone");
   assert.match(rule(".harness-table .harness-detail"), /contain: inline-size/, "a detail line never widens the column");
 });
 
-test("a table wider than its panel shows a shade on its clipped edge", () => {
-  assert.match(rule(".harness-panel .mantine-ScrollArea-viewport"), /no-repeat local,[\s\S]*no-repeat scroll/);
+test("a table wider than its panel shows a shade on its clipped edge, never behind the text", () => {
+  assert.match(rule(".harness-panel .mantine-ScrollArea-viewport"), /scroll-timeline: --harness-scroll x/);
+  assert.doesNotMatch(rule(".harness-panel .mantine-ScrollArea-viewport"), /background/, "text keeps a solid backdrop");
+  const shade = rule(".harness-panel::after");
+  assert.match(shade, /opacity: 0;[\s\S]*animation-timeline: --harness-scroll/, "no shade unless the table scrolls");
+  assert.match(shade, /pointer-events: none/);
 });
 
 test("a dot status badge is an outline in both themes", () => {

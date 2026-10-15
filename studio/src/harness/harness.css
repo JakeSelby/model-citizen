@@ -15,9 +15,9 @@
 .harness-table .harness-num { text-align: right; white-space: nowrap; }
 .harness-table .harness-nowrap { white-space: nowrap; }
 .harness-table .harness-item { width: 36%; }
-/* The item column stays in view while a phone scrolls the figures sideways. A name never wraps,
-   so an id never breaks at a hyphen; a phone caps the column and ends a long name in an
-   ellipsis, its whole text in the title, so the figures beside it still show. */
+/* The item column stays in view while a phone scrolls the figures sideways. An id never wraps,
+   so it never breaks at a hyphen; a phone caps the column, lets a name of several words wrap
+   between them, and ends a long id in an ellipsis with its whole text in the title. */
 .harness-table .harness-sticky {
   position: sticky;
   left: 0;
@@ -29,8 +29,10 @@
 /* A detail line never widens the column; the name and the heading size it. */
 .harness-table .harness-detail { contain: inline-size; }
 @media (max-width: 48em) {
-  .harness-table .harness-item { width: auto; }
+  /* Shrinks to its content, so a table with few columns gives its spare width to the figures. */
+  .harness-table .harness-sticky { width: 1%; }
   .harness-table .harness-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  .harness-table .harness-name[data-words] { min-width: min(9rem, 40vw); white-space: normal; }
   .harness-table .harness-sticky .harness-detail { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 .harness-table thead .harness-sticky { background: var(--studio-surface-subtle); }
@@ -43,13 +45,26 @@
   background: transparent;
 }
 
-/* When a table is wider than its panel, a shade on the clipped edge says it scrolls. The cover
-   travels with the content and hides the shade once that edge is reached. */
-.harness-panel .mantine-ScrollArea-viewport {
-  background:
-    linear-gradient(to left, var(--studio-surface-raised) 40%, transparent) right center / var(--studio-space-10) 100% no-repeat local,
-    linear-gradient(to left, color-mix(in srgb, var(--studio-ink-primary) 14%, transparent), transparent) right center / var(--studio-space-3) 100% no-repeat scroll;
+/* When a table is wider than its panel, a shade on its right edge says it scrolls, fading out as
+   the last column comes into view. It is a scroll-driven overlay rather than a background, so the
+   text under it keeps a solid backdrop; a table that fits has an inactive timeline and no shade. */
+.harness-panel { position: relative; timeline-scope: --harness-scroll; }
+.harness-panel .mantine-ScrollArea-viewport { scroll-timeline: --harness-scroll x; }
+.harness-panel::after {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--studio-space-3);
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(to left, color-mix(in srgb, var(--studio-ink-primary) 18%, transparent), transparent);
+  animation: harness-scroll-shade linear both;
+  animation-timeline: --harness-scroll;
 }
+@keyframes harness-scroll-shade { from { opacity: 1; } 95% { opacity: 1; } to { opacity: 0; } }
 
 /* An empty state inside the frame is its words alone, with no symbol tile. */
 .harness-empty .state-symbol { display: none; }
