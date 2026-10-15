@@ -9842,6 +9842,19 @@
       "provenance": "authored"
     },
     {
+      "bmad_id": "AH-B188",
+      "github_number": 1341,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1341",
+      "title": "fix(usage): price worker rows recorded under a model alias",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B188.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
       "bmad_id": "AH-B189",
       "github_number": 1343,
       "github_url": "https://github.com/JakeSelby/model-citizen/issues/1343",

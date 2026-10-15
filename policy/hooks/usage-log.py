@@ -1805,8 +1805,87 @@ def worker_rows(cutoff=0.0):
                "started": stamp(record.get("started_at")) or ended, "ended": ended}
         for name, _ in FIELDS:
             row[name] = usage.get(name)
+        parts = worker_parts(usage, path.parent / "stdout.log") \
+            if row["runtime"] == "claude-code" else {}
+        # A breakdown short of a total the run reported would price less than the run spent.
+        # It may exceed one, by a helper model's tokens, so only a shortfall drops it.
+        if any(isinstance(row[name], int) and sum(part[name] for part in parts.values()) < row[name]
+               for name, _ in FIELDS):
+            parts = {}
+        if parts:
+            # The breakdown is the whole bill: the envelope's own totals leave out a helper model's
+            # tokens, so the row's totals are the breakdown's sums and the two always agree.
+            row["by_model"] = parts
+            for name, _ in FIELDS:
+                row[name] = sum(part[name] for part in parts.values())
+            # The model the run was launched as, now by its full id: the one part, or the one
+            # part the alias names when a helper model ran beside it.
+            matches = [name for name in parts if row["model"] and row["model"] in name]
+            if len(parts) == 1:
+                row["model"] = next(iter(parts))
+            elif len(matches) == 1:
+                row["model"] = matches[0]
+        elif row["runtime"] == "claude-code":
+            # The launch model is what was asked for, not what ran, and the envelope's totals leave
+            # out a helper model and the cache-write split: priced at it, the row would read short.
+            row["model"] = ""
         rows.append(row)
     return rows
+
+
+# How a Claude Code result envelope's `modelUsage` names the four columns.
+MODEL_USAGE_FIELDS = (("input", "inputTokens"), ("output", "outputTokens"),
+                      ("cache_read", "cacheReadInputTokens"),
+                      ("cache_write", "cacheCreationInputTokens"))
+
+
+def worker_parts(usage, envelope):
+    """A worker run's tokens per full model id, or {} when the run did not report them.
+
+    A worker is launched by a CLI model alias, and the alias names no price: it resolves
+    to whatever the client's current model is, so the same alias has run two releases in one
+    month. The run's result envelope names the full id each model ran as, and the Claude Code
+    adapter copies that map into the status record. A run recorded before it did is read from the
+    envelope still saved beside the record.
+
+    The map carries no TTL split of the cache writes, and a `-p` run writes at the 1-hour rate.
+    The envelope's own totals do carry it, for the model the run was launched as, so the split is
+    given to the one part whose writes it adds up to. A map with a part that cannot be read, or
+    with writes the split cannot be placed on, is dropped whole, leaving the row unpriced rather
+    than priced short.
+    """
+    model_usage = usage.get("by_model")
+    tiers = dict((name, usage.get(name)) for name, _ in CACHE_TIERS)
+    if not isinstance(model_usage, dict):
+        try:
+            data = json.loads(envelope.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict) or not isinstance(data.get("modelUsage"), dict):
+            return {}
+        model_usage = data["modelUsage"]
+        totals = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        split = totals.get("cache_creation") if isinstance(totals.get("cache_creation"), dict) else {}
+        tiers = dict((name, split.get(key)) for name, key in CACHE_TIERS)
+    parts = {}
+    for name, counts in model_usage.items():
+        if not isinstance(name, str) or not name or not isinstance(counts, dict):
+            return {}
+        part = {}
+        for field, key in MODEL_USAGE_FIELDS:
+            value = counts.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return {}
+            part[field] = value
+        parts[name] = part
+    writers = [name for name, part in parts.items() if part["cache_write"]]
+    if writers:
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in tiers.values()):
+            return {}
+        if len(writers) != 1 or parts[writers[0]]["cache_write"] != sum(tiers.values()):
+            return {}
+        parts[writers[0]].update(tiers)
+    return parts
 
 
 def backup(path):
