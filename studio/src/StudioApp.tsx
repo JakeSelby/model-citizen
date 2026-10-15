@@ -13,7 +13,6 @@ import { ChangesPage } from "./changes/ChangesPage";
 import { ToastProvider } from "./components/StudioKit";
 import { LibraryPage } from "./library/LibraryPage";
 import { SourcesPage } from "./pages/harness/SourcesPage";
-import { OverviewPage } from "./overview/OverviewPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { RulesPage } from "./pages/harness/RulesPage";
 import { HooksPage } from "./pages/harness/HooksPage";
@@ -22,6 +21,7 @@ import { TrendsPage } from "./reports/trends/TrendsPage";
 import { SpendPage } from "./spend/SpendPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
 import { BaselinePage } from "./baseline/BaselinePage";
+import { HomePage } from "./home/HomePage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
@@ -100,7 +100,7 @@ function StudioFrame() {
         <div className="main-content" id="main-content" tabIndex={-1}>
           <Text className="visually-hidden" component="span">Current page: {title}</Text>
           <Routes>
-            <Route path="/home" element={<><FirstRunEntry /><OverviewPage /></>} />
+            <Route path="/home" element={<><FirstRunEntry /><HomePage /></>} />
             <Route path="/sessions" element={<SpendPage />} />
             <Route path="/harness/rules" element={<RulesPage />} />
             {/* Each placeholder is keyed, so moving between two of them mounts a new page. */}

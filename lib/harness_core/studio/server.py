@@ -689,6 +689,20 @@ def _evals(kind: str) -> Callable[[Handler, Route], None]:
 # End Phase C — Evals.
 
 
+# Phase B — Home: the daily digest and the attention queue (AH-S380, #1332).
+HOME = ResponseSchema("json-object", (
+    ("schema_version", "integer"), ("generated_at", "string"), ("digest", "object"),
+    ("drift", "object"), ("queue", "object")))
+
+
+def _home(handler: Handler, route: Route) -> None:
+    from . import home as studio_home
+    payload = studio_home.report(draft_apply.home_dir())
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+# End Phase B — Home.
+
+
 def _configure_schema(handler: Handler, route: Route) -> None:
     payload = settings.descriptor(handler.server.repo_root)
     route.response_schema.validate(payload)
@@ -2861,6 +2875,9 @@ ROUTES = RouteRegistry((
           _evals("auto-trim"), None, cli_command=evals.CLI_COMMANDS["auto-trim"],
           query=evals.QUERY["auto-trim"]),
     # End Phase C — Evals.
+    # Phase B — Home
+    Route("GET", "/api/home", "application/json", HOME, _home, None,
+          cli_command=("citizen", "home", "--json")),
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

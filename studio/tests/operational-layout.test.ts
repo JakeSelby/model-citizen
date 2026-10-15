@@ -33,7 +33,7 @@ const overview: Overview = {
 const render = (element: ReturnType<typeof h>) => renderToStaticMarkup(h(MantineProvider, {}, h(MemoryRouter, {}, element)));
 
 test("every page names the CLI command its evidence comes from", () => {
-  assert.equal(pageCommand("/home"), "citizen doctor");
+  assert.equal(pageCommand("/home"), "citizen home");
   assert.equal(pageCommand("/baseline"), "citizen baseline show");
   assert.equal(pageCommand("/changes"), "citizen draft list");
   assert.equal(pageCommand("/harness/sources"), "citizen catalog --library");

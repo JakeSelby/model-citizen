@@ -50,7 +50,7 @@ export function documentTitle(pathname: string): string {
 // The CLI command each page's evidence comes from, shown in the header beside the page title.
 // Longer paths come first, so a sub-page keeps its own command.
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["/home", "citizen doctor"],
+  ["/home", "citizen home"],
   ["/sessions", "citizen usage"],
   ["/harness/rules", "citizen usage --rules"],
   ["/harness/stances", "citizen stances"],

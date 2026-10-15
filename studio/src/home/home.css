@@ -1,0 +1,29 @@
+/* Home's digest: one hairline strip of linked figures, never cards; a figure past the cost
+   stance's line reads in the danger ink. */
+.home-digest {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+  border-bottom: var(--studio-border-width) solid var(--studio-border-default);
+  background: var(--studio-surface-raised);
+}
+.home-digest > li + li { border-left: var(--studio-border-width) solid var(--studio-border-default); }
+.home-figure {
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-space-1);
+  padding: var(--studio-space-3) var(--studio-space-4);
+  color: var(--studio-ink-primary);
+  text-decoration: none;
+}
+.home-figure:hover { background: var(--studio-surface-subtle); }
+.home-figure-label,
+.home-figure-detail { color: var(--studio-ink-secondary); font-size: var(--studio-text-xs); }
+.home-figure-label { font-weight: 600; }
+.home-figure-value { font-size: var(--studio-text-xl); font-weight: 600; font-variant-numeric: tabular-nums; }
+.home-figure[data-over="true"] .home-figure-value { color: var(--studio-danger); }
+.home-queue td { vertical-align: top; }
+.home-drift-list { overflow-wrap: anywhere; }
