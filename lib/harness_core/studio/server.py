@@ -671,7 +671,7 @@ EVALS_BEFORE_AFTER = ResponseSchema("json-object", _OBSERVATIONAL_FIELDS + (
     ("window_days", "integer"), ("surfaces", "object"), ("boundaries", "array")))
 EVALS_AUTO_TRIM = ResponseSchema("json-object", _OBSERVATIONAL_FIELDS + (
     ("context_warn", "integer"), ("state", "string"), ("reason", "string-or-null"),
-    ("sessions_with_reset", "integer"), ("sessions_without_reset", "integer"),
+    ("indexing", "boolean"), ("pending", "integer"), ("sessions_with_reset", "integer"), ("sessions_without_reset", "integer"),
     ("before", "object"), ("after", "object"), ("median_change", "integer-or-null"),
     ("sessions", "array")))
 

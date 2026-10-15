@@ -179,9 +179,28 @@ class BeforeAfterTests(unittest.TestCase):
                           if ":voice:" in i["id"]], [])
 
 
-def call(session, ts, tokens, event=None):
+def call(session, ts, tokens, event=None, sidechain=False):
     return {"session_id": session, "ts": ts, "context_tokens": tokens, "event": event,
-            "cost": None, "turn": 0, "sidechain": False}
+            "cost": None, "turn": 0, "sidechain": sidechain}
+
+
+def reading(calls, indexing=False, pending=0):
+    return lambda home, days, now: {"calls": calls, "indexing": indexing, "pending": pending}
+
+
+def snapshot_module(sessions, indexing=False, pending=0, seen=None):
+    """A stand-in transcript index whose `calls` raises: the adapter must read `snapshot`."""
+    def snapshot(home, *, days=30, now=None):
+        if seen is not None:
+            seen.update(home=home, days=days, now=now)
+        return {"sessions": sessions, "indexing": indexing, "pending": pending}
+
+    def calls(*args, **kwargs):
+        raise AssertionError("auto-trim must never call the blocking transcripts.calls")
+    module = types.ModuleType(TRANSCRIPTS)
+    module.snapshot = snapshot
+    module.calls = calls
+    return module
 
 
 class AutoTrimTests(unittest.TestCase):
@@ -192,7 +211,7 @@ class AutoTrimTests(unittest.TestCase):
             for i, tokens in enumerate((100_000, 200_000, 300_000, 40_000, 60_000))]
         fake.append({"session_id": "s2", "ts": "2026-10-10T01:00:00Z", "context_tokens": 5,
                      "after_reset": False})
-        answer = evals.auto_trim(Path("/nowhere"), days=7, reader=lambda h, d, n: fake)
+        answer = evals.auto_trim(Path("/nowhere"), days=7, reader=reading(fake))
         assert_observational(self, answer)
         self.assertEqual(answer["state"], "ready")
         self.assertEqual((answer["sessions_with_reset"], answer["sessions_without_reset"]), (1, 1))
@@ -204,8 +223,9 @@ class AutoTrimTests(unittest.TestCase):
 
     def test_no_reset_in_the_window_is_empty(self):
         fake = [{"session_id": "s", "ts": "t", "context_tokens": 1, "after_reset": False}]
-        answer = evals.auto_trim(Path("/nowhere"), reader=lambda h, d, n: fake)
+        answer = evals.auto_trim(Path("/nowhere"), reader=reading(fake))
         self.assertEqual((answer["state"], answer["median_change"]), ("empty", None))
+        self.assertEqual((answer["indexing"], answer["pending"]), (False, 0))
 
     def test_without_the_transcript_index_it_is_unavailable(self):
         with mock.patch.dict(sys.modules, {TRANSCRIPTS: None}):
@@ -215,22 +235,65 @@ class AutoTrimTests(unittest.TestCase):
         self.assertEqual(answer["state"], "unavailable")
         self.assertIn("transcript index", answer["reason"])
 
-    def test_the_adapter_reads_the_index_calls_contract(self):
+    def test_the_adapter_reads_the_non_blocking_snapshot(self):
         seen = {}
-
-        def calls(home, *, days=30, now=None, session_id=None, sidechain=False):
-            seen.update(home=home, days=days, now=now)
-            return [call("a", "2026-10-10T00:00:02Z", 30, "compact"),
-                    call("a", "2026-10-10T00:00:01Z", 200),
-                    call("a", "2026-10-10T00:00:03Z", 40),
-                    call("b", "2026-10-10T00:00:01Z", 10, "reseed")]
-        module = types.ModuleType(TRANSCRIPTS)
-        module.calls = calls
+        module = snapshot_module([
+            {"session_id": "a", "calls": [call("a", "2026-10-10T00:00:01Z", 200),
+                                          call("a", "2026-10-10T00:00:02Z", 30, "compact"),
+                                          call("a", "2026-10-10T00:00:03Z", 40)]},
+            {"session_id": "b", "calls": [call("b", "2026-10-10T00:00:01Z", 10, "reseed")]}],
+            seen=seen)
         with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
             found = evals._context_calls(Path("/h"), 9, NOW)
         self.assertEqual(seen, {"home": Path("/h"), "days": 9, "now": NOW})
-        self.assertEqual([(c["session_id"], c["context_tokens"], c["after_reset"]) for c in found],
+        self.assertEqual((found["indexing"], found["pending"]), (False, 0))
+        self.assertEqual([(c["session_id"], c["context_tokens"], c["after_reset"])
+                          for c in found["calls"]],
                          [("a", 200, False), ("a", 30, True), ("a", 40, True), ("b", 10, True)])
+
+    def test_sidechain_calls_are_left_out(self):
+        module = snapshot_module([{"session_id": "a", "calls": [
+            call("a", "2026-10-10T00:00:01Z", 200),
+            call("a", "2026-10-10T00:00:02Z", 900_000, sidechain=True),
+            call("a", "2026-10-10T00:00:03Z", 30, "compact"),
+            call("a", "2026-10-10T00:00:04Z", 800_000, sidechain=True)]}])
+        with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
+            found = evals._context_calls(Path("/h"), 9, NOW)
+            answer = evals.auto_trim(Path("/h"), days=9, now=NOW)
+        self.assertEqual([c["context_tokens"] for c in found["calls"]], [200, 30])
+        self.assertEqual((answer["before"]["calls"], answer["after"]["calls"]), (1, 1))
+        self.assertEqual(answer["median_change"], -170)
+
+    def test_the_blocking_calls_reader_is_never_used(self):
+        module = snapshot_module([], indexing=True, pending=4)
+        with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
+            answer = evals.auto_trim(Path("/h"), days=9, now=NOW)
+            status, payload = evals.answer("auto-trim", {}, repo=REPO, home=Path("/h"))
+        self.assertEqual(answer["state"], "indexing")
+        self.assertEqual(status, 200)
+        server.EVALS_AUTO_TRIM.validate(payload)
+
+    def test_indexing_with_nothing_usable_yet_is_the_indexing_state(self):
+        fake = [{"session_id": "s", "ts": "t", "context_tokens": 1, "after_reset": False}]
+        answer = evals.auto_trim(Path("/nowhere"), reader=reading(fake, indexing=True, pending=3))
+        assert_observational(self, answer)
+        self.assertEqual((answer["state"], answer["indexing"], answer["pending"]),
+                         ("indexing", True, 3))
+        self.assertEqual(answer["reason"],
+                         "Still indexing 3 transcripts; this reading covers the ones read so far.")
+        self.assertEqual((answer["sessions"], answer["median_change"]), ([], None))
+        server.EVALS_AUTO_TRIM.validate(answer)
+
+    def test_indexing_with_a_reset_session_read_is_ready_and_says_so(self):
+        fake = [{"session_id": "s", "ts": "t1", "context_tokens": 300, "after_reset": False},
+                {"session_id": "s", "ts": "t2", "context_tokens": 100, "after_reset": True}]
+        answer = evals.auto_trim(Path("/nowhere"), reader=reading(fake, indexing=True, pending=1))
+        self.assertEqual((answer["state"], answer["indexing"], answer["pending"]),
+                         ("ready", True, 1))
+        self.assertEqual(answer["reason"],
+                         "Still indexing 1 transcript; this reading covers the ones read so far.")
+        self.assertEqual(answer["median_change"], -200)
+        server.EVALS_AUTO_TRIM.validate(answer)
 
 
 class AnswerTests(unittest.TestCase):

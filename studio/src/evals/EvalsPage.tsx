@@ -183,8 +183,11 @@ export function AutoTrimView({ data }: { data: AutoTrim }) {
       <Title order={2}>Auto-trim reading</Title>
       <Text size="sm" maw="80ch">Context per call before and after each session's first reset (a compaction or a reseed), over the last {data.days} days.</Text>
       <ObservationalNote label={data} />
+      {data.state === "ready" && data.indexing && data.reason
+        ? <Text size="sm" c="dimmed" role="status" data-indexing="true">{data.reason}</Text>
+        : null}
       {data.state !== "ready"
-        ? <Text size="sm" c="dimmed" role="status">{data.reason}</Text>
+        ? <Text size="sm" c="dimmed" role="status" data-indexing={data.state === "indexing" ? "true" : undefined}>{data.reason}</Text>
         : <>
           <HairlineTable caption="Context per call before and after the reset" minWidth={480}>
             <Table.Thead><Table.Tr>
