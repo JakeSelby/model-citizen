@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 189,
+    "bug": 190,
     "chore": 114,
     "decision": 15,
     "epic": 30,
@@ -9849,6 +9849,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B188.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B189",
+      "github_number": 1343,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1343",
+      "title": "fix(workers): Codex role workers record no token usage",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B189.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",

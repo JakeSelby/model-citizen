@@ -59,9 +59,11 @@ def prepare(executable, work, root, workspace, read_roots, instructions, binding
 def usage(work, run_dir):
     """The run's token totals from the `--json` event stream the worker already wrote.
 
-    Codex reports cumulative totals, so the last snapshot is the run's, never a sum of them;
-    its `input_tokens` includes the cached share, which is subtracted out as the transcript
-    reader does. The stream reports no tool-call count, which the record leaves unknown.
+    `codex exec --json` reports them once, as the `usage` object on `turn.completed`. Older exec
+    builds streamed `token_count` events carrying `info.total_token_usage` instead; both are
+    cumulative, so the last snapshot is the run's, never a sum of them. `input_tokens` includes
+    the cached share, which is subtracted out as the transcript reader does. The stream reports
+    no tool-call count, which the record leaves unknown.
     """
     totals = None
     try:
@@ -72,6 +74,11 @@ def usage(work, run_dir):
         try:
             event = json.loads(line)
         except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "turn.completed" and isinstance(event.get("usage"), dict):
+            totals = event["usage"]
             continue
         for scope in (event, event.get("msg"), event.get("payload"), event.get("info")):
             info = scope.get("info") if isinstance(scope, dict) else None
@@ -87,6 +94,8 @@ def usage(work, run_dir):
         out["input"], out["cache_read"] = max(0, served - cached), cached
     if isinstance(totals.get("output_tokens"), int):
         out["output"] = totals["output_tokens"]
+    if isinstance(totals.get("cache_write_input_tokens"), int):
+        out["cache_write"] = totals["cache_write_input_tokens"]
     return out
 
 

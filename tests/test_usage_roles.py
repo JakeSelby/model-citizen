@@ -20,7 +20,28 @@ from pathlib import Path
 
 from isolation import without_config_dir
 
-from test_usage import REPO, harness, usage_log
+from test_usage import REPO, _load, harness, usage_log
+
+PRICING = _load("roles_pricing", REPO / "policy" / "hooks" / "pricing.py")
+
+# Cut from a real `codex exec --json` worker run (codex-cli 0.155.0-alpha.16.4) on 2026-10-15: the
+# event shapes and the `turn.completed` totals are as recorded, the message and command text are
+# replaced and all but one of its 27 command executions dropped.
+CODEX_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex"
+
+
+def adapter(case, runtime):
+    sys.path.insert(0, str(REPO / "lib"))
+    case.addCleanup(lambda: sys.path.remove(str(REPO / "lib")))
+    from harness_core import workers
+    return workers.adapter(REPO, runtime)
+
+
+def recorded_codex_usage(case, name="worker-exec-json.jsonl"):
+    run_dir = Path(tempfile.mkdtemp())
+    case.addCleanup(lambda: (run_dir / "stdout.log").unlink() or run_dir.rmdir())
+    (run_dir / "stdout.log").write_bytes((CODEX_FIXTURES / name).read_bytes())
+    return adapter(case, "codex").usage(run_dir, run_dir)
 
 HOOK = REPO / "claude" / "hooks" / "usage-log.py"
 STAMPS = [time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 600 + i * 60))
@@ -432,6 +453,15 @@ class WorkerIngest(Fixture):
         self.assertEqual(row["started"], row["ended"])
         self.assertIn("reviewer", self.report(by="role"))
 
+    def test_a_codex_worker_recorded_from_its_exec_stream_is_a_priced_row(self):
+        """Every completed Codex worker went unpriced while the adapter missed `turn.completed`."""
+        self.status(model="gpt-5.6-sol", usage=recorded_codex_usage(self))
+        row = [r for r in self.record() if r["kind"] == "worker"][0]
+        self.assertEqual((row["input"], row["cache_read"], row["output"]), (85288, 1128064, 16014))
+        cost = PRICING.row_cost(row, PRICING.shipped_prices())
+        self.assertIsNotNone(cost)
+        self.assertGreater(cost, 0)
+
     def test_a_worker_row_never_displaces_a_session_of_the_same_runtime(self):
         self.status(usage={"output": 250})
         rows = self.record()
@@ -448,10 +478,7 @@ class AdapterUsage(unittest.TestCase):
         self.run_dir = Path(self.tmp.name)
 
     def adapter(self, runtime):
-        sys.path.insert(0, str(REPO / "lib"))
-        self.addCleanup(lambda: sys.path.remove(str(REPO / "lib")))
-        from harness_core import workers
-        return workers.adapter(REPO, runtime)
+        return adapter(self, runtime)
 
     def test_the_claude_envelope_yields_the_four_token_fields(self):
         (self.run_dir / "stdout.log").write_text(json.dumps(
@@ -465,7 +492,15 @@ class AdapterUsage(unittest.TestCase):
         (self.run_dir / "stdout.log").write_text(json.dumps({"type": "result", "result": "done"}))
         self.assertEqual(self.adapter("claude-code").usage(self.run_dir, self.run_dir), {})
 
-    def test_the_codex_stream_takes_the_last_cumulative_snapshot(self):
+    def test_the_recorded_exec_stream_yields_its_turn_totals_net_of_the_cached_share(self):
+        self.assertEqual(recorded_codex_usage(self),
+                         {"input": 1213352 - 1128064, "cache_read": 1128064, "output": 16014,
+                          "cache_write": 0})
+
+    def test_a_recorded_failed_turn_reports_nothing_rather_than_zeroes(self):
+        self.assertEqual(recorded_codex_usage(self, "worker-exec-json-failed.jsonl"), {})
+
+    def test_a_legacy_token_count_stream_takes_the_last_cumulative_snapshot(self):
         (self.run_dir / "stdout.log").write_text("".join(json.dumps(e) + "\n" for e in [
             {"msg": {"type": "token_count", "info": {"total_token_usage": {
                 "input_tokens": 100, "cached_input_tokens": 40, "output_tokens": 10}}}},
