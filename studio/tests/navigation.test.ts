@@ -90,7 +90,7 @@ test("an old module deep link keeps its query and lands on the module browser", 
 });
 
 test("each page carries the CLI command of the page it re-homes", () => {
-  assert.equal(pageCommand("/home"), "citizen doctor");
+  assert.equal(pageCommand("/home"), "citizen home");
   assert.equal(pageCommand("/sessions"), "citizen usage");
   assert.equal(pageCommand("/harness/rules"), "citizen usage --rules");
   assert.equal(pageCommand("/harness/hooks"), "citizen activity");

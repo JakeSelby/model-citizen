@@ -565,5 +565,46 @@ class HookDetailFlow(support.StudioE2E):
         self.assertEqual(status, 404)
 
 
+
+# Phase B — Home: from a queue item to its page (AH-S380, #1332).
+class HomeQueueFlow(support.StudioE2E):
+    """Home lists a hook gone silent in its queue, and the item's one action opens that hook."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def prepare_home(self):
+        from test_studio_surface_hooks import decision
+
+        # grade-bash fired ten days ago and not since: silent past the Hooks page's seven days.
+        when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)
+        log = periods.state_dir(self.home) / "decisions.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps(decision(when, "grade-bash", "allow")) + "\n", encoding="utf-8")
+
+    def test_open_a_silent_hook_from_the_home_queue(self):
+        self.open("#/home")
+        action = "document.querySelector('tr[data-item-id=\"hooks:grade-bash\"] a')"
+        # The first Home read runs the rule-health engines of the fixture checkout.
+        self.wait(action + " !== null", "Home's queue listed no silent grade-bash", seconds=180)
+        rows = self.js("document.querySelectorAll('tr[data-item-id]').length")
+        self.assertGreaterEqual(rows, 1)
+        self.assertLessEqual(rows, 5)
+        self.assertEqual(self.js(action + ".textContent"), "Check hook")
+        self.assertEqual(self.js("document.querySelectorAll('tr[data-item-id=\"hooks:grade-bash\"] a').length"), 1)
+        self.js(action + ".click()")
+        self.wait("location.hash === '#/harness/hooks/grade-bash'", "the item did not open the hook")
+        self.wait("document.querySelector('h1')?.textContent === 'Command grader'",
+                  "the hook's page did not render", seconds=60)
+        status, home = self.api("GET", "/api/home")
+        self.assertEqual(status, 200)
+        self.assertLessEqual(len(home["queue"]["items"]), 5)
+        self.assertIn("hooks:grade-bash", [item["id"] for item in home["queue"]["items"]])
+        self.assertIn("observational reading", home["digest"]["basis"])
+
+
 if __name__ == "__main__":
     unittest.main()

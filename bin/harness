@@ -43,6 +43,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
     citizen harness periods --surface NAME [--days N] [--json]
     citizen harness hook NAME [--days N] [--json]
+    citizen home [--json]
     citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
@@ -7595,6 +7596,29 @@ def cmd_harness_periods(args: argparse.Namespace) -> int:
     return 0 if status == 200 else 2
 
 
+# Phase B — Home
+def cmd_home(args: argparse.Namespace) -> int:
+    """`GET /api/home`: the daily digest, projection drift and the attention queue."""
+    from harness_core.studio import home as studio_home
+    overview_core.install(_studio_overview)
+    result = studio_home.report(home())
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    digest = result["digest"]
+    if digest.get("status") == "ready":
+        print("last day: %d sessions, %d calls (%s)" % (digest["sessions"], digest["calls"],
+                                                        digest["basis"]))
+    for item in result["queue"]["items"]:
+        print("%s\t%s\t%s\t%s" % (item["severity"], item["title"], item["action"]["label"],
+                                  item["action"]["href"]))
+    for name, state in sorted(result["queue"]["sources"].items()):
+        if state != "ok":
+            print("source %s: %s" % (name, state), file=sys.stderr)
+    return 0
+# End Phase B — Home
+
+
 def cmd_harness_hook(args: argparse.Namespace) -> int:
     """`GET /api/harness/hook`: one hook's liveness, decisions by day and recent decisions."""
     from harness_core.studio.surfaces import hooks as hook_surface
@@ -8215,6 +8239,10 @@ def build_parser() -> argparse.ArgumentParser:
                              % studio_periods.MAX_DAYS)
     hook_parser.add_argument("--json", action="store_true")
     hook_parser.set_defaults(func=cmd_harness_hook)
+    # Phase B — Home
+    p = sub.add_parser("home", help="the Studio Home: the daily digest and what needs you")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_home)
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

@@ -18,6 +18,7 @@ def item(source, key, severity="medium", at="2026-10-12T10:00:00Z", **extra):
 
 class AttentionTests(unittest.TestCase):
     def setUp(self):
+        attention.sources()  # Load the package's sources now, so none registers mid-test.
         saved = dict(attention._REGISTRY)
         attention._REGISTRY.clear()
         self.addCleanup(lambda: (attention._REGISTRY.clear(), attention._REGISTRY.update(saved)))
