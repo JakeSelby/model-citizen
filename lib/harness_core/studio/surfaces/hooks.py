@@ -21,6 +21,10 @@ look silent.
 a hook's figures come from decisions, so `items` keeps each unit's decisions for the request on
 this thread and `metrics` reads them. Hooks register no `config_key`, so each item has exactly one
 period, the whole window, and those decisions are exactly the period's.
+
+`detail` is one hook's page (`GET /api/harness/hook`, `citizen harness hook NAME`): that row,
+its decisions by day and outcome, its recent decisions with session and input hash, and its
+settings.
 """
 from __future__ import annotations
 
@@ -28,7 +32,7 @@ import datetime as dt
 import importlib.util
 import threading
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ... import catalog
 from .. import periods
@@ -215,3 +219,110 @@ def metrics(_rows: Sequence[Mapping[str, Any]], unit: str = "", _value: str = ""
 
 
 periods.register_surface("hooks", items, metrics)
+
+
+# --- one hook's detail --------------------------------------------------------------------
+
+# The command that prints `GET /api/harness/hook`; `answer` serves both.
+CLI_COMMAND = ("citizen", "harness", "hook", "{name}", "--days", "{days}", "--json")
+RECENT_LIMIT = 20
+OUTCOMES = ("block", "warn", "allow", "error")
+
+
+def outcome_of(row: Mapping[str, Any]) -> str:
+    """One decision's outcome for the detail chart: `error` first, then block, warn, allow."""
+    answer = row.get("deterministic_answer")
+    if any(row.get(fact) for fact in ERROR_FACTS) or answer == "error":
+        return "error"
+    if answer in BLOCK_ANSWERS:
+        return "block"
+    if answer in WARN_ANSWERS:
+        return "warn"
+    return "allow"
+
+
+def known_units() -> List[str]:
+    """Every hook a detail page may name: the catalog's hooks and each point no hook owns."""
+    owners = point_modules() or {}
+    built_in = [POINT_PREFIX + point for point, module in owners.items() if not module]
+    return sorted(set(catalog.HOOK_IDS) | set(built_in))
+
+
+def _modes(config: Mapping[str, Any], unit: str) -> Dict[str, str]:
+    """`{point: mode}` for each decision point of this hook that takes a mode."""
+    from ...decisions import controls
+    owners = point_modules() or {}
+    points = [p for p in controls.POINTS
+              if p == unit or owners.get(p) == "hooks/" + unit or POINT_PREFIX + p == unit]
+    block = config.get("governance")
+    jev = block.get("jev") if isinstance(block, dict) else None
+    jev = jev if isinstance(jev, dict) else {}
+    named = jev.get("modes") if isinstance(jev.get("modes"), dict) else {}
+    fallback = jev.get("mode") if isinstance(jev.get("mode"), str) else controls.DEFAULT_MODE
+    return {p: named[p] if isinstance(named.get(p), str) else fallback for p in points}
+
+
+def _recent(row: Mapping[str, Any]) -> Dict[str, Any]:
+    """One recent decision: when, where, what it decided, and the hash of what it judged. The
+    judged text itself stays in the log; the Activity page is where a command is shown."""
+    reason = row.get("reason")
+    return {"ts": periods.iso(row["_ts"]), "point": str(row.get("point") or ""),
+            "answer": str(row.get("deterministic_answer") or ""), "outcome": outcome_of(row),
+            "session": str(row.get("session_id") or ""),
+            "input_hash": str(row.get("input_sha256") or ""),
+            "reason": reason if isinstance(reason, str) else ""}
+
+
+def detail(unit: str, *, days: int = 30, home: Optional[Path] = None,
+           now: Optional[dt.datetime] = None) -> Dict[str, Any]:
+    """One hook's page: its row on the Hooks page, decisions by day and outcome, its recent
+    decisions newest first, and its settings. Raises `KeyError` for a hook no page lists."""
+    if unit not in known_units():
+        raise KeyError(unit)
+    home = Path(home) if home else periods.default_home()
+    now = now or dt.datetime.now(dt.timezone.utc)
+    days = max(1, min(int(days), periods.MAX_DAYS))
+    found = periods.efficacy_rows("hooks", unit, days=days, home=home, now=now)
+    row = found["rows"][0] if found["rows"] else {"item_label": unit, "setting_label": "on",
+                                                  "metrics": metrics([], unit)}
+    cutoff = now - dt.timedelta(days=days)
+    owners = point_modules() or {}
+    mine = [r for r in decision_rows(home, cutoff)
+            if r.get("kind") == "decision" and cutoff <= r["_ts"] <= now
+            and _unit_of(r, owners) == unit]
+    first = cutoff.astimezone(dt.timezone.utc).date()
+    last = now.astimezone(dt.timezone.utc).date()
+    by_day = []
+    for offset in range((last - first).days + 1):
+        by_day.append(dict({"day": (first + dt.timedelta(days=offset)).isoformat()},
+                           **{name: 0 for name in OUTCOMES}))
+    for r in mine:
+        by_day[(r["_ts"].astimezone(dt.timezone.utc).date() - first).days][outcome_of(r)] += 1
+    config = periods._config(home)
+    built_in = unit.startswith(POINT_PREFIX)
+    source = Path(__file__).resolve().parents[4] / "policy" / "hooks" / (unit + ".py")
+    return {
+        "hook": unit, "label": row["item_label"], "built_in": built_in,
+        "core": unit in catalog.CORE_HOOKS, "window_days": days,
+        "summary": row["metrics"],
+        "by_day": by_day,
+        "recent": [_recent(r) for r in reversed(mine[-RECENT_LIMIT:])],
+        "settings": {"enabled": "always on" if built_in else _switch(config, unit),
+                     "modes": _modes(config, unit),
+                     "recording": _recording(config),
+                     "source": ("policy/hooks/%s.py" % unit) if source.is_file() else ""},
+    }
+
+
+def answer(name: Optional[str], days: Optional[str] = None, *,
+           home: Optional[Path] = None) -> Tuple[int, Dict[str, Any]]:
+    """The route's status and body: `detail`, a 400 `invalid_request` (no name, `days` not 1 to
+    `MAX_DAYS`) or a 404 `unknown_hook`."""
+    days = "30" if days is None else days
+    if (not name or not (days.isascii() and days.isdigit())
+            or not 1 <= int(days) <= periods.MAX_DAYS):
+        return 400, {"error": "invalid_request"}
+    try:
+        return 200, detail(name, days=int(days), home=home)
+    except KeyError:
+        return 404, {"error": "unknown_hook"}

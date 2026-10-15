@@ -205,5 +205,106 @@ class HooksRouteTests(studio_security.StudioSecurityFixture):
         self.assertEqual((status, json.loads(body)), (401, {"error": "unauthorized"}))
 
 
+
+class HookDetailTests(unittest.TestCase):
+    """One hook's page: `hooks.detail` and `GET /api/harness/hook`."""
+
+    def setUp(self):
+        self.home = Home(self)
+
+    def detail(self, unit="grade-bash", days=7):
+        return hooks.detail(unit, days=days, home=self.home.root, now=NOW)
+
+    def assert_outcomes(self, found):
+        totals = {name: sum(day[name] for day in found["by_day"]) for name in hooks.OUTCOMES}
+        self.assertEqual(totals, {"block": 1, "warn": 1, "allow": 2, "error": 1})
+
+    def test_shape_and_summary_match_the_hooks_page(self):
+        self.home.decisions(FIXTURE)
+        found = self.detail(days=30)
+        self.assertEqual(set(found), {"hook", "label", "built_in", "core", "window_days", "summary",
+                                      "by_day", "recent", "settings"})
+        self.assertEqual(found["summary"], self.metrics_row())
+        self.assertEqual((found["label"], found["core"], found["built_in"]),
+                         ("Command grader", True, False))
+
+    def metrics_row(self):
+        rows = periods.efficacy_rows("hooks", "grade-bash", home=self.home.root, now=NOW, days=30)
+        return rows["rows"][0]["metrics"]
+
+    def test_decisions_by_day_and_outcome(self):
+        self.home.decisions(FIXTURE)
+        found = self.detail()
+        self.assertEqual(len(found["by_day"]), 8, "one bar per day, today included")
+        self.assertEqual(found["by_day"][-1]["day"], "2026-10-12")
+        self.assert_outcomes(found)
+        self.assertEqual(found["by_day"][-1]["error"], 1, "an errored deny counts as an error")
+
+    def test_a_broken_outcome_split_fails_the_assertion(self):
+        self.home.decisions(FIXTURE)
+        with mock.patch.object(hooks, "BLOCK_ANSWERS", ()):
+            with self.assertRaises(AssertionError):
+                self.assert_outcomes(self.detail())
+
+    def test_recent_decisions_carry_session_and_hash_never_the_input(self):
+        rows = [decision(days_ago(1), "grade-bash", "deny", input="git push --force",
+                         input_sha256="ab" * 32, reason="Grade 3")] + FIXTURE
+        self.home.decisions(rows)
+        recent = self.detail()["recent"]
+        self.assertEqual([r["ts"] for r in recent], sorted((r["ts"] for r in recent), reverse=True))
+        stop = next(r for r in recent if r["input_hash"])
+        self.assertEqual(stop, {"ts": stamp(days_ago(1)), "point": "grade-bash", "answer": "deny",
+                                "outcome": "block", "session": "s1", "input_hash": "ab" * 32,
+                                "reason": "Grade 3"})
+        self.assertNotIn("git push", json.dumps(recent))
+
+    def test_settings_name_the_switch_modes_and_source(self):
+        self.home.config({"hooks": {"grade-bash": "off"},
+                          "governance": {"jev": {"mode": "shadow", "modes": {"grade-bash": "act"}}}})
+        found = self.detail()["settings"]
+        self.assertEqual(found["enabled"], "off")
+        self.assertEqual(found["modes"]["grade-bash"], "act")
+        self.assertEqual(found["source"], "policy/hooks/grade-bash.py")
+        self.assertEqual(self.detail("brief-guard")["settings"]["modes"], {"brief-guard": "shadow"})
+        self.assertEqual(self.detail("usage-log")["settings"]["modes"], {})
+
+    def test_a_built_in_point_has_a_page(self):
+        self.home.decisions(FIXTURE)
+        found = self.detail("point:evasion-deny")
+        self.assertTrue(found["built_in"])
+        self.assertEqual(found["settings"]["enabled"], "always on")
+        self.assertEqual(found["summary"]["liveness"], "built in")
+
+    def test_an_unknown_hook_is_404_and_a_bad_window_400(self):
+        self.assertEqual(hooks.answer("no-such-hook", home=self.home.root),
+                         (404, {"error": "unknown_hook"}))
+        self.assertEqual(hooks.answer("grade-bash", "0", home=self.home.root),
+                         (400, {"error": "invalid_request"}))
+        self.assertEqual(hooks.answer("", home=self.home.root), (400, {"error": "invalid_request"}))
+
+
+class HookDetailRouteTests(HooksRouteTests):
+    """The detail route over HTTP; inherits the seeded home and the session cookie."""
+
+    DETAIL = "/api/harness/hook"
+
+    def test_the_route_answers_one_hook(self):
+        status, headers, body = self.get(self.DETAIL + "?name=grade-bash&days=7")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(headers.get_content_type(), "application/json")
+        document = json.loads(body)
+        self.assertEqual(document["hook"], "grade-bash")
+        self.assertEqual(sum(day["block"] for day in document["by_day"]), 1)
+        self.assertEqual(document["recent"][0]["session"], "s1")
+
+    def test_an_unknown_hook_is_404(self):
+        status, _headers, body = self.get(self.DETAIL + "?name=no-such-hook")
+        self.assertEqual((status, json.loads(body)), (404, {"error": "unknown_hook"}))
+
+    def test_anonymous_detail_is_refused(self):
+        status, _headers, body = self.get(self.DETAIL + "?name=grade-bash", cookie=False)
+        self.assertEqual((status, json.loads(body)), (401, {"error": "unauthorized"}))
+
+
 if __name__ == "__main__":
     unittest.main()

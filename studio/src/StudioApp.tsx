@@ -17,6 +17,7 @@ import { OverviewPage } from "./overview/OverviewPage";
 import { RunDetailPage } from "./experiments/history/RunDetailPage";
 import { RulesPage } from "./pages/harness/RulesPage";
 import { HooksPage } from "./pages/harness/HooksPage";
+import { HookDetailPage } from "./pages/harness/HookDetailPage";
 import { TrendsPage } from "./reports/trends/TrendsPage";
 import { SpendPage } from "./spend/SpendPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
@@ -105,6 +106,7 @@ function StudioFrame() {
             <Route path="/harness/stances" element={<StancesPage />} />
             <Route path="/harness/skills" element={<RebuildingPage key="skills" page="skills" />} />
             <Route path="/harness/hooks" element={<HooksPage />} />
+            <Route path="/harness/hooks/:hook" element={<HookDetailPage />} />
             <Route path="/harness/roles" element={<RolesPage />} />
             <Route path="/harness/workflows" element={<WorkflowsPage />} />
             <Route path="/harness/sources" element={<SourcesPage />} />

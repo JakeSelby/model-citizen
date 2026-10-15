@@ -524,5 +524,46 @@ class SealTests(support.StudioE2E):
         self.assertIn("claude -p hello", str(caught.exception))
 
 
+
+# Orchestrator: the hook detail page (AH-S372, #1324).
+class HookDetailFlow(support.StudioE2E):
+    """The Hooks page links a hook to its detail page, which reads one seeded decision."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def prepare_home(self):
+        from test_studio_surface_hooks import decision
+
+        when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
+        row = decision(when, "grade-bash", "deny", session_id="e2e-session",
+                       input_sha256="ab" * 32, input="rm -rf e2e-secret-input")
+        log = periods.state_dir(self.home) / "decisions.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    def test_open_a_hook_from_the_hooks_page(self):
+        self.open("#/harness/hooks")
+        self.wait("document.querySelector('nav[aria-label=\"Hook details\"] a[data-hook=\"grade-bash\"]')"
+                  " !== null", "the Hooks page listed no link to the grade-bash detail", seconds=60)
+        self.js("document.querySelector('a[data-hook=\"grade-bash\"]').click()")
+        self.wait("location.hash === '#/harness/hooks/grade-bash'", "the link did not open the hook")
+        self.wait("document.querySelector('h1')?.textContent === 'Command grader'",
+                  "the detail page did not name the hook", seconds=60)
+        recent = "document.querySelector('table[aria-label=\"Recent decisions, newest first\"]')"
+        self.wait(recent + " !== null", "the recent decisions did not render", seconds=60)
+        shown = self.js(recent + ".textContent")
+        self.assertIn("e2e-session", shown)
+        self.assertIn("abababababab", shown)
+        self.assertNotIn("e2e-secret-input", self.js("document.querySelector('main').textContent"))
+        status, detail = self.api("GET", "/api/harness/hook?name=grade-bash")
+        self.assertEqual((status, sum(day["block"] for day in detail["by_day"])), (200, 1))
+        status, _missing = self.api("GET", "/api/harness/hook?name=no-such-hook")
+        self.assertEqual(status, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

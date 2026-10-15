@@ -1,6 +1,6 @@
-import { Badge, Box, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Box, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { ActivityPage } from "../../activity/ActivityPage";
 import { loadActivity } from "../../activity/api";
@@ -14,9 +14,10 @@ import { parseTab, type DraftChange, type PeriodRow } from "../../harness/model"
 import { useLoadedDraft } from "../../harness/selectedDraft";
 import {
   HOOK_FIELDS, HOOK_METRICS, MODES_PATH, SAFETY_OUTCOMES, SURFACE, livenessColor, livenessCounts,
-  modeChoices, nextModes, safetyLabel, settingRows, splitChanges, worstFirst,
+  livenessOf, modeChoices, nextModes, safetyLabel, settingRows, splitChanges, worstFirst,
   type DraftState,
 } from "./hooksModel";
+import { hookHref } from "./HookDetailPage";
 
 const SAFETY_LIMIT = 50;
 
@@ -89,6 +90,25 @@ export function LivenessSummary({ rows }: { rows: PeriodRow[] }) {
   </Box>;
 }
 
+/** One link per hook to its detail page, with its liveness. */
+export function HookLinks({ rows }: { rows: PeriodRow[] }) {
+  const latest = new Map<string, PeriodRow>();
+  for (const row of rows) {
+    const seen = latest.get(row.item_id);
+    if (!seen || row.period.start > seen.period.start) latest.set(row.item_id, row);
+  }
+  if (!latest.size) return null;
+  return <Box component="nav" aria-label="Hook details">
+    <Text fw={600} size="sm" mb="xs">Open a hook</Text>
+    <Group gap="xs">
+      {[...latest.values()].map((row) => <Anchor key={row.item_id} component={Link} to={hookHref(row.item_id)}
+        size="sm" data-hook={row.item_id}>
+        {row.item_label} <Badge size="xs" variant="light" tt="none" color={livenessColor(livenessOf(row))}>{livenessOf(row)}</Badge>
+      </Anchor>)}
+    </Group>
+  </Box>;
+}
+
 export function SafetyLog({ entries }: { entries: ActivityEntry[] }) {
   return <Stack gap="xs" component="section" aria-label="Safety log">
     <Title order={2} size="h4">Safety log</Title>
@@ -152,6 +172,7 @@ export function HooksPage() {
       metrics={HOOK_METRICS} fields={HOOK_FIELDS} settings={settings} onDraft={onDraft}
       draftLoading={draftLoading} draftError={draftError} />
     {tab === "efficacy" && <LivenessSummary rows={rows} />}
+    {tab === "efficacy" && <HookLinks rows={rows} />}
     {tab === "efficacy" && (safety.isPending
       ? <EvidenceState kind="loading" title="Reading the Safety log">Blocked and warned actions from the decision log.</EvidenceState>
       : safety.isError
