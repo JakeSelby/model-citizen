@@ -19,14 +19,13 @@ and `citizen evals` both call it, so the two cannot drift.
 from __future__ import annotations
 
 import datetime as dt
-import importlib
 import re
 import statistics
 import urllib.parse
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import periods
+from . import periods, transcripts
 
 SCHEMA_VERSION = 1
 PREREGISTRATION_DIR = "benchmarks/preregistrations"
@@ -213,22 +212,16 @@ def before_after(home: Path, *, days: int = DEFAULT_DAYS, now: Optional[dt.datet
 # --- auto-trim ------------------------------------------------------------------------------
 
 def _context_calls(home: Path, days: int,
-                   now: Optional[dt.datetime] = None) -> Optional[ContextReading]:
+                   now: Optional[dt.datetime] = None) -> ContextReading:
     """Main-thread calls as `{session_id, ts, context_tokens, after_reset}` with the index's
     `indexing` and `pending`, from the transcript index's non-blocking `snapshot(home, *, days,
-    now)`; None when that module is not installed. The snapshot answers from its cache at once
-    and warms the rest in the background, so a request never waits on a cold index.
+    now)`. The snapshot answers from its cache at once and warms the rest in the background, so
+    a request never waits on a cold index.
 
     A call is after the reset once its session has seen its first `compact` or `reseed` event:
     the index marks the first call after each event, and everything later in that session
     stays after it.
     """
-    try:
-        # Through sys.modules, not the package attribute, so a missing index reads as missing
-        # even after another module imported it.
-        transcripts = importlib.import_module(__package__ + ".transcripts")
-    except ImportError:
-        return None
     snap = transcripts.snapshot(home, days=days, now=now)
     rows = sorted((call for session in snap.get("sessions") or []
                    for call in session.get("calls") or [] if not call.get("sidechain")),
@@ -259,7 +252,7 @@ def auto_trim(home: Path, *, days: int = DEFAULT_DAYS, now: Optional[dt.datetime
     """Context per call before and after each session's first reset, over sessions that had
     one. `state` is `ready`, `indexing` (the index is still reading transcripts and no session
     read so far reset), `empty` (fully indexed, no session reset in the window) or
-    `unavailable` (no transcript index installed). While the index is still reading, `ready`
+    `unavailable` (the reader found no transcript index). While the index is still reading, `ready`
     covers the transcripts read so far: `indexing` is true and `reason` says so."""
     base = dict(observational(), schema_version=SCHEMA_VERSION, days=days,
                 context_warn=CONTEXT_WARN)

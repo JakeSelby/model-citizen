@@ -228,9 +228,7 @@ class AutoTrimTests(unittest.TestCase):
         self.assertEqual((answer["indexing"], answer["pending"]), (False, 0))
 
     def test_without_the_transcript_index_it_is_unavailable(self):
-        with mock.patch.dict(sys.modules, {TRANSCRIPTS: None}):
-            self.assertIsNone(evals._context_calls(Path("/nowhere"), 7))
-            answer = evals.auto_trim(Path("/nowhere"))
+        answer = evals.auto_trim(Path("/nowhere"), reader=lambda *_args: None)
         assert_observational(self, answer)
         self.assertEqual(answer["state"], "unavailable")
         self.assertIn("transcript index", answer["reason"])
@@ -243,7 +241,7 @@ class AutoTrimTests(unittest.TestCase):
                                           call("a", "2026-10-10T00:00:03Z", 40)]},
             {"session_id": "b", "calls": [call("b", "2026-10-10T00:00:01Z", 10, "reseed")]}],
             seen=seen)
-        with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
+        with mock.patch.object(evals, "transcripts", module):
             found = evals._context_calls(Path("/h"), 9, NOW)
         self.assertEqual(seen, {"home": Path("/h"), "days": 9, "now": NOW})
         self.assertEqual((found["indexing"], found["pending"]), (False, 0))
@@ -257,7 +255,7 @@ class AutoTrimTests(unittest.TestCase):
             call("a", "2026-10-10T00:00:02Z", 900_000, sidechain=True),
             call("a", "2026-10-10T00:00:03Z", 30, "compact"),
             call("a", "2026-10-10T00:00:04Z", 800_000, sidechain=True)]}])
-        with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
+        with mock.patch.object(evals, "transcripts", module):
             found = evals._context_calls(Path("/h"), 9, NOW)
             answer = evals.auto_trim(Path("/h"), days=9, now=NOW)
         self.assertEqual([c["context_tokens"] for c in found["calls"]], [200, 30])
@@ -266,7 +264,7 @@ class AutoTrimTests(unittest.TestCase):
 
     def test_the_blocking_calls_reader_is_never_used(self):
         module = snapshot_module([], indexing=True, pending=4)
-        with mock.patch.dict(sys.modules, {TRANSCRIPTS: module}):
+        with mock.patch.object(evals, "transcripts", module):
             answer = evals.auto_trim(Path("/h"), days=9, now=NOW)
             status, payload = evals.answer("auto-trim", {}, repo=REPO, home=Path("/h"))
         self.assertEqual(answer["state"], "indexing")
