@@ -1,12 +1,13 @@
 import { HarnessPage } from "../../harness/HarnessPage";
 import { saveLibrarySwitches, useLibrarySettings } from "./librarySettings";
-import { WORKFLOW_FIELDS, WORKFLOW_METRICS, workflowSettings } from "./rolesWorkflowsModel";
+import { WORKFLOW_FIELDS, WORKFLOW_READ_ONLY_NOTE, WORKFLOW_METRICS, workflowSettings } from "./rolesWorkflowsModel";
 
 export const WORKFLOWS_CONTENT = {
   title: "Workflows",
   question: "How many Workflow-tool runs there were, how many agents each started, and what they cost.",
   itemNoun: "Workflow",
   metrics: WORKFLOW_METRICS,
+  settingsNote: WORKFLOW_READ_ONLY_NOTE,
   fields: WORKFLOW_FIELDS,
 };
 

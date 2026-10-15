@@ -175,15 +175,15 @@ test("saving calls onDraft with only the changed values", () => {
   };
   const send = elements(SettingsTable(props)).find((element) => element.type === Button && text(element) === "Send to Changes");
   assert.ok(send);
-  assert.equal(send.props.disabled, false);
+  assert.ok(!send.props.disabled);
   (send.props.onClick as () => void)();
   assert.deepEqual(drafts, [expected]);
   const html = render(h(SettingsTable, props));
   assert.ok(html.includes("was: All repos"));
   assert.ok(html.includes("Draft, not applied"));
   assert.ok(html.includes("starts a new measurement period"));
-  const idle = elements(SettingsTable({ ...props, edits: {} })).find((element) => element.type === Button && text(element) === "Send to Changes");
-  assert.equal(idle?.props.disabled, true, "nothing to save without an edit");
+  const idle = elements(SettingsTable({ ...props, edits: {} })).filter((element) => element.type === Button);
+  assert.deepEqual(idle, [], "with nothing to save there is no Discard or Send to Changes");
 });
 
 test("an edit reaches the page through onEdit", () => {

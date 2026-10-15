@@ -90,7 +90,7 @@ test("Efficacy shows each rule's periods with its hits, precision and context co
   assert.ok(html.includes(">2 (10%)<") && html.includes(">0 (0%)<"));
   assert.ok(html.includes("measuring, day 5 of 7"));
   assert.ok(html.includes('href="/evals?surface=rules&amp;item=secrets"'));
-  assert.ok(html.includes(">no detector<") && html.includes(">464<"));
+  assert.ok(html.includes(">no detector<") && html.includes(">464<"), "no detector reads as a dash with its words hidden");
   assert.ok(html.includes(NOTE));
   assert.ok(html.includes(HITS_NOTE.slice(0, 30)));
 });
@@ -114,7 +114,7 @@ test("Settings shows each rule's switch, who set it and its context cost", () =>
   assert.deepEqual([rows[0].last_changed, rows[0].last_change_note], ["2026-10-08T12:00:00Z", "now off"]);
   assert.equal(rows[2].last_changed, null);
   assert.ok(html.includes('aria-label="On: secrets"'));
-  assert.ok(!html.includes('aria-label="On: working-style"'));
+  assert.ok(!html.includes('aria-label="On: working-style"'), "a rule with nothing to try without has no control");
 });
 
 test("Settings is loading until both reads land, and shows either one's error", () => {
@@ -164,4 +164,9 @@ test("a refused switch keeps the drafts already made and names the rule", async 
   assert.match(done.error ?? "", /^voice-and-format: This rule is not switched on/);
   const on = await draftRuleChanges([{ item_id: "x", field: "on", from: "off", to: "on" }], async () => { throw new Error("never"); });
   assert.match(on.error ?? "", /switch it on in Changes/);
+});
+
+test("the detector-hits note is on Efficacy only", () => {
+  assert.ok(render("/harness/rules", client(ROWS)).includes(HITS_NOTE.slice(0, 30)));
+  assert.ok(!render("/harness/rules?tab=settings", client(ROWS)).includes(HITS_NOTE.slice(0, 30)));
 });

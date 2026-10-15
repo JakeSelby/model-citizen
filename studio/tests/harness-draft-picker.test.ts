@@ -47,7 +47,8 @@ function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
   if (Array.isArray(node)) return node.flatMap(elements);
   if (!isValidElement(node)) return [];
   const element = node as ReactElement<Record<string, unknown>>;
-  return [element, ...elements(element.props.children as ReactNode)];
+  // The settings table carries the draft picker in its footer prop.
+  return [element, ...elements(element.props.children as ReactNode), ...elements(element.props.draftControls as ReactNode)];
 }
 
 function pickerIn(tree: ReactNode) {

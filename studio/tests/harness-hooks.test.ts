@@ -14,7 +14,7 @@ import { HarnessFrame } from "../src/harness/HarnessPage.tsx";
 import type { DraftChange, PeriodRow } from "../src/harness/model.ts";
 import { HooksPage, loadSafetyLog, safetyQuery, saveHookChanges, type HookDraftApi } from "../src/pages/harness/HooksPage.tsx";
 import {
-  HOOK_FIELDS, HOOK_METRICS, NO_MODE, livenessCounts, modeChoices, settingRows, splitChanges, worstFirst,
+  HOOK_FIELDS, HOOK_METRICS, NO_MODE, byLiveness, hookFields, livenessCounts, modeChoices, settingRows, splitChanges, utcMinute, worstFirst,
   type DraftState,
 } from "../src/pages/harness/hooksModel.ts";
 
@@ -107,6 +107,14 @@ test("Efficacy renders one row per hook with liveness, figures and the note", ()
   assert.ok(html.includes("not observable"));
 });
 
+test("Efficacy orders hooks worst liveness first, then by label", () => {
+  assert.deepEqual(byLiveness(ROWS).map((item) => item.item_id),
+    ["grade-bash", "steer-polling", "usage-log", "point:evasion-deny", "stop-gate"]);
+  const html = render("/harness/hooks", seeded());
+  const order = [...html.matchAll(/<tbody[^>]*data-item="([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(order, ["grade-bash", "steer-polling", "usage-log", "point:evasion-deny", "stop-gate"]);
+});
+
 test("liveness counts put the worst first and never call an unobservable hook silent", () => {
   assert.deepEqual(livenessCounts(ROWS), [
     { liveness: "erroring", count: 1 }, { liveness: "silent", count: 1 }, { liveness: "not observable", count: 1 },
@@ -127,12 +135,15 @@ test("the Safety log shows blocked, asked and warned actions worst first", async
     entry("e", "completed", "2026-10-12T12:00:00Z", { source: "studio-action" }),
   ];
   assert.deepEqual(worstFirst(entries).map((item) => item.id), ["d", "c", "b", "a"]);
-  const html = render("/harness/hooks", seeded(worstFirst(entries)));
+  const html = render("/harness/hooks?tab=log", seeded(worstFirst(entries)));
   const log = /aria-label="Safety log, worst first"[\s\S]*?<\/table>/.exec(html)?.[0] ?? "";
   assert.deepEqual([...log.matchAll(/data-outcome="([^"]+)"/g)].map((match) => match[1]),
     ["refused", "refused", "confirmation-required", "warn"]);
   assert.ok(log.includes("Blocked") && log.includes("Asked") && log.includes("Warned"));
-  assert.ok(render("/harness/hooks", seeded([])).includes("Nothing blocked or warned"));
+  assert.ok(render("/harness/hooks?tab=log", seeded([])).includes("Nothing blocked or warned"));
+  assert.ok(!render("/harness/hooks", seeded(worstFirst(entries))).includes("Safety log, worst first"), "Efficacy stays short");
+  assert.ok(log.includes(">Action<"), "entries with a command keep the Action column");
+  assert.equal(utcMinute("2026-10-12T11:00:00Z"), "2026-10-12 11:00 UTC");
 
   const asked: string[] = [];
   const original = globalThis.fetch;
@@ -156,7 +167,7 @@ test("Settings shows each hook's switch and mode, read-only until a draft is loa
   assert.deepEqual(choices.points, ["grade-bash", "stop-gate", "evasion-deny"]);
   const bare = settingRows(ROWS, null, choices);
   assert.deepEqual(bare.map((item) => item.item_id), ["grade-bash", "stop-gate", "steer-polling", "usage-log"], "built-in points have no settings");
-  assert.deepEqual(bare[0].values, { enabled: "on", mode: "pick a draft" });
+  assert.deepEqual(bare[0].values, { enabled: "on", mode: NO_MODE }, "no draft, no mode to show; the cell is a dash");
   assert.equal(bare[2].values.mode, NO_MODE, "a hook with no decision mode is labelled, not editable");
   assert.ok(bare.every((item) => item.options === undefined));
 
@@ -169,10 +180,11 @@ test("Settings shows each hook's switch and mode, read-only until a draft is loa
 
   const html = render("/harness/hooks?tab=settings", seeded());
   assert.ok(html.includes("Hooks: settings"));
-  assert.ok(html.includes("Decision mode") && html.includes("pick a draft") && html.includes(NO_MODE));
+  assert.ok(!html.includes("Decision mode") && !html.includes("pick a draft"), "with no mode to show, the column is left out");
+  assert.deepEqual(hookFields(edited).map((field) => field.key), ["enabled", "mode"], "a loaded draft brings the mode column back");
   assert.match(html, /aria-label="Hooks: draft to save into"/);
   assert.ok(html.includes("Save into draft") && html.includes("Pick or create a draft"));
-  assert.ok(!html.includes("Safety log"), "the Safety log belongs to Efficacy");
+  assert.ok(!html.includes("Safety log, worst first"), "the Safety log has its own tab");
 });
 
 test("saving from Settings calls onDraft, which routes switches and modes to their save paths", async () => {

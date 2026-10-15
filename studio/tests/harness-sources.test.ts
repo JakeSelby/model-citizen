@@ -12,7 +12,7 @@ import type { DraftChange, PeriodRow, PeriodsResponse } from "../src/harness/mod
 import { SettingsTable } from "../src/harness/SettingsTable.tsx";
 import { MODULES_PATH, sourceSettings, SourcesPage } from "../src/pages/harness/SourcesPage.tsx";
 import {
-  draftRoots, READ_ONLY, rootsAfter, saveSourcesDraft, settingRowsFromDraft, settingRowsFromPeriods,
+  draftRoots, READ_ONLY, rootsAfter, saveSourcesDraft, settingRowsFromDraft, settingRowsFromPeriods, shortPath,
   SOURCES_FIELDS, SOURCES_QUESTION, TEAM_NOTE,
 } from "../src/pages/harness/sourcesModel.ts";
 import { legacyTarget } from "../src/navigation.ts";
@@ -85,10 +85,12 @@ test("an unattributable answer shows the API's note and no invented split", () =
 test("Settings shows each source's root and enabled state, read-only where no route edits it", () => {
   const rows = settingRowsFromPeriods(ROWS);
   assert.deepEqual(rows.map((row) => [row.item_id, row.item_detail, row.values.source, row.values.on, row.values.editing, row.options]), [
-    ["core", "/opt/mc/primitives", "Core", "on", READ_ONLY.Core, undefined],
-    [`personal:${ROOT}`, ROOT, "Personal", "on", "pick a draft to switch it off", undefined],
+    ["core", "…/mc/primitives", "Core", "on", READ_ONLY.Core, undefined],
+    [`personal:${ROOT}`, "…/primitives/my-primitives", "Personal", "on", "pick a draft to switch it off", undefined],
     ["third-party:bmad-method@bmad", "/c/bmad", "Third-party", "on", READ_ONLY["Third-party"], undefined],
   ]);
+  assert.equal(rows[0].item_detail_title, "/opt/mc/primitives", "the full root is the row's title");
+  assert.equal(shortPath("/c/bmad"), "/c/bmad", "a short path is kept whole");
   assert.equal(rows[0].last_changed, "2026-10-09T12:00:00Z");
   assert.equal(rows[0].last_change_note, "harness 0.15.0 · measuring, day 4 of 7");
   assert.equal(rows[1].last_changed, null);
@@ -98,7 +100,9 @@ test("Settings shows each source's root and enabled state, read-only where no ro
   assert.ok(!html.includes("Draft name"), "the frame's picker replaces the typed field");
   assert.ok(html.includes("Pick or create a draft"));
   assert.ok(html.includes(READ_ONLY.Core));
-  assert.ok(!html.includes('aria-label="On: Personal: my-primitives"'), "no select before a draft");
+  assert.ok(html.includes(">Kind<"), "the field naming Core, Personal or Third-party is Kind, not a second Source");
+  assert.ok(html.includes('title="/opt/mc/primitives"'), "the full root is one hover away");
+  assert.ok(!html.includes('aria-label="On: Personal: my-primitives"'), "no control before a draft");
 });
 
 test("a loaded draft lists its own roots as switchable and keeps Core and plugins read-only", () => {

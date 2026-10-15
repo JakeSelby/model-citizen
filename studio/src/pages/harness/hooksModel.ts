@@ -22,7 +22,8 @@ export const HOOK_FIELDS: SettingField[] = [
   { key: "mode", heading: "Decision mode" },
 ];
 
-export const NO_MODE = "no mode";
+/** A hook with no decision point, or one read without a draft: the cell shows a dash. */
+export const NO_MODE = "";
 export const MODES_PATH = "governance.jev.modes";
 export const DEFAULT_MODE_PATH = "governance.jev.mode";
 
@@ -58,6 +59,20 @@ export function livenessCounts(rows: PeriodRow[]): LivenessCount[] {
     .sort((a, b) => rank(a.liveness) - rank(b.liveness));
 }
 
+/** Rows ordered worst liveness first, then by label, so Efficacy and the summary agree. */
+export function byLiveness(rows: PeriodRow[]): PeriodRow[] {
+  const rank = (row: PeriodRow) => {
+    const index = (LIVENESS_ORDER as readonly string[]).indexOf(livenessOf(row));
+    return index < 0 ? LIVENESS_ORDER.length : index;
+  };
+  return [...rows].sort((a, b) => rank(a) - rank(b) || a.item_label.localeCompare(b.item_label));
+}
+
+/** The settings columns: Decision mode only when some row has a mode to show. */
+export function hookFields(rows: SettingRow[]): SettingField[] {
+  return rows.some((row) => row.values.mode) ? HOOK_FIELDS : HOOK_FIELDS.filter((field) => field.key !== "mode");
+}
+
 export function livenessColor(label: string): string {
   if (label === "erroring") return "red";
   if (label === "silent" || label === "not recorded") return "yellow";
@@ -73,6 +88,13 @@ export const SAFETY_OUTCOMES = ["refused", "confirmation-required", "warn"] as c
 export function severity(outcome: string): number {
   const index = (SAFETY_OUTCOMES as readonly string[]).indexOf(outcome);
   return index < 0 ? SAFETY_OUTCOMES.length : index;
+}
+
+/** A log timestamp as the Efficacy table prints one: "2026-10-12 09:00 UTC". */
+export function utcMinute(timestamp: string): string {
+  const date = new Date(timestamp);
+  if (!timestamp || Number.isNaN(date.getTime())) return timestamp;
+  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 export function safetyLabel(outcome: string): string {
@@ -142,7 +164,7 @@ export function settingRows(rows: PeriodRow[], draft: DraftState | null, choices
     const control = switches.get(row.item_id);
     const hasMode = choices.points.includes(row.item_id);
     const mode = !hasMode ? NO_MODE
-      : modes[row.item_id] ?? (typeof fallback === "string" && fallback ? fallback : draft ? "off" : "pick a draft");
+      : modes[row.item_id] ?? (typeof fallback === "string" && fallback ? fallback : draft ? "off" : NO_MODE);
     const options: Record<string, string[]> = {};
     if (draft && control) options.enabled = ["on", "off"];
     if (draft && hasMode && choices.modes.length) options.mode = choices.modes;

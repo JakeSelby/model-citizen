@@ -6,13 +6,13 @@ export const SOURCES_SURFACE = "sources";
 export const SOURCES_QUESTION = "Where everything that loads comes from. Load is always shown against the harness version that was in effect.";
 
 export const SOURCES_METRICS: MetricColumn[] = [
-  { key: "sessions", heading: "Sessions" },
-  { key: "tokens_per_session", heading: "Tokens per session" },
-  { key: "modules", heading: "Modules" },
+  { key: "sessions", heading: "Sessions", align: "right" },
+  { key: "tokens_per_session", heading: "Tokens per session", align: "right" },
+  { key: "modules", heading: "Modules", align: "right" },
 ];
 
 export const SOURCES_FIELDS: SettingField[] = [
-  { key: "source", heading: "Source" },
+  { key: "source", heading: "Kind" },
   { key: "on", heading: "On" },
   { key: "editing", heading: "Editing" },
 ];
@@ -41,7 +41,8 @@ export function settingRowsFromPeriods(rows: PeriodRow[]): SettingRow[] {
     return {
       item_id: group.item_id,
       item_label: group.item_label,
-      item_detail: text(latest.metrics.root) || undefined,
+      item_detail: shortPath(text(latest.metrics.root)) || undefined,
+      item_detail_title: text(latest.metrics.root) || undefined,
       values: {
         source,
         on: text(latest.metrics.enabled, "on"),
@@ -51,6 +52,12 @@ export function settingRowsFromPeriods(rows: PeriodRow[]): SettingRow[] {
       last_change_note: changed ? `harness ${latest.setting_label} · ${measuringText(latest)}` : undefined,
     };
   });
+}
+
+/** A root path's last two segments, "…/repos/agent-harness"; the full path goes in the row's title. */
+export function shortPath(path: string): string {
+  const parts = path.replace(/\/+$/, "").split("/").filter(Boolean);
+  return parts.length > 2 ? `…/${parts.slice(-2).join("/")}` : path;
 }
 
 function basename(path: string): string {
@@ -66,7 +73,8 @@ export function settingRowsFromDraft(rows: PeriodRow[], draftRoots: string[]): S
   const personal: SettingRow[] = draftRoots.map((path) => ({
     item_id: PERSONAL + path,
     item_label: `Personal: ${basename(path)}`,
-    item_detail: path,
+    item_detail: shortPath(path),
+    item_detail_title: path,
     values: { source: "Personal", on: "on", editing: "in this draft" },
     options: { on: ["on", "off"] },
     last_changed: null,

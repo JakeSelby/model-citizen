@@ -63,12 +63,12 @@ export function SourcesPage() {
   return <Stack gap="lg">
     <HarnessPage surface={SOURCES_SURFACE} title="Sources" question={SOURCES_QUESTION} itemNoun="Source"
       metrics={SOURCES_METRICS} fields={SOURCES_FIELDS} settings={settings} onDraft={onDraft}
-      draftLoading={loading} draftError={error} />
+      draftLoading={loading} draftError={error}
+      efficacyNote={<Text size="sm" c="dimmed">
+        {TEAM_NOTE} Tokens per session are soft estimates (characters divided by four) of what each
+        source keeps resident, credited to the first source holding a module; plugins are not in that
+        record, so their sessions and tokens show as not recorded.
+      </Text>} />
     <ModuleBrowserLink />
-    <Text size="sm" c="dimmed">
-      {TEAM_NOTE} Tokens per session are soft estimates (characters divided by four) of what each
-      source keeps resident, credited to the first source holding a module; plugins are not in that
-      record, so their sessions and tokens show as not recorded.
-    </Text>
   </Stack>;
 }

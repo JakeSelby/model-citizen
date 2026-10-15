@@ -23,11 +23,12 @@ import test_studio_browser as browser_support
 CLI = browser_support.CLI
 CHECKS = (Path(__file__).resolve().parent / "studio_a11y_checks.js").read_text(encoding="utf-8")
 
-# Every routed screen. The unknown run id renders the run page's not-found state.
+# Every routed screen. The unknown run id renders the run page's not-found state. The Hooks
+# Safety log tab follows another page, never Hooks itself: a visit settles on a fresh h1.
 ROUTES = (
     "/home", "/sessions", "/harness/rules", "/harness/stances", "/harness/skills", "/harness/hooks",
-    "/harness/roles", "/harness/workflows", "/harness/sources", "/routines", "/changes", "/evals",
-    "/evals/runs/no-such-run", "/evals/trends", "/baseline",
+    "/harness/roles", "/harness/hooks?tab=log", "/harness/workflows", "/harness/sources", "/routines",
+    "/changes", "/evals", "/evals/runs/no-such-run", "/evals/trends", "/baseline",
 )
 FIXTURES = browser_support.REPO / "studio" / "tests" / "fixtures"
 # Report routes in their populated state, served from the committed fixtures the frontend unit
@@ -825,13 +826,13 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             for scheme in ("light", "dark"):
                 self._open(width, scheme)
                 self._install_stubs()
-                self._visit("/harness/hooks", scheme)
-                label = "/harness/hooks @%dpx %s" % (width, scheme)
+                self._visit("/harness/hooks?tab=log", scheme)
+                label = "/harness/hooks?tab=log @%dpx %s" % (width, scheme)
                 self._click("Preview rollback")
                 self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
                 self._audit_into(failures, label + " rollback preview")
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/harness/hooks rollback preview"))
+                    failures.extend(self._tab_walk("/harness/hooks?tab=log rollback preview"))
                 self._set_label("Confirm the applied draft to roll back", "tuning")
                 self._click("Roll back tuning")
                 self._wait("__has('citizen sync (pid 1) holds the sync lock') && __has('nothing was changed')",
@@ -862,7 +863,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
                     ".filter(node => node.textContent.includes('Rolled back. The doctor checks ran.')).length"), 1, label)
                 self._audit_into(failures, label + " rollback completed")
                 if width == PHONE and scheme == "light":
-                    failures.extend(self._tab_walk("/harness/hooks rollback completed"))
+                    failures.extend(self._tab_walk("/harness/hooks?tab=log rollback completed"))
                 self._dismiss_rollback_by_keyboard(label + " rollback completed")
                 self.devtools.evaluate("globalThis.__a11yRollback = ''")
                 self._assert_nothing_refused()
@@ -872,7 +873,7 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
         # Filters applied during a rollback win: its refresh must not put the old filters' page back.
         self._open(DESKTOP, "light")
         self._install_stubs()
-        self._visit("/harness/hooks", "light")
+        self._visit("/harness/hooks?tab=log", "light")
         self._click("Preview rollback")
         self._wait("__has('Preview ready. Nothing has changed.')", "the rollback preview fixture did not render")
         self.devtools.evaluate("globalThis.__a11yRollback = 'completed'; globalThis.__a11yHoldRollback = true")

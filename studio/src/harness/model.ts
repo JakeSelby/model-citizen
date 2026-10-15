@@ -1,7 +1,9 @@
 // The shared Harness page frame: one row per item per setting period on Efficacy, the item's
 // configuration on Settings. Rows come from `GET /api/harness/periods?surface=<name>`.
+import type { ReactNode } from "react";
 
-export type HarnessTab = "efficacy" | "settings";
+/** "log" is a page's own third tab (Hooks' Safety log); a page without one shows Efficacy for it. */
+export type HarnessTab = "efficacy" | "settings" | "log";
 
 export type PeriodRow = {
   item_id: string;
@@ -17,7 +19,14 @@ export type PeriodRow = {
 
 export type PeriodsResponse = { surface: string; rows: PeriodRow[]; note?: string };
 
-export type MetricColumn = { key: string; heading: string };
+export type MetricColumn = {
+  key: string;
+  heading: string;
+  /** Renders the cell instead of `metricText`, for a merged or badged value. */
+  render?: (row: PeriodRow) => ReactNode;
+  /** Overrides the alignment `isNumericColumn` infers from the rows. */
+  align?: "left" | "right";
+};
 
 export type SettingField = { key: string; heading: string };
 
@@ -25,6 +34,8 @@ export type SettingRow = {
   item_id: string;
   item_label: string;
   item_detail?: string;
+  /** The full text when `item_detail` is shortened, shown on hover. */
+  item_detail_title?: string;
   values: Record<string, string>;
   /** A field with options is editable; one without is shown read-only. */
   options?: Record<string, string[]>;
@@ -46,14 +57,19 @@ export const DEFAULT_EVALS_HREF = "/evals";
 
 export function parseTab(search: string | URLSearchParams): HarnessTab {
   const params = typeof search === "string" ? new URLSearchParams(search) : search;
-  return params.get("tab") === "settings" ? "settings" : "efficacy";
+  const tab = params.get("tab");
+  return tab === "settings" || tab === "log" ? tab : "efficacy";
 }
 
-/** The query string for `tab`, keeping every other parameter; Efficacy is the bare URL. */
+/**
+ * The query string for `tab`, keeping every other parameter; Efficacy is the bare URL. Leaving
+ * the log drops `?apply=`, the log entry a link focused, so it cannot reopen the log.
+ */
 export function tabSearch(search: string | URLSearchParams, tab: HarnessTab): URLSearchParams {
   const next = new URLSearchParams(search);
-  if (tab === "settings") next.set("tab", "settings");
-  else next.delete("tab");
+  if (tab === "efficacy") next.delete("tab");
+  else next.set("tab", tab);
+  if (tab !== "log") next.delete("apply");
   return next;
 }
 
@@ -91,6 +107,23 @@ export function metricText(value: number | string | undefined, key = ""): string
     return `${(value * 100).toLocaleString("en-US", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
   }
   return value.toLocaleString("en-US");
+}
+
+const FIGURE = String.raw`[-+~≈$€£]?\d[\d.,]*(%|[kKmM])?( \([^)]*\))?`;
+const NUMERIC = new RegExp(`^${FIGURE}( · ${FIGURE})*$`);
+/** Metric texts that mean "no figure": the table shows a dash, and says the text to a screen reader. */
+export const NO_VALUE: ReadonlySet<string> = new Set(["", "–", "not measured", "not recorded", "no detector", "no measured session"]);
+
+/** A column reads as figures, right-aligned, when every value it holds is a number or a figure. */
+export function isNumericColumn(rows: PeriodRow[], key: string): boolean {
+  let seen = false;
+  for (const row of rows) {
+    const value = row.metrics[key];
+    if (value === undefined || (typeof value === "string" && NO_VALUE.has(value))) continue;
+    if (typeof value === "string" && !NUMERIC.test(value)) return false;
+    seen = true;
+  }
+  return seen;
 }
 
 /** Metric columns in first-seen order when a page names none. */

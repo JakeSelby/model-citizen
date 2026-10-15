@@ -1,4 +1,4 @@
-import { Anchor, Badge, Box, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Box, Code, Group, Paper, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 
@@ -10,11 +10,11 @@ import { EvidenceState } from "../../components/StudioKit";
 import { loadDraft, loadDraftSelection, loadSchema, saveDraft, saveDraftSelection } from "../../configure/api";
 import { usePeriods } from "../../harness/api";
 import { HarnessPage, type SettingsState } from "../../harness/HarnessPage";
-import { parseTab, type DraftChange, type PeriodRow } from "../../harness/model";
+import { parseTab, type DraftChange, type MetricColumn, type PeriodRow } from "../../harness/model";
 import { useLoadedDraft } from "../../harness/selectedDraft";
 import {
-  HOOK_FIELDS, HOOK_METRICS, MODES_PATH, SAFETY_OUTCOMES, SURFACE, livenessColor, livenessCounts,
-  livenessOf, modeChoices, nextModes, safetyLabel, settingRows, splitChanges, worstFirst,
+  HOOK_METRICS, MODES_PATH, byLiveness, hookFields, SAFETY_OUTCOMES, SURFACE, livenessColor, livenessCounts,
+  livenessOf, modeChoices, nextModes, safetyLabel, settingRows, splitChanges, utcMinute, worstFirst,
   type DraftState,
 } from "./hooksModel";
 import { hookHref } from "./HookDetailPage";
@@ -71,6 +71,11 @@ export const safetyQuery = {
   staleTime: 30_000,
 };
 
+/** Hooks' columns, with liveness as a badge coloured like the summary's. */
+export const HOOK_COLUMNS: MetricColumn[] = HOOK_METRICS.map((column) => column.key === "liveness"
+  ? { ...column, align: "left", render: (row: PeriodRow) => <Badge className="harness-badge" variant="light" tt="none" color={livenessColor(livenessOf(row))}>{livenessOf(row)}</Badge> }
+  : column);
+
 export function LivenessSummary({ rows }: { rows: PeriodRow[] }) {
   const counts = livenessCounts(rows);
   if (!counts.length) return null;
@@ -110,46 +115,48 @@ export function HookLinks({ rows }: { rows: PeriodRow[] }) {
 }
 
 export function SafetyLog({ entries }: { entries: ActivityEntry[] }) {
+  const commands = entries.some((entry) => entry.command);
   return <Stack gap="xs" component="section" aria-label="Safety log">
     <Title order={2} size="h4">Safety log</Title>
     <Text size="sm" c="dimmed">Blocked, asked and warned actions from the decision log, worst first.</Text>
     {entries.length === 0
       ? <EvidenceState kind="empty" title="Nothing blocked or warned">No hook refused, asked about or warned on an action in the recent log.</EvidenceState>
-      : <Box role="region" aria-label="Safety log entries" tabIndex={0} style={{ overflowX: "auto" }}>
-        <Table verticalSpacing="xs" aria-label="Safety log, worst first" miw={640}>
+      : <Paper withBorder radius="md" className="harness-panel"><Box role="region" aria-label="Safety log entries" tabIndex={0} style={{ overflowX: "auto" }}>
+        <Table verticalSpacing="xs" aria-label="Safety log, worst first" miw={640} className="data-table harness-table">
           <Table.Thead>
             <Table.Tr>
               <Table.Th scope="col">Outcome</Table.Th>
               <Table.Th scope="col">When</Table.Th>
               <Table.Th scope="col">Hook</Table.Th>
               <Table.Th scope="col">Why</Table.Th>
-              <Table.Th scope="col">Action</Table.Th>
+              {commands && <Table.Th scope="col">Action</Table.Th>}
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {entries.map((entry) => <Table.Tr key={entry.id} data-outcome={entry.outcome}>
               <Table.Td>
-                <Badge variant="light" tt="none" color={entry.outcome === "refused" ? "red" : "yellow"}>{safetyLabel(entry.outcome)}</Badge>
+                <Badge className="harness-badge" variant="light" tt="none" color={entry.outcome === "refused" ? "red" : "yellow"}>{safetyLabel(entry.outcome)}</Badge>
               </Table.Td>
-              <Table.Td><Text size="sm"><time dateTime={entry.timestamp}>{entry.timestamp || "Time unavailable"}</time></Text></Table.Td>
+              <Table.Td><Text size="sm"><time dateTime={entry.timestamp}>{utcMinute(entry.timestamp) || "Time unavailable"}</time></Text></Table.Td>
               <Table.Td>{entry.hook ? <Code>{entry.hook}</Code> : <Text size="sm" c="dimmed">built in</Text>}</Table.Td>
               <Table.Td><Text size="sm">{entry.reason}</Text></Table.Td>
-              <Table.Td>{entry.command ? <Code block>{entry.command}</Code> : null}</Table.Td>
+              {commands && <Table.Td>{entry.command ? <Code block>{entry.command}</Code> : null}</Table.Td>}
             </Table.Tr>)}
           </Table.Tbody>
         </Table>
-      </Box>}
+      </Box></Paper>}
   </Stack>;
 }
 
-/** The Hooks page: liveness and figures per hook, the Safety log, and per-hook settings. */
+/** The Hooks page: liveness and figures per hook on Efficacy, per-hook settings, and the Safety log. */
 export function HooksPage() {
   const [searchParams] = useSearchParams();
   const location = useLocation();
-  const tab = parseTab(searchParams);
+  const focus = focusedEntry(location.search);
+  const tab = !searchParams.get("tab") && focus ? "log" : parseTab(searchParams);
   const periods = usePeriods(SURFACE);
   const schema = useQuery({ queryKey: ["configure-schema"], queryFn: loadSchema, staleTime: 300_000 });
-  const safety = useQuery({ ...safetyQuery, enabled: tab === "efficacy" });
+  const safety = useQuery({ ...safetyQuery, enabled: tab === "log" });
   const { draft, loading: draftLoading, error: draftError, reload } = useLoadedDraft(readHookDraft);
   const rows = periods.data?.rows ?? [];
   const choices = modeChoices(schema.data ?? null);
@@ -166,20 +173,24 @@ export function HooksPage() {
     await reload();
   }
 
-  return <Stack gap="lg">
-    <HarnessPage surface={SURFACE} title="Hooks" itemNoun="Hook"
-      question="Guardrails that run outside the model: which are firing, failing or silent."
-      metrics={HOOK_METRICS} fields={HOOK_FIELDS} settings={settings} onDraft={onDraft}
-      draftLoading={draftLoading} draftError={draftError} />
-    {tab === "efficacy" && <LivenessSummary rows={rows} />}
-    {tab === "efficacy" && <HookLinks rows={rows} />}
-    {tab === "efficacy" && (safety.isPending
+  const log = <Stack gap="xl">
+    {safety.isPending
       ? <EvidenceState kind="loading" title="Reading the Safety log">Blocked and warned actions from the decision log.</EvidenceState>
       : safety.isError
         ? <EvidenceState kind="error" title="The Safety log could not be read">{safety.error.message}</EvidenceState>
-        : <SafetyLog entries={safety.data} />)}
+        : <SafetyLog entries={safety.data} />}
     {/* The Activity timeline keeps Studio changes, their rollback and the `?apply=` links into
         them until that flow has a page of its own. */}
-    {(tab === "efficacy" || focusedEntry(location.search)) && <ActivityPage embedded />}
+    <ActivityPage embedded />
   </Stack>;
+
+  return <HarnessPage surface={SURFACE} title="Hooks" itemNoun="Hook"
+    question="Guardrails that run outside the model: which are firing, failing or silent."
+    metrics={HOOK_COLUMNS} fields={hookFields(settings.state === "ready" ? settings.rows : [])} settings={settings}
+    order={byLiveness} onDraft={onDraft}
+    draftLoading={draftLoading} draftError={draftError}
+    efficacyLead={<LivenessSummary rows={rows} />}
+    efficacyNote={<HookLinks rows={rows} />}
+    logTab={{ name: "Safety log", summary: "Blocked, asked and warned", content: log }}
+    openLog={Boolean(focus)} />;
 }

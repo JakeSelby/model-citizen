@@ -1,5 +1,5 @@
-import { Anchor, Code, Stack, Tabs, Text, Title } from "@mantine/core";
-import { useState } from "react";
+import { Anchor, Code, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
+import { useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { DraftPicker } from "../changes/DraftPicker";
@@ -25,11 +25,21 @@ type Content = {
   itemNoun?: string;
   metrics?: MetricColumn[];
   fields: SettingField[];
+  /** Shown above the Efficacy table, such as a summary of the rows. */
+  efficacyLead?: ReactNode;
+  /** Shown under the Efficacy table: what its figures mean. */
+  efficacyNote?: ReactNode;
+  /** One line in the Settings footer that holds for every row. */
+  settingsNote?: ReactNode;
+  /** Orders the Efficacy rows; items appear in the order of their first row. */
+  order?: (rows: PeriodRow[]) => PeriodRow[];
+  /** A third tab, opened by `?tab=log`. */
+  logTab?: { name: string; summary?: string; content: ReactNode };
 };
 
 function TabLabel({ name, summary }: { name: string; summary?: string }) {
   return <Stack gap={0} align="flex-start">
-    <Text fw={600} size="sm">{name}</Text>
+    <Text fw={600} size="sm" className="harness-tab-name">{name}</Text>
     {summary && <Text size="xs" c="dimmed">{summary}</Text>}
   </Stack>;
 }
@@ -57,10 +67,10 @@ function DraftStatus({ draft }: { draft: DraftSelection }) {
   if (draft.loading) return <Text size="sm" c="dimmed" role="status">Reading draft {draft.value}…</Text>;
   return <Text size="sm" c="dimmed">
     {draft.value
-      ? <>Edits save into draft <Code>{draft.value}</Code>, never the installed configuration.</>
+      ? <>Edits save into draft <Code>{draft.value}</Code>.</>
       : draft.optional
-        ? "Pick a draft to save edits into it, or save with none and each change becomes its own draft."
-        : "Pick or create a draft to save edits into; nothing here changes the installed configuration."}
+        ? "Pick a draft, or send with none and each change becomes its own draft."
+        : "Pick or create a draft to edit these settings."}
   </Text>;
 }
 
@@ -73,7 +83,7 @@ export function SavedDraft({ name }: { name: string }) {
 }
 
 // Kept free of hooks so tests can call it directly and reach its handlers.
-export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fields, tab, onTabChange, periods, settings, edits, onEdit, onDiscard, onDraft, saving, saveError, draft, savedDraft }: Content & {
+export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fields, efficacyLead, efficacyNote, settingsNote, logTab, order, tab: requested, onTabChange, periods, settings, edits, onEdit, onDiscard, onDraft, saving, saveError, draft, savedDraft }: Content & {
   tab: HarnessTab;
   onTabChange: (tab: HarnessTab) => void;
   periods: PeriodsState;
@@ -84,18 +94,23 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
   onDraft: (changes: DraftChange[]) => void;
   saving?: boolean;
   saveError?: string | null;
-  /** Shows the draft picker above the settings; a page without one saves some other way. */
+  /** Shows the draft picker in the settings footer; a page without one saves some other way. */
   draft?: DraftSelection;
   /** The draft the last save went into, linked to its card in Changes. */
   savedDraft?: string | null;
 }) {
   const noun = itemNoun.toLowerCase();
+  const tab = requested === "log" && !logTab ? "efficacy" : requested;
+  const draftControls = draft && <Stack gap="xs" component="section" aria-label={`${title}: draft to save into`}>
+    <DraftPicker value={draft.value} onChange={draft.onChange} source={draft.source} label="Save into draft" />
+    <DraftStatus draft={draft} />
+  </Stack>;
   return <Stack gap="lg">
     <div>
       <Title order={1}>{title}</Title>
       <Text c="dimmed">{question}</Text>
     </div>
-    <Tabs value={tab} onChange={(value) => onTabChange(value === "settings" ? "settings" : "efficacy")} keepMounted={false}>
+    <Tabs value={tab} onChange={(value) => onTabChange(value === "settings" ? "settings" : value === "log" && logTab ? "log" : "efficacy")} keepMounted={false} className="harness-tabs">
       <Tabs.List aria-label={`${title} views`}>
         <Tabs.Tab value="efficacy">
           <TabLabel name="Efficacy" summary={periods.state === "ready" ? efficacySummary(periods.rows) : undefined} />
@@ -103,30 +118,33 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
         <Tabs.Tab value="settings">
           <TabLabel name="Settings" summary={settings.state === "ready" ? settingsSummary(settings.rows) : undefined} />
         </Tabs.Tab>
+        {logTab && <Tabs.Tab value="log"><TabLabel name={logTab.name} summary={logTab.summary} /></Tabs.Tab>}
       </Tabs.List>
       <Tabs.Panel value="efficacy" pt="lg">
-        {periods.state !== "ready"
-          ? <StateView state={periods} noun={itemNoun} kind="measurement periods" />
-          : periods.rows.length === 0
-            ? <EvidenceState kind="empty" title="No measurement periods yet">
-              Each {noun} gets a row once a session has run under its setting.
-            </EvidenceState>
-            : <Stack gap="sm">
-              <EfficacyTable caption={`${title}: efficacy by setting period`} rows={periods.rows}
-                columns={metrics ?? metricColumns(periods.rows)} itemHeading={itemNoun} />
-              {periods.note && <Text size="sm" c="dimmed">{periods.note}</Text>}
-              <Text size="sm" c="dimmed">
-                One row per {noun} per setting period. A change splits the {noun} into a before row and
-                a row that measures for seven days; the comparison is in Evals.
-              </Text>
-            </Stack>}
+        <Stack gap="md">
+          {efficacyLead}
+          {periods.state !== "ready"
+            ? <StateView state={periods} noun={itemNoun} kind="measurement periods" />
+            : periods.rows.length === 0
+              ? <Paper withBorder radius="md" className="harness-panel">
+                <EvidenceState kind="empty" title="No measurement periods yet">
+                  Each {noun} gets a row once a session has run under its setting.
+                </EvidenceState>
+              </Paper>
+              : <EfficacyTable caption={`${title}: efficacy by setting period`} rows={order ? order(periods.rows) : periods.rows}
+                columns={metrics ?? metricColumns(periods.rows)} itemHeading={itemNoun} />}
+          {periods.state === "ready" && periods.rows.length > 0 && <Stack gap="xs" maw="80ch">
+            {periods.note && <Text size="sm" c="dimmed">{periods.note}</Text>}
+            <Text size="sm" c="dimmed">
+              One row per {noun} per setting period. A change splits the {noun} into a before row and
+              a row that measures for seven days; the comparison is in Evals.
+            </Text>
+            {efficacyNote}
+          </Stack>}
+        </Stack>
       </Tabs.Panel>
       <Tabs.Panel value="settings" pt="lg">
         <Stack gap="md">
-          {draft && <Stack gap="xs" component="section" aria-label={`${title}: draft to save into`}>
-            <DraftPicker value={draft.value} onChange={draft.onChange} source={draft.source} label="Save into draft" />
-            <DraftStatus draft={draft} />
-          </Stack>}
           {settings.state !== "ready"
             ? <StateView state={settings} noun={itemNoun} kind="settings" />
             : settings.rows.length === 0
@@ -135,10 +153,11 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
               </EvidenceState>
               : <SettingsTable caption={`${title}: settings`} rows={settings.rows} fields={fields} edits={edits}
                 onEdit={onEdit} onDiscard={onDiscard} onDraft={onDraft} saving={saving} saveError={saveError}
-                itemHeading={itemNoun} />}
+                itemHeading={itemNoun} draftControls={draftControls} footerNote={settingsNote} />}
           {savedDraft && <SavedDraft name={savedDraft} />}
         </Stack>
       </Tabs.Panel>
+      {logTab && <Tabs.Panel value="log" pt="lg">{logTab.content}</Tabs.Panel>}
     </Tabs>
   </Stack>;
 }
@@ -160,7 +179,7 @@ export async function saveToDraft(changes: DraftChange[], draft: string, onDraft
  * page's configuration, a picker for the draft to save into (`?draft=`), and hands edits to
  * `onDraft` with that draft, which records them for review in Changes.
  */
-export function HarnessPage({ surface, settings, onDraft, draftOptional = false, draftLoading, draftError, ...content }: Content & {
+export function HarnessPage({ surface, settings, onDraft, draftOptional = false, draftLoading, draftError, openLog = false, ...content }: Content & {
   surface: string;
   settings: SettingsState;
   onDraft: DraftSave;
@@ -168,6 +187,8 @@ export function HarnessPage({ surface, settings, onDraft, draftOptional = false,
   draftOptional?: boolean;
   draftLoading?: boolean;
   draftError?: string;
+  /** Opens the log tab when the URL names no tab, as an `?apply=` link into the log does. */
+  openLog?: boolean;
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = usePeriods(surface);
@@ -198,7 +219,7 @@ export function HarnessPage({ surface, settings, onDraft, draftOptional = false,
   }
 
   return <HarnessFrame {...content}
-    tab={parseTab(searchParams)}
+    tab={!searchParams.get("tab") && openLog ? "log" : parseTab(searchParams)}
     onTabChange={(tab) => setSearchParams(tabSearch(searchParams, tab))}
     periods={periods}
     settings={settings}

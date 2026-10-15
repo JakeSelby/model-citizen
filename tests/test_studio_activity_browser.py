@@ -32,7 +32,7 @@ class StudioActivityBrowserTests(unittest.TestCase):
                     now=1_780_000_000 + index)
 
         self._open()
-        self.devtools.evaluate("location.hash = '#/activity'")
+        self.devtools.evaluate("location.hash = '#/harness/hooks?tab=log'")
         self._wait("document.querySelectorAll('.activity-row').length === 25",
                    "Activity did not load its first bounded page")
         self.assertEqual(self.devtools.evaluate("globalThis.activityInjected"), None)

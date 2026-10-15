@@ -10,7 +10,7 @@ import { periodsQuery } from "../src/harness/api.ts";
 import { SettingsTable } from "../src/harness/SettingsTable.tsx";
 import type { DraftChange, PeriodsResponse } from "../src/harness/model.ts";
 import { LIBRARY_QUERY_KEY, saveLibrarySwitches } from "../src/pages/harness/librarySettings.ts";
-import { WORKFLOW_FIELDS, WORKFLOW_TOOL_ROW, workflowSettings } from "../src/pages/harness/rolesWorkflowsModel.ts";
+import { WORKFLOW_FIELDS, WORKFLOW_READ_ONLY_NOTE, WORKFLOW_TOOL_ROW, workflowSettings } from "../src/pages/harness/rolesWorkflowsModel.ts";
 import { WorkflowsPage } from "../src/pages/harness/WorkflowsPage.tsx";
 import { LIBRARY } from "./fixtures/harness-library.ts";
 
@@ -75,7 +75,8 @@ test("Settings lists each workflow with its source read-only and its switch edit
   assert.equal(workflowSettings(shadowed).filter((row) => row.item_id === "build").length, 1, "a name in two roots is one row");
   const html = render("/harness/workflows?tab=settings");
   assert.ok(html.includes("Workflows: settings"));
-  assert.ok(html.includes("Source (read-only)"));
+  assert.ok(html.includes(">Source<") && !html.includes("(read-only)"));
+  assert.equal(html.split(WORKFLOW_READ_ONLY_NOTE).length - 1, 1, "the read-only rule is stated once");
   assert.ok(html.includes('aria-label="Enabled: /build"'));
   assert.ok(!html.includes('aria-label="Enabled: Workflow tool runs"'), "the runtime's switch is not ours to draft");
 });

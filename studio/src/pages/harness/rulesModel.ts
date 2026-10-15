@@ -10,8 +10,8 @@ export const RULES_SURFACE = "rules";
 export const RULE_METRICS: MetricColumn[] = [
   { key: "sessions", heading: "Sessions" },
   { key: "hits", heading: "Detector hits" },
-  { key: "fired_in", heading: "Fired in" },
-  { key: "precision", heading: "Detector precision" },
+  { key: "fired_in", heading: "Fired in", align: "right" },
+  { key: "precision", heading: "Detector precision", align: "right" },
   { key: "context_tokens", heading: "Context tokens" },
 ];
 

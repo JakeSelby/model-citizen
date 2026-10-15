@@ -474,7 +474,7 @@ class StudioEndToEndFlows(support.StudioE2E):
         applied = json.loads(self.config_path.read_text(encoding="utf-8"))
         self.assertEqual(applied.get("rules", {}).get(SWITCHED_RULE), "off", applied.get("rules"))
 
-        self.js("location.hash = '#/harness/hooks'")
+        self.js("location.hash = '#/harness/hooks?tab=log'")
         self.click("Preview rollback", seconds=60)
         self.wait("__has('Preview ready. Nothing has changed.')", "rollback preview failed",
                   seconds=60)

@@ -1,0 +1,57 @@
+/* The Harness pages' tables: one bordered panel per table, a shaded header band, figures
+   right-aligned, and a divider under every item's row group. */
+/* The Studio draws sections as hairlines; a Harness table is the one carded surface on its page. */
+.main-content .mantine-Paper-root.harness-panel {
+  overflow: hidden;
+  padding: 0;
+  border: var(--studio-border-width) solid var(--studio-border-default);
+  border-radius: var(--studio-radius-md);
+  background: var(--studio-surface-raised);
+}
+.harness-table thead th { background: var(--studio-surface-subtle); white-space: nowrap; }
+.harness-table tbody th { color: var(--studio-ink-primary); font-size: var(--studio-text-sm); }
+.harness-table tbody th[scope="rowgroup"] { vertical-align: top; }
+.harness-table tbody > tr:last-child > * { border-bottom: var(--studio-border-width) solid var(--studio-border-default); }
+.harness-table tbody:last-of-type > tr:last-child > *,
+.harness-table tbody:last-of-type th[scope="rowgroup"] { border-bottom: 0; }
+.harness-table .harness-num { text-align: right; white-space: nowrap; }
+.harness-table .harness-nowrap { white-space: nowrap; }
+.harness-table .harness-item { width: 36%; }
+/* The item column stays in view while a phone scrolls the figures sideways, and names wrap at
+   word boundaries only. */
+.harness-table .harness-sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 9rem;
+  overflow-wrap: normal;
+  background: var(--studio-surface-raised);
+  box-shadow: inset calc(var(--studio-border-width) * -1) 0 0 var(--studio-border-default);
+}
+.harness-table thead .harness-sticky { background: var(--studio-surface-subtle); }
+.harness-table tr[data-status="measuring"] .harness-sticky,
+.harness-table tr[data-draft] .harness-sticky { background: inherit; }
+.harness-badge .mantine-Badge-label { overflow: visible; text-overflow: clip; }
+
+/* A tab's name reads as a link until it is the selected tab. */
+.harness-tabs .mantine-Tabs-tab:not([data-active]) .harness-tab-name { color: var(--studio-ink-secondary); }
+
+/* The Settings panel's footer: the draft picker beside the save actions. Its own help repeats the
+   notice above the table, so it is hidden here. */
+.harness-footer {
+  padding: var(--studio-space-3) var(--studio-space-4);
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+  background: var(--studio-surface-subtle);
+}
+.harness-footer .draft-picker > .mantine-Text-root,
+.harness-footer .draft-picker .mantine-InputWrapper-description { display: none; }
+
+/* An informational notice: a neutral raised surface with a primary rule, never a coloured wash. */
+.studio-frame .harness-note {
+  border: var(--studio-border-width) solid var(--studio-border-default);
+  border-left: calc(var(--studio-border-width) * 3) solid var(--studio-primary);
+  color: var(--studio-ink-primary);
+  background: var(--studio-surface-raised);
+}
+.studio-frame .harness-note .mantine-Alert-title { color: var(--studio-ink-primary); }
+.studio-frame .harness-note .mantine-Alert-icon { color: var(--studio-primary); }

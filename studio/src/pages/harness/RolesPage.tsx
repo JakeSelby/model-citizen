@@ -1,12 +1,13 @@
 import { HarnessPage } from "../../harness/HarnessPage";
 import { saveLibrarySwitches, useLibrarySettings } from "./librarySettings";
-import { ROLE_FIELDS, ROLE_METRICS, roleSettings } from "./rolesWorkflowsModel";
+import { ROLE_FIELDS, ROLE_READ_ONLY_NOTE, ROLE_METRICS, roleSettings } from "./rolesWorkflowsModel";
 
 export const ROLES_CONTENT = {
   title: "Roles",
   question: "Which roles spawned, at what tier and effort, what they cost, and how often they ran past their budget.",
   itemNoun: "Role",
   metrics: ROLE_METRICS,
+  settingsNote: ROLE_READ_ONLY_NOTE,
   fields: ROLE_FIELDS,
 };
 

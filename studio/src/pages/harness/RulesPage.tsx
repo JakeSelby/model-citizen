@@ -66,8 +66,8 @@ export function RulesPage() {
     <HarnessPage surface={RULES_SURFACE} title="Rules"
       question="Guidance the model reads every session, measured against the setting that was in effect."
       itemNoun="Rule" metrics={RULE_METRICS} fields={RULE_FIELDS}
-      settings={ruleSettingsState(selection, health, periods.data?.rows)} onDraft={onDraft} draftOptional />
+      settings={ruleSettingsState(selection, health, periods.data?.rows)} onDraft={onDraft} draftOptional
+      efficacyNote={<Text size="sm" c="dimmed">{HITS_NOTE}</Text>} />
     <TriedDrafts results={tried} />
-    <Text size="sm" c="dimmed">{HITS_NOTE}</Text>
   </Stack>;
 }

@@ -84,7 +84,7 @@ test("Activity keeps its h1 alone and an h2 when embedded", () => {
 });
 
 test("the Hooks page renders exactly one h1", () => {
-  const html = render(h(HooksPage), "/harness/hooks");
+  const html = render(h(HooksPage), "/harness/hooks?tab=log");
   assert.equal((html.match(/<h1[\s>]/g) ?? []).length, 1);
-  assert.ok(html.includes("What the harness decided and changed."), "the Activity timeline is still embedded");
+  assert.ok(html.includes("What the harness decided and changed."), "the Activity timeline is embedded in the Safety log tab");
 });

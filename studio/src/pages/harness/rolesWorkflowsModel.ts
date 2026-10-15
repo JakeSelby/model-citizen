@@ -4,13 +4,17 @@
 // Only the switch is saved to a draft; class, model and effort are shown read-only.
 
 import type { LibraryModule, LibraryPayload } from "../../library/model";
-import type { DraftChange, MetricColumn, SettingField, SettingRow } from "../../harness/model";
+import type { DraftChange, MetricColumn, PeriodRow, SettingField, SettingRow } from "../../harness/model";
+
+/** The model and effort a role ran at, one cell: "sonnet · high". */
+export function ranAs(row: PeriodRow): string {
+  return [row.metrics.model, row.metrics.effort].filter((value) => value !== undefined && value !== "")
+    .map(String).join(" · ") || "not measured";
+}
 
 export const ROLE_METRICS: MetricColumn[] = [
   { key: "spawns", heading: "Spawns" },
-  { key: "model", heading: "Model that ran" },
-  { key: "effort", heading: "Effort that ran" },
-  { key: "cost", heading: "Cost" },
+  { key: "model", heading: "Ran as", align: "left", render: ranAs },
   { key: "cost_per_spawn", heading: "Cost p50 · p75" },
   { key: "unpriced", heading: "Unpriced" },
   { key: "over_budget", heading: "Over budget" },
@@ -26,19 +30,22 @@ export const WORKFLOW_METRICS: MetricColumn[] = [
   { key: "unpriced_runs", heading: "Unpriced runs" },
 ];
 
-export const READ_ONLY = "read-only";
-
 export const ROLE_FIELDS: SettingField[] = [
-  { key: "tier", heading: `Tier (${READ_ONLY})` },
-  { key: "model", heading: `Model, Claude Code (${READ_ONLY})` },
-  { key: "effort", heading: `Effort (${READ_ONLY})` },
+  { key: "tier", heading: "Tier" },
+  { key: "model", heading: "Model, Claude Code" },
+  { key: "effort", heading: "Effort" },
   { key: "enabled", heading: "Enabled" },
 ];
+
+/** Said once under the Roles settings, not on every row or heading. */
+export const ROLE_READ_ONLY_NOTE = "Tier, model and effort are read-only here: they live in the role definition and its adapter binding. Only Enabled saves to a draft.";
 
 export const WORKFLOW_FIELDS: SettingField[] = [
-  { key: "source", heading: `Source (${READ_ONLY})` },
+  { key: "source", heading: "Source" },
   { key: "enabled", heading: "Enabled" },
 ];
+
+export const WORKFLOW_READ_ONLY_NOTE = "Source is read-only here; only Enabled saves to a draft.";
 
 export const SWITCH = ["on", "off"];
 
@@ -97,7 +104,7 @@ export function roleSettings(library: LibraryPayload): SettingRow[] {
       },
       options: enabled.options ? { enabled: enabled.options } : undefined,
       last_changed: null,
-      last_change_note: `${layerNote(module)}; class and effort live in the role definition and adapter binding`,
+      last_change_note: layerNote(module),
     };
   });
   return [...rows, BUILT_IN_ROW];

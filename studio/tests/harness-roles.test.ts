@@ -13,7 +13,7 @@ import { LIBRARY_QUERY_KEY, saveLibrarySwitches } from "../src/pages/harness/lib
 import { LIBRARY } from "./fixtures/harness-library.ts";
 import { ROLES_CONTENT, RolesPage } from "../src/pages/harness/RolesPage.tsx";
 import {
-  BUILT_IN_ROW, headerField, roleSettings, selectionChanges,
+  BUILT_IN_ROW, headerField, ROLE_READ_ONLY_NOTE, roleSettings, selectionChanges,
 } from "../src/pages/harness/rolesWorkflowsModel.ts";
 
 // Hand-typed in the shape `GET /api/harness/periods?surface=roles` answers with.
@@ -65,13 +65,14 @@ test("the Roles page renders each role's period with spawns, tier, effort, cost 
   const html = render(h(RolesPage), "/harness/roles", client());
   assert.match(html, /<h1[^>]*>Roles<\/h1>/);
   assert.ok(html.includes("Roles: efficacy by setting period"));
-  for (const heading of ["Spawns", "Model that ran", "Effort that ran", "Cost p50 · p75", "Over budget", "Tier rewrites"]) {
+  for (const heading of ["Spawns", "Ran as", "Cost p50 · p75", "Over budget", "Tier rewrites"]) {
     assert.ok(html.includes(heading), heading);
   }
   const builder = /<tbody[^>]*data-item="builder"[^>]*>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? "";
-  for (const value of ["strong · medium effort", "570", "claude-opus-5-5 +3", "$3525.73", "$2.82 · $7.01", "12% · 67 of 545", "since Sep 12"]) {
+  for (const value of ["strong · medium effort", "570", "claude-opus-5-5 +3", "$2.82 · $7.01", "12% · 67 of 545", "since Sep 12"]) {
     assert.ok(builder.includes(value), value);
   }
+  assert.ok(!builder.includes("$3525.73"), "the total cost column is gone; the per-spawn spread stays");
   const builtIn = /<tbody[^>]*data-item="built-in"[^>]*>([\s\S]*?)<\/tbody>/.exec(html)?.[1] ?? "";
   assert.ok(builtIn.includes("Session model · runtime default"));
   assert.ok(builtIn.includes("not measured"), "a cost the API did not send is never shown as zero");
@@ -99,8 +100,8 @@ test("Settings shows each role's class, model and effort read-only and its switc
 
   const html = render(h(RolesPage), "/harness/roles?tab=settings", client());
   assert.ok(html.includes("Roles: settings"));
-  assert.ok(html.includes("Tier (read-only)"));
-  assert.ok(html.includes("Effort (read-only)"));
+  assert.ok(html.includes(">Tier<") && html.includes(">Effort<"), "headings carry no read-only suffix");
+  assert.equal(html.split(ROLE_READ_ONLY_NOTE).length - 1, 1, "the read-only rule is stated once");
   assert.ok(html.includes('aria-label="Enabled: builder"'), "the switch is a control");
   assert.ok(!html.includes('aria-label="Tier: builder"'), "the class has no editing route, so no control");
   assert.ok(html.includes("Built-in and unnamed agents"));
