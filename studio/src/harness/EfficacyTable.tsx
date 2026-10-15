@@ -55,7 +55,7 @@ export function EfficacyTable({ caption, rows, columns, itemHeading = "Item" }: 
               data-status={row.status}
               bg={measuring ? "var(--mantine-primary-color-light)" : undefined}
             >
-              {index === 0 && <Table.Th scope="rowgroup" rowSpan={group.rows.length} fw={600} className="harness-sticky">{group.item_label}</Table.Th>}
+              {index === 0 && <Table.Th scope="rowgroup" rowSpan={group.rows.length} fw={600} className="harness-sticky"><span className="harness-name" title={group.item_label}>{group.item_label}</span></Table.Th>}
               <Table.Td>{row.setting_label}</Table.Td>
               <Table.Td className="harness-nowrap">
                 {role && <Text size="sm" fw={600}>{role}</Text>}

@@ -126,7 +126,7 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
           {periods.state !== "ready"
             ? <StateView state={periods} noun={itemNoun} kind="measurement periods" />
             : periods.rows.length === 0
-              ? <div className="harness-panel">
+              ? <div className="harness-panel harness-empty">
                 <EvidenceState kind="empty" title="No measurement periods yet">
                   Each {noun} gets a row once a session has run under its setting.
                 </EvidenceState>
@@ -148,12 +148,15 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
           {settings.state !== "ready"
             ? <StateView state={settings} noun={itemNoun} kind="settings" />
             : settings.rows.length === 0
-              ? <EvidenceState kind="empty" title="Nothing to configure yet">
-                No {noun} is installed for this harness.
-              </EvidenceState>
+              ? <div className="harness-empty">
+                <EvidenceState kind="empty" title="Nothing to configure yet">
+                  No {noun} is installed for this harness.
+                </EvidenceState>
+              </div>
               : <SettingsTable caption={`${title}: settings`} rows={settings.rows} fields={fields} edits={edits}
                 onEdit={onEdit} onDiscard={onDiscard} onDraft={onDraft} saving={saving} saveError={saveError}
-                itemHeading={itemNoun} draftControls={draftControls} footerNote={settingsNote} />}
+                itemHeading={itemNoun} draftControls={draftControls} draftOnChange={Boolean(draft?.optional && !draft.value)}
+                footerNote={settingsNote} />}
           {savedDraft && <SavedDraft name={savedDraft} />}
         </Stack>
       </Tabs.Panel>

@@ -15,21 +15,44 @@
 .harness-table .harness-num { text-align: right; white-space: nowrap; }
 .harness-table .harness-nowrap { white-space: nowrap; }
 .harness-table .harness-item { width: 36%; }
-/* The item column stays in view while a phone scrolls the figures sideways, and names wrap at
-   word boundaries only. */
+/* The item column stays in view while a phone scrolls the figures sideways. A name never wraps,
+   so an id never breaks at a hyphen; a phone caps the column and ends a long name in an
+   ellipsis, its whole text in the title, so the figures beside it still show. */
 .harness-table .harness-sticky {
   position: sticky;
   left: 0;
   z-index: 1;
-  min-width: 9rem;
-  overflow-wrap: normal;
   background: var(--studio-surface-raised);
   box-shadow: inset calc(var(--studio-border-width) * -1) 0 0 var(--studio-border-default);
+}
+.harness-table .harness-name { display: block; white-space: nowrap; }
+/* A detail line never widens the column; the name and the heading size it. */
+.harness-table .harness-detail { contain: inline-size; }
+@media (max-width: 48em) {
+  .harness-table .harness-item { width: auto; }
+  .harness-table .harness-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  .harness-table .harness-sticky .harness-detail { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 .harness-table thead .harness-sticky { background: var(--studio-surface-subtle); }
 .harness-table tr[data-status="measuring"] .harness-sticky,
 .harness-table tr[data-draft] .harness-sticky { background: inherit; }
 .harness-badge .mantine-Badge-label { overflow: visible; text-overflow: clip; }
+/* A status badge is an outline in both themes; Mantine fills the dot variant in dark. */
+.harness-table .harness-badge[data-variant="dot"] {
+  border: var(--studio-border-width) solid var(--studio-border-default);
+  background: transparent;
+}
+
+/* When a table is wider than its panel, a shade on the clipped edge says it scrolls. The cover
+   travels with the content and hides the shade once that edge is reached. */
+.harness-panel .mantine-ScrollArea-viewport {
+  background:
+    linear-gradient(to left, var(--studio-surface-raised) 40%, transparent) right center / var(--studio-space-10) 100% no-repeat local,
+    linear-gradient(to left, color-mix(in srgb, var(--studio-ink-primary) 14%, transparent), transparent) right center / var(--studio-space-3) 100% no-repeat scroll;
+}
+
+/* An empty state inside the frame is its words alone, with no symbol tile. */
+.harness-empty .state-symbol { display: none; }
 
 /* A tab's name reads as a link until it is the selected tab. */
 .harness-tabs .mantine-Tabs-tab:not([data-active]) .harness-tab-name { color: var(--studio-ink-secondary); }
@@ -43,13 +66,12 @@
 }
 .harness-footer .draft-picker > .mantine-Text-root,
 .harness-footer .draft-picker .mantine-InputWrapper-description { display: none; }
+/* Mantine drops an input under its description; with that hidden, every label shares a baseline. */
+.harness-footer .draft-picker .mantine-Input-wrapper { margin-top: 0; }
 
-/* An informational notice: a neutral raised surface with a primary rule, never a coloured wash. */
-.studio-frame .harness-note {
-  border: var(--studio-border-width) solid var(--studio-border-default);
-  border-left: calc(var(--studio-border-width) * 3) solid var(--studio-primary);
-  color: var(--studio-ink-primary);
-  background: var(--studio-surface-raised);
+/* The Settings notice: a lead line over a hairline, as every Studio section is, never a card. */
+.harness-note {
+  padding-bottom: var(--studio-space-3);
+  border-bottom: var(--studio-border-width) solid var(--studio-border-default);
 }
-.studio-frame .harness-note .mantine-Alert-title { color: var(--studio-ink-primary); }
-.studio-frame .harness-note .mantine-Alert-icon { color: var(--studio-primary); }
+.harness-note svg { flex-shrink: 0; color: var(--studio-primary); }

@@ -151,7 +151,7 @@ test("a changed item's before row and measuring row are adjacent", () => {
   assert.deepEqual(periods, ["Before", "After"]);
   assert.ok(body.indexOf("Old wording") < body.indexOf("New wording"));
   assert.ok(body.includes("Sep 24 to Oct 8"));
-  assert.match(body, /rowspan="2"[^>]*>Offer alternatives on decisions/i);
+  assert.match(body, /rowspan="2"[^>]*><span class="harness-name"[^>]*>Offer alternatives on decisions/i);
 });
 
 test("each setting shows its last changed date", () => {

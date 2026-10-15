@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Group, NativeSelect, Stack, Switch, Table, Text } from "@mantine/core";
+import { Badge, Button, Group, NativeSelect, Stack, Switch, Table, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 
 import { EvidenceState } from "../components/StudioKit";
@@ -32,7 +32,7 @@ function Value({ value }: { value: string }) {
 }
 
 // Kept free of hooks so tests can call it directly and reach its handlers.
-export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard, onDraft, saving = false, saveError = null, itemHeading = "Item", draftControls, footerNote }: {
+export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard, onDraft, saving = false, saveError = null, itemHeading = "Item", draftControls, draftOnChange = false, footerNote }: {
   caption: string;
   rows: SettingRow[];
   fields: SettingField[];
@@ -46,16 +46,22 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
   itemHeading?: string;
   /** The draft picker, shown in the footer beside the save actions. */
   draftControls?: ReactNode;
+  /** Shows the draft picker only once a row is edited, for a page that can save with no draft. */
+  draftOnChange?: boolean;
   /** One line under the table that holds for every row, such as which fields are read-only. */
   footerNote?: ReactNode;
 }) {
   const changes = draftChanges(rows, edits);
   const changed = new Set(changes.map((change) => change.item_id));
+  const picker = draftOnChange && changes.length === 0 ? null : draftControls;
   return <Stack gap="md">
-    <Alert variant="light" color="gray" icon={<InfoIcon />} title={NEW_PERIOD_NOTE} className="harness-note" role="note">
-      Edits here become a draft in Changes. Nothing applies until you approve it there, and from
-      that day Efficacy measures the item under its new setting for seven days.
-    </Alert>
+    <div className="harness-note" role="note">
+      <Group gap="xs" wrap="nowrap"><InfoIcon /><Text size="sm" fw={600}>{NEW_PERIOD_NOTE}</Text></Group>
+      <Text size="sm" c="dimmed">
+        Edits here become a draft in Changes. Nothing applies until you approve it there, and from
+        that day Efficacy measures the item under its new setting for seven days.
+      </Text>
+    </div>
     <div className="harness-panel">
       <Table.ScrollContainer minWidth={640}
         scrollAreaProps={{ type: "auto", offsetScrollbars: false, viewportProps: { role: "region", "aria-label": caption, tabIndex: 0 } }}>
@@ -74,8 +80,9 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
               return <Table.Tr key={row.item_id} data-item={row.item_id} data-draft={drafted || undefined}
                 bg={drafted ? "var(--mantine-color-yellow-light)" : undefined}>
                 <Table.Th scope="row" fw={400} className="harness-sticky">
-                  <Text size="sm" fw={600}>{row.item_label}</Text>
-                  {row.item_detail && <Text size="xs" c="dimmed" lineClamp={2} title={row.item_detail_title}>{row.item_detail}</Text>}
+                  <Text size="sm" fw={600} className="harness-name" title={row.item_label}>{row.item_label}</Text>
+                  {row.item_detail && <Text size="xs" c="dimmed" lineClamp={2} className="harness-detail"
+                    title={row.item_detail_title ?? row.item_detail}>{row.item_detail}</Text>}
                 </Table.Th>
                 {fields.map((field) => {
                   const options = row.options?.[field.key];
@@ -111,10 +118,10 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
-      {(draftControls || footerNote || changes.length > 0) && <div className="harness-footer">
+      {(picker || footerNote || changes.length > 0) && <div className="harness-footer">
         <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
           <Stack gap="xs">
-            {draftControls}
+            {picker}
             {footerNote && <Text size="sm" c="dimmed">{footerNote}</Text>}
           </Stack>
           {changes.length > 0 && <Group gap="xs">
