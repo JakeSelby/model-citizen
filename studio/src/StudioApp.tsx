@@ -21,7 +21,6 @@ import { HookDetailPage } from "./pages/harness/HookDetailPage";
 import { TrendsPage } from "./reports/trends/TrendsPage";
 import { SpendPage } from "./spend/SpendPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
-import { FirstRunPage } from "./firstrun/FirstRunPage";
 import { BaselinePage } from "./baseline/BaselinePage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
