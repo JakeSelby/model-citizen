@@ -199,7 +199,7 @@ class StudioEndToEndFlows(support.StudioE2E):
                      ("#/library?path=rules/a.md", "#/harness/sources/modules?path=rules/a.md", "Sources"),
                      ("#/experiments", "#/evals", "Evals"),
                      ("#/experiments/runs/no-such-run", "#/evals/runs/no-such-run", "Evals"),
-                     ("#/activity", "#/harness/hooks", "Hooks"),
+                     ("#/activity", "#/harness/hooks?tab=log", "Hooks"),
                      ("#/reports", "#/evals", "Evals"),
                      ("#/reports/rules", "#/harness/rules", "Rules"),
                      ("#/reports/usage", "#/sessions", "Sessions"),

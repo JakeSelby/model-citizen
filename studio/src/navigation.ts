@@ -107,6 +107,15 @@ export function legacyTarget(pathname: string): string | null {
 
 // Where an old or unknown location lands: its new path, with the query and fragment carried over so
 // a deep link such as `/library?path=<module>` still opens the module.
+// The old Activity page lives on as the Hooks page's safety log tab.
+const LEGACY_TABS: Record<string, string> = { "/activity": "log" };
+
 export function legacyLocation({ pathname, search, hash }: { pathname: string; search: string; hash: string }) {
+  const tab = LEGACY_TABS[pathname];
+  if (tab) {
+    const params = new URLSearchParams(search);
+    if (!params.has("tab")) params.set("tab", tab);
+    search = `?${params.toString()}`;
+  }
   return { pathname: legacyTarget(pathname) ?? HOME_PATH, search, hash };
 }

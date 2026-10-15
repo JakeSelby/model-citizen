@@ -81,6 +81,10 @@ test("every old route redirects to its page in the new nav", () => {
 test("an old module deep link keeps its query and lands on the module browser", () => {
   assert.deepEqual(legacyLocation({ pathname: "/library", search: "?path=rules/a.md&line=3", hash: "" }),
     { pathname: "/harness/sources/modules", search: "?path=rules/a.md&line=3", hash: "" });
+  assert.deepEqual(legacyLocation({ pathname: "/activity", search: "", hash: "" }),
+    { pathname: "/harness/hooks", search: "?tab=log", hash: "" });
+  assert.deepEqual(legacyLocation({ pathname: "/activity", search: "?apply=a1", hash: "" }),
+    { pathname: "/harness/hooks", search: "?apply=a1&tab=log", hash: "" });
   assert.deepEqual(legacyLocation({ pathname: "/not-a-route", search: "?x=1", hash: "#top" }),
     { pathname: "/home", search: "?x=1", hash: "#top" });
 });
