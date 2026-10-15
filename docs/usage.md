@@ -12,8 +12,8 @@ call, no service, no account, and nothing beyond the session id, the repository 
 the branch, model ids and token counts. Sending those rows to an observability backend is
 opt-in, off by default and described in [telemetry.md](telemetry.md); the ledger stays the
 record and the backend is a copy that `bin/citizen usage export --since` can rebuild.
-The [Studio](studio.md#spend-and-usage) shows the same ledger in a browser, for the same window as
-`citizen usage --json`.
+The [Studio](studio.md#the-pages) reads the same ledger for its Roles and Workflows pages; its
+Sessions page prices each call from the transcripts themselves.
 
 ## Machine-readable reports
 
