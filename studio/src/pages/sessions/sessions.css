@@ -1,0 +1,12 @@
+/* The Sessions charts: grey under the 160k line, warning between the lines, danger past 400k. */
+.sessions-chart { display: block; min-width: 560px; color: var(--studio-ink-primary); }
+.sessions-chart-scroll { max-width: 100%; overflow-x: auto; }
+.sessions-bar { fill: var(--studio-neutral-mark); }
+.sessions-bar[data-band="warn"] { fill: var(--studio-warning-mark); }
+.sessions-bar[data-band="limit"] { fill: var(--studio-danger-mark); }
+.sessions-line line { stroke: var(--studio-ink-primary); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.sessions-line text,
+.sessions-event text { fill: var(--studio-ink-primary); font-size: 11px; font-weight: 600; }
+.sessions-event line { stroke: var(--studio-primary); stroke-width: 1.5; }
+.sessions-axis { fill: var(--studio-ink-secondary); font-size: 11px; }
+.sessions-figures { border-top: var(--studio-border-width) solid var(--studio-border-default); padding-top: var(--studio-space-3); }
