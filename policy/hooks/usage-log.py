@@ -1807,6 +1807,11 @@ def worker_rows(cutoff=0.0):
             row[name] = usage.get(name)
         parts = worker_parts(usage, path.parent / "stdout.log") \
             if row["runtime"] == "claude-code" else {}
+        # A breakdown short of a total the run reported would price less than the run spent.
+        # It may exceed one, by a helper model's tokens, so only a shortfall drops it.
+        if any(isinstance(row[name], int) and sum(part[name] for part in parts.values()) < row[name]
+               for name, _ in FIELDS):
+            parts = {}
         if parts:
             # The breakdown is the whole bill: the envelope's own totals leave out a helper model's
             # tokens, so the row's totals are the breakdown's sums and the two always agree.
@@ -1865,9 +1870,9 @@ def worker_parts(usage, envelope):
         part = {}
         for field, key in MODEL_USAGE_FIELDS:
             value = counts.get(key)
-            if isinstance(value, bool) or not isinstance(value, int):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 return {}
-            part[field] = max(value, 0)
+            part[field] = value
         parts[name] = part
     writers = [name for name, part in parts.items() if part["cache_write"]]
     if writers:

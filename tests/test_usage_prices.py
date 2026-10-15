@@ -519,6 +519,20 @@ class WorkerAliasTests(unittest.TestCase):
                                  "cache_write_5m": 0, "cache_write_1h": 8, "by_model": both})
         self.assertNotIn("by_model", row)
 
+    def test_a_negative_count_leaves_the_row_unpriced_rather_than_free(self):
+        row = self.worker(usage={"input": 1, "output": 2, "cache_read": 3, "cache_write": 0,
+                                 "by_model": {"claude-opus-5-5": self.model_usage(1, -2, 3, 0)}})
+        self.assertNotIn("by_model", row)
+        self.assertIsNone(harness.row_cost(row, PRICES["models"]))
+
+    def test_a_breakdown_short_of_the_reported_totals_is_not_priced(self):
+        """A map below the run's own totals would charge less than the run spent."""
+        row = self.worker(usage={"input": 44, "output": 25258, "cache_read": 0, "cache_write": 0,
+                                 "by_model": {"claude-opus-5-5": self.model_usage(44, 100, 0, 0)}})
+        self.assertNotIn("by_model", row)
+        self.assertEqual(row["output"], 25258)
+        self.assertIsNone(harness.row_cost(row, PRICES["models"]))
+
     def test_a_codex_worker_keeps_the_id_it_already_records(self):
         row = self.worker(usage={"input": 9, "output": 250, "cache_read": 4},
                           envelope={"modelUsage": {"other-model": self.model_usage(1, 1, 1, 1)}},
