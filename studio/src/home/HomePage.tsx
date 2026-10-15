@@ -114,7 +114,7 @@ export function HomePage() {
   const home = useQuery(homeQuery);
   const location = useLocation();
   useEffect(() => {
-    // A queue item's link to `/home#drift` lands on the section once it has rendered.
+    // A link to `/home#drift` lands on the section once it has rendered.
     if (location.hash && home.data) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
   }, [location.hash, home.data]);
   return <Stack gap="lg">

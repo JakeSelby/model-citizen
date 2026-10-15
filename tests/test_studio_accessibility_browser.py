@@ -33,10 +33,11 @@ ROUTES = (
 FIXTURES = browser_support.REPO / "studio" / "tests" / "fixtures"
 # Report routes in their populated state, served from the committed fixtures the frontend unit
 # tests read, so charts, tables and legends are audited and not only the empty states.
+# Sessions reads seeded transcripts from the test home instead (`_seed_transcripts`).
 POPULATED = ("/evals/trends", "/harness/rules", "/sessions")
 POPULATE = """
 (() => {
-  const fixtures = { trends: %s, rules: %s, spend: %s };
+  const fixtures = { trends: %s, rules: %s };
   const original = globalThis.fetch.bind(globalThis);
   const reply = (body) => Promise.resolve(new Response(JSON.stringify(body), {
     status: 200, headers: { 'Content-Type': 'application/json' } }));
@@ -44,10 +45,6 @@ POPULATE = """
     const url = new URL(typeof input === 'string' ? input : input.url, location.href).pathname;
     if (url === '/api/reports/trends') return reply(fixtures.trends);
     if (url === '/api/rules/health') return reply(fixtures.rules);
-    if (url === '/api/reports/spend') {
-      const by = JSON.parse(init.body || '{}').by;
-      return reply(fixtures.spend[by] || fixtures.spend.session);
-    }
     return original(input, init);
   };
 })();
@@ -367,7 +364,26 @@ class StudioAccessibilityBrowserTests(unittest.TestCase):
             return (FIXTURES / name).read_text(encoding="utf-8")
         self.devtools.call("Page.enable")
         self.devtools.call("Page.addScriptToEvaluateOnNewDocument", {"source": POPULATE % (
-            fixture("trends.json"), fixture("rule-health.json"), fixture("spend.json"))})
+            fixture("trends.json"), fixture("rule-health.json"))})
+        self._seed_transcripts()
+
+    def _seed_transcripts(self) -> None:
+        """Two transcripts from the Sessions unit tests' builder, moved to today and indexed
+        here, so Sessions answers populated from its cache instead of "still indexing"."""
+        import datetime
+
+        import test_studio_sessions as sessions_fixture
+        from harness_core.studio import periods, transcripts
+
+        shift = datetime.datetime.now(datetime.timezone.utc) - sessions_fixture.NOW
+        project = self.home / ".claude" / "projects" / "-a11y-proj"
+        project.mkdir(parents=True, exist_ok=True)
+        for name in ("a11y-busy-one", "a11y-busy-two"):
+            lines = [json.dumps(dict(entry, timestamp=(periods.parse_ts(entry["timestamp"]) + shift)
+                                     .strftime("%Y-%m-%dT%H:%M:%S.000Z")))
+                     for entry in sessions_fixture.busy_session()]
+            (project / (name + ".jsonl")).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.assertEqual(len(transcripts.sessions(self.home)), 2)
 
     def _install_stubs(self, revision: str = "") -> None:
         # Installed into the open page, which hash routing keeps: the hook-matrix fixture is larger

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
-"""Home item: projection drift, as `GET /api/overview` reports it. The drift lines show on Home
-itself, with the governed repair command, so the item links there. Drift the overview could not
-read is this source's error, never an empty queue."""
+"""Home item: projection drift, as `GET /api/overview` reports it. The item links to the governed
+sync review on Changes, where the repair is previewed before it is applied. Drift the overview
+could not read is this source's error, never an empty queue."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +11,7 @@ from .. import home as studio_home
 from ..attention import register_attention
 
 NAME = "drift"
-HREF = "/home#drift"
+HREF = "/changes#governed-sync"
 
 
 def items(block: Mapping[str, Any]) -> List[Dict[str, Any]]:

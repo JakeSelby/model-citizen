@@ -33,7 +33,7 @@ const REPORT: HomeReport = {
     items: [
       item("context:over-limit", "high", "/sessions", "See sessions"),
       item("hooks:grade-bash", "medium", "/harness/hooks/grade-bash", "Check hook"),
-      item("drift:projection", "medium", "/home#drift", "See drift"),
+      item("drift:projection", "medium", "/changes#governed-sync", "See drift"),
       item("drafts:tidy", "medium", "/changes?draft=tidy", "Review draft"),
       item("rules:read-narrowly", "low", "/harness/rules", "Review rule"),
     ],

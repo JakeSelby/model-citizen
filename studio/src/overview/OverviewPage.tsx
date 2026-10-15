@@ -58,14 +58,14 @@ function runTone(status: string) {
   return status === "succeeded" ? "success" : status === "failed" ? "danger" : "neutral";
 }
 
-export function DeterministicOverview({ overview, children }: { overview: Overview; children?: ReactNode }) {
+/** The installed version, doctor checks, drift and release line: shown on Hub and on Baseline. */
+export function SystemSummary({ overview }: { overview: Overview }) {
   const summary = systemSummary(overview);
   const installed = overview.installed.version ? `v${overview.installed.version}` : "Unavailable";
   const attention = overview.doctor.checks.filter((check) => check.status === "attention");
-  const informational = overview.doctor.checks.filter((check) => check.status !== "attention");
   const driftTone = overview.drift.status === "drift" ? "warning" : overview.drift.status === "current" ? "success" : "danger";
   const driftLabel = overview.drift.status === "drift" ? `${overview.drift.items.length} changed` : overview.drift.status === "current" ? "In sync" : "Unavailable";
-  return <div className="hub">
+  return (
     <section aria-labelledby="installed-system-title" className="system-summary">
       <dl className="number-strip">
         <div className="strip-item">
@@ -94,6 +94,16 @@ export function DeterministicOverview({ overview, children }: { overview: Overvi
         {overview.release.changelog_url && <Anchor href={overview.release.changelog_url} size="sm" target="_blank" rel="noreferrer">Read changelog</Anchor>}
       </div>
     </section>
+  );
+}
+
+export function DeterministicOverview({ overview, children }: { overview: Overview; children?: ReactNode }) {
+  const attention = overview.doctor.checks.filter((check) => check.status === "attention");
+  const informational = overview.doctor.checks.filter((check) => check.status !== "attention");
+  const driftTone = overview.drift.status === "drift" ? "warning" : overview.drift.status === "current" ? "success" : "danger";
+  const driftLabel = overview.drift.status === "drift" ? `${overview.drift.items.length} changed` : overview.drift.status === "current" ? "In sync" : "Unavailable";
+  return <div className="hub">
+    <SystemSummary overview={overview} />
 
     <section aria-labelledby="doctor-checks-title" className="hub-section">
       <Group gap="sm"><Title id="doctor-checks-title" order={2}>Doctor checks</Title><StatusBadge>{overview.doctor.checks.length} checks</StatusBadge></Group>

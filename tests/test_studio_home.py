@@ -175,7 +175,7 @@ class DriftSourceTests(HomeCase):
     def test_drift_is_one_item_linked_to_the_drift_on_home(self):
         overview.install(drift_overview("drift", ["~/.claude/CLAUDE.md differs", "rules/x.md missing"]))
         found = self.items("drift")
-        self.assertEqual([(i["id"], i["action"]["href"]) for i in found], [("drift:projection", "/home#drift")])
+        self.assertEqual([(i["id"], i["action"]["href"]) for i in found], [("drift:projection", "/changes#governed-sync")])
         self.assertIn("2 projected files", found[0]["title"])
         self.assertEqual(studio_home.report(self.home.root)["drift"]["items"][1], "rules/x.md missing")
 
@@ -258,7 +258,9 @@ class DigestAndCapTests(HomeCase):
         queue = result["queue"]
         self.assertEqual(len(queue["items"]), 5)
         self.assertEqual(queue["total"], 2 + 3 + 1 + 1 + 1)
-        self.assertEqual(queue["sources"], dict.fromkeys(SOURCES, "ok"))
+        # Phase C registers its own sources (routines, evals) alongside these; none may fail.
+        self.assertLessEqual(set(SOURCES), set(queue["sources"]))
+        self.assertEqual(set(queue["sources"].values()), {"ok"})
         self.assertEqual(queue["items"][0]["id"], "context:over-limit")
         for item in queue["items"]:
             self.assertEqual(set(item["action"]), {"label", "href"})

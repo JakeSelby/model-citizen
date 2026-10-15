@@ -7,6 +7,8 @@ import { Link, useLocation } from "react-router-dom";
 
 import { EvidenceState } from "../components/StudioKit";
 import { FirstRunPage } from "../firstrun/FirstRunPage";
+import { loadOverview } from "../overview/api";
+import { SystemSummary } from "../overview/OverviewPage";
 import "../harness/harness.css";
 import { baselineQuery, recordBaseline } from "./api";
 import {
@@ -130,13 +132,14 @@ export function FirstRunLink({ configPresent }: { configPresent: boolean }) {
 }
 
 /** The page body for a loaded baseline. Kept free of hooks so tests render it directly. */
-export function BaselineView({ data, label, onLabel, onRecord, recording = false, error = "" }: {
+export function BaselineView({ data, label, onLabel, onRecord, recording = false, error = "", installed }: {
   data: BaselineResponse;
   label: string;
   onLabel: (label: string) => void;
   onRecord: () => void;
   recording?: boolean;
   error?: string;
+  installed?: ReactNode;
 }) {
   return <Stack gap="lg">
     <div>
@@ -147,6 +150,10 @@ export function BaselineView({ data, label, onLabel, onRecord, recording = false
       </Text>
     </div>
     {!data.current.config_present && <FirstRunLink configPresent={false} />}
+    {installed && <Section label="What you have now" title="What you have now"
+      lead="The installed harness, its doctor checks and projection drift, read as citizen doctor reads them.">
+      {installed}
+    </Section>}
     <CurrentSetup current={data.current} />
     <Section label="Your baselines" title="Your baselines" lead="Each baseline holds the config and plugins it saw.">
       <RecordForm label={label} onLabel={onLabel} onRecord={onRecord} recording={recording} error={error} command={data.commands.record} />
@@ -183,5 +190,13 @@ export function BaselinePage() {
   if (query.isPending) return <EvidenceState kind="loading" title="Reading what you have">Config and plugins are read from this machine.</EvidenceState>;
   if (query.isError) return <EvidenceState kind="error" title="Baseline could not be read">{query.error.message}</EvidenceState>;
   return <BaselineView data={query.data} label={label} onLabel={setLabel} onRecord={() => record.mutate()}
-    recording={record.isPending} error={record.error?.message ?? ""} />;
+    recording={record.isPending} error={record.error?.message ?? ""} installed={<InstalledSystem />} />;
+}
+
+/** Hub's installed-system summary, read from the same overview the Hub reads. */
+function InstalledSystem() {
+  const overview = useQuery({ queryKey: ["overview"], queryFn: loadOverview });
+  if (overview.isPending) return <EvidenceState kind="loading" title="Reading the installed harness">The same local sources as citizen doctor, diff and catalog.</EvidenceState>;
+  if (overview.isError) return <EvidenceState kind="error" title="Installed system unavailable">{overview.error.message}</EvidenceState>;
+  return <SystemSummary overview={overview.data} />;
 }

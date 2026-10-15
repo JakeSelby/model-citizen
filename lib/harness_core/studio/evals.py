@@ -19,6 +19,7 @@ and `citizen evals` both call it, so the two cannot drift.
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import re
 import statistics
 import urllib.parse
@@ -223,7 +224,9 @@ def _context_calls(home: Path, days: int,
     stays after it.
     """
     try:
-        from . import transcripts  # type: ignore[attr-defined]
+        # Through sys.modules, not the package attribute, so a missing index reads as missing
+        # even after another module imported it.
+        transcripts = importlib.import_module(__package__ + ".transcripts")
     except ImportError:
         return None
     snap = transcripts.snapshot(home, days=days, now=now)

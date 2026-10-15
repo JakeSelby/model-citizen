@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""The operational look as rendered: shell geometry, compact Hub rows and no boxed sections."""
+"""The operational look as rendered: shell geometry, compact Home rows and no boxed sections."""
 from __future__ import annotations
 
+import datetime
 import json
 import unittest
 
@@ -22,16 +23,19 @@ SHELL = """JSON.stringify((() => {
     toolsOverflow: [...header.children].some(child => child.getBoundingClientRect().bottom > header.getBoundingClientRect().bottom + 0.5)
       || [...header.querySelectorAll('*')].some(node => node.getBoundingClientRect().right > header.getBoundingClientRect().right + 0.5) };
 })())"""
-HUB_ROWS = """JSON.stringify((() => {
-  const rows = [...document.querySelectorAll('.report-row, .doctor-row')];
-  const mono = [...document.querySelectorAll('.hub *')].filter(node => node.childNodes.length
+HOME_ROWS = """JSON.stringify((() => {
+  const rows = [...document.querySelectorAll('tr[data-item-id]')];
+  const figures = [...document.querySelectorAll('.home-figure')];
+  const mono = [...document.querySelectorAll('main *')].filter(node => node.childNodes.length
       && [...node.childNodes].some(child => child.nodeType === 3 && child.textContent.trim())
       && getComputedStyle(node).fontFamily.startsWith('"JetBrains Mono"'))
-    .filter(node => !node.closest('code, pre, .run-id, .code-view'))
+    .filter(node => !node.closest('code, pre, .run-id, .code-view, .page-command'))
     .map(node => node.tagName + '.' + node.className);
-  return { reports: [...document.querySelectorAll('.report-row')].map(row => row.getBoundingClientRect().height),
-    sizes: [...new Set(rows.map(row => getComputedStyle(row).fontSize))], mono,
-    ids: [...document.querySelectorAll('.run-id, .page-command')].every(node => getComputedStyle(node).fontFamily.startsWith('"JetBrains Mono"')) };
+  return { rows: rows.map(row => row.getBoundingClientRect().height),
+    sizes: [...new Set(rows.map(row => getComputedStyle(row.querySelector('td:nth-child(2) p') || row).fontSize))],
+    figureTops: [...new Set(figures.map(figure => Math.round(figure.getBoundingClientRect().top)))],
+    figures: figures.length, mono,
+    ids: [...document.querySelectorAll('.page-command')].every(node => getComputedStyle(node).fontFamily.startsWith('"JetBrains Mono"')) };
 })())"""
 BOXED = ("JSON.stringify([...document.querySelectorAll('main [data-with-border], main .mantine-Card-root')]"
          ".map(node => node.className.toString()))")
@@ -49,6 +53,7 @@ class OperationalLookBrowserTests(unittest.TestCase):
     _wait = a11y.StudioAccessibilityBrowserTests._wait
     _visit = a11y.StudioAccessibilityBrowserTests._visit
     _populate = a11y.StudioAccessibilityBrowserTests._populate
+    _seed_transcripts = a11y.StudioAccessibilityBrowserTests._seed_transcripts
     _install_stubs = a11y.StudioAccessibilityBrowserTests._install_stubs
 
     def _go(self, route: str) -> None:
@@ -79,18 +84,31 @@ class OperationalLookBrowserTests(unittest.TestCase):
                    "the shell did not switch to the dark scheme")
         self.assertEqual(json.loads(self.devtools.evaluate(SHELL))["borderColor"], "rgb(44, 47, 52)")
 
-    def test_hub_rows_are_compact_and_monospace_only_for_ids_and_commands(self):
+    def test_home_rows_are_compact_and_monospace_only_for_ids_and_commands(self):
+        from test_studio_surface_hooks import decision
+        from harness_core.studio import periods
+
+        # grade-bash fired ten days ago and not since, so Home's queue holds a silent-hook row.
+        when = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=10)
+        log = periods.state_dir(self.home) / "decisions.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(json.dumps(decision(when, "grade-bash", "allow")) + "\n", encoding="utf-8")
         self._open(1440, "light")
         self._go("/home")
-        self._wait("document.querySelector('.report-row') !== null", "the Hub report rows did not render")
-        hub = json.loads(self.devtools.evaluate(HUB_ROWS))
-        self.assertTrue(hub["reports"])
-        for height in hub["reports"]:
+        # The first Home read runs the rule-health engines of the fixture checkout.
+        self._wait("document.querySelector('tr[data-item-id]') !== null", "Home's queue rows did not render",
+                   seconds=180.0)
+        home = json.loads(self.devtools.evaluate(HOME_ROWS))
+        self.assertTrue(home["rows"])
+        for height in home["rows"]:
             self.assertGreaterEqual(height, 26)
-            self.assertLessEqual(height, 36)
-        self.assertEqual(hub["sizes"], ["13px"])
-        self.assertEqual(hub["mono"], [])
-        self.assertTrue(hub["ids"])
+            self.assertLessEqual(height, 96)
+        self.assertEqual(home["sizes"], ["13px"])
+        # The digest is one hairline strip of figures, never a stack of cards.
+        self.assertGreater(home["figures"], 1)
+        self.assertEqual(len(home["figureTops"]), 1)
+        self.assertEqual(home["mono"], [])
+        self.assertTrue(home["ids"])
 
     def test_no_restyled_page_draws_a_bordered_card_or_paper(self):
         self._populate()

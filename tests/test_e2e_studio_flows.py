@@ -162,8 +162,8 @@ class StudioEndToEndFlows(support.StudioE2E):
     def test_open_the_studio_and_reach_every_area(self):
         """Flow 1: the launcher's session opens Home, and every page of the nav renders."""
         self.open()
-        self.wait("document.querySelector('.system-summary') !== null", "Home did not load")
-        self.assertIn("Installed system", self.js("document.querySelector('main').textContent"))
+        self.wait("document.querySelector('.home-digest') !== null", "Home did not load",
+                  seconds=180)
         # The detached Studio resolves the model clients to the stubs, so the model seal
         # watches the processes the Studio itself starts.
         status, overview = self.api("GET", "/api/overview")
@@ -182,7 +182,7 @@ class StudioEndToEndFlows(support.StudioE2E):
                  ("#/changes", "Changes", "document.querySelector('input') !== null"),
                  ("#/evals", "Evals", "document.querySelector('.experiment-launch') !== null"),
                  ("#/evals/trends", "Evals", "document.querySelector('h1') !== null"),
-                 ("#/baseline", "Baseline", "document.querySelector('h1') !== null"))
+                 ("#/baseline", "Baseline", "document.querySelector('.system-summary') !== null"))
         for route, label, ready in areas:
             with self.subTest(area=route):
                 self.js("location.hash = %s" % json.dumps(route))
@@ -190,6 +190,8 @@ class StudioEndToEndFlows(support.StudioE2E):
                           % json.dumps(label), label + " was not the current area")
                 self.wait(ready, route + " did not render", seconds=60)
                 self.assertEqual(self.js("location.hash"), route)
+        # Hub's installed-system summary lives on Baseline, under "What you have now".
+        self.assertIn("Installed system", self.js("document.querySelector('main').textContent"))
 
     def test_every_old_route_redirects_to_its_new_page(self):
         """#1320: each route of the old nav lands on its regrouped page, query and run id kept."""
@@ -492,7 +494,8 @@ class SealTests(support.StudioE2E):
 
     def test_the_network_seal_fails_on_a_request_outside_the_loopback_origin(self):
         self.open()
-        self.wait("document.querySelector('.system-summary') !== null", "Home did not load")
+        self.wait("document.querySelector('.home-digest') !== null", "Home did not load",
+                  seconds=180)
         self.assert_no_network()
         # The browser blocks the foreign navigation itself, so nothing leaves this machine, yet
         # the request is still announced, as a real one would be.

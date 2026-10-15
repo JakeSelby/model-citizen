@@ -391,7 +391,9 @@ refusal is reported, never worked around.
 
 ## Baseline
 
-Baseline (`/#/baseline`) starts from what you have rather than a preset. It shows the stances,
+Baseline (`/#/baseline`) starts from what you have rather than a preset. **What you have now**
+shows the installed version, doctor checks, projection drift and release line, from
+`GET /api/overview` as the Hub read them. Below it are the stances,
 rule switches, settings and enabled third-party plugins in effect now, read from `config.json` and
 Claude Code's `enabledPlugins`, and the baselines recorded so far. **Record baseline** appends one
 row, holding the redacted config and the plugins it saw, to `baselines.jsonl` in the Studio state

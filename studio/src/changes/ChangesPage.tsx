@@ -1,6 +1,6 @@
 import { Button, Group, Paper, Stack, Text, Title } from "@mantine/core";
-import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useSearchParams } from "react-router-dom";
 
 import { CommandChip, DataTable, EvidenceState, StatusBadge } from "../components/StudioKit";
 import { ConfigurePage } from "../configure/ConfigurePage";
@@ -154,6 +154,11 @@ export function ChangesPage() {
   const [undo, setUndo] = useState("");
   const [notice, setNotice] = useState<RollbackNotice | null>(null);
   const current = drafts.drafts.find((draft) => draft.name === selected) ?? null;
+  const location = useLocation();
+  useEffect(() => {
+    // A link to `/changes#governed-sync` (Home's drift item) lands on that section.
+    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+  }, [location.hash]);
 
   function select(name: string) {
     const next = new URLSearchParams(params);

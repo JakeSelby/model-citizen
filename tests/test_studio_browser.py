@@ -290,12 +290,12 @@ class StudioBrowserTests(unittest.TestCase):
             "focused:document.activeElement?.id,"
             "scheme:document.documentElement.dataset.mantineColorScheme,"
             "canvas:getComputedStyle(document.body).backgroundColor,"
-            "buttonForeground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).color,"
-            "buttonBackground:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor),"
+            "buttonForeground:getComputedStyle(document.querySelector('.nav-link[aria-current=page]')).color,"
+            "buttonBackground:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.nav-link[aria-current=page]')).backgroundColor),"
             "direction:getComputedStyle(document.querySelector('.studio-shell')).flexDirection,"
             "navbarWidth:document.querySelector('.studio-navbar').getBoundingClientRect().width,"
-            "stylePadding:getComputedStyle(document.querySelector('.overview-card')).paddingTop,"
-            "styleAttribute:document.querySelector('.overview-card').getAttribute('style'),"
+            "stylePadding:getComputedStyle(document.querySelector('#main-content > .mantine-Stack-root')).rowGap,"
+            "styleAttribute:document.querySelector('#main-content > .mantine-Stack-root').getAttribute('style'),"
             "nonce:document.querySelector('style[data-mantine-styles]')?.nonce,"
             "declaredNonce:document.querySelector('meta[name=studio-style-nonce]')?.content,"
             "violations:globalThis.__studioCspViolations ?? ['listener-missing']"
@@ -304,7 +304,7 @@ class StudioBrowserTests(unittest.TestCase):
         self.assertEqual(before, "#/home")
         self.assertEqual(rendered["hash"], "#/home")
         self.assertEqual(rendered["title"], "Home · Model Citizen Studio")
-        self.assertEqual(rendered["heading"], "Your harness at a glance.")
+        self.assertEqual(rendered["heading"], "Home")
         self.assertEqual(rendered["active"], "Home")
         self.assertEqual(rendered["navLabel"], "Studio")
         self.assertEqual(rendered["focused"], "main-content")
@@ -315,8 +315,9 @@ class StudioBrowserTests(unittest.TestCase):
         # One column on a phone: the navbar stacks above the header at the full viewport width.
         self.assertEqual(rendered["direction"], "column")
         self.assertEqual(rendered["navbarWidth"], 390)
-        self.assertEqual(rendered["stylePadding"], "12px")
-        self.assertIn("padding-block:", rendered["styleAttribute"])
+        # Home's page stack takes its gap from a Mantine style attribute the CSP must allow.
+        self.assertEqual(rendered["stylePadding"], "16px")
+        self.assertIn("--stack-gap:", rendered["styleAttribute"])
         self.assertEqual(rendered["nonce"], rendered["declaredNonce"])
         self.assertEqual(rendered["violations"], [])
 
@@ -332,8 +333,8 @@ class StudioBrowserTests(unittest.TestCase):
             time.sleep(0.05)
         light = json.loads(self.devtools.evaluate("JSON.stringify({"
             "canvas:getComputedStyle(document.body).backgroundColor,"
-            "foreground:getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).color,"
-            "background:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.page-heading .mantine-Button-root')).backgroundColor)"
+            "foreground:getComputedStyle(document.querySelector('.nav-link[aria-current=page]')).color,"
+            "background:((c) => c === 'rgba(0, 0, 0, 0)' ? getComputedStyle(document.body).backgroundColor : c)(getComputedStyle(document.querySelector('.nav-link[aria-current=page]')).backgroundColor)"
             "})"))
         self.assertEqual(scheme, "light")
         self.assertEqual(light["canvas"], "rgb(248, 249, 250)")
