@@ -70,6 +70,10 @@ def usage(work, run_dir):
 
     `--no-session-persistence` leaves no transcript to read, so the envelope is the only source;
     it reports no tool-call count, which the record therefore leaves unknown.
+
+    `by_model` is the envelope's `modelUsage`, keyed by the full id each model ran as. The worker
+    is launched by a model alias, which resolves to whatever the client's current model is, so
+    only this map can price the run; the usage sweep reads it, see `worker_parts` there.
     """
     try:
         envelope = json.loads((run_dir / "stdout.log").read_text())
@@ -80,8 +84,20 @@ def usage(work, run_dir):
         return {}
     fields = {"input": "input_tokens", "output": "output_tokens",
               "cache_read": "cache_read_input_tokens", "cache_write": "cache_creation_input_tokens"}
-    return {name: int(counts[key]) for name, key in fields.items()
-            if isinstance(counts.get(key), int)}
+    out = {name: int(counts[key]) for name, key in fields.items()
+           if isinstance(counts.get(key), int)}
+    # The TTL split of the cache writes, which `modelUsage` does not carry. A `-p` run writes at
+    # the 1-hour rate, so pricing every write at the 5-minute one would understate the run.
+    split = counts.get("cache_creation")
+    if isinstance(split, dict):
+        for name, key in (("cache_write_5m", "ephemeral_5m_input_tokens"),
+                          ("cache_write_1h", "ephemeral_1h_input_tokens")):
+            if isinstance(split.get(key), int):
+                out[name] = split[key]
+    models = envelope.get("modelUsage")
+    if isinstance(models, dict) and models:
+        out["by_model"] = models
+    return out
 
 
 def result(work, run_dir):
