@@ -63,6 +63,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["/evals/trends", "citizen reports trends"],
   ["/evals", "citizen runs history"],
   ["/baseline", "citizen draft first-run"],
+  ["/routines", "citizen studio routine list"],
 ];
 
 export function pageCommand(pathname: string): string {

@@ -177,7 +177,8 @@ class StudioEndToEndFlows(support.StudioE2E):
                  ("#/harness/sources", "Sources", _tablist("Sources")),
                  ("#/harness/sources/modules", "Sources",
                   "document.querySelectorAll('.library-module').length > 0"),
-                 ("#/routines", "Routines", "__has('being rebuilt in story #1335')"),
+                 ("#/routines", "Routines",
+                  "document.querySelector('table[aria-label=\"Routines\"]') !== null"),
                  ("#/changes", "Changes", "document.querySelector('input') !== null"),
                  ("#/evals", "Evals", "document.querySelector('.experiment-launch') !== null"),
                  ("#/evals/trends", "Evals", "document.querySelector('h1') !== null"),
@@ -563,6 +564,42 @@ class HookDetailFlow(support.StudioE2E):
         self.assertEqual((status, sum(day["block"] for day in detail["by_day"])), (200, 1))
         status, _missing = self.api("GET", "/api/harness/hook?name=no-such-hook")
         self.assertEqual(status, 404)
+
+
+# Phase C — Routines (#1335)
+class RoutinesFlow(support.StudioE2E):
+    """Routines lists both routines, runs one from the page into its history, and refuses an
+    install from this fixture home before anyone is asked: no launchd agent is ever written."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def test_run_a_routine_from_the_page_and_see_it_in_history(self):
+        self.open("#/routines")
+        table = "document.querySelector('table[aria-label=\"Routines\"]')"
+        self.wait(table + " !== null", "the Routines table did not render", seconds=60)
+        self.assertEqual(self.js("[...%s.querySelectorAll('tr[data-routine]')].map(r => r.dataset.routine)"
+                                 % table), ["hook-liveness", "rule-adherence"])
+        self.assertEqual(self.js("[...document.querySelectorAll('tr[data-routine]')]"
+                                 ".map(r => r.dataset.installed)"), ["no", "no"])
+        self.js("document.querySelector('button[aria-label=\"Run Hook liveness now\"]').click()")
+        history = "document.querySelector('table[aria-label=\"Run history: Hook liveness, newest first\"]')"
+        self.wait(history + " !== null", "the run did not reach the history", seconds=60)
+        self.assertIn("From the Studio", self.js(history + ".textContent"))
+        status, listing = self.api("GET", "/api/routines")
+        self.assertEqual(status, 200)
+        self.assertEqual([run["trigger"] for run in listing["history"]["hook-liveness"]], ["studio"])
+        status, refused = self.api("POST", "/api/routines/install",
+                                   {"name": "hook-liveness", "confirm": "hook-liveness"})
+        self.assertEqual((status, refused["error"]), (409, "launchd_refused"))
+        self.assertFalse((self.home / "Library" / "LaunchAgents").exists())
+        shown = self.cli_json("studio", "routine", "list")
+        self.assertEqual(shown["history"]["hook-liveness"][0]["run_id"],
+                         listing["history"]["hook-liveness"][0]["run_id"])
+# End Phase C — Routines.
 
 
 if __name__ == "__main__":
