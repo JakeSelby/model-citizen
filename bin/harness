@@ -43,6 +43,7 @@ guidance, and reports drift. Python 3.9+ with a bundled style-preserving TOML pa
     citizen studio   [status|stop] [--no-open] [--port PORT] [--detach] [--json]
     citizen harness periods --surface NAME [--days N] [--json]
     citizen harness hook NAME [--days N] [--json]
+    citizen baseline show | record [--label TEXT] [--json]
     citizen activity [--session ID] [--repository REPO] [--hook HOOK] [--outcome STATE] [--json]
     citizen --version
 
@@ -7614,6 +7615,25 @@ def cmd_harness_hook(args: argparse.Namespace) -> int:
     return 0 if status == 200 else 2
 
 
+# Phase C — Baseline (#1334)
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """`GET /api/baseline` and `POST /api/baseline/record`, through their own handlers."""
+    if args.baseline_action == "record":
+        method, path, request = "POST", "/api/baseline/record", {"label": args.label}
+    else:
+        method, path, request = "GET", "/api/baseline", None
+    try:
+        status, result = studio_headless.call_route(REPO, state_dir() / "studio", method, path,
+                                                    request)
+    except OSError:
+        status, result = 503, {"error": "state_unavailable"}
+    except (ValueError, RuntimeError):
+        status, result = 500, {"error": "internal_error"}
+    print(json.dumps(result, sort_keys=True) if args.json else json.dumps(result, indent=2))
+    return 0 if status == 200 else (1 if status >= 500 else 2)
+# End Phase C — Baseline
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8215,6 +8235,20 @@ def build_parser() -> argparse.ArgumentParser:
                              % studio_periods.MAX_DAYS)
     hook_parser.add_argument("--json", action="store_true")
     hook_parser.set_defaults(func=cmd_harness_hook)
+
+    # Phase C — Baseline (#1334)
+    p = sub.add_parser("baseline", help="show what you have now, or record it as a baseline")
+    baseline_sub = p.add_subparsers(dest="baseline_action", required=True)
+    show_parser = baseline_sub.add_parser(
+        "show", help="the current config, stances and plugins, and the recorded baselines")
+    show_parser.add_argument("--json", action="store_true")
+    show_parser.set_defaults(func=cmd_baseline)
+    record_parser = baseline_sub.add_parser(
+        "record", help="record the current config and plugins as a baseline period")
+    record_parser.add_argument("--label", default="", help="a short name for this baseline")
+    record_parser.add_argument("--json", action="store_true")
+    record_parser.set_defaults(func=cmd_baseline)
+    # End Phase C — Baseline
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

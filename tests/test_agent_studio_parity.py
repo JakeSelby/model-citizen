@@ -106,6 +106,12 @@ def cases(draft, revision, files):
         ("GET", "/api/harness/periods"): (
             ["harness", "periods", "--surface", "stances", "--days", "30"],
             {"surface": "stances", "days": "30"}, "same"),
+        # Phase C — Baseline
+        ("GET", "/api/baseline"): (["baseline", "show"], None, "same"),
+        # Each side records its own baseline; both write only Studio state.
+        ("POST", "/api/baseline/record"): (["baseline", "record", "--label", "parity"],
+                                           {"label": "parity"}, "same"),
+        # End Phase C — Baseline
         # Orchestrator
         ("GET", "/api/harness/hook"): (
             ["harness", "hook", "grade-bash", "--days", "30"],

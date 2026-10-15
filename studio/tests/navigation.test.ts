@@ -98,7 +98,7 @@ test("each page carries the CLI command of the page it re-homes", () => {
   assert.equal(pageCommand("/changes"), "citizen draft list");
   assert.equal(pageCommand("/evals"), "citizen runs history");
   assert.equal(pageCommand("/evals/trends"), "citizen reports trends");
-  assert.equal(pageCommand("/baseline"), "citizen draft first-run");
+  assert.equal(pageCommand("/baseline"), "citizen baseline show");
   // The command follows the page, not the old path.
   for (const [from] of LEGACY_REDIRECTS) {
     const target = legacyTarget(from.replace(":runId", "r-1"));

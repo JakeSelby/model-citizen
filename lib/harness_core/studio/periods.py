@@ -5,7 +5,7 @@ A Harness page's Efficacy tab shows one row per item per period, so a change can
 before and an after. Nothing new is recorded for this: periods are derived at request time from
 logs the harness already writes, and every one of them is only read.
 
-A period boundary comes from one of three sources, in order of precision:
+A period boundary comes from one of four sources; the first three in order of precision:
 
 - **applies**: a completed apply in the Studio's journal (`apply.journal_path`) whose config
   commands name the item's config key. Its time is exact, its before value is read from the
@@ -16,6 +16,9 @@ A period boundary comes from one of three sources, in order of precision:
   stream (a row kind, local or bridge), because streams interleave. A transition A to B counts only
   when A stops appearing before B starts, within `TOLERANCE`; when both stay live it is overlap
   (concurrent profiles, a worker stamped with its start profile) and starts no period.
+- **baseline**: a baseline recorded from the Studio's Baseline page (`baselines_path`). It changes
+  no setting: it starts a period at the value its snapshot names, so later periods compare against
+  it. It is never collapsed into the boundary before it, and never explains away a usage boundary.
 
 The profile fingerprint is never a boundary: most of its changes name no setting. A surface with
 no boundary in the window returns one period per item and `NOTE`.
@@ -123,6 +126,11 @@ def state_dir(home: Path) -> Path:
 
 def config_path(home: Path) -> Path:
     return Path(home) / ".config" / "agent-harness" / "config.json"
+
+
+def baselines_path(home: Path) -> Path:
+    """The append-only record of recorded baselines (`baseline.record`)."""
+    return state_dir(home) / "studio" / "baselines.jsonl"
 
 
 def parse_ts(text: Any) -> Optional[dt.datetime]:
@@ -335,6 +343,27 @@ def config_git_boundaries(home: Path, surface: Surface, unit: str,
     return out
 
 
+def baseline_boundaries(home: Path, surface: Surface, unit: str, cutoff: dt.datetime,
+                        observations: Sequence[Observation],
+                        current: Optional[str] = None) -> List[Dict[str, Any]]:
+    """One boundary per recorded baseline in the window, at the value it saw: read from its
+    config snapshot where the surface names one, else the last value observed before it."""
+    out = []
+    for row in _jsonl(baselines_path(home), "ts"):
+        if row["_ts"] < cutoff:
+            continue
+        config = row.get("config")
+        value = None
+        if surface.config_value is not None and isinstance(config, dict):
+            value = surface.config_value(config, unit)
+        if value is None:
+            before = [o[1] for o in observations if o[0] <= row["_ts"]]
+            value = before[-1] if before else current
+        text = _text(value)
+        out.append(_boundary(row["_ts"], text, text, "baseline"))
+    return out
+
+
 def _text(value: Any) -> str:
     if value is None:
         return "(unset)"
@@ -343,16 +372,17 @@ def _text(value: Any) -> str:
 
 def merge_boundaries(named: Sequence[Dict[str, Any]],
                      observed: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Named boundaries win; a usage boundary is kept only when no named one explains it."""
+    """Named boundaries win; a usage boundary is kept only when no named one explains it. A
+    baseline explains nothing and is always kept: it starts a period without changing a value."""
     kept = list(named)
     for item in observed:
         if not any(n["to"] == item["to"] and abs(n["at"] - item["at"]) <= SAME_CHANGE
-                   for n in named):
+                   and n["source"] != "baseline" for n in named):
             kept.append(item)
     kept.sort(key=lambda b: b["at"])
     merged: List[Dict[str, Any]] = []
     for item in kept:
-        if merged and merged[-1]["to"] == item["to"]:
+        if merged and merged[-1]["to"] == item["to"] and item["source"] != "baseline":
             continue  # the same change seen twice, or two streams catching up
         merged.append(item)
     return merged
@@ -381,7 +411,9 @@ def _unit_periods(surface: Surface, unit: str, item: Mapping[str, Any],
     observations: List[Observation] = sorted(item.get("observations") or (), key=lambda o: o[0])
     observed, _overlaps = usage_boundaries(observations)
     named = (applies_boundaries(ctx.home, surface, unit, ctx.cutoff)
-             + config_git_boundaries(ctx.home, surface, unit, ctx.cutoff))
+             + config_git_boundaries(ctx.home, surface, unit, ctx.cutoff)
+             + baseline_boundaries(ctx.home, surface, unit, ctx.cutoff, observations,
+                                   item.get("current")))
     boundaries = merge_boundaries(named, observed)
     times = [o[0] for o in observations]
     current = item.get("current")
@@ -394,18 +426,20 @@ def _unit_periods(surface: Surface, unit: str, item: Mapping[str, Any],
         start = ctx.cutoff
     spans = []
     value, source = first_value, boundaries[0]["source"] if boundaries else "none"
+    starts_at_baseline = False
     for boundary in boundaries:
-        spans.append((start, boundary["at"], value, source))
+        spans.append((start, boundary["at"], value, source, starts_at_baseline))
         start, value, source = boundary["at"], boundary["to"], boundary["source"]
-    spans.append((start, None, value, source))
+        starts_at_baseline = source == "baseline"
+    spans.append((start, None, value, source, starts_at_baseline))
     out = []
-    for begin, end, value, source in spans:
+    for begin, end, value, source, at_baseline in spans:
         inside = [o for o in observations if o[0] >= begin and (end is None or o[0] < end)]
         out.append({"surface": surface.name, "unit": unit, "label": item.get("label") or unit,
                     "value": value, "start": iso(begin), "end": iso(end), "source": source,
                     "rows": len(inside), "attributable": bool(boundaries),
                     "overlaps": sum(1 for o in inside if o[1] != value),
-                    "_start": begin, "_end": end})
+                    "_start": begin, "_end": end, "_baseline": at_baseline})
     return out
 
 
@@ -450,7 +484,8 @@ def efficacy_rows(surface: str, unit: Optional[str] = None, *, days: int = 30,
                   home: Optional[Path] = None,
                   now: Optional[dt.datetime] = None) -> Dict[str, Any]:
     """The `/api/harness/periods` answer: `{surface, rows, note?}`, rows in the Studio frontend's
-    `PeriodRow` shape. A period that started under `WINDOW_DAYS` ago is still measuring."""
+    `PeriodRow` shape. A period that started under `WINDOW_DAYS` ago is still measuring; one that
+    starts at a recorded baseline carries `baseline: true`."""
     rows, ctx = _compute(surface, unit, days, Path(home) if home else default_home(), now)
     provider = _surface(surface)
     out = []
@@ -467,6 +502,8 @@ def efficacy_rows(surface: str, unit: Optional[str] = None, *, days: int = 30,
                     {"surface": surface, "item": row["unit"]})}
         if measuring:
             item["measuring_day"] = max(1, min(WINDOW_DAYS, age.days + 1))
+        if row["_baseline"]:
+            item["baseline"] = True  # this period starts at a recorded baseline
         out.append(item)
     response: Dict[str, Any] = {"surface": surface, "rows": out}
     if not any(row["attributable"] for row in rows):

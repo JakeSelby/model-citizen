@@ -34,7 +34,7 @@ const render = (element: ReturnType<typeof h>) => renderToStaticMarkup(h(Mantine
 
 test("every page names the CLI command its evidence comes from", () => {
   assert.equal(pageCommand("/home"), "citizen doctor");
-  assert.equal(pageCommand("/baseline"), "citizen draft first-run");
+  assert.equal(pageCommand("/baseline"), "citizen baseline show");
   assert.equal(pageCommand("/changes"), "citizen draft list");
   assert.equal(pageCommand("/harness/sources"), "citizen catalog --library");
   assert.equal(pageCommand("/evals"), "citizen runs history");

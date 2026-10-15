@@ -33,6 +33,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
 from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import changes, periods
+from . import baseline
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -553,6 +554,34 @@ def _harness_hook(handler: Handler, route: Route) -> None:
     route.response_schema.validate(payload)
     handler._json(200, payload)
 # End Orchestrator.
+
+
+# Phase C — Baseline (#1334). Recording writes only Studio state, never config.json, so like the
+# other state-only POSTs (UI preferences, draft create) it asks for no presence confirmation.
+BASELINE = ResponseSchema("json-object", (("schema_version", "integer"), ("current", "object"),
+                                          ("baselines", "array"), ("commands", "object")))
+BASELINE_RECORDED = ResponseSchema("json-object", (("schema_version", "integer"),
+                                                   ("baseline", "object")))
+
+
+def _baseline_read(handler: Handler, route: Route) -> None:
+    payload = baseline.read(draft_apply.home_dir())
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _baseline_record(handler: Handler, route: Route) -> None:
+    request = _required_request(handler, ("label",))
+    if request is None:
+        return
+    if not baseline.valid_label(request["label"]):
+        handler._error(400, "invalid_request")
+        return
+    payload = handler.server.mutations.call(
+        lambda: baseline.record(draft_apply.home_dir(), request["label"]))
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+# End Phase C — Baseline.
 
 
 def _configure_schema(handler: Handler, route: Route) -> None:
@@ -2695,6 +2724,12 @@ ROUTES = RouteRegistry((
           "application/json", trends.CLI_COMMAND),
     Route("GET", "/api/harness/periods", "application/json", HARNESS_PERIODS,
           _harness_periods, None, cli_command=periods.CLI_COMMAND, query=("surface", "days")),
+    # Phase C — Baseline (#1334)
+    Route("GET", "/api/baseline", "application/json", BASELINE, _baseline_read, None,
+          cli_command=baseline.CLI_COMMANDS["show"]),
+    Route("POST", "/api/baseline/record", "application/json", BASELINE_RECORDED,
+          _baseline_record, None, "application/json", baseline.CLI_COMMANDS["record"]),
+    # End Phase C — Baseline
     # Orchestrator
     Route("GET", "/api/harness/hook", "application/json", HARNESS_HOOK, _harness_hook, None,
           cli_command=("citizen", "harness", "hook", "{name}", "--days", "{days}", "--json"),

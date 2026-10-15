@@ -284,7 +284,7 @@ class StudioEndToEndFlows(support.StudioE2E):
         """Flow 6 (#997): health, draft, identity, preferences, the free check, then apply."""
         self.discard_after(FIRST_RUN_DRAFT)
         live_before = self.config_path.read_bytes()
-        self.open("#/baseline")
+        self.open("#/baseline?guide=first-run")
         self.wait("__has('From this install to an applied setup.')", "the guide did not open")
         self.click("Continue")
         self.click("Create the draft")
@@ -563,6 +563,50 @@ class HookDetailFlow(support.StudioE2E):
         self.assertEqual((status, sum(day["block"] for day in detail["by_day"])), (200, 1))
         status, _missing = self.api("GET", "/api/harness/hook?name=no-such-hook")
         self.assertEqual(status, 404)
+
+
+
+# Phase C — Baseline (AH-S382, #1334).
+class BaselineFlow(support.StudioE2E):
+    """Baseline shows what the fixture home runs, records a baseline that starts a period, and
+    keeps the guided first run one link away; recording changes no live config."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def test_record_a_baseline_from_what_you_have(self):
+        live_before = self.config_path.read_bytes()
+        self.open("#/baseline")
+        self.wait("document.querySelector('h1')?.textContent === 'Start from what you have'",
+                  "Baseline did not open", seconds=60)
+        self.wait("document.querySelector('header code')?.textContent === 'citizen baseline show'",
+                  "the header did not show citizen baseline show")
+        self.wait("__has('No baseline recorded yet')", "Baseline listed a baseline in a fresh home",
+                  seconds=60)
+        self.js("__setLabelValue('Label (optional)', 'e2e start')")
+        self.click("Record baseline")
+        recorded = "document.querySelector('table[aria-label=\"Recorded baselines, newest first\"]')"
+        self.wait("(%s)?.textContent.includes('e2e start') === true" % recorded,
+                  "the recorded baseline was not listed", seconds=60)
+        self.assertEqual(self.config_path.read_bytes(), live_before, "recording changed live config")
+        status, document = self.api("GET", "/api/baseline")
+        self.assertEqual((status, [b["label"] for b in document["baselines"]]), (200, ["e2e start"]))
+        status, answer = self.api("GET", "/api/harness/periods?surface=stances")
+        self.assertEqual(status, 200, answer)
+        self.assertTrue(any(row.get("baseline") for row in answer["rows"]),
+                        "the baseline started no period Evals can compare against")
+
+        self.js("[...document.querySelectorAll('a')]"
+                ".find(a => a.textContent === 'Open the guided first run').click()")
+        self.wait("location.hash === '#/baseline?guide=first-run'",
+                  "the first-run link did not open the guide")
+        self.wait("__has('From this install to an applied setup.')", "the guide did not open",
+                  seconds=60)
+        self.assertEqual(self.config_path.read_bytes(), live_before)
+# End Phase C — Baseline.
 
 
 if __name__ == "__main__":

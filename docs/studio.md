@@ -388,3 +388,17 @@ loop: draft, test and apply with `--json` throughout, then open the Studio with
 something. It holds the agent to the same limits as the Studio: a paid run starts only on the
 user's go for the exact preview shown, an apply only on their go for the reviewed revision, and a
 refusal is reported, never worked around.
+
+## Baseline
+
+Baseline (`/#/baseline`) starts from what you have rather than a preset. It shows the stances,
+rule switches, settings and enabled third-party plugins in effect now, read from `config.json` and
+Claude Code's `enabledPlugins`, and the baselines recorded so far. **Record baseline** appends one
+row, holding the redacted config and the plugins it saw, to `baselines.jsonl` in the Studio state
+directory. It writes nothing else, never `config.json`, so like other state-only actions it asks
+for no confirmation at the Mac. A recorded baseline starts a setting period on every Harness
+surface, and its row in `GET /api/harness/periods` carries `baseline: true`, so Evals can compare
+later periods against it. The guided first run is one link away, at `/#/baseline?guide=first-run`,
+and leads the page when there is no configuration yet. `citizen baseline show --json` and
+`citizen baseline record [--label TEXT] --json` answer through the routes' own handlers
+(`GET /api/baseline`, `POST /api/baseline/record`).

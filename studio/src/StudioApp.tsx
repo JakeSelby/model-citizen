@@ -22,6 +22,7 @@ import { TrendsPage } from "./reports/trends/TrendsPage";
 import { SpendPage } from "./spend/SpendPage";
 import { FirstRunEntry } from "./firstrun/FirstRunEntry";
 import { FirstRunPage } from "./firstrun/FirstRunPage";
+import { BaselinePage } from "./baseline/BaselinePage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
@@ -116,7 +117,7 @@ function StudioFrame() {
             <Route path="/evals" element={<EvalsPage />} />
             <Route path="/evals/runs/:runId" element={<RunDetailPage />} />
             <Route path="/evals/trends" element={<TrendsPage />} />
-            <Route path="/baseline" element={<FirstRunPage />} />
+            <Route path="/baseline" element={<BaselinePage />} />
             {/* Every old route and any unknown one: see LEGACY_REDIRECTS in navigation.ts. */}
             <Route path="*" element={<LegacyRedirect />} />
           </Routes>
