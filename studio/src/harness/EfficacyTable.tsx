@@ -1,4 +1,4 @@
-import { Anchor, Badge, Paper, Stack, Table, Text } from "@mantine/core";
+import { Anchor, Badge, Stack, Table, Text } from "@mantine/core";
 import { Link } from "react-router-dom";
 
 import "./harness.css";
@@ -31,7 +31,7 @@ export function EfficacyTable({ caption, rows, columns, itemHeading = "Item" }: 
   // Status earns its column only when some row is measuring or ran no session.
   const showStatus = rows.some((row) => statusText(row) !== "measured");
   const align = (key: string) => numeric.has(key) ? "harness-num" : "harness-nowrap";
-  return <Paper withBorder radius="md" className="harness-panel">
+  return <div className="harness-panel">
     <Table.ScrollContainer minWidth={640}
       scrollAreaProps={{ type: "auto", offsetScrollbars: false, viewportProps: { role: "region", "aria-label": caption, tabIndex: 0 } }}>
       <Table verticalSpacing="sm" aria-label={caption} className="data-table harness-table">
@@ -78,5 +78,5 @@ export function EfficacyTable({ caption, rows, columns, itemHeading = "Item" }: 
         </Table.Tbody>)}
       </Table>
     </Table.ScrollContainer>
-  </Paper>;
+  </div>;
 }

@@ -1,4 +1,4 @@
-import { Anchor, Badge, Box, Code, Group, Paper, Stack, Table, Text, Title } from "@mantine/core";
+import { Anchor, Badge, Box, Code, Group, Stack, Table, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 
@@ -121,7 +121,7 @@ export function SafetyLog({ entries }: { entries: ActivityEntry[] }) {
     <Text size="sm" c="dimmed">Blocked, asked and warned actions from the decision log, worst first.</Text>
     {entries.length === 0
       ? <EvidenceState kind="empty" title="Nothing blocked or warned">No hook refused, asked about or warned on an action in the recent log.</EvidenceState>
-      : <Paper withBorder radius="md" className="harness-panel"><Box role="region" aria-label="Safety log entries" tabIndex={0} style={{ overflowX: "auto" }}>
+      : <div className="harness-panel"><Box role="region" aria-label="Safety log entries" tabIndex={0} style={{ overflowX: "auto" }}>
         <Table verticalSpacing="xs" aria-label="Safety log, worst first" miw={640} className="data-table harness-table">
           <Table.Thead>
             <Table.Tr>
@@ -144,7 +144,7 @@ export function SafetyLog({ entries }: { entries: ActivityEntry[] }) {
             </Table.Tr>)}
           </Table.Tbody>
         </Table>
-      </Box></Paper>}
+      </Box></div>}
   </Stack>;
 }
 

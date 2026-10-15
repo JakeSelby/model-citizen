@@ -1,4 +1,4 @@
-import { Anchor, Code, Paper, Stack, Tabs, Text, Title } from "@mantine/core";
+import { Anchor, Code, Stack, Tabs, Text, Title } from "@mantine/core";
 import { useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -126,11 +126,11 @@ export function HarnessFrame({ title, question, itemNoun = "Item", metrics, fiel
           {periods.state !== "ready"
             ? <StateView state={periods} noun={itemNoun} kind="measurement periods" />
             : periods.rows.length === 0
-              ? <Paper withBorder radius="md" className="harness-panel">
+              ? <div className="harness-panel">
                 <EvidenceState kind="empty" title="No measurement periods yet">
                   Each {noun} gets a row once a session has run under its setting.
                 </EvidenceState>
-              </Paper>
+              </div>
               : <EfficacyTable caption={`${title}: efficacy by setting period`} rows={order ? order(periods.rows) : periods.rows}
                 columns={metrics ?? metricColumns(periods.rows)} itemHeading={itemNoun} />}
           {periods.state === "ready" && periods.rows.length > 0 && <Stack gap="xs" maw="80ch">

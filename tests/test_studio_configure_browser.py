@@ -69,9 +69,13 @@ class ConfigureBrowserTests(unittest.TestCase):
         self.devtools.call("Page.navigate", {"url": self.started["url"] + "#/configure"})
         self.devtools.call("Page.bringToFront")
         self._wait_for_shell()
-        self._wait("document.querySelector('input') !== null", "Configure did not render")
+        # /configure lands on Changes, whose own draft picker renders before the settings loader.
+        self._wait("[...document.querySelectorAll('label')]"
+                   ".some(item => item.textContent.trim().startsWith('Draft name'))",
+                   "the draft settings editor did not render")
 
-    def _load_draft(self, draft: str) -> None:
+    def _click_load_draft(self, draft: str) -> None:
+        # Load draft stays disabled until the schema is read and a name is typed.
         self.devtools.evaluate("__setLabelValue('Draft name', %s)" % json.dumps(draft))
         self._wait(
             "[...document.querySelectorAll('button')].some(b => b.textContent === 'Load draft' && !b.disabled)",
@@ -80,6 +84,9 @@ class ConfigureBrowserTests(unittest.TestCase):
         self.devtools.evaluate(
             "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
         )
+
+    def _load_draft(self, draft: str) -> None:
+        self._click_load_draft(draft)
         self._wait(
             "document.body.textContent.includes('Draft configuration is ready.')",
             "draft configuration did not load",
@@ -236,10 +243,7 @@ class ConfigureBrowserTests(unittest.TestCase):
             };
             globalThis.__savesAnswered = 0;
         """)
-        self.devtools.evaluate("__setLabelValue('Draft name', %s)" % json.dumps(self.draft))
-        self.devtools.evaluate(
-            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-        )
+        self._click_load_draft(self.draft)
         self._wait(
             "[...document.querySelectorAll('button')].some(b => b.textContent === 'Clear malformed reference')",
             "malformed reference did not render a Clear action",

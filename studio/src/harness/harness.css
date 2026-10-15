@@ -1,11 +1,9 @@
-/* The Harness pages' tables: one bordered panel per table, a shaded header band, figures
-   right-aligned, and a divider under every item's row group. */
-/* The Studio draws sections as hairlines; a Harness table is the one carded surface on its page. */
-.main-content .mantine-Paper-root.harness-panel {
+/* The Harness pages' tables: a hairline section, as every Studio section is, never a card; a
+   shaded header band, figures right-aligned, and a divider under every item's row group. */
+.harness-panel {
   overflow: hidden;
-  padding: 0;
-  border: var(--studio-border-width) solid var(--studio-border-default);
-  border-radius: var(--studio-radius-md);
+  border-top: var(--studio-border-width) solid var(--studio-border-default);
+  border-bottom: var(--studio-border-width) solid var(--studio-border-default);
   background: var(--studio-surface-raised);
 }
 .harness-table thead th { background: var(--studio-surface-subtle); white-space: nowrap; }

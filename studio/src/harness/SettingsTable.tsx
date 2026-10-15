@@ -1,4 +1,4 @@
-import { Alert, Badge, Button, Group, NativeSelect, Paper, Stack, Switch, Table, Text } from "@mantine/core";
+import { Alert, Badge, Button, Group, NativeSelect, Stack, Switch, Table, Text } from "@mantine/core";
 import type { ReactNode } from "react";
 
 import { EvidenceState } from "../components/StudioKit";
@@ -56,7 +56,7 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
       Edits here become a draft in Changes. Nothing applies until you approve it there, and from
       that day Efficacy measures the item under its new setting for seven days.
     </Alert>
-    <Paper withBorder radius="md" className="harness-panel">
+    <div className="harness-panel">
       <Table.ScrollContainer minWidth={640}
         scrollAreaProps={{ type: "auto", offsetScrollbars: false, viewportProps: { role: "region", "aria-label": caption, tabIndex: 0 } }}>
         <Table verticalSpacing="sm" aria-label={caption} className="data-table harness-table">
@@ -126,7 +126,7 @@ export function SettingsTable({ caption, rows, fields, edits, onEdit, onDiscard,
           </Group>}
         </Group>
       </div>}
-    </Paper>
+    </div>
     {saveError && <EvidenceState kind="error" title="The draft was not saved">{saveError}</EvidenceState>}
   </Stack>;
 }
