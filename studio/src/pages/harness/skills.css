@@ -1,0 +1,60 @@
+/* The Skills page on the shared Harness frame: names never break at their hyphens, the invoked
+   share draws as a bar beside its figure, and the description tokens read as figures. */
+.skills-page .harness-table tbody th[scope="rowgroup"],
+.skills-page .harness-table tbody th[scope="row"] > :first-child { white-space: nowrap; }
+
+.skills-page .skills-lead-title { margin: 0; color: var(--studio-ink-primary); }
+.skills-page .skills-strip { padding: var(--studio-space-3) 0; border-top: var(--studio-border-width) solid var(--studio-border-default); border-bottom: var(--studio-border-width) solid var(--studio-border-default); }
+
+.skills-invoked {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--studio-space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.skills-bar {
+  display: inline-block;
+  width: var(--studio-space-10);
+  height: var(--studio-space-1);
+  overflow: hidden;
+  border-radius: var(--studio-radius-pill);
+  background: var(--studio-border-default);
+}
+
+.skills-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--studio-primary);
+}
+
+/* Settings: the description tokens column, the fourth, is a column of figures. */
+.skills-page table[aria-label="Skills: settings"] :is(th, td):nth-child(4) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Settings: every cell of a row sits on one centre line, the select's included. */
+.skills-page table[aria-label="Skills: settings"] tbody :is(td, th) { vertical-align: middle; }
+
+/* Last changed: a row with no date says only its note, not a dash above it. */
+.skills-page table[aria-label="Skills: settings"] td:last-child > .mantine-Text-root:first-child:not(:only-child):has(> [aria-hidden="true"]) {
+  display: none;
+}
+
+/* A skill switched off reads as off before its select is read. */
+.skills-page table[aria-label="Skills: settings"] tr:has(option[value="Off"]:checked) th .mantine-Text-root {
+  color: var(--studio-ink-secondary);
+}
+
+/* Both tables: when a table is wider than its panel, a shade on the clipped edge says it scrolls.
+   The covers travel with the content and hide the shade once that edge is reached. */
+.skills-page .harness-panel .mantine-ScrollArea-viewport {
+  background:
+    linear-gradient(to left, var(--studio-surface-raised) 40%, transparent) right center / var(--studio-space-10) 100% no-repeat local,
+    linear-gradient(to left, color-mix(in srgb, var(--studio-ink-primary) 14%, transparent), transparent) right center / var(--studio-space-3) 100% no-repeat scroll;
+}
+
+/* The Load select keeps its longest option whole when a phone narrows the column. */
+.skills-page table[aria-label="Skills: settings"] select { min-width: calc(var(--studio-space-10) * 2.5); }

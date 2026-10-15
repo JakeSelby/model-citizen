@@ -58,14 +58,51 @@ export function useSkillSummary() {
   return useQuery({ ...skillSummaryQuery, refetchInterval: (query) => summaryPoll(query.state.data) });
 }
 
-/** The lead's figures: sessions read, skills invoked of those loaded, and loaded-never-invoked. */
-export function leadFigures(summary: SkillSummary): { invoked: number; loaded: number; never: SkillSummaryRow[] } {
+/** Each skill's description tokens, a soft estimate, read from the Settings rows. */
+export function tokensByName(rows: SettingRow[] | undefined): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const row of rows ?? []) {
+    const tokens = Number(row.values.tokens);
+    if (Number.isFinite(tokens)) out.set(row.item_id, tokens);
+  }
+  return out;
+}
+
+export type LeadFigures = {
+  invoked: number;
+  loaded: number;
+  never: SkillSummaryRow[];
+  /** Description tokens a session spends on the skills invoked in none; undefined unmeasured. */
+  neverTokens?: number;
+  /** Description tokens a session spends on every loaded skill; undefined unmeasured. */
+  loadedTokens?: number;
+};
+
+function tokenSum(rows: SkillSummaryRow[], tokens: Map<string, number>): number | undefined {
+  if (!tokens.size || !rows.length) return undefined;
+  return rows.reduce((sum, row) => sum + (tokens.get(row.skill) ?? 0), 0);
+}
+
+/** The lead's figures: skills invoked of those loaded, loaded-never-invoked, and their tokens. */
+export function leadFigures(summary: SkillSummary, tokens: Map<string, number> = new Map()): LeadFigures {
   const loaded = summary.skills.filter((row) => row.loaded_sessions > 0);
+  const never = loaded.filter((row) => row.use === NEVER_INVOKED);
   return {
     invoked: loaded.filter((row) => row.invoked_sessions > 0).length,
     loaded: loaded.length,
-    never: loaded.filter((row) => row.use === NEVER_INVOKED),
+    never,
+    neverTokens: tokenSum(never, tokens),
+    loadedTokens: tokenSum(loaded, tokens),
   };
+}
+
+/** The lead's one sentence: how many loaded skills no session invoked. */
+export function leadHeadline(summary: SkillSummary, figures: LeadFigures): string {
+  const days = `the last ${summary.window_days} days`;
+  if (!figures.loaded) return `No session in ${days} listed a skill.`;
+  if (!figures.never.length) return `Every skill loaded in ${days} was invoked at least once.`;
+  const skills = figures.never.length === 1 ? "skill" : "skills";
+  return `${figures.never.length} of ${figures.loaded} loaded ${skills} were invoked in no session in ${days}.`;
 }
 
 export function indexingText(summary: SkillSummary): string {
@@ -113,12 +150,16 @@ export function presentRows(rows: PeriodRow[]): PeriodRow[] {
     .sort((a, b) => rank(a) - rank(b) || a.item_label.localeCompare(b.item_label));
 }
 
+/** The share of loading sessions that invoked the skill, 0 to 1; undefined when none loaded it. */
+export function invokedShare(row: PeriodRow): number | undefined {
+  const invoked = row.metrics.invoked_in;
+  const loaded = row.metrics.loaded_in;
+  return typeof invoked === "number" && typeof loaded === "number" && loaded > 0 ? Math.min(1, invoked / loaded) : undefined;
+}
+
 export const SKILL_METRICS: MetricColumn[] = [
   { key: "sessions", heading: "Sessions" },
-  { key: "loaded_in", heading: "Loaded in" },
-  { key: "invoked_in", heading: "Invoked in", render: invokedText, align: "right" },
   { key: "invocations", heading: "Invocations" },
-  { key: "invoked_rate", heading: "Invoked when loaded" },
 ];
 
 // --- Settings ----------------------------------------------------------------------------------
@@ -131,8 +172,11 @@ export const SKILL_FIELDS: SettingField[] = [
   { key: "tokens", heading: "Description tokens" },
 ];
 
+/** A description longer than this is cut at a word and shown whole on hover. */
+export const DETAIL_CHARS = 60;
+
 /** Said once under the Skills settings, not on every row. */
-export const SKILL_READ_ONLY_NOTE = "Only Load saves to a draft, and only as Always or Off: the harness has no on-demand or per-repository skill setting yet, so those are not offered. Source and description tokens are read-only.";
+export const SKILL_READ_ONLY_NOTE = "Only Load saves to a draft, as Always or Off; the harness has no on-demand or per-repository skill setting yet. Source and description tokens, a soft estimate, are read-only.";
 
 function core(modules: LibraryModule[]): LibraryModule[] {
   const seen = new Set<string>();
@@ -144,25 +188,49 @@ function description(module: LibraryModule): string | undefined {
   const header = /^---\n([\s\S]*?)\n---/.exec(module.source.text)?.[1] ?? "";
   const line = header.split("\n").find((entry) => entry.startsWith("description:"));
   const text = line ? line.slice("description:".length).trim().replace(/^["']|["']$/g, "") : "";
-  return text ? text.split(". ")[0] : undefined;
+  return text ? text.split(". ")[0].replace(/\.$/, "") : undefined;
+}
+
+/** The description's first sentence, cut at a word to one line; the whole sentence is the title. */
+export function shortDetail(text: string | undefined): { detail?: string; title?: string } {
+  if (!text || text.length <= DETAIL_CHARS) return { detail: text };
+  const cut = text.slice(0, DETAIL_CHARS + 1);
+  const end = cut.lastIndexOf(" ");
+  return { detail: `${cut.slice(0, end > 0 ? end : DETAIL_CHARS).replace(/[,;:—–-]+$/, "")}…`, title: text };
 }
 
 export function skillSettings(library: LibraryPayload): SettingRow[] {
   return core(library.modules).map((module): SettingRow => {
-    const detail = description(module);
+    const { detail, title } = shortDetail(description(module));
     return {
       item_id: module.name,
       item_label: module.name,
       item_detail: detail,
+      item_detail_title: title,
       values: {
         load: module.state.value === "off" ? "Off" : "Always",
         source: module.root.label,
-        tokens: `~${module.context_cost.tokens}`,
+        tokens: String(module.context_cost.tokens),
       },
       options: module.state.switchable ? { load: LOAD_OPTIONS } : undefined,
       last_changed: null,
-      last_change_note: module.state.layer === "default" ? "default selection" : `set by ${module.state.layer}`,
+      last_change_note: module.state.layer === "default" ? "Default selection" : `Set by ${module.state.layer}`,
     };
+  });
+}
+
+/**
+ * Each switched skill's Settings row dated by the period its switch started, from the Efficacy
+ * rows: a skill with more than one period was switched on its newest period's first day.
+ */
+export function withSwitchDates(rows: SettingRow[], periods: PeriodRow[] | undefined): SettingRow[] {
+  const spans = new Map<string, PeriodRow[]>();
+  for (const row of periods ?? []) spans.set(row.item_id, [...(spans.get(row.item_id) ?? []), row]);
+  return rows.map((row) => {
+    const seen = spans.get(row.item_id) ?? [];
+    if (seen.length < 2) return row;
+    const newest = seen.reduce((a, b) => (b.period.start > a.period.start ? b : a));
+    return { ...row, last_changed: newest.period.start, last_change_note: `Switched to ${loadLabel(newest.setting_label)}` };
   });
 }
 
