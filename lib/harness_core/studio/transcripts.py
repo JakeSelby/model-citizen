@@ -19,7 +19,9 @@ shows where it fell. Loaded skills are the `skill_listing` attachments' names; i
 
 Each transcript's index is cached as JSON under `cache_dir(home)`, keyed on the stamps (mtime and
 size) of its file and its subagent files and on the price table, so an unchanged transcript is
-answered without being opened.
+answered without being opened. A cold read of a month of real transcripts takes tens of seconds,
+so a page reads `snapshot`, which answers from the cache at once and warms the rest on a daemon
+thread.
 """
 from __future__ import annotations
 
@@ -31,6 +33,7 @@ import os
 import re
 import statistics
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
@@ -63,19 +66,23 @@ def cache_dir(home: Path) -> Path:
 
 def sessions(home: Path, *, days: int = 30, now: Optional[dt.datetime] = None) -> List[Dict[str, Any]]:
     """Every main transcript modified inside the window, indexed, newest first."""
-    cutoff = _cutoff(days, now)
     table = _prices(home)
-    found = []
+    found = [index_file(home, path, table) for path in _window(home, days, now)]
+    found.sort(key=lambda s: (s.get("ended") or "", s["session_id"]), reverse=True)
+    return found
+
+
+def _window(home: Path, days: int, now: Optional[dt.datetime]) -> List[Path]:
+    cutoff = _cutoff(days, now)
+    chosen = []
     for path in _main_files(home):
         try:
             mtime = path.stat().st_mtime
         except OSError:
             continue
-        if dt.datetime.fromtimestamp(mtime, dt.timezone.utc) < cutoff:
-            continue
-        found.append(index_file(home, path, table))
-    found.sort(key=lambda s: (s.get("ended") or "", s["session_id"]), reverse=True)
-    return found
+        if dt.datetime.fromtimestamp(mtime, dt.timezone.utc) >= cutoff:
+            chosen.append(path)
+    return chosen
 
 
 def session(home: Path, session_id: str) -> Optional[Dict[str, Any]]:
@@ -133,18 +140,87 @@ def index_file(home: Path, path: Path, table: Optional[Mapping[str, Any]] = None
     """The index of one main transcript, from the cache when nothing it was built from changed."""
     path = Path(path)
     table = _prices(home) if table is None else table
+    key, cache, subagents = _cache_key(home, path, table)
+    hit = _cached(cache, key)
+    if hit is not None:
+        return hit
+    built = build(path, subagents, table)
+    _write_cache(cache, {"key": key, "session": built})
+    return built
+
+
+def cached_file(home: Path, path: Path, table: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The cached index of one transcript when it is current, else None. Never parses."""
+    key, cache, _ = _cache_key(home, Path(path), table)
+    return _cached(cache, key)
+
+
+def _cache_key(home: Path, path: Path, table: Mapping[str, Any]):
     subagents = _subagent_files(path)
     key = {"version": CACHE_VERSION, "path": str(path),
            "stamps": [_stamp(p) for p in [path] + subagents],
            "prices": hashlib.sha256(json.dumps(table, sort_keys=True, default=str)
                                     .encode("utf-8")).hexdigest()}
     cache = cache_dir(home) / (hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:32] + ".json")
-    cached = _read_cache(cache)
-    if cached is not None and cached.get("key") == key:
-        return cached["session"]
-    built = build(path, subagents, table)
-    _write_cache(cache, {"key": key, "session": built})
-    return built
+    return key, cache, subagents
+
+
+def _cached(cache: Path, key: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    data = _read_cache(cache)
+    return data["session"] if data is not None and data.get("key") == key else None
+
+
+# --- non-blocking reads ------------------------------------------------------------------------
+
+_WARMING: Dict[str, threading.Thread] = {}
+_WARM_LOCK = threading.Lock()
+
+
+def snapshot(home: Path, *, days: int = 30, now: Optional[dt.datetime] = None) -> Dict[str, Any]:
+    """What the cache already holds for the window, never parsing on the caller's thread.
+
+    `{"sessions": [...], "indexing": bool, "pending": int}`: when any transcript in the window is
+    not cached yet, a background warm starts (or continues) and `indexing` is true, so a page can
+    answer at once and say it is still indexing instead of blocking on a cold read.
+    """
+    table = _prices(home)
+    found, pending = [], 0
+    for path in _window(home, days, now):
+        hit = cached_file(home, path, table)
+        if hit is None:
+            pending += 1
+        else:
+            found.append(hit)
+    found.sort(key=lambda s: (s.get("ended") or "", s["session_id"]), reverse=True)
+    if pending:
+        warm(home, days=days, now=now)
+    return {"sessions": found, "indexing": bool(pending) or warming(home), "pending": pending}
+
+
+def warm(home: Path, *, days: int = 30, now: Optional[dt.datetime] = None) -> bool:
+    """Index the window on a daemon thread, one per home at a time; True when one started."""
+    name = str(Path(home))
+    with _WARM_LOCK:
+        running = _WARMING.get(name)
+        if running is not None and running.is_alive():
+            return False
+        thread = threading.Thread(target=_warm, args=(Path(home), days, now),
+                                  name="studio-transcripts-warm", daemon=True)
+        _WARMING[name] = thread
+        thread.start()
+        return True
+
+
+def warming(home: Path) -> bool:
+    thread = _WARMING.get(str(Path(home)))
+    return thread is not None and thread.is_alive()
+
+
+def _warm(home: Path, days: int, now: Optional[dt.datetime]) -> None:
+    try:
+        sessions(home, days=days, now=now)
+    except Exception:
+        pass  # A failed warm leaves the cache as it was; the next request tries again.
 
 
 def build(path: Path, subagents: Iterable[Path] = (),

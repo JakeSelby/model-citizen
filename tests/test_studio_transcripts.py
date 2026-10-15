@@ -310,5 +310,44 @@ class TranscriptCacheTests(unittest.TestCase):
         self.assertEqual(path.stat().st_mtime_ns, mtime)
 
 
+class SnapshotTests(unittest.TestCase):
+    def setUp(self):
+        self.home = base.Home(self)
+        self.files = Transcripts(self.home)
+
+    def join(self):
+        thread = transcripts._WARMING.get(str(self.home.root))
+        if thread is not None:
+            thread.join(10)
+
+    def test_a_cold_snapshot_answers_without_parsing_and_warms_in_the_background(self):
+        self.files.write("s1", [prompt(0), reply(1, "m1")])
+        with mock.patch.object(transcripts, "warm") as warm:
+            first = transcripts.snapshot(self.home.root, days=30, now=NOW)
+        self.assertEqual((first["sessions"], first["pending"], first["indexing"]), ([], 1, True))
+        warm.assert_called_once()
+        transcripts.snapshot(self.home.root, days=30, now=NOW)
+        self.join()
+        warmed = transcripts.snapshot(self.home.root, days=30, now=NOW)
+        self.assertEqual(([s["session_id"] for s in warmed["sessions"]], warmed["pending"], warmed["indexing"]),
+                         (["s1"], 0, False))
+
+    def test_a_snapshot_never_parses_on_the_callers_thread(self):
+        self.files.write("s1", [prompt(0), reply(1, "m1")])
+        with mock.patch.object(transcripts, "warm"), \
+                mock.patch.object(transcripts, "build", side_effect=AssertionError("parsed")):
+            self.assertEqual(transcripts.snapshot(self.home.root, days=30, now=NOW)["pending"], 1)
+
+    def test_one_warm_runs_per_home_at_a_time(self):
+        gate = __import__("threading").Event()
+        with mock.patch.object(transcripts, "_warm", side_effect=lambda *a: gate.wait(5)):
+            self.assertTrue(transcripts.warm(self.home.root))
+            self.assertFalse(transcripts.warm(self.home.root))
+            self.assertTrue(transcripts.warming(self.home.root))
+            gate.set()
+            self.join()
+        self.assertFalse(transcripts.warming(self.home.root))
+
+
 if __name__ == "__main__":
     unittest.main()
