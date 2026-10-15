@@ -107,8 +107,8 @@ class _Handler:
     def _json(self, code: int, payload: Dict[str, Any]) -> None:
         self.answer = (code, json.loads(json.dumps(payload, sort_keys=True)))
 
-    def _error(self, code: int, name: str) -> None:
-        self.answer = (code, {"error": name})
+    def _error(self, code: int, name: str, reason: Optional[str] = None) -> None:
+        self.answer = (code, dict({"error": name}, **({"reason": reason} if reason else {})))
 
 
 def call(repo_root: Path, state_directory: Path, group: str, action: str,
