@@ -734,6 +734,24 @@ def _sessions_show(handler: Handler, route: Route) -> None:
 # End Phase B — Sessions.
 
 
+# Phase B — Skills: loaded versus invoked, from the transcript index (AH-S378, #1330).
+HARNESS_SKILLS = ResponseSchema("json-object", (
+    ("window_days", "integer"), ("sessions", "integer"), ("indexing", "boolean"),
+    ("pending", "integer"), ("basis", "string"), ("skills", "array")))
+
+
+def _harness_skills(handler: Handler, route: Route) -> None:
+    from .surfaces import skills as skill_surface
+    query = getattr(handler, "request_query", {})
+    status, payload = skill_surface.answer(query.get("days"))
+    if status != 200:
+        handler._error(status, payload["error"])
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+# End Phase B — Skills.
+
+
 def _configure_schema(handler: Handler, route: Route) -> None:
     payload = settings.descriptor(handler.server.repo_root)
     route.response_schema.validate(payload)
@@ -2884,6 +2902,11 @@ ROUTES = RouteRegistry((
     Route("GET", "/api/harness/hook", "application/json", HARNESS_HOOK, _harness_hook, None,
           cli_command=("citizen", "harness", "hook", "{name}", "--days", "{days}", "--json"),
           query=("name", "days")),
+    # Phase B — Skills
+    Route("GET", "/api/harness/skills", "application/json", HARNESS_SKILLS, _harness_skills,
+          None, cli_command=("citizen", "harness", "skills", "--days", "{days}", "--json"),
+          query=("days",)),
+    # End Phase B — Skills
     # Phase C — Routines (#1335)
     Route("GET", "/api/routines", "application/json", ROUTINES_LIST, _routines_list, None,
           cli_command=routines.CLI_COMMANDS["list"]),

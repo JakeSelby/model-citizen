@@ -116,7 +116,7 @@ test("page titles follow the route and unknown routes read as Home", () => {
 });
 
 test("pages not yet rebuilt name the story that builds them", () => {
-  assert.deepEqual(Object.keys(REBUILDING).sort(), ["roles", "routines", "skills", "stances", "workflows"]);
+  assert.deepEqual(Object.keys(REBUILDING).sort(), ["roles", "routines", "stances", "workflows"]);
   const html = renderToStaticMarkup(h(MantineProvider, {}, h(RebuildingPage, { page: "routines" })));
   assert.match(html, /<h1[^>]*>Routines<\/h1>/);
   assert.match(html, /story #1335/);

@@ -116,6 +116,9 @@ def cases(draft, revision, files):
         ("GET", "/api/harness/hook"): (
             ["harness", "hook", "grade-bash", "--days", "30"],
             {"name": "grade-bash", "days": "30"}, "same"),
+        # Phase B — Skills
+        ("GET", "/api/harness/skills"): (
+            ["harness", "skills", "--days", "30"], {"days": "30"}, "same"),
         # Phase C — Routines
         ("GET", "/api/routines"): (["studio", "routine", "list"], None, "same"),
         ("POST", "/api/routines/run"): (["studio", "routine", "run", "hook-liveness"],

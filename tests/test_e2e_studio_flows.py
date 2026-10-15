@@ -789,5 +789,61 @@ class SessionsFlow(support.StudioE2E):
 # End Phase B — Sessions.
 
 
+# Phase B — Skills: loaded versus invoked (AH-S378, #1330).
+class SkillsFlow(support.StudioE2E):
+    """The Skills page reads two synthetic transcripts: one skill invoked, one loaded and never."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def prepare_home(self):
+        import types
+
+        from harness_core.studio import transcripts
+        from test_studio_surface_skills import session_entries
+        from test_studio_transcripts import Transcripts
+
+        files = Transcripts(types.SimpleNamespace(root=self.home))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for session_id, age, invoked in (("e2e-skills-1", 3, ["plan-authoring"]),
+                                         ("e2e-skills-2", 1, [])):
+            when = now - datetime.timedelta(days=age)
+            path = files.write(session_id, session_entries(
+                when, ["plan-authoring", "sandbox"], invoked))
+            stamp = when.timestamp() + 600
+            os.utime(str(path), (stamp, stamp))
+        # Indexed before the Studio starts, so the page reads a complete index.
+        transcripts.sessions(self.home, days=30)
+
+    def test_skills_page_marks_a_skill_loaded_but_never_invoked(self):
+        self.open("#/harness/skills")
+        self.wait("document.querySelector('header code')?.textContent === 'citizen harness skills'",
+                  "the header did not show citizen harness skills")
+        self.wait("%s === 'Efficacy'" % _selected_tab("Skills"), "Skills did not open on Efficacy")
+        table = "document.querySelector('table[aria-label=\"Skills: efficacy by setting period\"]')"
+        self.wait(table + " !== null", "the Skills efficacy table did not render", seconds=60)
+        sandbox = self.js(table + ".querySelector('tbody[data-item=\"sandbox\"]').textContent")
+        self.assertIn("loaded, never invoked", sandbox)
+        plan = self.js(table + ".querySelector('tbody[data-item=\"plan-authoring\"]').textContent")
+        self.assertIn("1 of 2", plan)
+        lead = self.js("document.querySelector('section[aria-label=\"Skills loaded versus invoked\"]')"
+                       "?.textContent")
+        self.assertIn("Observational", lead)
+        self.assertNotIn("Still indexing", lead)
+        status, summary = self.api("GET", "/api/harness/skills?days=30")
+        self.assertEqual((status, summary["sessions"], summary["indexing"]), (200, 2, False))
+
+        self.js("location.hash = '#/harness/skills?tab=settings'")
+        self.wait("%s === 'Settings'" % _selected_tab("Skills"), "?tab=settings did not select Settings")
+        self.wait("document.querySelector('table[aria-label=\"Skills: settings\"]') !== null",
+                  "the Skills Settings table did not render", seconds=60)
+        self.wait("document.querySelector('[aria-label=\"Save into draft\"], .draft-picker') !== null",
+                  "the Settings footer showed no draft picker")
+# End Phase B — Skills.
+
+
 if __name__ == "__main__":
     unittest.main()
