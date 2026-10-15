@@ -16,7 +16,7 @@ from harness_core.studio import drafts
 CLI = browser_support.CLI
 
 
-class ConfigureBrowserTests(unittest.TestCase):
+class ConfigureBrowserTests(browser_support.DraftLoading, unittest.TestCase):
     _bootstrap = browser_support.StudioBrowserTests._bootstrap
     _wait_for_shell = browser_support.StudioBrowserTests._wait_for_shell
     _close_devtools = browser_support.StudioBrowserTests._close_devtools
@@ -73,17 +73,6 @@ class ConfigureBrowserTests(unittest.TestCase):
         self._wait("[...document.querySelectorAll('label')]"
                    ".some(item => item.textContent.trim().startsWith('Draft name'))",
                    "the draft settings editor did not render")
-
-    def _click_load_draft(self, draft: str) -> None:
-        # Load draft stays disabled until the schema is read and a name is typed.
-        self.devtools.evaluate("__setLabelValue('Draft name', %s)" % json.dumps(draft))
-        self._wait(
-            "[...document.querySelectorAll('button')].some(b => b.textContent === 'Load draft' && !b.disabled)",
-            "draft load did not enable",
-        )
-        self.devtools.evaluate(
-            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
-        )
 
     def _load_draft(self, draft: str) -> None:
         self._click_load_draft(draft)

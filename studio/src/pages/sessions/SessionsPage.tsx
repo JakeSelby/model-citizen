@@ -177,7 +177,7 @@ export function SessionsView({ data, days, onDays, sort, onSort }: {
         <Title order={2} size="h4">Context per call</Title>
         <Text size="sm" c="dimmed">{count(summary.calls)} calls in 50k buckets against your stance's {tokens(lines.warn)} and {tokens(lines.limit)} lines. {OBSERVED}.</Text>
       </div>
-      <div className="sessions-chart-scroll"><ContextHistogram buckets={data.histogram} lines={lines} /></div>
+      <div className="sessions-chart-scroll" role="region" aria-label="Context per call, scrollable" tabIndex={0}><ContextHistogram buckets={data.histogram} lines={lines} /></div>
       <Group gap="lg" aria-label="Calls by line">
         <Text size="sm" data-count="under">Under the line <b>{count(under)}</b></Text>
         <Text size="sm" data-count="warn">{tokens(lines.warn)} to {tokens(lines.limit)}, costs more <b>{count(summary.over_warn - summary.over_limit)}</b></Text>

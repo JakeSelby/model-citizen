@@ -141,6 +141,22 @@ class DevTools:
         return result["result"].get("value")
 
 
+class DraftLoading:
+    """Shared by every browser class that loads a draft on Changes, including the classes that
+    borrow Configure's helpers, so a borrowed `_load_draft` always finds `_click_load_draft`."""
+
+    def _click_load_draft(self, draft: str) -> None:
+        # Load draft stays disabled until the schema is read and a name is typed.
+        self.devtools.evaluate("__setLabelValue('Draft name', %s)" % json.dumps(draft))
+        self._wait(
+            "[...document.querySelectorAll('button')].some(b => b.textContent === 'Load draft' && !b.disabled)",
+            "draft load did not enable",
+        )
+        self.devtools.evaluate(
+            "[...document.querySelectorAll('button')].find(b => b.textContent === 'Load draft').click()"
+        )
+
+
 class StudioBrowserTests(unittest.TestCase):
     def setUp(self):
         chrome = _chrome()

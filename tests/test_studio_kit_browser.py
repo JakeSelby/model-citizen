@@ -9,7 +9,7 @@ import test_studio_browser as browser_support
 import test_studio_configure_browser as configure_support
 
 
-class StudioKitBrowserTests(unittest.TestCase):
+class StudioKitBrowserTests(browser_support.DraftLoading, unittest.TestCase):
     setUp = configure_support.ConfigureBrowserTests.setUp
     _close_devtools = browser_support.StudioBrowserTests._close_devtools
     _stop_browser = browser_support.StudioBrowserTests._stop_browser
@@ -45,7 +45,7 @@ class StudioKitBrowserTests(unittest.TestCase):
     def test_themes_contrast_focus_and_narrow_content(self):
         self._open_configure("")
         self.devtools.evaluate("location.hash = '#/'")
-        self._wait("document.querySelector('.overview-card') !== null", "hub missing")
+        self._wait("document.querySelector('main .page-heading h1')?.textContent === 'Home'", "Home missing")
         for theme in ("light", "dark"):
             self.devtools.evaluate("""(() => {
                 const select = document.querySelector('select[aria-label="Color theme"]');
@@ -71,7 +71,7 @@ class StudioKitBrowserTests(unittest.TestCase):
             self.assertGreaterEqual(browser_support._contrast_ratio(control["border"], control["background"]), 3)
             self.assertGreaterEqual(browser_support._contrast_ratio(control["text"], control["background"]), 4.5)
             self.devtools.call("Emulation.setDeviceMetricsOverride", {"width": 320, "height": 844, "deviceScaleFactor": 1, "mobile": True})
-            self.devtools.evaluate("document.querySelector('.overview-lead').textContent = 'A'.repeat(120)")
+            self.devtools.evaluate("document.querySelector('main .page-heading p').textContent = 'A'.repeat(120)")
             self.assertTrue(self.devtools.evaluate("document.documentElement.scrollWidth <= innerWidth"))
             self.devtools.evaluate("document.querySelector('.skip-link').focus()")
             self.devtools.call("Input.dispatchKeyEvent", {"type": "keyDown", "key": "Tab", "code": "Tab", "windowsVirtualKeyCode": 9})

@@ -8,7 +8,7 @@ import test_studio_browser as browser_support
 import test_studio_configure_browser as configure_browser
 
 
-class DraftTestBrowserTests(unittest.TestCase):
+class DraftTestBrowserTests(browser_support.DraftLoading, unittest.TestCase):
     """Borrows the Configure browser harness, not its tests: a real Studio, Chrome and draft."""
 
     setUp = configure_browser.ConfigureBrowserTests.setUp

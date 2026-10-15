@@ -632,7 +632,7 @@ class RoutinesFlow(support.StudioE2E):
                                  % table), ["hook-liveness", "rule-adherence"])
         self.assertEqual(self.js("[...document.querySelectorAll('tr[data-routine]')]"
                                  ".map(r => r.dataset.installed)"), ["no", "no"])
-        self.js("document.querySelector('button[aria-label=\"Run Hook liveness now\"]').click()")
+        self.js("document.querySelector('button[aria-label=\"Run now: Hook liveness\"]').click()")
         history = "document.querySelector('table[aria-label=\"Run history: Hook liveness, newest first\"]')"
         self.wait(history + " !== null", "the run did not reach the history", seconds=60)
         self.assertIn("From the Studio", self.js(history + ".textContent"))
@@ -826,11 +826,12 @@ class SkillsFlow(support.StudioE2E):
         table = "document.querySelector('table[aria-label=\"Skills: efficacy by setting period\"]')"
         self.wait(table + " !== null", "the Skills efficacy table did not render", seconds=60)
         sandbox = self.js(table + ".querySelector('tbody[data-item=\"sandbox\"]').textContent")
-        self.assertIn("loaded, never invoked", sandbox)
+        # The design pass shortened the cell to "never invoked"; its title keeps the full reading.
+        self.assertIn("never invoked", sandbox)
+        self.assertEqual(self.js(table + ".querySelector('tbody[data-item=\"sandbox\"] [title=\"loaded, never invoked\"]') !== null"), True)
         plan = self.js(table + ".querySelector('tbody[data-item=\"plan-authoring\"]').textContent")
         self.assertIn("1 of 2", plan)
-        lead = self.js("document.querySelector('section[aria-label=\"Skills loaded versus invoked\"]')"
-                       "?.textContent")
+        lead = self.js("document.querySelector('section.skills-lead')?.textContent")
         self.assertIn("Observational", lead)
         self.assertNotIn("Still indexing", lead)
         status, summary = self.api("GET", "/api/harness/skills?days=30")

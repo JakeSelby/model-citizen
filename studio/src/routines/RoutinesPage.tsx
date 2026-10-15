@@ -34,7 +34,7 @@ export function RoutinesTable({ routines, selected, onSelect, onRun, busy }: {
       <Table verticalSpacing="sm" aria-label="Routines" className="data-table harness-table">
         <Table.Thead>
           <Table.Tr>
-            <Table.Th scope="col" className="harness-sticky">Routine</Table.Th>
+            <Table.Th scope="col">Routine</Table.Th>
             <Table.Th scope="col">Schedule</Table.Th>
             <Table.Th scope="col">Last run</Table.Th>
             <Table.Th scope="col">Next run</Table.Th>
@@ -44,7 +44,8 @@ export function RoutinesTable({ routines, selected, onSelect, onRun, busy }: {
         <Table.Tbody>
           {routines.map((routine) => <Table.Tr key={routine.name} data-routine={routine.name}
             data-installed={routine.installed ? "yes" : "no"} aria-current={routine.name === selected ? "true" : undefined}>
-            <Table.Th scope="row" className="harness-sticky">
+            {/* Not sticky: a sticky name column covered Run now when Tab scrolled to it on a phone. */}
+            <Table.Th scope="row">
               <Anchor component="button" type="button" fw={600} onClick={() => onSelect(routine.name)}>{routine.title}</Anchor>
               <Text size="xs" c="dimmed">{routine.description}</Text>
             </Table.Th>
@@ -63,7 +64,7 @@ export function RoutinesTable({ routines, selected, onSelect, onRun, busy }: {
             <Table.Td className="harness-nowrap">
               <Button size="compact-sm" variant="default" loading={busy === `run:${routine.name}`}
                 disabled={busy !== ""} onClick={() => onRun(routine.name)}
-                aria-label={`Run ${routine.title} now`}>Run now</Button>
+                aria-label={`Run now: ${routine.title}`}>Run now</Button>
             </Table.Td>
           </Table.Tr>)}
         </Table.Tbody>

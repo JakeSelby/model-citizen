@@ -90,7 +90,7 @@ export function SessionDetailView({ detail }: { detail: SessionDetail }) {
       </div>
       {calls.length === 0
         ? <EvidenceState kind="empty" title="No calls in this session">The transcript has no assistant reply yet.</EvidenceState>
-        : <div className="sessions-chart-scroll"><ContextPerCall calls={calls} lines={lines} /></div>}
+        : <div className="sessions-chart-scroll" role="region" aria-label="Context per call, scrollable" tabIndex={0}><ContextPerCall calls={calls} lines={lines} /></div>}
     </Stack>
     <ResetEvents events={detail.events} />
     <TurnCosts turns={detail.turns} />
