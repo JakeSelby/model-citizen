@@ -5560,6 +5560,12 @@ def _studio_overview() -> Dict[str, Any]:
 
 
 def cmd_studio(args: argparse.Namespace) -> int:
+    if args.action == "routine":  # Phase C — Routines (#1335)
+        if args.detach or args._serve or args.port or args.no_open:
+            raise SystemExit("studio routine accepts only --json and --scheduled")
+        return cmd_studio_routine(args)
+    if args.routine_action is not None or args.scheduled:
+        raise SystemExit("usage: citizen studio routine list | run|install|remove NAME [--json]")
     if args.port < 0 or args.port > 65535:
         raise SystemExit("--port must be between 0 and 65535")
     if args.action and (args.detach or args._serve or args.port or args.no_open):
@@ -7634,6 +7640,60 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 # End Phase C — Baseline
 
 
+# Phase C — Routines (#1335)
+def cmd_studio_routine(args: argparse.Namespace) -> int:
+    """`citizen studio routine list|run|install|remove`, which `/api/routines*` show; see
+    `harness_core.studio.routines`. Install and remove change this Mac's launchd agents, so each
+    needs a person's confirmation at the Mac, as an apply does."""
+    from harness_core.studio import routines as studio_routines
+    action, name = args.routine_action, args.routine_name
+    if action is None or (action == "list") != (name is None):
+        raise SystemExit("usage: citizen studio routine list | run|install|remove NAME [--json]")
+    if args.scheduled and action != "run":
+        raise SystemExit("--scheduled applies only to `routine run`")
+    try:
+        if action == "list":
+            result = studio_routines.listing(home())
+        else:
+            studio_routines.definition(name)
+            if action == "run":
+                result = {"run": studio_routines.run(
+                    home(), name, trigger="scheduled" if args.scheduled else "citizen")}
+            else:
+                studio_routines.preflight(home(), name)
+                refused = person_present(args, presence.ask(
+                    presence.requester(False), studio_routines.presence_action(action, name),
+                    "it changes what runs on this Mac on a schedule"))
+                if refused is not None:
+                    return refused
+                change = studio_routines.install if action == "install" else studio_routines.remove
+                result = {"routine": change(home(), name)}
+    except studio_routines.RoutineError as exc:
+        error = {"error": exc.code}
+        if exc.reason:
+            error["reason"] = exc.reason
+        if args.json:
+            print(json.dumps(error, sort_keys=True))
+        print("citizen studio routine %s: %s" % (action, exc.reason or exc.code), file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif action == "list":
+        for row in result["routines"]:
+            print("%s\t%s\t%s\t%s\tnext %s%s" % (
+                row["name"], row["schedule"]["label"],
+                "installed" if row["installed"] else "not installed", row["outcome"],
+                row["next_run"] or "none", "\toverdue" if row["overdue"] else ""))
+    elif action == "run":
+        print("%s\t%s\t%s" % (name, result["run"]["outcome"], result["run"]["summary"]))
+    else:
+        print("%s\t%s" % (name, "installed" if result["routine"]["installed"] else "removed"))
+    if action == "run" and result["run"]["outcome"] != "ok":
+        return 1
+    return 0
+# End Phase C — Routines.
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8199,7 +8259,12 @@ def build_parser() -> argparse.ArgumentParser:
     rc_heal.set_defaults(func=cmd_remote_control_heal)
 
     p = sub.add_parser("studio", help="open the loopback-only local Studio")
-    p.add_argument("action", nargs="?", choices=["status", "stop"])
+    p.add_argument("action", nargs="?", choices=["status", "stop", "routine"])
+    # Phase C — Routines (#1335): `studio routine list | run|install|remove NAME`.
+    p.add_argument("routine_action", nargs="?", choices=["list", "run", "install", "remove"],
+                   help=argparse.SUPPRESS)
+    p.add_argument("routine_name", nargs="?", help=argparse.SUPPRESS)
+    p.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--no-open", action="store_true", help="do not open the default browser")
     p.add_argument("--port", type=int, default=0,
                    help="preferred loopback port; falls back to a free port when occupied")

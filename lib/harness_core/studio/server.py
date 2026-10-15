@@ -34,6 +34,7 @@ from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
 from . import changes, periods
 from . import baseline
+from . import routines  # Phase C — Routines (#1335)
 from . import spend as spend_report
 from . import rollback as draft_rollback
 from .mutations import MutationExecutor
@@ -582,6 +583,79 @@ def _baseline_record(handler: Handler, route: Route) -> None:
     route.response_schema.validate(payload)
     handler._json(200, payload)
 # End Phase C — Baseline.
+
+
+# Phase C — Routines (#1335): the scheduled local checks; see `routines`.
+ROUTINES_LIST = ResponseSchema("json-object", (("routines", "array"), ("history", "object")))
+ROUTINE_RUN = ResponseSchema("json-object", (("run", "object"),))
+ROUTINE_CHANGE = ResponseSchema("json-object", (("routine", "object"),))
+
+
+def _routine_error(handler: Handler, exc: "routines.RoutineError") -> None:
+    code = {"unknown_routine": 400, "invalid_request": 400, "routine_running": 409,
+            "launchd_refused": 409}.get(exc.code, 400)
+    _refusal(handler, code, exc.code, exc)
+
+
+def _routines_list(handler: Handler, route: Route) -> None:
+    payload = routines.listing(periods.default_home())
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _routine_request(handler: Handler, names: Tuple[str, ...]) -> Optional[Dict[str, object]]:
+    request = _required_request(handler, names)
+    if request is None:
+        return None
+    if any(not isinstance(request[name], str) or not request[name] for name in names):
+        handler._error(400, "invalid_request")
+        return None
+    return request
+
+
+def _routines_run(handler: Handler, route: Route) -> None:
+    request = _routine_request(handler, ("name",))
+    if request is None:
+        return
+    # Not through `mutations`: an audit may read for minutes and must not hold other requests.
+    try:
+        payload = {"run": routines.run(periods.default_home(), str(request["name"]),
+                                       trigger="studio")}
+    except routines.RoutineError as exc:
+        _routine_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+
+
+def _routines_change(handler: Handler, route: Route) -> None:
+    """Install or remove a routine's launchd agent: the request names the routine twice, as an
+    apply names its draft, and then the person at this Mac confirms, since it changes what runs
+    on the machine."""
+    request = _routine_request(handler, ("name", "confirm"))
+    if request is None:
+        return
+    action = "install" if route.path.endswith("/install") else "remove"
+    home = periods.default_home()
+    name = str(request["name"])
+    try:
+        routines.definition(name)
+        if not hmac.compare_digest(str(request["confirm"]).encode("utf-8"), name.encode("utf-8")):
+            handler._error(400, "confirmation_required")
+            return
+        routines.preflight(home, name)
+        if not _person_present(handler, presence.ask(
+                _requester(handler), routines.presence_action(action, name),
+                "it changes what runs on this Mac on a schedule")):
+            return
+        change = routines.install if action == "install" else routines.remove
+        payload = {"routine": change(home, name)}
+    except routines.RoutineError as exc:
+        _routine_error(handler, exc)
+        return
+    route.response_schema.validate(payload)
+    handler._json(200, payload)
+# End Phase C — Routines.
 
 
 def _configure_schema(handler: Handler, route: Route) -> None:
@@ -2734,6 +2808,16 @@ ROUTES = RouteRegistry((
     Route("GET", "/api/harness/hook", "application/json", HARNESS_HOOK, _harness_hook, None,
           cli_command=("citizen", "harness", "hook", "{name}", "--days", "{days}", "--json"),
           query=("name", "days")),
+    # Phase C — Routines (#1335)
+    Route("GET", "/api/routines", "application/json", ROUTINES_LIST, _routines_list, None,
+          cli_command=routines.CLI_COMMANDS["list"]),
+    Route("POST", "/api/routines/run", "application/json", ROUTINE_RUN, _routines_run, None,
+          "application/json", routines.CLI_COMMANDS["run"]),
+    Route("POST", "/api/routines/install", "application/json", ROUTINE_CHANGE, _routines_change,
+          None, "application/json", routines.CLI_COMMANDS["install"]),
+    Route("POST", "/api/routines/remove", "application/json", ROUTINE_CHANGE, _routines_change,
+          None, "application/json", routines.CLI_COMMANDS["remove"]),
+    # End Phase C — Routines.
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),

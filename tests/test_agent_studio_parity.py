@@ -116,6 +116,16 @@ def cases(draft, revision, files):
         ("GET", "/api/harness/hook"): (
             ["harness", "hook", "grade-bash", "--days", "30"],
             {"name": "grade-bash", "days": "30"}, "same"),
+        # Phase C — Routines
+        ("GET", "/api/routines"): (["studio", "routine", "list"], None, "same"),
+        ("POST", "/api/routines/run"): (["studio", "routine", "run", "hook-liveness"],
+                                        {"name": "hook-liveness"}, "same"),
+        # An unknown routine is refused alike, before launchd or a person is asked.
+        ("POST", "/api/routines/install"): (["studio", "routine", "install", "absent"],
+                                            {"name": "absent", "confirm": "absent"}, "refused"),
+        ("POST", "/api/routines/remove"): (["studio", "routine", "remove", "absent"],
+                                           {"name": "absent", "confirm": "absent"}, "refused"),
+        # End Phase C — Routines
         ("GET", "/api/library"): (["catalog", "--library"], None, "same"),
         ("POST", "/api/activity"): (["activity"], {}, "same"),
         # The Studio wraps the command's own document in an envelope naming it and its basis.
