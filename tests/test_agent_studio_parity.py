@@ -126,6 +126,15 @@ def cases(draft, revision, files):
         ("POST", "/api/routines/remove"): (["studio", "routine", "remove", "absent"],
                                            {"name": "absent", "confirm": "absent"}, "refused"),
         # End Phase C — Routines
+        # Phase C — Evals
+        ("GET", "/api/evals/preregistrations"): (["evals", "preregistrations"], None, "same"),
+        ("GET", "/api/evals/evidence"): (["evals", "evidence"], None, "same"),
+        ("GET", "/api/evals/before-after"): (
+            ["evals", "before-after", "--days", "30", "--surface", "stances"],
+            {"days": "30", "surface": "stances"}, "same"),
+        ("GET", "/api/evals/auto-trim"): (["evals", "auto-trim", "--days", "30"],
+                                         {"days": "30"}, "same"),
+        # End Phase C — Evals
         ("GET", "/api/library"): (["catalog", "--library"], None, "same"),
         ("POST", "/api/activity"): (["activity"], {}, "same"),
         # The Studio wraps the command's own document in an envelope naming it and its basis.

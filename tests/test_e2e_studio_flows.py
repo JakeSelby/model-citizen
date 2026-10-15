@@ -646,5 +646,57 @@ class RoutinesFlow(support.StudioE2E):
 # End Phase C — Routines.
 
 
+
+# Phase C — Evals (#1333)
+class EvalsFlow(support.StudioE2E):
+    """Evals lists the pre-registrations, keeps the observational before and after on its own
+    tab, and reads runtime qualification through the compatibility catalog."""
+
+    def tearDown(self):
+        if hasattr(self, "devtools"):
+            self.assert_no_network()
+        self.assert_no_model_calls()
+        super().tearDown()
+
+    def prepare_home(self):
+        from test_studio_periods import usage_row
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        rows = [usage_row(now - datetime.timedelta(days=n), voice="answer-card") for n in (20, 15, 12)]
+        rows += [usage_row(now - datetime.timedelta(days=n), voice="concise") for n in (10, 5, 1)]
+        log = periods.state_dir(self.home) / "usage.jsonl"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+
+    def test_evals_shows_pre_registrations_before_and_after_and_qualification(self):
+        self.open("#/evals")
+        self.wait("document.querySelectorAll('[data-preregistration]').length > 0",
+                  "the pre-registrations did not render", seconds=60)
+        self.wait("document.querySelector('.experiment-launch') !== null",
+                  "the experiments launcher is not under Evals", seconds=60)
+        self.assertEqual(self.js("document.querySelectorAll('h1').length"), 1)
+
+        self.js("location.hash = '#/evals?surface=stances&item=voice'")
+        observational = "document.querySelector('section[data-label=observational]')"
+        self.wait(observational + " !== null", "the before and after did not render", seconds=60)
+        self.wait("document.querySelector('[data-boundary^=\"stances:voice:\"]') !== null",
+                  "the stance change showed no before and after", seconds=60)
+        shown = self.js("[...document.querySelectorAll('section[data-label=observational]')]"
+                        ".map(s => s.textContent).join(' ')")
+        self.assertIn("Observational · exploratory", shown)
+        self.assertIn("answer-card → concise", shown)
+        self.assertNotIn("evidence", shown.lower())
+        self.assertEqual(self.js("document.querySelectorAll('[data-label=pre-registered]').length"),
+                         0)
+
+        self.js("location.hash = '#/evals?tab=qualification'")
+        self.wait("document.querySelector('[data-client=\"claude-code-cli-macos\"]') !== null",
+                  "runtime qualification did not render", seconds=60)
+        status, answer = self.api("GET", "/api/evals/before-after?days=30&surface=stances")
+        self.assertEqual((status, answer["label"]), (200, "observational"))
+        status, _refused = self.api("GET", "/api/evals/auto-trim?days=0")
+        self.assertEqual(status, 400)
+# End Phase C — Evals.
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,7 @@ import { BaselinePage } from "./baseline/BaselinePage";
 import { version } from "../package.json";
 import { loadColorScheme, saveColorScheme, type ColorScheme } from "./preferences";
 import { LiveUpdateControls, LiveUpdatesProvider } from "./live/LiveUpdates";
-import { EvalsPage } from "./shell/EvalsPage";
+import { EvalsPage } from "./evals/EvalsPage";
 import { LegacyRedirect } from "./shell/LegacyRedirect";
 import { StudioNav } from "./shell/StudioNav";
 import { RebuildingPage } from "./shell/RebuildingPage";

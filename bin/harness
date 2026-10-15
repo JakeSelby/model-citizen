@@ -7694,6 +7694,33 @@ def cmd_studio_routine(args: argparse.Namespace) -> int:
 # End Phase C — Routines.
 
 
+# Phase C — Evals (#1333)
+def cmd_evals(args: argparse.Namespace) -> int:
+    """`GET /api/evals/<view>` through its own handler: pre-registrations, the compatibility
+    catalog's records, or the observational before-and-after and auto-trim readings."""
+    request = {name: str(value) for name, value in (
+        ("days", getattr(args, "days", None)), ("surface", getattr(args, "surface", None)),
+        ("item", getattr(args, "item", None))) if value is not None}
+    try:
+        status, result = studio_headless.call_route(
+            REPO, state_dir() / "studio", "GET", "/api/evals/" + args.evals_view, request)
+    except (OSError, studio.runs.RunError):
+        status, result = 503, {"error": "run_state_unavailable"}
+    except (ValueError, RuntimeError):
+        status, result = 500, {"error": "internal_error"}
+    if args.json:
+        print(json.dumps(result, sort_keys=True))
+    elif status != 200:
+        print("citizen evals %s: %s" % (args.evals_view, result["error"]), file=sys.stderr)
+    else:
+        if result.get("label") == "observational":
+            print(result["note"])
+        print(json.dumps({k: v for k, v in result.items()
+                          if k not in ("label", "standard_label", "note")}, indent=2))
+    return 0 if status == 200 else (1 if status >= 500 else 2)
+# End Phase C — Evals.
+
+
 def cmd_draft_try_without(args: argparse.Namespace) -> int:
     """`POST /api/rules/try-without`: a draft with one rule switched off."""
     return _studio_route_cli(args, "/api/rules/try-without", {"rule": args.rule})
@@ -8314,6 +8341,26 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser.add_argument("--json", action="store_true")
     record_parser.set_defaults(func=cmd_baseline)
     # End Phase C — Baseline
+
+    # Phase C — Evals (#1333)
+    p = sub.add_parser("evals", help="print what the Studio's Evals page shows")
+    evals_sub = p.add_subparsers(dest="evals_view", required=True)
+    for view, text in (("preregistrations", "the committed pre-registrations"),
+                       ("evidence", "the compatibility catalog's native qualification records"),
+                       ("before-after", "observational: before and after each setting change"),
+                       ("auto-trim", "observational: context per call before and after a reset")):
+        view_parser = evals_sub.add_parser(view, help=text)
+        if view in ("before-after", "auto-trim"):
+            view_parser.add_argument("--days", default=None,
+                                     help="the window in days, 1 to %d (default 30)"
+                                     % studio_periods.MAX_DAYS)
+        if view == "before-after":
+            view_parser.add_argument("--surface", default=None,
+                                     help="one Harness surface, such as stances")
+            view_parser.add_argument("--item", default=None, help="one item on the surface")
+        view_parser.add_argument("--json", action="store_true")
+        view_parser.set_defaults(func=cmd_evals)
+    # End Phase C — Evals.
 
     p = sub.add_parser("activity", help="page through decisions and governed changes")
     p.add_argument("--session", default="", help="match a session id")

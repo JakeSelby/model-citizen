@@ -29,7 +29,8 @@ import {
 
 const POLL_MS = 350;
 
-export function ExperimentsPage() {
+/** `embedded` is the Evals page's Experiments tab: Evals owns the page's one level-one heading. */
+export function ExperimentsPage({ embedded = false }: { embedded?: boolean } = {}) {
   const [catalog, setCatalog] = useState<RunCatalog | null>(null);
   const [nativeCatalog, setNativeCatalog] = useState<NativeCatalog | null>(null);
   const [nativeSelection, setNativeSelection] = useState<NativeSelection | null>(null);
@@ -200,8 +201,8 @@ export function ExperimentsPage() {
   return (
     <Stack gap="xl">
       <div className="page-heading">
-        <Text className="eyebrow">Studio / Experiments</Text>
-        <Title order={1}>Run checks, native acceptance or a live replay.</Title>
+        {!embedded && <Text className="eyebrow">Studio / Experiments</Text>}
+        <Title order={embedded ? 2 : 1}>Run checks, native acceptance or a live replay.</Title>
         <Text c="dimmed" mt="xs">Free suites stay local. Paid experiments show their estimate, resolved targets and hard caps before any model process starts.</Text>
       </div>
 

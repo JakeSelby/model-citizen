@@ -32,7 +32,7 @@ from . import (activity, auth, compare, draft_registration, draft_tests, drafts,
                targets)
 from . import apply as draft_apply
 from . import definitive, definitive_launch, eval_tiers, first_run, headless, rule_health, run_store, trends
-from . import changes, periods
+from . import changes, evals, periods
 from . import baseline
 from . import routines  # Phase C — Routines (#1335)
 from . import spend as spend_report
@@ -656,6 +656,37 @@ def _routines_change(handler: Handler, route: Route) -> None:
     route.response_schema.validate(payload)
     handler._json(200, payload)
 # End Phase C — Routines.
+
+
+# Phase C — Evals (#1333)
+EVALS_PREREGISTRATIONS = ResponseSchema("json-object", (
+    ("schema_version", "integer"), ("directory", "string"), ("items", "array")))
+EVALS_COMPATIBILITY = ResponseSchema("json-object", (
+    ("schema_version", "integer"), ("state", "string"), ("reason", "string-or-null"),
+    ("harness_version", "string-or-null"), ("qualification_source", "string-or-null"),
+    ("required_cases", "array"), ("clients", "array"), ("limitations", "array")))
+_OBSERVATIONAL_FIELDS = (("label", "string"), ("standard_label", "string"), ("note", "string"),
+                         ("schema_version", "integer"), ("days", "integer"))
+EVALS_BEFORE_AFTER = ResponseSchema("json-object", _OBSERVATIONAL_FIELDS + (
+    ("window_days", "integer"), ("surfaces", "object"), ("boundaries", "array")))
+EVALS_AUTO_TRIM = ResponseSchema("json-object", _OBSERVATIONAL_FIELDS + (
+    ("context_warn", "integer"), ("state", "string"), ("reason", "string-or-null"),
+    ("sessions_with_reset", "integer"), ("sessions_without_reset", "integer"),
+    ("before", "object"), ("after", "object"), ("median_change", "integer-or-null"),
+    ("sessions", "array")))
+
+
+def _evals(kind: str) -> Callable[[Handler, Route], None]:
+    def handle(handler: Handler, route: Route) -> None:
+        status, payload = evals.answer(kind, getattr(handler, "request_query", {}),
+                                       repo=handler.server.repo_root)
+        if status != 200:
+            handler._error(status, payload["error"])
+            return
+        route.response_schema.validate(payload)
+        handler._json(200, payload)
+    return handle
+# End Phase C — Evals.
 
 
 def _configure_schema(handler: Handler, route: Route) -> None:
@@ -2818,6 +2849,18 @@ ROUTES = RouteRegistry((
     Route("POST", "/api/routines/remove", "application/json", ROUTINE_CHANGE, _routines_change,
           None, "application/json", routines.CLI_COMMANDS["remove"]),
     # End Phase C — Routines.
+    # Phase C — Evals (#1333)
+    Route("GET", "/api/evals/preregistrations", "application/json", EVALS_PREREGISTRATIONS,
+          _evals("preregistrations"), None, cli_command=evals.CLI_COMMANDS["preregistrations"]),
+    Route("GET", "/api/evals/evidence", "application/json", EVALS_COMPATIBILITY,
+          _evals("evidence"), None, cli_command=evals.CLI_COMMANDS["evidence"]),
+    Route("GET", "/api/evals/before-after", "application/json", EVALS_BEFORE_AFTER,
+          _evals("before-after"), None, cli_command=evals.CLI_COMMANDS["before-after"],
+          query=evals.QUERY["before-after"]),
+    Route("GET", "/api/evals/auto-trim", "application/json", EVALS_AUTO_TRIM,
+          _evals("auto-trim"), None, cli_command=evals.CLI_COMMANDS["auto-trim"],
+          query=evals.QUERY["auto-trim"]),
+    # End Phase C — Evals.
     Route("GET", CONTROL_HEALTH, "application/json", HEALTH, _health, "authenticated-health"),
     Route("POST", CONTROL_BOOTSTRAP, "application/json", BOOTSTRAP_CONTROL,
           _control_bootstrap, "bootstrap"),
