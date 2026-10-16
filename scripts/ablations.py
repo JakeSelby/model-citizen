@@ -24,6 +24,12 @@ A file no switch removes, the user-level CLAUDE.md, is withheld from the image i
 (`WITHHOLDABLE`), and such an arm is admitted by `withheld_differences`, its image manifest
 against control's, since the resolver cannot see the file.
 
+An arm may instead declare `settings_env`, a Claude Code settings `env` merged into its image after
+the sync (`replay_arms.declaration(settings_env=...)`): a variable to a string, or to null to take
+it out. It is for what the resolver cannot see, such as the native auto-compaction window, so
+`check_entries` has no entry to read for it and `admit_arms` holds it to its declaration and its
+image's recorded settings env instead of a profile difference.
+
 The extended sweep (#1184) adds what each arm is judged on. An arm may name its `layer`, `what`
 it removes in words, its own pack `tasks`, its `long_session` scenarios and its pre-registered
 `scores`, each a metric and its equivalence margin; the manifest's `outcome` names the task subset
@@ -50,6 +56,7 @@ from harness_core import catalog  # noqa: E402  the core hooks a selection must 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import equivalence  # noqa: E402  the interval-inside-bounds verdict and margin checks
 import oracle_metrics  # noqa: E402  behaviour scores' paired intervals
+import replay_arms  # noqa: E402  a declared settings env and its admission
 import replay_pair  # noqa: E402  the schema-1 pair, its loader and its surface parity
 import replay_stats  # noqa: E402  the per-arm comparison and the minimum detectable effect
 PRICING = replay_pair.load_pricing()  # `policy/hooks/pricing.py`, the one place a rate is read
@@ -68,6 +75,7 @@ ARM_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 ENTRY = re.compile(r"^([a-z][a-z-]*)/([A-Za-z0-9][A-Za-z0-9._-]*)$")
 TASK_ID = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 CORE_ACK = "core_switches_acknowledged"
+SETTINGS_ENV = "settings_env"  # replay_arms.SETTINGS_ENV, the arm key and declaration key
 # The loaded-surface fields (`cost_bench.SURFACE_FIELDS`) one entry's removal may move, by kind.
 # Anything else that differs from control in a trial is a difference nobody declared. A hook is
 # not in the loaded surface, so its removal may move none of it.
@@ -154,10 +162,15 @@ def structure_errors(data):
             errors.append("%s: id %s is used twice" % (where, ident))
         seen_ids.add(ident)
         keys = set(arm) - {"id"} - set(ARM_KEYS)
-        if keys not in ({"removes"}, {"sets"}):
-            errors.append("%s: give exactly one of removes or sets, and nothing else" % where)
+        if keys not in ({"removes"}, {"sets"}, {SETTINGS_ENV}):
+            errors.append("%s: give exactly one of removes, sets or settings_env, and nothing else" % where)
             continue
         errors += ["%s: %s" % (where, line) for line in arm_sweep_errors(arm)]
+        if SETTINGS_ENV in arm:
+            problem = replay_arms.settings_env_problem(arm[SETTINGS_ENV])
+            if problem:
+                errors.append("%s: %s" % (where, problem))
+            continue
         entry = entry_of(arm)
         if entry is None:
             errors.append("%s: %s must name one kind/unit entry%s" % (
@@ -262,6 +275,18 @@ def arm_sweep_errors(arm):
     return errors
 
 
+def settings_env_of(arm):
+    """The settings `env` an arm declares into its image, or None for a selection arm."""
+    value = (arm or {}).get(SETTINGS_ENV)
+    return dict(value) if isinstance(value, dict) else None
+
+
+def declared_inputs(arm):
+    """What `replay_arms.declaration` takes for this arm: its selection or its settings env."""
+    env = settings_env_of(arm)
+    return {"settings_env": env} if env is not None else {"selection": selection(arm)}
+
+
 def entries_of(arm):
     """Every `kind/unit` entry an arm toggles: one, or a whole listing's. [] when malformed."""
     value = arm.get("removes")
@@ -295,7 +320,10 @@ def entry_of(arm):
 
 def selection(arm):
     """The arm's selection in the user-config shape the sync reads: `{kind: {unit: value}}`, with
-    `core_switches_acknowledged` true when it switches a core hook off, as a user must."""
+    `core_switches_acknowledged` true when it switches a core hook off, as a user must. None for
+    an arm that declares a settings env, which installs no selection."""
+    if SETTINGS_ENV in arm:
+        return None
     if "sets" in arm:
         kind, unit = ENTRY.match(entry_of(arm)).groups()
         return {kind: {unit: arm["sets"][entry_of(arm)].strip()}}
@@ -377,6 +405,8 @@ def check_entries(manifest, posture, root, env=None):
     errors = []
     withholdable = {e.split("/", 1)[0] for e in WITHHOLDABLE}
     for arm in manifest["arms"]:
+        if SETTINGS_ENV in arm:  # nothing the resolver reads; its image is checked at admission
+            continue
         entry = entries_of(arm)[0]
         kind, unit = ENTRY.match(entry).groups()
         spec = kinds.get(kind)
@@ -479,8 +509,9 @@ def _variant_exists(posture, kind, spec, unit, variant, root):
 
 def stripped(declaration):
     """A declaration less its selection: what an ablation arm's must share with control's."""
-    out = {k: v for k, v in (declaration or {}).items() if k != "selection"}
-    out["components"] = [c for c in out.get("components") or [] if c.get("name") != "selection"]
+    out = {k: v for k, v in (declaration or {}).items() if k not in ("selection", SETTINGS_ENV)}
+    out["components"] = [c for c in out.get("components") or []
+                         if c.get("name") not in ("selection", replay_arms.SETTINGS_ENV_COMPONENT)]
     return out
 
 
@@ -504,8 +535,15 @@ def admit_arms(records, fingerprints):
             continue
         reasons += ["%s: %s" % (name, line) for line in
                     declaration_differences(control.get("declaration"), record.get("declaration"))]
+        if record.get("declaration", {}).get(SETTINGS_ENV) is not None:
+            # The resolver cannot see a settings env, so no profile can differ; what the arm
+            # changes is its declaration and the settings its image holds.
+            problem = replay_arms._settings_env_installed(record)
+            if problem:
+                reasons.append("%s: %s" % (name, problem))
+            continue
         if record.get("declaration", {}).get("selection") is None:
-            reasons.append("%s: declares no selection" % name)
+            reasons.append("%s: declares no selection or settings env" % name)
         mine, theirs = fingerprints.get(name), fingerprints.get(CONTROL)
         held = withheld((record.get("declaration") or {}).get("selection"))
         if mine is None or theirs is None:
@@ -569,6 +607,7 @@ def row_stamp(manifest, arm, seed):
     return {"ablation": ablation,
             "ablation_removes": spec.get("removes") if spec else None,
             "ablation_sets": dict(spec["sets"]) if spec and "sets" in spec else None,
+            "ablation_settings_env": settings_env_of(spec),
             "selection": selection(spec) if spec else {}, "schedule_seed": seed}
 
 

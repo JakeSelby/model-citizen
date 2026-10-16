@@ -88,6 +88,14 @@ LAUNCH_INPUTS = ("effort",)
 SELECTION = "selection"
 SELECTION_FILE = "selection.json"
 SELECTED_TARGET = "harness-selected"
+# A declared Claude Code settings `env`: its declaration key and component name, the build-context
+# file the Dockerfile merges into the agent user's `~/.claude/settings.json` after the sync, and the
+# stage that does so. A null value takes the variable out, so an arm can run the native default.
+SETTINGS_ENV = "settings_env"
+SETTINGS_ENV_COMPONENT = "settings-env"
+SETTINGS_ENV_FILE = "settings-env.json"
+SETTINGS_ENV_TARGET = "harness-env"
+ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 def digest(value):
@@ -126,6 +134,23 @@ def selection_bytes(selection):
     return (json.dumps(selection, sort_keys=True, indent=2) + "\n").encode("utf-8")
 
 
+def settings_env_bytes(settings_env):
+    """The file a declared settings `env` is installed from, byte for byte: canonical JSON with a
+    trailing newline. The `settings-env` component's version is the sha256 of these bytes."""
+    return (json.dumps(settings_env, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+
+def settings_env_problem(settings_env):
+    """Why `settings_env` is not a settings `env` to declare: a non-empty object of upper-case
+    variable name to a string, or to null for a variable taken out. None when it is one."""
+    if not isinstance(settings_env, dict) or not settings_env:
+        return "a settings env is a non-empty object of variable name to a string or null"
+    for name, value in settings_env.items():
+        if not isinstance(name, str) or not ENV_NAME.match(name) or not (value is None or isinstance(value, str)):
+            return "settings env %r is not an upper-case variable name with a string or null value" % (name,)
+    return None
+
+
 def _selection_problem(selection):
     """Why `selection` is not a selection in the user-config shape, or None."""
     if not isinstance(selection, dict):
@@ -141,7 +166,8 @@ def _selection_problem(selection):
     return None
 
 
-def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None, selection=None):
+def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None, selection=None,
+                settings_env=None):
     """What one arm is built from, as a dict: every input that could change what it holds.
 
     `harness` is `{ref, commit}` for the harness arm and None for the bare one; the commit is the
@@ -154,7 +180,14 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
     configuration before the sync, so the sync withholds what it switches off, and it is declared
     as a `selection` component whose version is the digest of the installed bytes; admission
     accepts that file only when it matches (`_user_config_problem`). An arm with no selection
-    has no `selection` key at all, so its declaration and image name are what they always were."""
+    has no `selection` key at all, so its declaration and image name are what they always were.
+
+    `settings_env` is a Claude Code settings `env` for the harness arm, such as an auto-compaction
+    window pair, merged into the agent user's settings after the sync. It is declared as a
+    `settings-env` component whose version is the digest of the installed bytes and recorded in
+    full, so the arm's declaration digest and image name change with it, and admission accepts the
+    image only when its settings hold exactly those values (`_settings_env_installed`). An arm
+    declares a selection or a settings env, never both."""
     if effort is not None and effort not in EFFORT_LEVELS:
         raise SystemExit("replay-arms: effort %r is not one of %s" % (effort, ", ".join(EFFORT_LEVELS)))
     if arm not in ARMS:
@@ -169,6 +202,14 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
         problem = _selection_problem(selection)
         if problem:
             raise SystemExit("replay-arms: %s" % problem)
+    if settings_env is not None:
+        if not harness:
+            raise SystemExit("replay-arms: only the harness arm takes a declared settings env")
+        if selection is not None:
+            raise SystemExit("replay-arms: an arm declares a selection or a settings env, not both")
+        problem = settings_env_problem(settings_env)
+        if problem:
+            raise SystemExit("replay-arms: %s" % problem)
     version = claude_code_version or inputs["claude_code_version"]
     components = [{"name": "base-image", "version": inputs["base_image"]},
                   {"name": "@anthropic-ai/claude-code", "version": version},
@@ -178,6 +219,9 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
     if selection is not None:
         components.append({"name": SELECTION,
                            "version": "sha256:" + hashlib.sha256(selection_bytes(selection)).hexdigest()})
+    if settings_env is not None:
+        components.append({"name": SETTINGS_ENV_COMPONENT,
+                           "version": "sha256:" + hashlib.sha256(settings_env_bytes(settings_env)).hexdigest()})
     out = {"schema": SCHEMA, "arm": arm, "base_image": inputs["base_image"],
            "claude_code_version": version,
            "harness": dict(ref=harness["ref"], commit=harness["commit"]) if harness else None,
@@ -186,6 +230,8 @@ def declaration(arm, inputs, harness=None, claude_code_version=None, effort=None
            "observer_settings_sha256": digest(observer_settings())}
     if selection is not None:
         out[SELECTION] = json.loads(json.dumps(selection))
+    if settings_env is not None:
+        out[SETTINGS_ENV] = json.loads(json.dumps(settings_env))
     return out
 
 
@@ -216,12 +262,17 @@ def build_context(decl, parent, snapshot, repo=ROOT):
         snapshot(repo, decl["harness"]["commit"], context / "harness")
     if decl.get(SELECTION) is not None:
         (context / SELECTION_FILE).write_bytes(selection_bytes(decl[SELECTION]))
+    if decl.get(SETTINGS_ENV) is not None:
+        (context / SETTINGS_ENV_FILE).write_bytes(settings_env_bytes(decl[SETTINGS_ENV]))
     return context
 
 
 def target(decl):
     """The Dockerfile stage an arm builds: its own name, or `SELECTED_TARGET` for a harness arm
-    with a declared selection, which installs the selection before the sync."""
+    with a declared selection, which installs the selection before the sync, or
+    `SETTINGS_ENV_TARGET` for one with a declared settings env, merged after the sync."""
+    if decl.get(SETTINGS_ENV) is not None:
+        return SETTINGS_ENV_TARGET
     return SELECTED_TARGET if decl.get(SELECTION) is not None else decl["arm"]
 
 
@@ -559,7 +610,7 @@ HARNESS_DIRS = ("home:.claude/rules", "home:.claude/rules/harness-stances", "hom
                 "home:.claude/agents", "home:.claude/hooks", "home:.claude/output-styles",
                 "home:.claude/plans")
 # Declared components that are not global npm packages; every other one is, as `name@version`.
-NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION)
+NOT_PACKAGES = ("base-image", "model-citizen", "model-citizen-observer", SELECTION, SETTINGS_ENV_COMPONENT)
 # The image user's configuration, and the file a sync copies there when it finds none.
 USER_CONFIG = "home:.config/agent-harness/config.json"
 EXAMPLE_CONFIG = "harness:config.example.json"
@@ -810,8 +861,34 @@ def _pins_its_effort(record):
     return None
 
 
+def _settings_env_installed(record):
+    """The image's Claude Code settings `env` holds the declared settings env exactly: each
+    declared variable at its value, and each declared null absent. The component must match the
+    declared values, and an arm that declares none may carry no `settings-env` component. The
+    manifest's `settings_env` is what `arm_manifest.py` read from the image's settings file."""
+    decl = record.get("declaration") if isinstance(record.get("declaration"), dict) else {}
+    manifest = record.get("manifest") if isinstance(record.get("manifest"), dict) else {}
+    declared = decl.get(SETTINGS_ENV)
+    versions = [c.get("version") for c in decl.get("components") or []
+                if isinstance(c, dict) and c.get("name") == SETTINGS_ENV_COMPONENT]
+    if declared is None:
+        return "a settings-env component is declared with no settings env" if versions else None
+    if settings_env_problem(declared):
+        return settings_env_problem(declared)
+    if versions != ["sha256:" + hashlib.sha256(settings_env_bytes(declared)).hexdigest()]:
+        return "the settings-env component does not match the declared settings env"
+    held = manifest.get(SETTINGS_ENV)
+    if not isinstance(held, dict):
+        return "the manifest does not record the image's settings env"
+    wrong = sorted(name for name, value in declared.items()
+                   if (name in held if value is None else held.get(name) != value))
+    if wrong:
+        return "the image's settings env differs from the declared one at %s" % ", ".join(wrong)
+    return None
+
+
 ADMISSION_CHECKS.extend([_has_intact_records, _matches_its_declaration, _configuration_is_declared, _no_host_path,
-                         _is_preregistered_or_exploratory, _pins_its_effort])
+                         _is_preregistered_or_exploratory, _pins_its_effort, _settings_env_installed])
 
 
 def admit(record, checks=None):

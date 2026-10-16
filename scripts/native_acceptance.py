@@ -26,6 +26,7 @@ import json
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -3084,6 +3085,433 @@ def case_bidirectional_handoff(home):
     return "; ".join(notes) + "."
 
 
+# The context reset: native auto-compaction at a lowered window, in one headless invocation.
+RESET_WINDOW = 100000
+# No `context_reset_at` resolves to this percentage: sync always writes 100, so the case sets it.
+RESET_PCT = 70
+# The probe variant's reset point: the smallest a variant may name, which projects the window above.
+RESET_VARIANT, RESET_VARIANT_AT = "reset-probe", 80000
+# Measured in the spike: auto-compaction fires near pct/100 x (window - this), not pct of window.
+COMPACT_RESERVE = 19300
+RESET_TOLERANCE = 0.15
+RESET_ITEMS = 20
+RESET_TIMEOUT = 2400
+# What the pre-compact hook keeps per session (`policy/hooks/pre-compact.py`, KEEP).
+SNAPSHOT_KEEP = 5
+RESEED_LINE = "[harness: Your context was reset automatically"
+THRASH = "Autocompact is thrashing"
+REFUSAL = re.compile(r"^\W*(I'm sorry|I am sorry|I can(?:no|')t (?:help|assist|continue|do)|"
+                     r"I won't|I will not|I'm not able to (?:help|continue))", re.I)
+RESET_PROMPT = ("Work through CHECKLIST.md from item 01 to item %d, in order. Each item names one "
+                "ledger in inventory/. For each item, read that ledger with your Read tool, then use "
+                "your Write tool once to create done/item-NN.txt (NN is the item number) holding "
+                "only the ledger's audit code. Do every item exactly once, ask no questions, and "
+                "when all %d are written reply with the single word DONE." % (RESET_ITEMS, RESET_ITEMS))
+RESET_VARIANT_JSON = {"schema_version": 1, "extends": "balanced",
+                      "switches": {"context_reset_at": RESET_VARIANT_AT}}
+RESET_VARIANT_PROSE = ("# Cost stance: reset probe\n\n"
+                       "Balanced, with the context reset at its lowest point, for acceptance only.\n")
+HOOK_LOGGER = """#!/usr/bin/env python3
+import json, sys
+event = sys.argv[2]
+data = json.load(sys.stdin)
+with open(sys.argv[1], "a") as out:
+    out.write(json.dumps({"event": event, "trigger": data.get("trigger"),
+                          "source": data.get("source"), "session_id": data.get("session_id")}) + "\\n")
+"""
+LEDGER_GOODS = ("brass hinges", "oak shelving boards", "copper wire spools", "canvas tarpaulins",
+                "glass jars", "wool blankets", "steel brackets", "paper notebooks", "rubber boots",
+                "clay flowerpots", "cotton aprons", "tin lanterns", "pine crates", "linen napkins",
+                "ceramic tiles", "leather satchels", "wicker baskets", "iron skillets",
+                "bamboo ladders", "felt hats")
+LEDGER_NOTES = ("each wrapped in brown paper and labelled by hand",
+                "stacked two deep with the newest stock at the back",
+                "checked against the delivery note from the morning van",
+                "with three set aside for the repair bench",
+                "counted twice because the first tally was interrupted",
+                "moved here last week from the loading dock",
+                "with the damaged ones already returned to the supplier",
+                "kept on the lower shelf where the floor stays dry")
+LEDGER_TEAMS = ("morning", "evening", "weekend", "relief", "night")
+LEDGER_SENTENCES = 150  # about 4,000 tokens of prose per ledger
+
+
+def ledger_code(index):
+    return "AUDIT-%02d-%03d" % (index, (index * 7919) % 1000)
+
+
+def inventory_ledger(index):
+    """One plain-prose stock ledger of about 4,000 tokens, and its audit code; deterministic.
+
+    Prose, never a word list: a fixture of random code words drew a model refusal in the spike.
+    """
+    lines = ["# Stock ledger %02d" % index, ""]
+    for number in range(LEDGER_SENTENCES):
+        step = index * 31 + number
+        if number % 10 == 0:
+            lines += ["", "## Aisle %d" % (number // 10 + 1), ""]
+        lines.append("On shelf %d of aisle %d, the %s team counted %d boxes of %s, %s."
+                     % (number % 7 + 1, number // 10 + 1, LEDGER_TEAMS[step % len(LEDGER_TEAMS)],
+                        (step * 37) % 90 + 10, LEDGER_GOODS[step % len(LEDGER_GOODS)],
+                        LEDGER_NOTES[step % len(LEDGER_NOTES)]))
+    code = ledger_code(index)
+    lines += ["", "The audit code for this ledger is %s." % code, ""]
+    return "\n".join(lines), code
+
+
+def reset_workspace(project, items=RESET_ITEMS):
+    """Write the ledgers and the checklist into `project`; returns item number to audit code."""
+    (project / "inventory").mkdir(parents=True, exist_ok=True)
+    (project / "done").mkdir(exist_ok=True)
+    codes, checklist = {}, ["# Checklist", ""]
+    for index in range(1, items + 1):
+        text, codes[index] = inventory_ledger(index)
+        (project / "inventory" / ("inventory-%02d.md" % index)).write_text(text)
+        checklist.append("- [ ] %02d: inventory/inventory-%02d.md" % (index, index))
+    (project / "done" / ".keep").write_text("")
+    (project / "CHECKLIST.md").write_text("\n".join(checklist) + "\n")
+    return codes
+
+
+def stream_events(text):
+    """Every JSON object of a stream-json transcript, in order."""
+    events = []
+    for line in (text or "").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def is_boundary(event):
+    return event.get("type") == "system" and event.get("subtype") == "compact_boundary"
+
+
+def compactions(events):
+    """Each compaction as (trigger, tokens before it), in order."""
+    found = []
+    for event in events:
+        if is_boundary(event):
+            meta = event.get("compact_metadata") or event.get("compactMetadata") or {}
+            found.append((meta.get("trigger"), meta.get("pre_tokens", meta.get("preTokens"))))
+    return found
+
+
+def compact_hook_reseeds(event):
+    """Whether a SessionStart hook response for a compaction carries the reseed line in the
+    context it injected: its parsed `additionalContext`, or its raw output when that is not JSON."""
+    if event.get("type") != "system" or event.get("subtype") != "hook_response":
+        return None
+    if event.get("hook_event") != "SessionStart" or not str(event.get("hook_name", "")).endswith(":compact"):
+        return None
+    raw = str(event.get("output") or event.get("stdout") or "")
+    try:
+        context = ((json.loads(raw) or {}).get("hookSpecificOutput") or {}).get("additionalContext") or ""
+    except (ValueError, AttributeError):
+        context = raw
+    return RESEED_LINE in str(context)
+
+
+def reseeded(events):
+    """For each compaction, whether a SessionStart(compact) hook response injected the reseed line:
+    one between the previous boundary and this one, where Claude Code emits it, or after this
+    boundary and before the model's next reply. Text a later summary quotes never counts."""
+    marks, pending, open_after = [], False, False
+    for event in events:
+        if is_boundary(event):
+            marks.append(pending)
+            pending, open_after = False, True
+            continue
+        hit = compact_hook_reseeds(event)
+        if hit:
+            if open_after and marks and not marks[-1]:
+                marks[-1] = True
+            else:
+                pending = True
+        if event.get("type") == "assistant":
+            open_after = False
+    return marks
+
+
+def continued(events):
+    """For each automatic compaction, whether the main thread made a tool call after it before the
+    next result event or the end of the stream: the work went on without a human turn."""
+    marks, waiting = [], []
+    for event in events:
+        if is_boundary(event) and (event.get("compact_metadata") or {}).get("trigger") == "auto":
+            marks.append(False)
+            waiting.append(len(marks) - 1)
+        elif event.get("type") == "result":
+            waiting = []
+        elif event.get("type") == "assistant" and not event.get("parent_tool_use_id") \
+                and any(block.get("type") == "tool_use" for block in message_blocks(event)):
+            for index in waiting:
+                marks[index] = True
+            waiting = []
+    return marks
+
+
+def message_blocks(event):
+    content = (event.get("message") or {}).get("content")
+    if isinstance(content, str):
+        return [{"type": "text", "text": content}]
+    return [block for block in content or [] if isinstance(block, dict)]
+
+
+ITEM_FILE = re.compile(r"done/item-(\d{2})\.txt")
+WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+               "NotebookEdit": "notebook_path"}
+SEPARATORS = (";", "&&", "||", "|", "&", "\n")
+PY_OPEN = re.compile(r"open\(\s*(['\"])([^'\"]+)\1\s*,\s*(['\"])[wax]b?\+?\3")
+
+
+def _redirect_targets(command):
+    """Files an unquoted `>`, `>>`, `&>` or `1>` writes; a `2>` or other descriptor is not stdout."""
+    found, quote, index = [], None, 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            quote = None if char == quote else quote
+        elif char in "'\"":
+            quote = char
+        elif char == ">":
+            before = command[index - 1] if index else " "
+            if before.isdigit() and before != "1":
+                index += 1
+                continue
+            index += 2 if command[index + 1:index + 2] == ">" else 1
+            if command[index:index + 1] == "&":  # `>&2` duplicates a descriptor
+                continue
+            rest = command[index:].lstrip()
+            target = re.match(r"(\"[^\"]*\"|'[^']*'|[^\s;&|<>]+)", rest)
+            if target:
+                found.append(target.group(1).strip("'\""))
+            continue
+        index += 1
+    return found
+
+
+def _simple_commands(command):
+    """The command's simple commands as argument lists, redirections dropped; [] if unparsable."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>")
+        lexer.whitespace_split = True
+        tokens = list(lexer)
+    except ValueError:
+        return []
+    commands, current, skip = [], [], False
+    for token in tokens:
+        if skip:
+            skip = False
+            continue
+        if token in SEPARATORS or set(token) <= set(";&|") and token:
+            if current:
+                commands.append(current)
+            current = []
+        elif set(token) <= set("<>&") and token:
+            skip = True  # the redirection's target, read by `_redirect_targets`
+            if current and current[-1].isdigit():
+                current.pop()
+        else:
+            current.append(token)
+    if current:
+        commands.append(current)
+    return commands
+
+
+def bash_write_targets(command):
+    """Every path a shell command writes: stdout redirections, `tee`, `cp` and `mv` destinations,
+    `sed -i` files and a `python -c` that opens a file for writing. A read is not a write."""
+    targets = _redirect_targets(command)
+    for argv in _simple_commands(command):
+        name, args = os.path.basename(argv[0]), argv[1:]
+        plain = [a for a in args if not a.startswith("-")]
+        if name == "tee":
+            targets += plain
+        elif name in ("cp", "mv", "install") and len(plain) >= 2:
+            targets.append(plain[-1])
+        elif name in ("sed", "gsed") and any(a == "-i" or a.startswith("-i") or a == "--in-place" for a in args):
+            targets += plain[1:] if not any(a in ("-e", "-f") for a in args) else plain
+        elif name.startswith("python") and "-c" in args:
+            code = args[args.index("-c") + 1] if args.index("-c") + 1 < len(args) else ""
+            targets += [match.group(2) for match in PY_OPEN.finditer(code)]
+    return targets
+
+
+def tool_write_targets(name, data):
+    """The paths one tool call writes: a file tool's own path, or a shell command's targets."""
+    if name in WRITE_TOOLS:
+        return [str(data.get(WRITE_TOOLS[name], ""))]
+    if name == "Bash":
+        return bash_write_targets(str(data.get("command", "")))
+    return []
+
+
+def item_writes(events, pattern=ITEM_FILE):
+    """Item number to the count of main-thread tool calls that wrote its file."""
+    counts = {}
+    for event in events:
+        if event.get("type") != "assistant" or event.get("parent_tool_use_id"):
+            continue
+        for block in message_blocks(event):
+            if block.get("type") != "tool_use":
+                continue
+            numbers = set()
+            for target in tool_write_targets(block.get("name"), block.get("input") or {}):
+                numbers.update(int(n) for n in pattern.findall(target))
+            for number in numbers:
+                counts[number] = counts.get(number, 0) + 1
+    return counts
+
+
+def one_turn(events):
+    """Why the run was not one turn from the first reset to completion, or None: a single result
+    event, with none between the first compaction and the end."""
+    results = [index for index, event in enumerate(events) if event.get("type") == "result"]
+    boundaries = [index for index, event in enumerate(events) if is_boundary(event)]
+    if len(results) != 1:
+        return "%d result events, not one" % len(results)
+    if boundaries and results[0] < boundaries[0]:
+        return "the turn ended before the first reset"
+    return None
+
+
+def run_ending(events):
+    """Why the run ended badly, or None: no result, a thrash stop, a refusal or an error."""
+    results = [event for event in events if event.get("type") == "result"]
+    if not results:
+        return "the stream has no result event"
+    result = results[-1]
+    text = str(result.get("result") or "")
+    tail = json.dumps(events[-3:])
+    if THRASH in text or THRASH in tail:
+        return "the run stopped with \"%s\"" % THRASH
+    replies = [event for event in events if event.get("type") == "assistant"
+               and not event.get("parent_tool_use_id")]
+    stop = (replies[-1].get("message") or {}).get("stop_reason") if replies else None
+    if stop == "refusal" or REFUSAL.search(text):
+        return "the run ended on a refusal: " + redact(text[:160])
+    if result.get("is_error") or result.get("subtype") not in (None, "success"):
+        return "the run ended as %s: %s" % (result.get("subtype"), redact(text[:160]))
+    return None
+
+
+def expected_reset(window=RESET_WINDOW, pct=RESET_PCT):
+    return pct / 100.0 * (window - COMPACT_RESERVE)
+
+
+def assess_reset(events, written, codes, snapshots, expected=None):
+    """Each acceptance assertion as (name, held, detail), from the stream and the workspace.
+
+    `written` maps item number to the done file's text, `codes` item number to the ledger's audit
+    code, and `snapshots` is the count of this session's snapshot files.
+    """
+    expected = expected or expected_reset()
+    low, high = expected * (1 - RESET_TOLERANCE), expected * (1 + RESET_TOLERANCE)
+    found = compactions(events)
+    auto = [size for trigger, size in found if trigger == "auto"]
+    stray = [size for size in auto if not isinstance(size, (int, float)) or not low <= size <= high]
+    checks = [("compaction", bool(auto) and not stray,
+               "%d automatic compaction(s) at %s tokens against %d to %d"
+               % (len(auto), ", ".join(str(size) for size in auto) or "none", low, high))]
+    want = min(len(auto), SNAPSHOT_KEEP)
+    checks.append(("snapshot", bool(auto) and snapshots == want,
+                   "%d snapshot file(s) for %d compaction(s), %d expected with %d kept"
+                   % (snapshots, len(auto), want, SNAPSHOT_KEEP)))
+    went_on = continued(events)
+    checks.append(("continued", bool(went_on) and all(went_on),
+                   "the work went on after %d of %d automatic reset(s) within the turn"
+                   % (sum(went_on), len(went_on))))
+    marks = reseeded(events)
+    checks.append(("reseed", bool(marks) and all(marks),
+                   "a SessionStart(compact) hook injected the reseed line at %d of %d reset(s)"
+                   % (sum(marks), len(marks))))
+    writes = item_writes(events)
+    numbers = range(1, len(codes) + 1)
+    missing = [n for n in numbers if codes[n] not in (written.get(n) or "")]
+    repeated = [n for n in numbers if writes.get(n, 0) > 1]
+    checks.append(("items", not missing and not repeated,
+                   "%d of %d items done; missing or wrong %s; written more than once %s"
+                   % (len(codes) - len(missing), len(codes), missing or "none", repeated or "none")))
+    split = one_turn(events)
+    checks.append(("one-turn", split is None, split or "one result event, after every reset"))
+    ending = run_ending(events)
+    checks.append(("ending", ending is None, ending or "the run ended normally"))
+    return checks
+
+
+def reset_settings(home, log_dir):
+    """Set the spike's window pair and add logging hooks beside the harness's own."""
+    path = home.client_dir / "settings.json"
+    settings = json.loads(path.read_text())
+    env = settings.setdefault("env", {})
+    projected = env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+    if projected != str(RESET_WINDOW):
+        raise AssertionError("cost variant %s (context_reset_at %d) projected the window %r, not %d"
+                             % (RESET_VARIANT, RESET_VARIANT_AT, projected, RESET_WINDOW))
+    env["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] = str(RESET_PCT)
+    env["HARNESS_HANDOFF_BLOCK"] = "on"
+    logger = log_dir / "log_hook.py"
+    logger.write_text(HOOK_LOGGER)
+    hooks = settings.setdefault("hooks", {})
+    for event in ("PreCompact", "SessionStart"):
+        command = "%s %s %s %s" % (sys.executable, logger, log_dir / "hooks.jsonl", event)
+        hooks.setdefault(event, []).append({"hooks": [{"type": "command", "command": command}]})
+    path.write_text(json.dumps(settings, indent=2) + "\n")
+
+
+def case_context_reset(home):
+    """A lowered auto-compaction window, crossed in one headless turn, without losing the task."""
+    if home.runtime != "claude-code":
+        raise Unverified("the context reset is projected into Claude Code alone")
+    root = home.primitives / "stances" / "cost"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / (RESET_VARIANT + ".json")).write_text(json.dumps(RESET_VARIANT_JSON) + "\n")
+    (root / (RESET_VARIANT + ".md")).write_text(RESET_VARIANT_PROSE)
+    home.seed(stances={"cost": RESET_VARIANT, "autonomy": "execute"}, roots=[home.primitives],
+              permissions="bypass", **{ACK_KEY: True})
+    home.harness("sync")
+    logs = home.root / "hook-logs"  # outside the workspace the agent can read
+    logs.mkdir()
+    reset_settings(home, logs)
+    codes = reset_workspace(home.project)
+    probe_repo(home.project, home)
+    if home.keychain_error:
+        raise Unverified(home.keychain_error)
+    args = [home.command, "-p", RESET_PROMPT, "--model", home.model, "--output-format",
+            "stream-json", "--verbose", "--allowedTools", "Read,Write,Bash,Edit"]
+    home.launched += 1
+    try:
+        result = run(args, cwd=str(home.project), stdin=subprocess.DEVNULL, timeout=RESET_TIMEOUT,
+                     env=home.env({"HARNESS_HANDOFF_BLOCK": "on"}))
+    except subprocess.TimeoutExpired:
+        raise Unverified("the client did not finish the checklist within %ss" % RESET_TIMEOUT)
+    (logs / "stream.jsonl").write_text(result.stdout)
+    events = stream_events(result.stdout)
+    if not events:
+        raise Unverified("the client wrote no stream: " + redact(result.stderr[-300:]))
+    session = next((event.get("session_id") for event in events if event.get("session_id")), "")
+    snapshots = len(list((home.project / ".agent-harness" / "handoffs").glob(
+        "auto-%s-*.md" % session))) if session else 0
+    written = {}
+    for number in codes:
+        path = home.project / "done" / ("item-%02d.txt" % number)
+        if path.exists():
+            written[number] = path.read_text(errors="replace")
+    logged = [row for row in jsonl_rows(logs / "hooks.jsonl") if row.get("event") == "PreCompact"]
+    checks = assess_reset(events, written, codes, snapshots)
+    lines = ["%s %s: %s" % (name, "held" if held else "FAILED", detail)
+             for name, held, detail in checks]
+    lines.append("the logging PreCompact hook saw %d call(s), triggers %s"
+                 % (len(logged), sorted(set(str(row.get("trigger")) for row in logged)) or "none"))
+    if not all(held for _, held, _ in checks):
+        raise AssertionError("; ".join(lines))
+    return "; ".join(lines) + "."
+
+
 LEGACY_RULE = "delegation.md"
 OWN_KEY = "MY_OWN_KEY"
 ADOPT_HINT = "--adopt"
@@ -3290,6 +3718,22 @@ CASES = {
 }
 
 
+# Cases runnable by name that the catalog does not yet require of every target; `--cases all`
+# leaves them out. Promoting one is a catalog change, made with the release that requires it.
+OPTIONAL_CASES = {
+    "context-reset": (case_context_reset,
+                      "sync a cost variant with a lowered reset point, set the spike's window "
+                      "pair, run one headless turn over a twenty-item checklist of large ledgers, "
+                      "and read each compaction, snapshot, reseed, item and the ending from its "
+                      "stream and workspace"),
+}
+
+
+def case_entry(name):
+    """The (function, description) a case name runs, required or optional, or None."""
+    return CASES.get(name) or OPTIONAL_CASES.get(name)
+
+
 def confirmed_targets(value):
     """The client surfaces an operator named as hand-compared, as a set of ids.
 
@@ -3363,7 +3807,7 @@ def probe(client, name, model, keep, confirmed=(), login=None):
     try:
         if login is not None:
             secrets = home.use_login(login)
-        observation = CASES[name][0](home)
+        observation = case_entry(name)[0](home)
         return {"case": name, "result": "unverified" if caveat else "passed",
                 "observation": scrub(observed([observation], caveat) if caveat else observation),
                 "seconds": round(time.time() - started, 1), "sessions": home.launched}
@@ -3539,7 +3983,7 @@ def selected(names):
     if names in (None, "all"):
         return list(required)
     chosen = [name.strip() for name in names.split(",") if name.strip()]
-    unknown = [name for name in chosen if name not in required]
+    unknown = [name for name in chosen if name not in required and name not in OPTIONAL_CASES]
     if unknown:
         raise SystemExit("unknown acceptance case: " + ", ".join(unknown))
     return chosen
@@ -3591,7 +4035,7 @@ def plan(client, names, model, confirmed=(), tier_routing=None, login=False):
     if caveat:
         lines.append("  note: " + caveat)
     for name in names:
-        how = CASES[name][1] if name in CASES else NOT_AUTOMATED
+        how = case_entry(name)[1] if case_entry(name) else NOT_AUTOMATED
         lines.append("  %-22s %s" % (name, how))
     return "\n".join(lines)
 
@@ -3631,7 +4075,7 @@ def record(client, names, model, keep, runner=probe, progress=None, confirmed=()
             continue
         # The login is passed only when asked for, so a runner that never takes one still fits.
         extra = {"login": login} if login is not None else {}
-        item = (runner(client, name, model, keep, confirmed, **extra) if name in CASES
+        item = (runner(client, name, model, keep, confirmed, **extra) if case_entry(name)
                 else {"case": name, "result": "unverified", "observation": NOT_AUTOMATED})
         append_case(progress, header, item)
         results.append(item)

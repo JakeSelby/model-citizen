@@ -3219,9 +3219,10 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
     names = ablations.arm_names(manifest)
     plan = ablations.schedule(tasks, args.reps, names, seed, ablations.arm_task_filter(manifest))
     inputs = arms.qualification_inputs()
-    selected = [(ident, arms.declaration("harness", inputs, control_decl["harness"],
-                                         control_decl["claude_code_version"], args.effort, selection=selection))
-                for ident, selection in ablations.selections(manifest).items()]
+    selected = [(spec["id"], arms.declaration("harness", inputs, control_decl["harness"],
+                                              control_decl["claude_code_version"], args.effort,
+                                              **ablations.declared_inputs(spec)))
+                for spec in manifest["arms"]]
     cap_source = getattr(args, "run_cap_source", "--run-cap")
     preflight_cap = 0.0 if args.skip_preflight else PREFLIGHT_CAP_USD
     print("%d run(s): %d task(s) x %d arm(s) (bare, control and %d ablation arm(s)) x %d rep(s), model %s at "
@@ -3247,7 +3248,10 @@ def replay_ablations(args, tasks, protocol, manifest, pack=None):
         print("  arm harness (control) %s at %s: %s" % (arms.label(control_decl), commit,
                                                         arms.image_name(control_decl)))
         for spec, (ident, decl) in zip(manifest["arms"], selected):
+            env = ablations.settings_env_of(spec)
             change = "removes %s" % ablations.entry_of(spec) if "removes" in spec else \
+                "sets settings env %s" % ", ".join("%s=%s" % (k, "<unset>" if v is None else v)
+                                                   for k, v in sorted(env.items())) if env is not None else \
                 "sets %s" % ", ".join("%s to %s" % kv for kv in sorted(spec["sets"].items()))
             runs = [task["id"] for task in tasks if any(t is task and a == ident for t, _, a in plan)]
             print("  arm %s %s: %s; runs %s" % (ident, change, arms.image_name(decl),
