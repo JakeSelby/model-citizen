@@ -90,7 +90,7 @@ MAX_EXTENDS_DEPTH = 5
 SWITCH_VALUES = {
     "session_effort": ("low", "medium", "high", "default"),
     "fast_mode": ("never", "off-unless-asked", "allowed"),
-    "compaction": ("clear-only", "clear-at-task-end", "compact-allowed"),
+    "compaction": ("clear-only", "clear-at-task-end", "auto-at-reset", "compact-allowed"),
     "turn_feed": ("off", "thresholds", "every-turn"),
 }
 BUDGET_KEYS = ("budget_output_tokens", "budget_tool_calls")

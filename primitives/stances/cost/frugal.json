@@ -5,7 +5,7 @@
     "session_effort": "low",
     "max_parallel": 3,
     "fast_mode": "never",
-    "compaction": "clear-only",
+    "compaction": "auto-at-reset",
     "budget_multiplier": 0.6,
     "context_reset_at": 200000
   },

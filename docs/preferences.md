@@ -148,16 +148,18 @@ unnamed spawn is routed to. All of it is data in a JSON sidecar beside the varia
 `citizen stances --json` prints the resolved table with the sidecar each layer came from.
 
 - `frugal` runs the session at low effort, keeps the fan-out narrow, never turns fast mode on,
-  ends a task with `/clear`, drops the cheaper bands a class each, and scales every budget down.
+  resets the context at 200,000 tokens, drops the cheaper bands a class each, and scales every
+  budget down.
 - `balanced` is the shipped default: medium effort, a moderate fan-out, fast mode off unless you
-  ask for it, `/clear` at task end, and the measured budgets unscaled.
+  ask for it, a context reset at 400,000 tokens, and the measured budgets unscaled.
 - `max` leaves effort at the model's default, fans out as widely as the task needs, allows fast
-  mode and compaction, and marks nothing as over budget.
+  mode and compaction whenever you choose, leaves the runtime's own compaction point alone, and
+  marks nothing as over budget.
 - `off` puts no cost posture in force: no effort, fan-out or handoff guidance and no per-turn
   usage feed. Spawns still resolve on `balanced`'s table. It is the economy concern's off level in
   the unit-by-economy two-by-two ([benchmarks.md](benchmarks.md#unit-evals-the-two-by-two)).
 
-### When a session should hand off
+### When a session resets
 
 A long session's cost is mostly the context every further call re-reads. An exploratory audit of
 265 host sessions on 1M-token windows priced a main-thread call at about $0.13 from 50,000 to
@@ -166,22 +168,40 @@ $0.43 above 400,000; 57% of sessions passed 160,000, ran a median of six more tu
 all spend landed after that point. Host sessions are exploratory under the
 [evidence standard](evidence-standard.md), so these figures choose the defaults and prove nothing.
 
-So each variant names two thresholds and the curve:
+A session does not end at those points; it resets its own context and carries on. Each variant
+names a nudge, two points and the curve:
 
 - **Soft, `session_nudge_at`: 160,000** in `balanced` and `frugal`. That is where the per-call cost
-  leaves its floor. Under it a call costs the same however full the context is, so handing off
+  leaves its floor. Under it a call costs the same however full the context is, so resetting
   earlier saves nothing per call, and no posture moves it. The feed says it once, with the
   multiple: about 1.3× the floor there.
-- **Hard, `session_handoff_at`: 400,000 in `balanced`, 200,000 in `frugal`.** Past it, the turn's
-  end is blocked once with the hand-off instruction. `balanced` waits for the band where a call
-  costs about 3.3× the floor (a quarter of sessions, 37% of spend), so it interrupts only
-  the expensive tail. `frugal` stops at 1.7×, half the sessions. The next stop is released
-  whatever the turn did, so the block is never a trap.
+- **The reset point, `context_reset_at`: 400,000 in `balanced`, 200,000 in `frugal`.** `citizen
+  sync` projects it into Claude Code's own auto-compaction, so at that size the runtime compacts
+  the context by itself and the session start reseeds it from the session's saved handoff.
+  `balanced` waits for the band where a call costs about 3.3× the floor (a quarter of sessions,
+  37% of spend), so it resets only the expensive tail. `frugal` resets at 1.7×, half the sessions.
+- **The hand-off point, `session_handoff_at`: 360,000 in `balanced`, 180,000 in `frugal`.** It is
+  nine tenths of the reset point unless a variant names a lower one. Past it the turn's end is
+  blocked once, asking for the task store and progress to be saved and the work to go on, so the
+  reset finds a current handoff. The next stop is released whatever the turn did, so the block is
+  never a trap.
 - **`context_cost_curve`: 1.3× from 160,000, 1.7× from 200,000, 3.3× from 400,000**, the
   multiples the feed names, each that band's per-call cost over the floor's.
 
-`max` names neither threshold and `off` blocks nothing. Change either threshold per variant in its
-sidecar; [usage.md](usage.md#usage-feed) describes the line, the block and their adherence rows.
+`max` and `off` name no reset point, so the runtime keeps its own: Claude Code's documentation
+says a 1M-token model compacts "at about 967K tokens by default"
+([model configuration](https://code.claude.com/docs/en/model-config#context-window-and-auto-compaction)),
+a figure this repository has not measured; `max` names no hand-off point and `off` blocks nothing. Change any of the points per
+variant in its sidecar; [usage.md](usage.md#usage-feed) describes the line, the block, the
+snapshot, the reseed and their adherence rows.
+
+How the projected pair lands on the reset point is exploratory. One spike in a throwaway container
+(Claude Code 2.1.280, headless) saw auto-compaction fire at about the override percentage of the
+window less a reserve of roughly 19,300 tokens: 0.70 × (100,000 − 19,300) ≈ 56,500, against
+observed triggers of 56,353 to 57,924. So sync writes the window as the reset point plus 20,000
+and the percentage as 100, which puts the trigger within about a thousand tokens of the reset
+point. It was one exploratory run and is not evidence under the standard above; a model whose own
+window is smaller than the projected one caps it.
 
 Select one with `citizen config set stances.cost frugal`, or for a single session with
 `HARNESS_STANCE_COST=frugal claude`. To write your own, put a `.md` and a sidecar in your
@@ -189,11 +209,19 @@ primitive root, `extends` a shipped variant and change only the cells you care a
 [primitive-authoring.md](primitive-authoring.md) has the worked example and the schema.
 
 Compaction is the one place a variant overrides an always-loaded rule. `cache-hygiene.md` says
-to start a fresh session rather than compact, unless the selected `cost` stance allows compaction;
-the variant's `compaction` switch is what decides. Under `max` (`compact-allowed`) a compaction
-is the stance working, so the `cache-hygiene/compact` detector does not count it there, and it
-still counts one under `frugal`, `balanced`, `off` or no selection, where the rule stands. A
-session override (`HARNESS_STANCE_COST=max`) lifts the rule for that session only; `citizen sync`
+to reset by hand with a fresh session rather than compact, unless the selected `cost` stance
+allows compaction; the variant's `compaction` switch is what decides. Under `max`
+(`compact-allowed`) any compaction is the stance working, so the `cache-hygiene/compact` detector
+counts none there. Under `balanced` and `frugal` (`auto-at-reset`) the runtime's own compaction at
+the projected reset point is the stance working too, and the detector decides that from the
+settings and journal as they stand when it scans, not from the selected stance. It leaves a compaction out only when all of these
+hold: `citizen sync` wrote the auto-compaction pair, as its ownership journal records, and
+Claude Code's settings still hold those values with no `autoCompactWindow` of your own; the
+transcript records the compaction as `trigger: auto`; and its recorded size before compacting is
+within 15% of the projected reset point. Every other compaction counts as before: a manual
+`/compact`, one far from the point, one recording no trigger or size, and every one when the pair
+is yours or absent. So a session `HARNESS_STANCE_COST` override, which Claude Code's settings
+never see, does not change the verdict, and neither does a window you own. A session override (`HARNESS_STANCE_COST=max`) lifts the rule for that session only; `citizen sync`
 never writes it into the user configuration or the global projections.
 
 Two things a variant never wins against. A `role_bindings.<runtime>.<role>` entry in your config

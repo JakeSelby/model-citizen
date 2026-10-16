@@ -50,8 +50,11 @@ def prompt(turn=1):
     return {"kind": "user_prompt", "turn": turn}
 
 
-def compact(turn=1):
-    return {"kind": "compact", "turn": turn}
+def compact(turn=1, trigger=None):
+    event = {"kind": "compact", "turn": turn}
+    if trigger is not None:
+        event["trigger"] = trigger
+    return event
 
 
 def fence(*lines):
@@ -179,6 +182,9 @@ CASES = {
         ([compact(), prompt(turn=2)], 1),
         ([compact(), compact(turn=2)], 2),
         ([prompt(), say("a")], 0),
+        # An automatic compaction with no recorded size is never the projected reset, whatever
+        # sync wrote; the exemption itself is `tests/test_context_reset_docs.py`'s.
+        ([compact(trigger="manual"), compact(turn=2, trigger="auto")], 2),
     ],
     "voice/banned-opener": [
         ([say("I started by reading the hook.")], 1),

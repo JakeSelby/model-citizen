@@ -5,7 +5,7 @@
     "session_effort": "medium",
     "max_parallel": 6,
     "fast_mode": "off-unless-asked",
-    "compaction": "clear-at-task-end",
+    "compaction": "auto-at-reset",
     "budget_multiplier": 1.0,
     "turn_feed": "every-turn",
     "nudge_at": [1.0, 1.5],

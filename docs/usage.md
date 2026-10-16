@@ -434,8 +434,9 @@ printed, the settled one the stop records afterwards raises the session totals �
 never named a second time, and the session total is never below the sum of the final figures.
 
 A prompt also carries one line about the session itself when its context has grown past a size
-the posture calls a full session: `usage-feed: session context 120,000 tokens, past the
-fresh-session threshold of 100,000 — finish the task, write the handoff, start a fresh session`.
+the posture calls a full session: `usage-feed: session context 170,000 tokens, past the nudge
+point of 160,000, where a call costs about 1.3× one under 160,000; it resets automatically at about
+400,000, so keep the task store and progress.md current`. It never asks for a new session.
 The size is the newest response's input tokens plus the prefix it read from the cache and the
 prefix it wrote into it, which is what every further turn re-reads and what a long session mostly
 costs; the turn line shows none of that.
@@ -448,21 +449,68 @@ again, because crossing it a second time is a crossing nobody has been told abou
 the highest threshold newly crossed, never one already fed. A context no response has reported
 yet is no crossing, so nothing is said rather than a size of zero being invented. Where the
 variant's cost curve has a point at or under the size, the line also names the cost multiple:
-`…, past the fresh-session threshold of 160,000, where a call costs about 1.3× one under 160,000
-— finish the task, …`. Like every other line here it is soft: nothing is blocked.
+`…, past the nudge point of 160,000, where a call costs about 1.3× one under 160,000; it resets
+automatically …`. Like every other line here it is soft: nothing is blocked.
 
-Past the variant's hard threshold the feed answers `Stop` too. The stop that ends the turn is
-blocked once, with a reason naming the size, the threshold and the multiple and asking for the
-handoff (the state, the next step, the open decisions) and a fresh session started from it. The
-threshold blocked at is kept in the state file, so the next stop is released whatever the turn
-did and a session that stays past it is never blocked again; a context that falls back under it
-re-arms it. The repository's stop gate is asked first, and a stop it blocks does not spend the
-hand-off. A headless run (`CLAUDE_CODE_ENTRYPOINT` `sdk-cli`, `sdk-ts` or `sdk-py`, which is what
-`claude -p` and a replay trial are) is never blocked unless `HARNESS_HANDOFF_BLOCK=on`;
-`HARNESS_HANDOFF_BLOCK=off` turns the block off anywhere. Why the thresholds sit where they do is
-in [preferences.md](preferences.md#when-a-session-should-hand-off).
+Past the variant's hand-off point the feed answers `Stop` too. The stop that ends the turn is
+blocked once, with a reason naming the size, the hand-off point, where the context resets and the
+multiple, and asking for the task store (`harness task save`) and progress.md to be saved, with
+the state, the next step and the open decisions, before the work carries on. It never asks for a
+new session: the context resets by itself a little later. The point blocked at is kept in the
+state file, so the next stop is released whatever the turn did and a session that stays past it
+is never blocked again; a context that falls back under it, which every reset does, re-arms it.
+The repository's stop gate is asked first, and a stop it blocks does not spend the hand-off. A
+headless run (`CLAUDE_CODE_ENTRYPOINT` `sdk-cli`, `sdk-ts` or `sdk-py`, which is what `claude -p`
+and a replay trial are) is never blocked unless `HARNESS_HANDOFF_BLOCK=on`;
+`HARNESS_HANDOFF_BLOCK=off` turns the block off anywhere. Why the points sit where they do is in
+[preferences.md](preferences.md#when-a-session-resets).
 
-Seven settings in the active `cost` variant's sidecar govern all of it, and the hook holds no
+### The context reset
+
+The reset itself is Claude Code's own auto-compaction, moved to the cost variant's
+`context_reset_at`. Three pieces make a compaction there a pause rather than the end of the task.
+
+- **The projection.** `citizen sync` writes two variables into the `env` of
+  `~/.claude/settings.json`: `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, the reset point plus 20,000
+  (420,000 under `balanced`, 220,000 under `frugal`), and `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `100`.
+  Auto-compaction holds back a reserve of about that size below the window, so the pair fires
+  within about a thousand tokens of the reset point; a model whose own window is smaller caps it.
+  The two are written together or not at all, and a variant naming no reset point, `max` and `off`,
+  takes back out only what sync wrote. Claude Code reads settings `env` at startup, so the projection
+  follows your configured cost variant: a session override (`HARNESS_STANCE_COST`) moves the
+  hand-off block but not the reset. **A setting of your own wins:** while your settings carry
+  `autoCompactWindow`, or either variable holds a value sync did not write, sync leaves both alone
+  and prints one warning line instead. [settings-ownership.md](settings-ownership.md) lists the pair.
+- **The snapshot.** A `PreCompact` hook, registered for Claude Code only, runs on every
+  `trigger: auto` compaction and writes `.agent-harness/handoffs/auto-<session>-<UTC time>.md` in
+  the repository the session works in: the last five prompts of the main thread, the branch and a
+  count of the working tree's changes, the open items of the newest TodoWrite list, and the task
+  store's revision. It is the fallback for whatever the hand-off save missed. Prompts and todos
+  pass through the decision log's redaction (the lint's secret shapes) before they are clipped and
+  written, and neither is written when those shapes cannot be read. The folder carries a
+  `.gitignore` that also ignores itself, so nothing in it is ever committed, and each session keeps
+  its newest five. It calls no model and never blocks;
+  a manual `/compact` gets no snapshot. A failure is a line in `pre-compact.errors.jsonl` beside
+  the other ledgers.
+- **The reseed.** When a session starts again with source `compact` or `clear`, the session-start
+  hook injects, as framed data and not instructions, this session's own task store, the first 80
+  lines of progress.md, and this session's newest snapshot. `harness task save` records the saving
+  `session_id` in `task.json`, which is how the task store is known to be this session's: one
+  another session saved is skipped with a note, since two sessions can share a checkout, and one
+  naming no `session_id`, which includes any saved before this change, is skipped without one. The
+  task store and the snapshot share a 12,000-character budget; progress.md's 80 lines come on top
+  of it. A closing line saying the context was reset, to pick up from the saved next steps, is
+  added only when the task store or a snapshot was reseeded.
+
+The sidecar's `compaction` switch names the arrangement: `auto-at-reset` in `balanced` and
+`frugal`, `compact-allowed` in `max`, and `clear-at-task-end` in `off`; `clear-only` stays valid
+for a custom variant. Only the `cache-hygiene/compact` detector reads it, and only to know
+whether compaction is allowed outright; which automatic compaction was the reset it decides from
+what sync wrote ([what each detector looks for](#what-each-detector-looks-for)). A finished task refreshes the
+handoff too, and a desktop session clears itself when nothing is left open; that clear reseeds the
+same way. Codex has no auto-compaction setting the harness projects, so none of this reaches it.
+
+Eight settings in the active `cost` variant's sidecar govern all of it, and the hook holds no
 number of its own:
 
 - `turn_feed: "off"` — nothing is injected anywhere and no file is written.
@@ -473,11 +521,15 @@ number of its own:
 - `nudge_at` — the multiples that mark a return as over budget. An empty list, which `max` ships,
   means never.
 - `session_nudge_at` — the context sizes, in whole tokens, smallest first and none repeating,
-  that the fresh-session line is said at: the soft threshold. `balanced` and `frugal` ship
+  that the nudge line is said at: the soft threshold. `balanced` and `frugal` ship
   160,000, and `max` an empty list, which means never.
-- `session_handoff_at` — the hard threshold, one size in whole tokens past which a stop is
-  blocked once. `balanced` ships 400,000, `frugal` 200,000; `null`, which `max` ships, means
-  never, and `off` turns the block off with the rest of the feed.
+- `context_reset_at` — the reset point, one size in whole tokens that sync projects into Claude
+  Code's auto-compaction. `balanced` ships 400,000, `frugal` 200,000; `null`, which `max` and `off`
+  ship, leaves the runtime's own point.
+- `session_handoff_at` — the hand-off point, one size in whole tokens past which a stop is
+  blocked once. Unset, it is nine tenths of `context_reset_at`: 360,000 in `balanced`, 180,000 in
+  `frugal`. `null` with no reset point, which `max` ships, means never, and `off` turns the block
+  off with the rest of the feed.
 - `context_cost_curve` — `[size, multiple]` pairs, sizes ascending: from that size up, a call
   costs about that multiple of one under the first size. `balanced` ships 1.3 from 160,000, 1.7
   from 200,000 and 3.3 from 400,000, and the other variants inherit it.
@@ -533,7 +585,7 @@ after a fortnight of not being used, and removed by `bin/citizen uninstall`.
 
 ### Adherence events
 
-The fresh-session line is a recommendation, so saying it also appends an `emitted` row to
+The nudge line is a recommendation, `context-reset-nudge`, so saying it also appends an `emitted` row to
 `~/.local/state/agent-harness/adherence.jsonl`: the recommendation, the module that said it
 (`hooks/usage-feed`), the session id, the turn it was said on and the profile fingerprint. A
 `response` row joined to it by `adherence_id` later says `followed`, `not_followed` or
@@ -541,13 +593,18 @@ The fresh-session line is a recommendation, so saying it also appends an `emitte
 row holds a prompt, a tool call or the line's own text, and recording never changes what the feed
 says: a ledger it cannot write is skipped in silence.
 
-The hand-off block is recorded the same way, as `fresh-session-handoff`, so how often a blocked
-session actually ends is a rate of its own.
+The hand-off block is recorded the same way, as `context-reset-handoff`. It is followed when
+`harness task save` records a save for the session after the block and before the next compaction
+or session end, and not followed when either comes first; no prompt count closes it, since the
+reset can be many turns off. Rows written under the block's earlier name, `fresh-session-handoff`,
+are counted under the new one.
 
-The response is read from the session's prompts and its end. A session that ends within three
-prompts of the line followed it, or within two of the block; one that carries on past them did
-not. Those events come from the observation ledger (`observation.jsonl`) for a session it holds,
-and otherwise from `session-events.jsonl`, where the dispatcher records each prompt and session
+The nudge is followed when `harness task save` records a save within three prompts of the line, and
+not followed when the session carries on past them without one. The feed no longer emits the
+earlier `fresh-session` kind, which a session end within three prompts answered; rows already
+written under it keep that reading and stay a kind of their own.
+Answers are read from the session's prompts, saves, compactions and end. Those events come from
+the observation ledger (`observation.jsonl`) for a session it holds, and otherwise from `session-events.jsonl`, where the dispatcher records each prompt and session
 end, identifiers only, whether or not the observation entry point is registered. An emission
 neither can answer is `unknown` once it is a day old, with reason `unobserved`. Each session start
 writes the answers that are due, one per emission, and says nothing about them.
@@ -562,7 +619,7 @@ Every number carries its label, and `--json` gives each figure as an object with
 `interval` and `estimator`, with unknown values `null`. `--rules`, `--stance` and `--rescan` are
 refused with it.
 
-The estimator for `fresh-session` is **carried-context reprice** (PRD FR-85). It prices only
+The estimator for the retired `fresh-session` kind is **carried-context reprice** (PRD FR-85). It prices only
 emissions the ledger answers `not_followed`, from that session's own transcript, found as
 `<session_id>.jsonl` under the Claude Code projects folder and read through the rebuild report's
 parser. The context carried past a fresh start is the context at the nudge less the session's
@@ -1089,7 +1146,7 @@ do backfill.
 | `secrets/git-add-secret-file` | secrets | `git add` of a path whose name says it holds a credential |
 | `research/search-over-cap` | research-and-verification | the web search that takes the session past the per-session cap |
 | `cache-hygiene/model-switch` | cache-hygiene | a model change mid-session, which rebuilds the cached prefix |
-| `cache-hygiene/compact` | cache-hygiene | each compaction boundary in the transcript, except under a `cost` variant that allows compaction (`max`) |
+| `cache-hygiene/compact` | cache-hygiene | each compaction boundary in the transcript, except under a `cost` variant that allows compaction (`max`), and except the projected reset: a `trigger: auto` boundary whose recorded size is within 15% of the reset point, exempted only while `citizen sync`'s ownership journal records writing the auto-compaction pair and Claude Code's settings still hold it with no `autoCompactWindow` of your own. The selected stance, a session override included, plays no part in that exemption, and replay (`scripts/replay_detect.py`) applies the same one when given the run's reset point, which its callers do not pass yet. A manual `/compact`, one far from the point and one recording no trigger or size still count |
 | `voice/banned-opener` | voice-and-format | a final message opening with a phrase the output style bans, or closing with one |
 | `voice/second-table` | voice-and-format | two or more table blocks in one final message |
 | `voice/scaffold-leak` | voice-and-format | under the `concise` voice, a final message wearing a reply template's section labels |

@@ -116,6 +116,7 @@ class CompactionPrecedenceTests(unittest.TestCase):
         text = RULE.read_text()
         self.assertIn("not compaction", text)
         self.assertIn("unless `cost` allows it", text)
+        self.assertIn("reset point is the stance working", text)
         self.assertIn("compaction\nis allowed", (COST / "max.md").read_text())
 
     def test_the_precedence_is_documented(self):

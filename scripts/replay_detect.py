@@ -114,7 +114,10 @@ def stream_events(messages):
         kind = message.get("type")
         if kind == "system":
             if message.get("subtype") == "compact_boundary":
-                events.append({"kind": "compact", "turn": turn})
+                meta = message.get("compact_metadata") or message.get("compactMetadata")
+                meta = meta if isinstance(meta, dict) else {}
+                events.append({"kind": "compact", "turn": turn, "trigger": meta.get("trigger"),
+                               "pre_tokens": meta.get("pre_tokens", meta.get("preTokens"))})
             continue
         body = message.get("message")
         body = body if isinstance(body, dict) else {}
@@ -159,11 +162,16 @@ def stream_events(messages):
     return events
 
 
-def detect_messages(messages, module, registry=None):
+def detect_messages(messages, module, registry=None, reset_point=None):
     """`{detector_id: [turn, ...]}` for every detector, empty lists included, and the errors.
-    ValueError when the messages hold no model call."""
+    ValueError when the messages hold no model call.
+
+    `reset_point` is the context size the run's own Claude Code settings had sync project, as
+    `projected_reset_point` reads it on the run's home; an automatic compaction there is left out
+    exactly as the live ledger leaves it out. None, the default, counts every compaction, since
+    a saved stream does not carry the settings it ran under."""
     events = stream_events(messages)
-    registry = registry or ungated(module)
+    registry = module.with_reset_point(registry or ungated(module), reset_point)
     errors = []
     hits = module._run(events, None, registry=registry, errors=errors)
     failed = dict((e["detector"], e["error"]) for e in errors)
@@ -178,14 +186,14 @@ def detect_messages(messages, module, registry=None):
     return out
 
 
-def run_rows(identity, text, reader, module, registry=None, stances=ALWAYS):
+def run_rows(identity, text, reader, module, registry=None, stances=ALWAYS, reset_point=None):
     """One run's rows, one per detector. A stream that cannot be read, or a detector that
     raised, is a row with `count` null and the reason in `error`: unknown, never zero. A detector
     `stances` does not enable is `not_applicable` (`applicability`)."""
     registry = registry or ungated(module)
     applies = applicability(module, registry, stances)
     try:
-        found = detect_messages(reader(text)[0], module, registry)
+        found = detect_messages(reader(text)[0], module, registry, reset_point)
     except (TypeError, ValueError) as exc:
         found = dict((d.id, "unreadable: %s" % exc) for d in registry)
     rows = []
