@@ -458,7 +458,9 @@ threshold blocked at is kept in the state file, so the next stop is released wha
 did and a session that stays past it is never blocked again; a context that falls back under it
 re-arms it. The repository's stop gate is asked first, and a stop it blocks does not spend the
 hand-off. A headless run (`CLAUDE_CODE_ENTRYPOINT` `sdk-cli`, `sdk-ts` or `sdk-py`, which is what
-`claude -p` and a replay trial are) is never blocked unless `HARNESS_HANDOFF_BLOCK=on`;
+`claude -p` and a replay trial are) is never blocked unless `HARNESS_HANDOFF_BLOCK=on`. A
+Remote Control bridge session reports `sdk-cli` too, but it is interactive: the bridge sets
+`CLAUDE_CODE_ENVIRONMENT_KIND=bridge` in it, and it is blocked like a terminal session.
 `HARNESS_HANDOFF_BLOCK=off` turns the block off anywhere. Why the thresholds sit where they do is
 in [preferences.md](preferences.md#when-a-session-should-hand-off).
 

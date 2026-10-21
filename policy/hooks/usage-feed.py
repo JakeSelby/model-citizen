@@ -63,7 +63,8 @@ with the hand-off instruction: save the task store and progress before the conte
 itself (`switches.context_reset_at`, named when the posture sets it), then carry on. It is a
 single block per crossing — the next stop is released whatever the turn did — it is recorded as
 the `context-reset-handoff` adherence event, and it is off in a headless run (`claude -p`, an SDK)
-unless `HARNESS_HANDOFF_BLOCK=on` enables it there.
+unless `HARNESS_HANDOFF_BLOCK=on` enables it there. A Remote Control bridge session reports the
+same entrypoint but is interactive, so it is blocked like any other.
 """
 import errno
 import hashlib
@@ -128,6 +129,10 @@ MODES = ("off", "thresholds", "every-turn")
 # The `CLAUDE_CODE_ENTRYPOINT` values Claude Code gives a non-interactive run: `claude -p` is
 # `sdk-cli`. A replay trial is one, and blocking its last stop would add a turn to the measure.
 HEADLESS = ("sdk-cli", "sdk-ts", "sdk-py")
+# A Remote Control bridge child runs `--print --sdk-url …`, so it reports `sdk-cli` too, but a
+# person drives it from the Claude app. The bridge marks it here; a `claude -p` replay never is.
+ENVIRONMENT_KIND = "CLAUDE_CODE_ENVIRONMENT_KIND"
+INTERACTIVE_KINDS = ("bridge",)
 HANDOFF_SWITCH = "HARNESS_HANDOFF_BLOCK"
 
 
@@ -1259,6 +1264,8 @@ def handoff_enabled(env):
     switch = (env.get(HANDOFF_SWITCH) or "").strip().lower()
     if switch in ("on", "off"):
         return switch == "on"
+    if env.get(ENVIRONMENT_KIND) in INTERACTIVE_KINDS:
+        return True
     return env.get("CLAUDE_CODE_ENTRYPOINT") not in HEADLESS
 
 

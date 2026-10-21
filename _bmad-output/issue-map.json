@@ -4,7 +4,7 @@
   "native_type_projection": "labels-only",
   "generated_at": "2026-09-22",
   "next_ids": {
-    "bug": 190,
+    "bug": 191,
     "chore": 114,
     "decision": 15,
     "epic": 30,
@@ -9864,6 +9864,19 @@
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B189.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-B190",
+      "github_number": 1345,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1345",
+      "title": "fix(usage): give Remote Control bridge sessions the context-reset hand-off block",
+      "type": "bug",
+      "native_type": "Bug",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-B190.md",
+      "parent_bmad_id": "AH-E028",
+      "parent_github_number": 1290,
       "lifecycle": "active",
       "provenance": "authored"
     }
