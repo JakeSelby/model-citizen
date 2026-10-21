@@ -35,6 +35,13 @@ def load_adherence():
 
 
 class Handoff(Fixture):
+    def env(self, **extra):
+        # A suite run inside a Remote Control bridge session must not hand the hook its marker.
+        merged = super().env(**extra)
+        if "CLAUDE_CODE_ENVIRONMENT_KIND" not in extra:
+            merged.pop("CLAUDE_CODE_ENVIRONMENT_KIND", None)
+        return merged
+
     def hard(self, at=300000, extends="balanced"):
         self.variant("handed", {"schema_version": 1, "extends": extends,
                                 "switches": {"session_handoff_at": at}})
@@ -230,6 +237,28 @@ class Headless(Handoff):
         self.grow("m1", 310000)
         answer = self.stop_answer(CLAUDE_CODE_ENTRYPOINT="sdk-cli", HARNESS_HANDOFF_BLOCK="on")
         self.assertEqual(answer["decision"], "block")
+
+    def test_a_bridge_session_is_blocked(self):
+        # A Remote Control bridge child reports `sdk-cli` but is driven by a person.
+        self.hard()
+        self.grow("m1", 310000)
+        answer = self.stop_answer(CLAUDE_CODE_ENTRYPOINT="sdk-cli",
+                                  CLAUDE_CODE_ENVIRONMENT_KIND="bridge")
+        self.assertEqual(answer["decision"], "block")
+        self.assertEqual([r["recommendation"] for r in self.emitted()], ["context-reset-handoff"])
+
+    def test_another_environment_kind_leaves_a_headless_run_unblocked(self):
+        self.hard()
+        self.grow("m1", 310000)
+        self.assertIsNone(self.stop_answer(CLAUDE_CODE_ENTRYPOINT="sdk-cli",
+                                           CLAUDE_CODE_ENVIRONMENT_KIND="container"))
+
+    def test_the_switch_can_turn_it_off_in_a_bridge_session(self):
+        self.hard()
+        self.grow("m1", 310000)
+        self.assertIsNone(self.stop_answer(CLAUDE_CODE_ENTRYPOINT="sdk-cli",
+                                           CLAUDE_CODE_ENVIRONMENT_KIND="bridge",
+                                           HARNESS_HANDOFF_BLOCK="off"))
 
     def test_the_switch_can_turn_it_off_interactively(self):
         self.hard()
