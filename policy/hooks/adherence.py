@@ -31,6 +31,13 @@ is closed by its `close` events alone. Unknown: neither can be read yet. An emis
 `unobserved` when no row covers its turn, and `window_open` otherwise. The lifecycle's session
 start calls `settle`, so a live session writes each answer once it is due.
 
+**A kind with a `reset` rule is also asked whether the context came back down**, apart from
+whether the advice was followed: its response carries `context_reset`, `compacted` for a
+`PreCompact` after the emission, `cleared` for a `/clear` (`Clear`, noted with its
+`SessionEnd`), `not_reset` when the session ended any other way first, and `unknown` when none of
+these was read. Its response waits for that reading, or for `UNKNOWN_AFTER`, even once the advice
+is followed, so a save that is never followed by a reset cannot read as the whole answer.
+
 The observation entry point is an opt-in (`observation.enabled`), and with it off nothing
 writes `observation.jsonl`, which left every emission `unobserved`. So the dispatcher also
 records the events a response reads, each prompt, compaction and session end, in
@@ -75,7 +82,14 @@ EVENTS_MAX_BYTES = 2 * 1024 * 1024
 CARRIED = "session-events.carried.json"
 CARRY_FOR = 2 * 86400
 OUTCOMES = ("followed", "not_followed", "unknown")
+RESETS = ("compacted", "cleared", "not_reset", "unknown")
 PROMPT = "UserPromptSubmit"
+# A `/clear` ends the session with `SessionEnd` `reason: clear`; the dispatcher notes it as this
+# event beside the session end, which the observation ledger records without its reason.
+CLEAR = "Clear"
+# A `Clear` is noted in the same hook run as its `SessionEnd`, but the two can land a second apart
+# and either side of each other once a covered session's rows are merged by time.
+CLEAR_SLACK = 2
 # An emission that neither outcome has reached in a day is not going to be read: a session idle
 # that long was left, and the ledger that would say so is either not written or not complete.
 UNKNOWN_AFTER = 86400
@@ -104,8 +118,11 @@ KINDS = {
     # off, so a session left before either reads `unknown` once `UNKNOWN_AFTER` has passed. The
     # rows are stamped to the second, so a save in the same second as the block counts as after.
     # A headless run can stop before any prompt is counted, so its emission may be turn 0.
+    # A save says the handoff was written, not that the context ever came back under the
+    # threshold, so `reset` reads that apart: a compaction or a `/clear` after the block.
     "context-reset-handoff": {"module": "hooks/usage-feed", "window": None,
                               "follow": ("TaskSave",), "close": ("PreCompact", "SessionEnd"),
+                              "reset": {"PreCompact": "compacted", CLEAR: "cleared"},
                               "first_turn": 0},
 }
 # A recommendation's earlier name → its current one. Rows already in the ledger keep the name they
@@ -119,7 +136,7 @@ RETIRED = {
 }
 # Events no hook raises, so the observation ledger never holds them: the events file is their
 # only record, and `observed_rows` reads them from it for every session.
-NOTED_ONLY = ("TaskSave",)
+NOTED_ONLY = ("TaskSave", CLEAR)
 
 _POSTURE = []
 
@@ -252,6 +269,7 @@ def noted():
     for spec in list(KINDS.values()) + list(RETIRED.values()):
         names.update(spec["follow"])
         names.update(spec.get("close", ()))
+        names.update(spec.get("reset", ()))
     return names
 
 
@@ -484,6 +502,49 @@ def respond(row, observed):
     return "unknown", "window_open", prompts - turn
 
 
+def cleared(session, end, observed):
+    """Whether a `Clear` for `session` is stamped within `CLEAR_SLACK` of the session end at `end`."""
+    for item in observed:
+        if item.get("session_id") == session and item.get("event") == CLEAR:
+            stamped = parse_ts(item.get("ts"))
+            if end is None or stamped is None or abs(stamped - end) <= CLEAR_SLACK:
+                return True
+    return False
+
+
+def context_reset(row, observed):
+    """Whether the context came back down after an emission whose kind has a `reset` rule.
+
+    One of `RESETS`, or None while no row answers it yet. The rows are read from the emission
+    on, as `respond` reads them: the first reset event answers it, and a session end first is
+    `cleared` when a `Clear` goes with it and `not_reset` otherwise. A kind with no `reset` rule
+    is `unknown`; `settle` writes `unknown` for one still unanswered at `UNKNOWN_AFTER`.
+    """
+    spec = spec_for(row.get("recommendation")) or {}
+    reset, turn, session = spec.get("reset"), row.get("turn"), row.get("session_id")
+    if not reset or not whole(turn) or not isinstance(session, str):
+        return "unknown"
+    turn = max(turn, prompts_by(row.get("ts"), session, observed))
+    emitted_at, prompts = parse_ts(row.get("ts")), 0
+    for item in observed:
+        if item.get("session_id") != session:
+            continue
+        event = item.get("event")
+        if event == PROMPT:
+            prompts += 1
+            continue
+        if prompts < turn:
+            continue
+        stamped = parse_ts(item.get("ts"))
+        if emitted_at is not None and stamped is not None and stamped < emitted_at:
+            continue
+        if event in reset:
+            return reset[event]
+        if event == "SessionEnd":
+            return "cleared" if cleared(session, stamped, observed) else "not_reset"
+    return None
+
+
 def responses(rows):
     """The first response to each emission, by `adherence_id`. A second one is a duplicate."""
     out = {}
@@ -578,17 +639,20 @@ def _settle(env, now):
         if row.get("kind") != "emitted" or not isinstance(ident, str) or ident in answered:
             continue
         outcome, reason, after = respond(row, observed)
-        if outcome == "unknown":
-            emitted_at = parse_ts(row.get("ts"))
-            if emitted_at is not None and now - emitted_at < UNKNOWN_AFTER:
-                continue
         spec = spec_for(row.get("recommendation")) or {}
+        reset = context_reset(row, observed) if spec.get("reset") else None
+        emitted_at = parse_ts(row.get("ts"))
+        due = emitted_at is None or now - emitted_at >= UNKNOWN_AFTER
+        if (outcome == "unknown" or (spec.get("reset") and reset is None)) and not due:
+            continue
         answer = {"kind": "response", "adherence_id": ident,
                   "recommendation": row.get("recommendation"), "module": row.get("module"),
                   "session_id": row.get("session_id"), "turn": row.get("turn"),
                   "outcome": outcome, "reason": reason, "turns_after": after,
                   "window": spec.get("window"), "ts": now_ts(now),
                   FINGERPRINT_KEY: row.get(FINGERPRINT_KEY), SCHEMA_KEY: SCHEMA_VERSION}
+        if spec.get("reset"):
+            answer["context_reset"] = reset or "unknown"
         _append(answer, path(env))
         answered[ident] = answer
         written.append(answer)
@@ -600,7 +664,8 @@ def rates(rows):
 
     `rate` is followed over followed plus not followed, and None while neither has happened: an
     unknown is neither, and counting it as either would invent an answer the ledger never gave.
-    A renamed recommendation's rows are counted under its current name (`RENAMED`).
+    A renamed recommendation's rows are counted under its current name (`RENAMED`). A kind with
+    a `reset` rule also counts its answers' `context_reset` readings, under `resets`.
     """
     answered = responses(rows)
     out = {}
@@ -616,6 +681,10 @@ def rates(rows):
             entry[outcome] += 1
         else:
             entry["pending"] += 1
+        if (spec_for(row.get("recommendation")) or {}).get("reset"):
+            resets = entry.setdefault("resets", {name: 0 for name in RESETS})
+            if answer and answer.get("context_reset") in RESETS:
+                resets[answer["context_reset"]] += 1
     for entry in out.values():
         judged = entry["followed"] + entry["not_followed"]
         entry["rate"] = entry["followed"] / float(judged) if judged else None

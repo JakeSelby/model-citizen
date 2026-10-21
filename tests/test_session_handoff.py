@@ -366,6 +366,86 @@ class SavedBeforeTheReset(unittest.TestCase):
                              ("followed", "TaskSave", 0))
 
 
+class ResetAfterTheBlock(unittest.TestCase):
+    """Whether the context came back down is read apart from whether the handoff was saved."""
+
+    T0 = SavedBeforeTheReset.T0
+    setUp = SavedBeforeTheReset.setUp
+    observed = SavedBeforeTheReset.observed
+
+    def test_a_save_then_a_compaction_is_followed_and_compacted(self):
+        observed = self.observed("UserPromptSubmit", "Stop", "TaskSave", "PreCompact")
+        self.assertEqual(self.adherence.respond(self.row, observed)[0], "followed")
+        self.assertEqual(self.adherence.context_reset(self.row, observed), "compacted")
+
+    def test_a_clear_is_cleared_whichever_side_of_its_session_end_it_lands(self):
+        for clear in (("Clear", 3), ("Clear", 5)):
+            with self.subTest(at=clear[1]):
+                observed = self.observed("UserPromptSubmit", "TaskSave", ("SessionEnd", 4), clear)
+                self.assertEqual(self.adherence.context_reset(self.row, observed), "cleared")
+
+    def test_an_exit_is_not_a_reset_even_after_a_save(self):
+        observed = self.observed("UserPromptSubmit", "TaskSave", "SessionEnd")
+        self.assertEqual(self.adherence.respond(self.row, observed)[0], "followed")
+        self.assertEqual(self.adherence.context_reset(self.row, observed), "not_reset")
+
+    def test_a_clear_long_before_an_exit_is_not_its_reason(self):
+        observed = self.observed("UserPromptSubmit", ("Clear", -60), ("SessionEnd", 30))
+        self.assertEqual(self.adherence.context_reset(self.row, observed), "not_reset")
+
+    def test_a_save_with_the_session_still_open_has_no_reset_reading_yet(self):
+        observed = self.observed("UserPromptSubmit", "TaskSave", *["UserPromptSubmit"] * 5)
+        self.assertIsNone(self.adherence.context_reset(self.row, observed))
+
+    def test_the_noted_events_include_the_clear(self):
+        self.assertIn(self.adherence.CLEAR, self.adherence.noted())
+
+    def settled(self, events, age):
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp:
+            env = {"HARNESS_HOME": temp}
+            self.adherence.state_dir(env).mkdir(parents=True)
+            with open(str(self.adherence.path(env)), "w") as handle:
+                handle.write(json.dumps(self.row) + "\n")
+            for offset, event in enumerate(events, 1):
+                self.adherence.note_event(event, "s-1", "claude-code", env, now=self.T0 + offset)
+            return self.adherence.settle(env, now=self.T0 + age)
+
+    def test_a_save_is_not_written_as_the_answer_while_the_session_runs_on(self):
+        # The session that saved and then ran on to 893k: nothing is final until a reset or a day.
+        events = ["UserPromptSubmit", "TaskSave", "UserPromptSubmit", "UserPromptSubmit"]
+        self.assertEqual(self.settled(events, 60), [])
+        answer, = self.settled(events, self.adherence.UNKNOWN_AFTER + 1)
+        self.assertEqual((answer["outcome"], answer["context_reset"]), ("followed", "unknown"))
+
+    def test_a_save_then_an_exit_is_written_followed_and_not_reset(self):
+        answer, = self.settled(["UserPromptSubmit", "TaskSave", "SessionEnd"], 60)
+        self.assertEqual((answer["outcome"], answer["reason"], answer["context_reset"]),
+                         ("followed", "TaskSave", "not_reset"))
+
+    def test_a_compaction_without_a_save_is_not_followed_but_compacted(self):
+        answer, = self.settled(["UserPromptSubmit", "PreCompact"], 60)
+        self.assertEqual((answer["outcome"], answer["context_reset"]),
+                         ("not_followed", "compacted"))
+
+    def test_rates_count_the_resets_beside_the_outcomes(self):
+        rows = [self.row, dict(self.row, adherence_id="c2"), dict(self.row, adherence_id="c3"),
+                {"kind": "response", "adherence_id": "c1", "outcome": "followed",
+                 "context_reset": "not_reset"},
+                {"kind": "response", "adherence_id": "c2", "outcome": "followed",
+                 "context_reset": "compacted"}]
+        entry = self.adherence.rates(rows)["context-reset-handoff"]
+        self.assertEqual((entry["followed"], entry["pending"]), (2, 1))
+        self.assertEqual(entry["resets"],
+                         {"compacted": 1, "cleared": 0, "not_reset": 1, "unknown": 0})
+
+    def test_a_kind_without_a_reset_rule_carries_no_reset_reading(self):
+        nudge = dict(self.row, recommendation="context-reset-nudge")
+        self.assertEqual(self.adherence.context_reset(nudge, self.observed("PreCompact")),
+                         "unknown")
+        self.assertNotIn("resets", self.adherence.rates([nudge])["context-reset-nudge"])
+
+
 class Validation(unittest.TestCase):
     def test_a_hard_threshold_is_a_whole_positive_size_or_null(self):
         posture = load_posture()
