@@ -541,8 +541,11 @@ The fresh-session line is a recommendation, so saying it also appends an `emitte
 row holds a prompt, a tool call or the line's own text, and recording never changes what the feed
 says: a ledger it cannot write is skipped in silence.
 
-The hand-off block is recorded the same way, as `fresh-session-handoff`, so how often a blocked
-session actually ends is a rate of its own.
+The hand-off block is recorded the same way, as `context-reset-handoff`. Its `outcome` says
+whether the handoff was saved (`harness task save`) after the block and before the next
+compaction or session end; a separate `context_reset` says whether the context then came back
+down: `compacted`, `cleared` (a `/clear`), `not_reset` (the session ended any other way first) or
+`unknown`. A save alone is not the answer: the response waits for the reset reading, or a day.
 
 The response is read from the session's prompts and its end. A session that ends within three
 prompts of the line followed it, or within two of the block; one that carries on past them did

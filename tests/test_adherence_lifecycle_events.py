@@ -134,6 +134,14 @@ class DispatchTests(Base):
                          + [("SessionEnd", "s-9", "claude-code")])
         self.assertNotIn("hello", adherence.events_path(self.env).read_text())
 
+    def test_a_clear_is_noted_with_its_session_end_and_an_exit_is_not(self):
+        for session, reason in (("s-c", "clear"), ("s-x", "prompt_input_exit")):
+            self.dispatch({"hook_event_name": "SessionEnd", "session_id": session,
+                           "reason": reason, "cwd": str(self.home)})
+        rows = adherence.read_rows(adherence.events_path(self.env))
+        self.assertEqual([(r["event"], r["session_id"]) for r in rows],
+                         [("Clear", "s-c"), ("SessionEnd", "s-c"), ("SessionEnd", "s-x")])
+
 
 if __name__ == "__main__":
     unittest.main()

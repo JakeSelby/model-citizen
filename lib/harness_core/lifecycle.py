@@ -88,10 +88,16 @@ def settle_adherence():
 def note_adherence(runtime, event):
     """Record a prompt, compaction or session end for the adherence reading (`adherence.note_event`).
 
-    Observation, like `settle_adherence`: nothing it does or fails to do changes the answer.
+    A session end whose `reason` is `clear` is noted as `Clear` first, since a `/clear` resets
+    the context and an exit does not. Observation, like `settle_adherence`: nothing it does or
+    fails to do changes the answer.
     """
     try:
-        load("adherence").note_event(event.get("hook_event_name"), event.get("session_id"), runtime)
+        module = load("adherence")
+        kind, session = event.get("hook_event_name"), event.get("session_id")
+        if kind == "SessionEnd" and event.get("reason") == "clear":
+            module.note_event(module.CLEAR, session, runtime)
+        module.note_event(kind, session, runtime)
     except Exception:
         pass
 
