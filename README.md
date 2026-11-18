@@ -82,6 +82,7 @@ Most agent output is a wall of text. This puts the verdict first and the ask whe
 - [Voice stances](primitives/stances/voice): Choose concise, answer-card or scannable. Same content, shaped for how you read.
 - [Scannable output style](claude/output-styles/scannable.md): Verdict first, action items in one place, and status in plain words: Fixed, Partially fixed, Not fixed, Unverified.
 - [Review Card plans](primitives/skills/plan-authoring): Every plan opens with a one-screen card and stops at a build gate until you say build.
+- [Decision pages](primitives/skills/decision-page): Opt in, and every question waiting on you lands on one private page per project: click the recommendation or write your own, and nothing applies until you say so.
 - [Bounded subagent returns](primitives/skills/transcript-hygiene): Subagents come back with findings and a word cap, not their whole transcript.
 - [Conciseness rules](primitives/rules/conciseness.md): Explain a decision once. Comments say why, not what.
 
@@ -222,6 +223,7 @@ A client's status is not a capability's status. Each cell is derived from that r
 | `build-vs-buy` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
 | `commits` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
 | `cost` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
+| `decisions` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
 | `delegation` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
 | `licensing` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |
 | `plan-ceremony` | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified | unqualified |

@@ -30,7 +30,7 @@
     },
     "decisions-and-plans": {
       "claims": [
-        "Puts a substantive decision in a written decision block and builds only on explicit approval."
+        "Asks a substantive decision with its alternatives and builds only on explicit approval."
       ],
       "surface": [
         "resident-context"
@@ -175,6 +175,19 @@
     "code-quality-instruments": {
       "claims": [
         "Measures whether a test suite is any good, not only that it passes."
+      ],
+      "surface": [
+        "resident-context",
+        "on-demand-context"
+      ],
+      "instruments": [],
+      "slot": null,
+      "dependencies": [],
+      "conflicts": []
+    },
+    "decision-page": {
+      "claims": [
+        "Puts every decision waiting on the user on a private page answered by clicking, applied on their word."
       ],
       "surface": [
         "resident-context",

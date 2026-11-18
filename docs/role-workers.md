@@ -83,7 +83,7 @@ the runtime, in the sense the compatibility table's tier-restriction row uses:
   is instruction text, as the declared input roots above already are.
 
 `status.json` records the estimate under `context`: policy tokens, reference tokens and their
-total against a 50,000-token budget, counted with the same characters-per-token approximation
+total against a 55,000-token budget, counted with the same characters-per-token approximation
 `citizen lint` uses on always-loaded context. A review role resolves at about 30,800 and the
 planner, which may read any skill, at about 43,800. The budget is recorded, not enforced: what a
 worker is shown is fixed by its contract and the policy's own pointers before any brief is read.

@@ -44,8 +44,9 @@ Everything the harness ships, at its defaults. It changes nothing.
 
 ### `minimal`
 
-Enforcement without ceremony. Every hook stays on, and the `cost`, `delegation` and `autonomy`
-stances keep their values. It changes:
+Enforcement without ceremony. Every hook stays on, and the `cost`, `delegation`, `autonomy` and
+`decisions` stances keep their values, since how a question reaches you is not ceremony. It
+changes:
 
 - Stances: `licensing` off, `build-vs-buy` off, `commits` off, `plan-ceremony` light,
   `testing` off, `voice` off.

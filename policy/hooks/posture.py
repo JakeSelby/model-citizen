@@ -71,7 +71,7 @@ DEFAULT_STANCES = {
     "delegation": "tiered",
     "testing": "required",
     "autonomy": "execute",
-    "cost": "balanced", "voice": "scannable",
+    "cost": "balanced", "voice": "scannable", "decisions": "numbered-block",
 }
 # Capability classes, strongest first; a test holds this equal to `catalog.TIER_CLASSES`, which
 # is the definition. Named here so a hook can order an adapter's table without importing the

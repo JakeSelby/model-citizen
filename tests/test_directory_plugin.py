@@ -30,14 +30,14 @@ class DirectoryPluginTests(unittest.TestCase):
         bundle = REPO / DIRECTORY_PLUGIN.BUNDLE_RELATIVE
         manifest = json.loads(
             (bundle / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(list((bundle / "primitives" / "skills").glob("*/SKILL.md"))), 15)
+        self.assertEqual(len(list((bundle / "primitives" / "skills").glob("*/SKILL.md"))), 16)
         self.assertEqual(len(manifest["agents"]), 11)
         self.assertEqual(len(list((bundle / "claude" / "commands").glob("*.md"))), 7)
         self.assertTrue((bundle / "primitives" / "presentation" / "scannable.md").is_file())
 
     def test_source_list_is_file_level_and_excludes_unlisted_files(self):
         listed = DIRECTORY_PLUGIN._source_files(REPO)
-        self.assertEqual(len(listed), 48)
+        self.assertEqual(len(listed), 50)
         self.assertNotIn(Path("primitives/skills/not-submitted/SKILL.md"), listed)
 
     def test_source_list_rejects_symlinked_ancestors(self):

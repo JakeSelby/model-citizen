@@ -92,6 +92,7 @@ dimension.
 | `autonomy` | `execute`, `confirm-writes`, `ask` | `execute` |
 | `cost` | `off`, `frugal`, `balanced`, `max` | `balanced` |
 | `voice` | `scannable`, `concise`, `answer-card`, `off` | `scannable` |
+| `decisions` | `numbered-block`, `decision-page` | `numbered-block` |
 
 `citizen config set stances.testing off` checks the variant exists before writing, and names
 the options when it does not.
@@ -130,6 +131,12 @@ The `plan-ceremony` stance also decides whether the plan-card validator runs. Re
 unconditional — one coordinator per lifecycle event, as in
 [how it works](how-it-works.md) — so the stance is read inside dispatch, at the moment a plan
 file is written, and a switch takes effect in the next turn rather than at the next sync.
+
+The `decisions` stance decides how a question reaches you. `numbered-block` asks in chat, as
+numbered blocks you answer by typing. `decision-page` puts every decision on one private page per
+project, where you click an option or write your own answer; the agent applies the answers only
+when you say so. It needs a runtime that publishes pages with a database, and falls back to
+numbered blocks, saying so, where there is none. The `decision-page` skill holds the contract.
 
 ## What a session costs
 

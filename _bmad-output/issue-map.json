@@ -9,7 +9,7 @@
     "decision": 15,
     "epic": 30,
     "spike": 22,
-    "story": 385,
+    "story": 386,
     "task": 42
   },
   "items": [
@@ -9862,6 +9862,19 @@
       "type": "bug",
       "native_type": "Bug",
       "artifact_path": "_bmad-output/implementation-artifacts/AH-B189.md",
+      "parent_bmad_id": null,
+      "parent_github_number": null,
+      "lifecycle": "active",
+      "provenance": "authored"
+    },
+    {
+      "bmad_id": "AH-S385",
+      "github_number": 1350,
+      "github_url": "https://github.com/JakeSelby/model-citizen/issues/1350",
+      "title": "Answer decisions on a decision page as a selectable decisions stance",
+      "type": "story",
+      "native_type": "Feature",
+      "artifact_path": "_bmad-output/implementation-artifacts/AH-S385.md",
       "parent_bmad_id": null,
       "parent_github_number": null,
       "lifecycle": "active",
