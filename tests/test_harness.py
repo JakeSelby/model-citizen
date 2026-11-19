@@ -501,6 +501,19 @@ class LinkAliasTests(TempHome):
         self.assertEqual(Path(os.readlink(voice)), REPO / "primitives" / "stances" / "voice" / "concise.md")
         self.assertEqual(harness._diff_lines(), [])
 
+    def test_selecting_the_decision_page_links_the_variant_and_its_skill(self):
+        self.assertEqual(self.sync(), 0)
+        link = self.home / ".claude" / "rules" / "harness-stances" / "decisions.md"
+        decisions = REPO / "primitives" / "stances" / "decisions"
+        self.assertEqual(Path(os.readlink(link)), decisions / "numbered-block.md")
+        path = harness.config_path()
+        cfg = json.loads(path.read_text())
+        cfg["stances"]["decisions"] = "decision-page"
+        path.write_text(json.dumps(cfg))
+        self.assertEqual(self.sync(), 0)
+        self.assertEqual(Path(os.readlink(link)), decisions / "decision-page.md")
+        self.assertTrue((self.home / ".claude" / "skills" / "decision-page" / "SKILL.md").is_file())
+
     def test_changing_a_stance_preserves_a_real_redirect(self):
         self.assertEqual(self.sync(), 0)
         voice = self.home / ".claude" / "rules" / "harness-stances" / "voice.md"

@@ -13,6 +13,7 @@
   "cost=frugal",
   "cost=max",
   "cost=off",
+  "decisions=decision-page",
   "delegation=off",
   "delegation=session-model",
   "licensing=off",

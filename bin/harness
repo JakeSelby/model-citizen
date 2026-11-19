@@ -77,7 +77,7 @@ from harness_core.decisions import ledger as decision_ledger
 VERSION = (REPO / "VERSION").read_text().strip() if (REPO / "VERSION").exists() else "0.0.0"
 
 STANCE_NAMES = ["licensing", "build-vs-buy", "commits", "plan-ceremony", "delegation", "testing",
-                "autonomy", "cost", "voice"]
+                "autonomy", "cost", "voice", "decisions"]
 POSTURES = {
     "bypass": {"claude": "bypassPermissions", "vscode": "bypassPermissions", "codex": ("never", "danger-full-access")},
     "auto": {"claude": "auto", "vscode": None, "codex": ("on-request", "workspace-write")},

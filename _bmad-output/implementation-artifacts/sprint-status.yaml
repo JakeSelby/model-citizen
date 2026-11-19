@@ -5,7 +5,7 @@
 # depth check. backlog: any other open item. An open epic is in-progress when any child
 # is done, ready or in progress, and backlog otherwise.
 
-generated: "2026-10-15"
+generated: "2026-11-17"
 project: agent-harness
 project_key: AH
 tracking_system: github-issues
@@ -777,6 +777,7 @@ development_status:
   ah-s351-removal-arms-for-claude-md-and-the-stances: ready-for-dev
   ah-s352-record-a-native-stop-payload-for-the-hook-replay: ready-for-dev
   ah-s354-a-real-boundary-for-destructive-commands-sandbox: ready-for-dev
+  ah-s385-answer-decisions-on-a-decision-page-as-a: ready-for-dev
   ah-sp004-jev-count-the-labelled-decisions-existing: done
   ah-sp013-spike-architecture-which-harness-capabilities: backlog
   ah-sp014-licence-review-of-the-humanizer-skill-for-drafts: backlog

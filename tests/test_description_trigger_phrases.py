@@ -19,6 +19,8 @@ SKILL_TRIGGERS = {
     "code-quality-instruments": ("Measure", "Use when", "adding or reviewing tests",
                                  "a bug still shipped", "coverage is high and confidence is not",
                                  "well tested", "mutation score", "branch coverage"),
+    "decision-page": ("`decision-page` decisions stance", "before asking the user anything",
+                      "posting a plan", "\"apply\"", "what is still waiting on them"),
     "delegation-tiering": ("planning a fan-out", "choosing a subagent model", "opts.model",
                            "authoring an agent definition", "cost posture",
                            "delegation decision is non-obvious"),

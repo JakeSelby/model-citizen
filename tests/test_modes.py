@@ -218,10 +218,10 @@ class ShippedModes(unittest.TestCase):
         for kind in posture.selection_kinds():
             self.assertEqual(with_full[kind], without[kind])
 
-    def test_minimal_keeps_hooks_cost_delegation_autonomy_and_drops_the_rest(self):
+    def test_minimal_keeps_hooks_cost_delegation_autonomy_decisions_and_drops_the_rest(self):
         data = self.load("minimal")
         self.assertNotIn("hooks", data)
-        kept = {"cost", "delegation", "autonomy"}
+        kept = {"cost", "delegation", "autonomy", "decisions"}
         self.assertEqual(set(data["stances"]), set(posture.DEFAULT_STANCES) - kept)
         self.assertTrue(set(data["stances"].values()) <= {"off", "light"})
         self.assertEqual(data["workflows"], {name: "off" for name in WORKFLOWS})

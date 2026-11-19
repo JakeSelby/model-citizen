@@ -1,0 +1,192 @@
+<title>Decisions</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* One column of decision cards under a sticky bar of sections with counts. Items and answers live in the page's store. */
+:root{
+  --bg:#f3f6f4; --surface:#ffffff; --ink:#13211b; --muted:#56655e; --line:#d5ddd8;
+  --go:#0b6b4f; --go-ink:#ffffff; --go-soft:#dcefe7; --rec:#8a5a00; --rec-soft:#fbefd0; --warn:#a4372a;
+  --display:ui-rounded,"SF Pro Rounded",system-ui,sans-serif; --body:system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1714; --surface:#17221d; --ink:#e7efea; --muted:#9bada4; --line:#2b3a33;
+  --go:#3fbf93; --go-ink:#06231a; --go-soft:#173a2e; --rec:#f0b93a; --rec-soft:#3a2f12; --warn:#f08a7a; color-scheme:dark } }
+:root[data-theme="dark"]{
+  --bg:#0f1714; --surface:#17221d; --ink:#e7efea; --muted:#9bada4; --line:#2b3a33;
+  --go:#3fbf93; --go-ink:#06231a; --go-soft:#173a2e; --rec:#f0b93a; --rec-soft:#3a2f12; --warn:#f08a7a; color-scheme:dark }
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.5;margin:0}
+.wrap{max-width:820px;margin:0 auto;padding-block:20px 80px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{font-family:var(--display);font-size:26px;line-height:1.15;margin:0;text-wrap:balance}
+.sub{color:var(--muted);margin:6px 0 0;max-width:62ch}
+.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);padding-block:12px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid var(--line)}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
+.lanes{display:flex;gap:6px;flex-wrap:wrap}
+.lane{font:500 13px var(--body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:6px 12px;cursor:pointer;display:flex;gap:8px;align-items:center}
+.lane[aria-selected="true"]{background:var(--go);color:var(--go-ink);border-color:var(--go)}
+.lane .n{font-variant-numeric:tabular-nums;opacity:.8}
+.meter{height:6px;background:var(--line);border-radius:3px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--go);width:0;transition:width .2s}
+.tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:16px 0 4px}
+.btn{font:600 13px var(--body);border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:8px 12px;cursor:pointer}
+.btn:hover{border-color:var(--go)}
+.btn.primary{background:var(--go);color:var(--go-ink);border-color:var(--go)}
+.status{color:var(--muted);font-size:13px}
+.list{display:flex;flex-direction:column;gap:14px;margin-top:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.card.open{border-left:4px solid var(--rec)}
+.card.applied{opacity:.75}
+.card h2{font-family:var(--display);font-size:17px;margin:0;line-height:1.25;text-wrap:balance}
+.why{color:var(--muted);margin:0;max-width:65ch}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.chip.go{color:var(--go)} .chip.warn{color:var(--warn)}
+.opts{display:flex;flex-direction:column;gap:8px}
+.opt{text-align:left;font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;display:flex;flex-direction:column;gap:2px;min-width:0}
+.opt:hover{border-color:var(--go)}
+.opt[aria-pressed="true"]{background:var(--go-soft);border-color:var(--go)}
+.opt .l{font-weight:600;display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.opt .note{color:var(--muted);font-size:13px}
+.rec{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--rec);background:var(--rec-soft);border-radius:4px;padding:1px 6px}
+.own{display:flex;flex-direction:column;gap:6px}
+.own label{font-size:12px;color:var(--muted)}
+.own textarea{font:inherit;color:var(--ink);background:var(--bg);border:1.5px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px;resize:vertical;width:100%}
+.own textarea.filled{border-color:var(--go);background:var(--go-soft)}
+.own .btn{align-self:flex-start;font-weight:500}
+.secret{display:flex;flex-direction:column;gap:4px;background:var(--bg);border:1.5px dashed var(--line);border-radius:10px;padding:10px 12px}
+.secret .state{font-weight:600}
+.secret .state.yes{color:var(--go)} .secret .state.no{color:var(--warn)}
+:focus-visible{outline:2px solid var(--go);outline-offset:2px}
+.empty{color:var(--muted);padding:28px 0}
+@media (prefers-reduced-motion:reduce){ .meter i{transition:none} }
+</style>
+
+<div class="wrap">
+  <h1>Decisions</h1>
+  <p class="sub">Every choice waiting on you. Pick an option, reword your pick, or write your own answer. Everything saves as you go; nothing is applied until you tell the agent to apply it.</p>
+
+  <div class="bar">
+    <div class="lanes" id="lanes" role="tablist"></div>
+    <div class="meter" aria-hidden="true"><i id="meter"></i></div>
+  </div>
+
+  <div class="tools">
+    <button class="btn primary" id="acceptRecs" type="button">Accept every open recommendation shown</button>
+    <span class="status" id="status" role="status">Loading your decisions…</span>
+  </div>
+
+  <div id="view"><p class="empty">Your decisions load from this page's store. They appear here in a moment.</p></div>
+</div>
+
+<script>
+(function(){
+  var ALL='__all__';
+  var items=[], answers={}, notes={}, lane=ALL, db=null, loaded=false;
+  var $=function(id){return document.getElementById(id)};
+  function el(tag,cls,text){var e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e}
+  function typing(){var a=document.activeElement; return a&&a.tagName==='TEXTAREA'}
+  try{ var saved=localStorage.getItem('decisions-lane'); if(saved) lane=saved }catch(e){}
+
+  function isSecret(i){return i.kind==='secret'}
+  function sections(){var s=[]; items.forEach(function(i){var k=i.sec||'Open'; if(s.indexOf(k)<0) s.push(k)}); return s}
+  function laneItems(l){return l===ALL?items:items.filter(function(i){return (i.sec||'Open')===l})}
+  function answered(i){
+    if(isSecret(i)) return !!(i.secret&&i.secret.status==='stored');
+    var a=answers[i.id]; return !!i.applied||(a&&a.length>0)||!!(notes[i.id]&&notes[i.id].trim()) }
+  function counts(l){var li=laneItems(l); return [li.filter(answered).length, li.length]}
+
+  function renderLanes(){
+    var box=$('lanes'); box.textContent=''; var secs=sections();
+    if(secs.indexOf(lane)<0) lane=ALL;
+    var tabs=secs.length>1?[[ALL,'All']].concat(secs.map(function(s){return [s,s]})):[];
+    tabs.forEach(function(L){ var c=counts(L[0]); var b=el('button','lane'); b.type='button'; b.setAttribute('role','tab');
+      b.setAttribute('aria-selected', String(lane===L[0])); b.appendChild(el('span',null,L[1])); b.appendChild(el('span','n',c[0]+'/'+c[1]));
+      b.onclick=function(){lane=L[0]; try{localStorage.setItem('decisions-lane',lane)}catch(e){} render()}; box.appendChild(b) });
+    var c=counts(ALL); $('meter').style.width=(c[1]?Math.round(100*c[0]/c[1]):0)+'%';
+  }
+
+  function save(id){ if(!db) return; $('status').textContent='Saving…';
+    db.doc('answers/'+id).set({choice:answers[id]||[],text:notes[id]||'',at:new Date().toISOString()}).then(
+      function(){ $('status').textContent='Saved' },
+      function(e){ $('status').textContent='Could not save ('+(e&&e.code||'error')+'). Your click is not stored; try again.' }) }
+
+  function choose(item,optId){
+    var a=(answers[item.id]||[]).slice();
+    if(item.multi){ var k=a.indexOf(optId); if(k>=0)a.splice(k,1); else a.push(optId) } else a=[optId];
+    answers[item.id]=a; save(item.id); render();
+  }
+
+  function secretCard(it,card){
+    var s=it.secret||{}; var box=el('div','secret');
+    var stored=s.status==='stored';
+    box.appendChild(el('span','state '+(stored?'yes':'no'),stored?'Stored':'Not yet'));
+    if(s.name) box.appendChild(el('span',null,s.name));
+    if(s.where) box.appendChild(el('span','note','Goes in: '+s.where));
+    box.appendChild(el('span','note','Never type the value here. Put it where it goes yourself, then tell the agent.'));
+    card.appendChild(box);
+  }
+
+  function choiceCard(it,card){
+    var opts=el('div','opts');
+    (it.opts||[]).forEach(function(o){ var b=el('button','opt'); b.type='button';
+      b.setAttribute('aria-pressed', String((answers[it.id]||[]).indexOf(o.id)>=0));
+      var l=el('span','l'); l.appendChild(el('span',null,o.label)); if(o.rec) l.appendChild(el('span','rec','Recommended'));
+      b.appendChild(l); if(o.note) b.appendChild(el('span','note',o.note));
+      b.onclick=function(){choose(it,o.id)}; opts.appendChild(b) });
+    card.appendChild(opts);
+    var own=el('div','own'); var ta=el('textarea',(notes[it.id]&&notes[it.id].trim())?'filled':''); ta.id='w-'+it.id; ta.rows=2; ta.value=notes[it.id]||'';
+    var lb=el('label',null,'Your own answer, or changes to the option you picked (optional). It overrides the options.'); lb.setAttribute('for',ta.id);
+    ta.onchange=function(){ notes[it.id]=ta.value; save(it.id); render() };
+    var ed=el('button','btn','Edit the wording of my pick'); ed.type='button';
+    ed.onclick=function(){ var sel=(it.opts||[]).filter(function(o){return (answers[it.id]||[]).indexOf(o.id)>=0}).map(function(o){return o.label+(o.note?' '+o.note:'')});
+      if(!sel.length){ $('status').textContent='Pick an option first, or just write your own answer.'; ta.focus(); return }
+      if(!ta.value.trim()) ta.value=sel.join('; '); ta.focus() };
+    own.appendChild(lb); own.appendChild(ta); own.appendChild(ed); card.appendChild(own);
+  }
+
+  function renderItems(){
+    var v=$('view'); v.textContent=''; var li=laneItems(lane);
+    if(!li.length){ v.appendChild(el('p','empty', loaded?'Nothing is waiting on you.':'Loading…')); return }
+    var list=el('div','list');
+    li.forEach(function(it){
+      var card=el('section','card'+(it.applied?' applied':answered(it)?'':' open'));
+      card.appendChild(el('h2',null,it.title));
+      if(it.why) card.appendChild(el('p','why',it.why));
+      var chips=el('div','chips');
+      if(it.unblocks) chips.appendChild(el('span','chip','Unblocks '+it.unblocks));
+      if(it.approves) chips.appendChild(el('span','chip warn','Your pick is the go-ahead'));
+      if(it.applied) chips.appendChild(el('span','chip go','Applied: '+it.applied));
+      if(chips.childNodes.length) card.appendChild(chips);
+      if(isSecret(it)) secretCard(it,card); else choiceCard(it,card);
+      list.appendChild(card) });
+    v.appendChild(list);
+  }
+
+  function render(){ renderLanes(); renderItems() }
+
+  $('acceptRecs').onclick=function(){
+    var n=0; laneItems(lane).forEach(function(it){ if(isSecret(it)||it.applied||answered(it)) return;
+      var r=(it.opts||[]).filter(function(o){return o.rec})[0]; if(!r) return;
+      answers[it.id]=[r.id]; save(it.id); n++ });
+    render(); $('status').textContent= n? n+' recommendation'+(n===1?'':'s')+' accepted. Change any by clicking another option.' : 'Nothing open to accept here.';
+  };
+
+  function start(){
+    render();
+    var timer=setTimeout(function(){ if(!loaded) $('status').textContent='The store did not answer. Check you are signed in, then reopen this page.' },10000);
+    var ready=window.claude&&window.claude.use?window.claude.use('db'):Promise.resolve(null);
+    ready.then(function(d){
+      if(!d){ clearTimeout(timer); $('status').textContent='This page needs you signed in to load and save.'; return }
+      db=d;
+      var fail=function(e){ clearTimeout(timer); $('status').textContent='Could not load ('+(e&&e.code||'error')+').' };
+      db.collection('content').onSnapshot(function(s){ clearTimeout(timer); loaded=true; var all=[];
+        s.docs.slice().sort(function(a,b){return a.id<b.id?-1:1}).forEach(function(doc){ var x=doc.data()||{};
+          if(Array.isArray(x.items)) all=all.concat(x.items.filter(function(i){return i&&typeof i.id==='string'&&typeof i.title==='string'})) });
+        items=all; $('status').textContent= items.length? 'Selections save as you click.' : 'Nothing is waiting on you.'; render() },fail);
+      db.collection('answers').limit(1000).onSnapshot(function(s){ if(typing()) return; var a={},t={};
+        s.docs.forEach(function(doc){var x=doc.data()||{}; if(Array.isArray(x.choice)) a[doc.id]=x.choice; if(typeof x.text==='string') t[doc.id]=x.text});
+        answers=a; notes=t; render() },fail);
+    });
+  }
+  start();
+})();
+</script>

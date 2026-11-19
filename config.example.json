@@ -16,7 +16,8 @@
     "testing": "required",
     "autonomy": "execute",
     "cost": "balanced",
-    "voice": "scannable"
+    "voice": "scannable",
+    "decisions": "numbered-block"
   },
   "permissions": "inherit",
   "permissions_bypass_acknowledged": false,

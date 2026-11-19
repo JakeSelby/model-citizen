@@ -24,6 +24,8 @@ primitives/presentation/scannable.md
 primitives/skills/api-verification/SKILL.md
 primitives/skills/architecture-viewer/SKILL.md
 primitives/skills/code-quality-instruments/SKILL.md
+primitives/skills/decision-page/SKILL.md
+primitives/skills/decision-page/template.html
 primitives/skills/delegation-tiering/SKILL.md
 primitives/skills/design-loop/ATTRIBUTION.md
 primitives/skills/design-loop/SKILL.md

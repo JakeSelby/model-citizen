@@ -119,7 +119,9 @@ against impressions.
 
 ## Decisions for the reviewer
 
-Numbered, answerable in chat by number ("1 A, 2 your rec"). Three lines each:
+Numbered. Under the default `numbered-block` decisions stance the reviewer answers them in chat by
+number ("1 A, 2 your rec"); under `decision-page` they stay numbered here for reading and are
+answered on the decision page. Three lines each:
 
 > **3. Borders from geometry ribbons, or from the attribute texture?**
 > *Recommend* ribbons — the real boundary lines already exist and stay crisp at every zoom.
@@ -157,7 +159,10 @@ reviewer replies to. Three shapes, and nothing improvised.
 2. **`## At a glance`** — the seven bullets, verbatim. This is the "is this even the right
    scope" check, and it saves opening a plan that was going to be redirected anyway.
 3. **`## Decisions`** — the numbered blocks, verbatim. The reviewer answers by number in chat,
-   so they must be readable where they type.
+   so they must be readable where they type. Under the `decision-page` decisions stance, seed
+   each decision as an item on the decision page instead (the `decision-page` skill), make the
+   second line of the message say how many are waiting with the page's link, and leave this
+   section out: the card keeps them for reading, the page takes the answers.
 4. **A workspace-relative markdown link** to the plan file, with a note on how to preview it.
 5. **The closing line**, only where there is no plan mode, exactly: *Reply **build** to
    proceed, or keep refining.* Under plan mode the message ends at the link.
@@ -185,7 +190,8 @@ revision round, since the reviewer is reading a changed file, not the one they o
 **Revision round, after feedback.** Much shorter — the reviewer already knows the plan:
 
 1. **One line naming what changed**, matching the card's **Changed this round** line.
-2. **Only the decisions still open**, renumbered from 1.
+2. **Only the decisions still open**, renumbered from 1 — or, under `decision-page`, the page's
+   link and how many items are still open there.
 3. **The link, and the closing line only where there is no plan mode.**
 
 Never re-post At a glance on a revision. If the scope moved enough to need re-reading, say so in
@@ -236,7 +242,7 @@ awk '/^---$/{exit} {n++} END{print n" card lines"}' <plan file>
 - [ ] First screen answers: what is being built, how, what it touches, what I must decide
 - [ ] No paragraph above the rule runs past three sentences
 - [ ] Every step has a real exit test
-- [ ] Decisions numbered and answerable by number
+- [ ] Decisions numbered and answerable by number, or seeded on the decision page under `decision-page`
 - [ ] Nothing above the rule repeated below it
 - [ ] The repository's lint, where it names one, reports no finding on the plan
 
@@ -300,6 +306,11 @@ Batch related decisions into one block.
 
 *Amended on 2026-09-24 by #811:* the block may still close the message, but the reply's first two
 lines say that a decision is waiting.
+
+*Amended on 2026-11-17 by #1350:* this section is the default `numbered-block` variant of the
+`decisions` stance. Under its `decision-page` variant every decision or question goes on a decision
+page instead, whose items carry the same assessment, recommendation and alternatives; the
+`decision-page` skill holds the contract.
 
 ### Pointing at an option is not a decision
 

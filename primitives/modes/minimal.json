@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Enforcement without ceremony: every hook on, the cost, delegation and autonomy stances kept, every other stance off or light, and every workflow off.",
+  "description": "Enforcement without ceremony: every hook on, the cost, delegation, autonomy and decisions stances kept, every other stance off or light, and every workflow off.",
   "stances": {
     "licensing": "off",
     "build-vs-buy": "off",

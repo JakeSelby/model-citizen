@@ -22,7 +22,7 @@ Note to carry over: {{arguments}}
 
    Fill them from this session, not the file you replace. **Done** and **Open** are short bullets
    naming files and commands; **Next command** is one runnable line; **Decisions needed** is what
-   only the user can settle; **Learnings** is what you wish you had known at the start.
+   only the user can settle, keeping any `Decision page:` line the old file had; **Learnings** is what you wish you had known at the start.
 2. **Save the shared task contract.** After `citizen task show`, save a JSON input of `objective`,
    `next_steps`, `decisions` and `artifacts` (plus a planning framework's checkout and baseline)
    with `citizen task save --input <file> --runtime <runtime> --revision <current-revision>`. The

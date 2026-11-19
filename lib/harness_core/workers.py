@@ -22,8 +22,9 @@ CHARS_PER_TOKEN = 4.0
 # What a worker may be shown before it stops being cheap: the policy it carries plus every byte
 # mounted beside it. Recorded per run rather than enforced, because what a worker is shown is a
 # property of its contract and the policy's own pointers, fixed before any brief is read. A review
-# role resolves at about 30,800 of it and the planner, which may read any skill, at 43,800 (#335).
-CONTEXT_BUDGET_TOKENS = 50000
+# role resolves at about 30,800 of it and the planner, which may read any skill, at 43,800 (#335),
+# then 52,000 once the decision-page skill bundled its page template (#1350).
+CONTEXT_BUDGET_TOKENS = 55000
 
 
 def harness_version(root):

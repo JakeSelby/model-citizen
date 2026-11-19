@@ -37,6 +37,10 @@
     "voice": {
       "mode": "instruction",
       "qualification": "unqualified"
+    },
+    "decisions": {
+      "mode": "instruction",
+      "qualification": "unqualified"
     }
   },
   "custom_stance_default": {
